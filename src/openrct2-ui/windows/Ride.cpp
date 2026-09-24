@@ -12,6 +12,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <openrct2-ui/FirstPersonController.h>
 #include <openrct2-ui/UiStringIds.h>
 #include <openrct2-ui/interface/Dropdown.h>
 #include <openrct2-ui/interface/Theme.h>
@@ -133,6 +134,7 @@ namespace OpenRCT2::Ui::Windows
         WIDX_RENAME,
         WIDX_LOCATE,
         WIDX_DEMOLISH,
+        WIDX_POV,
         WIDX_CLOSE_LIGHT,
         WIDX_SIMULATE_LIGHT,
         WIDX_TEST_LIGHT,
@@ -283,6 +285,7 @@ namespace OpenRCT2::Ui::Windows
         makeWidget({291,  94}, { 24,  24}, WidgetType::flatBtn,       WindowColour::secondary, ImageId(SPR_RENAME),                 STR_NAME_RIDE_TIP          ),
         makeWidget({291, 118}, { 24,  24}, WidgetType::flatBtn,       WindowColour::secondary, ImageId(SPR_LOCATE),                 STR_LOCATE_SUBJECT_TIP     ),
         makeWidget({291, 142}, { 24,  24}, WidgetType::flatBtn,       WindowColour::secondary, ImageId(SPR_DEMOLISH),               STR_DEMOLISH_RIDE_TIP      ),
+        makeWidget({291, 166}, { 24,  24}, WidgetType::flatBtn,       WindowColour::secondary, ImageId(SPR_LOCATE),                 STR_VIEW_OF_RIDE_ATTRACTION_TIP),
         makeWidget({296,  48}, { 14,  14}, WidgetType::imgBtn,        WindowColour::secondary, ImageId(SPR_G2_RCT1_CLOSE_BUTTON_0), STR_CLOSE_RIDE_TIP         ),
         makeWidget({296,  62}, { 14,  14}, WidgetType::imgBtn,        WindowColour::secondary, ImageId(SPR_G2_RCT1_TEST_BUTTON_0),  STR_SIMULATE_RIDE_TIP      ),
         makeWidget({296,  62}, { 14,  14}, WidgetType::imgBtn,        WindowColour::secondary, ImageId(SPR_G2_RCT1_TEST_BUTTON_0),  STR_TEST_RIDE_TIP          ),
@@ -1644,6 +1647,26 @@ namespace OpenRCT2::Ui::Windows
             }
         }
 
+        Vehicle* GetFirstPersonVehicle(const Ride& ride) const
+        {
+            if (!ride.flags.has(RideFlag::onTrack))
+                return nullptr;
+
+            auto& entities = getGameState().entities;
+            if (_viewIndex > 0 && _viewIndex <= ride.numTrains)
+            {
+                if (auto* selected = entities.getEntity<Vehicle>(ride.vehicles[_viewIndex - 1]); selected != nullptr)
+                    return selected;
+            }
+
+            for (int32_t trainIndex = 0; trainIndex < ride.numTrains; trainIndex++)
+            {
+                if (auto* vehicle = entities.getEntity<Vehicle>(ride.vehicles[trainIndex]); vehicle != nullptr)
+                    return vehicle;
+            }
+            return nullptr;
+        }
+
         void MainOnMouseUp(WidgetIndex widgetIndex)
         {
             switch (widgetIndex)
@@ -1684,6 +1707,20 @@ namespace OpenRCT2::Ui::Windows
                 case WIDX_DEMOLISH:
                     ContextOpenDetailWindow(WindowDetail::demolishRide, number);
                     break;
+                case WIDX_POV:
+                {
+                    auto ride = GetRide(rideId);
+                    if (ride != nullptr)
+                    {
+                        if (auto* vehicle = GetFirstPersonVehicle(*ride); vehicle != nullptr
+                            && FirstPerson::EnterRide(vehicle->id))
+                        {
+                            close();
+                            return;
+                        }
+                    }
+                    break;
+                }
                 case WIDX_CLOSE_LIGHT:
                 case WIDX_SIMULATE_LIGHT:
                 case WIDX_TEST_LIGHT:
@@ -1719,7 +1756,7 @@ namespace OpenRCT2::Ui::Windows
 
         void MainResize()
         {
-            int32_t newMinHeight = 180;
+            int32_t newMinHeight = 204;
             if (ThemeGetFlags() & UITHEME_FLAG_USE_LIGHTS_RIDE)
             {
                 newMinHeight += 20 + kRCT1LightOffset;
@@ -2382,6 +2419,7 @@ namespace OpenRCT2::Ui::Windows
                 WIDX_DEMOLISH,
                 ride->flags.hasAny(RideFlag::indestructible, RideFlag::indestructibleTrack)
                     && !gameState.cheats.makeAllDestructible);
+            setWidgetDisabled(WIDX_POV, GetFirstPersonVehicle(*ride) == nullptr);
 
             uint32_t spriteIds[] = {
                 SPR_CLOSED,
@@ -2470,7 +2508,7 @@ namespace OpenRCT2::Ui::Windows
                 widgets[i].left = width - 20;
                 widgets[i].right = width - 7;
             }
-            for (i = WIDX_OPEN; i <= WIDX_DEMOLISH; i++, widgetHeight += 24)
+            for (i = WIDX_OPEN; i <= WIDX_POV; i++, widgetHeight += 24)
             {
                 widgets[i].left = width - 25;
                 widgets[i].right = width - 2;
