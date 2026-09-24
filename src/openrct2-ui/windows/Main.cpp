@@ -7,6 +7,7 @@
  * OpenRCT2 is licensed under the GNU General Public License version 3.
  *****************************************************************************/
 
+#include <openrct2-ui/FirstPersonController.h>
 #include <openrct2-ui/interface/Widget.h>
 #include <openrct2-ui/interface/Window.h>
 #include <openrct2-ui/windows/Windows.h>
@@ -44,8 +45,28 @@ namespace OpenRCT2::Ui::Windows
             WindowFootpathResetSelectedPath();
         }
 
+        void onClose() override
+        {
+            FirstPerson::Exit();
+        }
+
+        void onUpdate() override
+        {
+            if (FirstPerson::IsActive())
+            {
+                FirstPerson::Update();
+                invalidate();
+            }
+        }
+
         void onDraw(Drawing::RenderTarget& rt) override
         {
+            if (FirstPerson::IsActive())
+            {
+                FirstPerson::Render(rt);
+                return;
+            }
+
             ViewportRender(rt, viewport);
         }
 

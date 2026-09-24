@@ -23,6 +23,8 @@
     #define glBegin __static__glBegin
     #define glBindTexture __static__glBindTexture
     #define glBlendFunc __static__glBlendFunc
+    #define glDepthMask __static__glDepthMask
+    #define glScissor __static__glScissor
     #define glClear __static__glClear
     #define glClearColor __static__glClearColor
     #define glCullFace __static__glCullFace
@@ -67,6 +69,8 @@
     #undef glBegin
     #undef glBindTexture
     #undef glBlendFunc
+    #undef glDepthMask
+    #undef glScissor
     #undef glClear
     #undef glClearColor
     #undef glCullFace
@@ -98,6 +102,8 @@
 using PFNGLBEGINPROC = void(APIENTRYP)(GLenum mode);
 using PFNGLBINDTEXTUREPROC = void(APIENTRYP)(GLenum target, GLuint texture);
 using PFNGLBLENDFUNCPROC = void(APIENTRYP)(GLenum sfactor, GLenum dfactor);
+using PFNGLDEPTHMASKPROC = void(APIENTRYP)(GLboolean flag);
+using PFNGLSCISSORPROC = void(APIENTRYP)(GLint x, GLint y, GLsizei width, GLsizei height);
 using PFNGLCLEARPROC = void(APIENTRYP)(GLbitfield mask);
 using PFNGLCLEARCOLORPROC = void(APIENTRYP)(GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha);
 using PFNGLCULLFACEPROC = void(APIENTRYP)(GLenum mode);

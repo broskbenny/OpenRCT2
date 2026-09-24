@@ -29,6 +29,7 @@
 #include "../interface/Viewport.h"
 #include "../object/LargeSceneryEntry.h"
 #include "../object/SmallSceneryEntry.h"
+#include "../paint/FirstPersonRenderer.h"
 #include "../profiling/Profiling.h"
 #include "../ride/RideManager.hpp"
 #include "../ride/Vehicle.h"
@@ -445,6 +446,7 @@ namespace OpenRCT2
         gameState.grassSceneryTileLoopPosition = 0;
         gameState.widePathTileLoopPosition = {};
         gameState.mapSize = size;
+        Paint::ClearFirstPersonSceneCache();
         MapRemoveOutOfRangeElements();
         MapAnimations::ClearAll();
 
@@ -1697,6 +1699,7 @@ namespace OpenRCT2
 
     static void MapInvalidateTileUnderZoom(int32_t x, int32_t y, int32_t z0, int32_t z1, ZoomLevel maxZoom)
     {
+        Paint::InvalidateFirstPersonSceneTile({x,y});
         if (gOpenRCT2Headless)
             return;
 
@@ -1746,6 +1749,7 @@ namespace OpenRCT2
 
     void MapInvalidateRegion(const CoordsXY& mins, const CoordsXY& maxs)
     {
+        Paint::InvalidateFirstPersonSceneRegion(mins,maxs);
         int32_t x0 = mins.x + 16;
         int32_t y0 = mins.y + 16;
         int32_t x1 = maxs.x + 16;

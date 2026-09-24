@@ -318,6 +318,39 @@ static uint8_t ViewportSurfacePaintSetupGetRelativeSlope(const SurfaceElement& s
     return slopeHeight | slopeCorners;
 }
 
+ImageId GetFirstPersonTerrainImage(const SurfaceElement& surface, const CoordsXY& worldPos)
+{
+    const auto* object = surface.getSurfaceObject();
+    if (object == nullptr)
+        return {};
+    const auto relativeSlope = ViewportSurfacePaintSetupGetRelativeSlope(surface, 0);
+    const uint8_t offset = Byte97B444[relativeSlope];
+    return object->GetImageId(worldPos, surface.getGrassLength() & 0x7, 0, offset, false, false);
+}
+
+static uint8_t GetFirstPersonWaterOffset(const SurfaceElement& surface)
+{
+    // The ordinary surface painter uses this same mapping when shallow water
+    // intersects the tile's slope, rather than a universal flat-water image.
+    const uint8_t slope = ViewportSurfacePaintSetupGetRelativeSlope(surface, 0);
+    return surface.getWaterHeight() <= surface.getBaseZ() + 16
+        ? Byte97B740[slope & 0xF] : 0;
+}
+
+ImageId GetFirstPersonWaterMaskImage(const SurfaceElement& surface)
+{
+    return ImageId(SPR_WATER_MASK + GetFirstPersonWaterOffset(surface), FilterPaletteID::paletteWater)
+        .WithBlended(true);
+}
+
+ImageId GetFirstPersonWaterOverlayImage(const SurfaceElement& surface, uint32_t viewFlags)
+{
+    const bool transparent = Config::Get().general.transparentWater
+        || (viewFlags & VIEWPORT_FLAG_UNDERGROUND_INSIDE);
+    const uint32_t start = transparent ? EnumValue(SPR_WATER_OVERLAY) : EnumValue(SPR_G2_OPAQUE_WATER_OVERLAY);
+    return ImageId(start + GetFirstPersonWaterOffset(surface));
+}
+
 /**
  *  rct2: 0x0065E890, 0x0065E946, 0x0065E9FC, 0x0065EAB2
  */

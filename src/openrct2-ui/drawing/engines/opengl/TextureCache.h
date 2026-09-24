@@ -187,6 +187,7 @@ namespace OpenRCT2::Ui
     {
     private:
         bool _initialized = false;
+        std::unordered_map<ImageIndex,uint64_t> _imageAtlasRevisions;
 
         GLuint _atlasesTexture = 0;
         GLint _atlasesTextureDimensions = 0;
@@ -210,6 +211,12 @@ namespace OpenRCT2::Ui
         BasicTextureInfo GetOrLoadBitmapTexture(ImageIndex image, const void* pixels, size_t width, size_t height);
 
         GLuint GetAtlasesTexture();
+        // Per-G1 revision: invalidating animated text must not rebuild all static park geometry.
+        [[nodiscard]] uint64_t GetImageTextureRevision(ImageIndex image) const
+        {
+            const auto it=_imageAtlasRevisions.find(image);
+            return it==_imageAtlasRevisions.end()?0:it->second;
+        }
         GLuint GetPaletteTexture();
         GLuint GetBlendPaletteTexture();
         static GLint PaletteToY(Drawing::FilterPaletteID palette);

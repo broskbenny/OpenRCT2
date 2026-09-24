@@ -12,6 +12,7 @@
 #include "../Identifiers.h"
 #include "../ride/RideTypes.h"
 #include "AudioMixer.h"
+#include "FirstPersonSpatialAudio.h"
 
 #include <memory>
 #include <string>
@@ -56,6 +57,7 @@ namespace OpenRCT2::Audio
         uint16_t frequency;
         int16_t volume;
         uint16_t priority;
+        uint8_t firstPersonVolume = 255;
     };
 
     enum class SoundId : uint8_t
@@ -148,6 +150,17 @@ namespace OpenRCT2::Audio
 
     extern bool gGameSoundsOff;
     extern int32_t gVolumeAdjustZoom;
+
+    // Walking supplies a fixed world listener. Ride mode stores a vehicle
+    // attachment instead, so tick-driven audio resolves the ear against the
+    // same simulation-time car transform as emitters.
+    void SetFirstPersonAudioListener(const FirstPersonAudioListener& listener);
+    void SetFirstPersonRideAudioListener(
+        EntityId vehicleId, RideId rideId, float headYaw, float headPitch, float eyeOffset);
+    void RefreshFirstPersonSpatialAudio();
+    void ClearFirstPersonAudioListener();
+    [[nodiscard]] bool HasFirstPersonAudioListener();
+    [[nodiscard]] FirstPersonSpatialParams GetFirstPersonSpatialParams(const CoordsXYZ& source);
 
     extern VehicleSound gVehicleSoundList[kMaxVehicleSounds];
 

@@ -31,12 +31,17 @@
 #include "../world/Map.h"
 #include "../world/Weather.h"
 #include "../world/tile_element/SurfaceElement.h"
+#include "../paint/FirstPersonVehiclePose.h"
+#include "../GameState.h"
+#include "../ride/Vehicle.h"
 #include "AudioChannel.h"
 #include "AudioContext.h"
 #include "AudioMixer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace OpenRCT2::Audio
@@ -56,6 +61,147 @@ namespace OpenRCT2::Audio
 
     bool gGameSoundsOff = false;
     int32_t gVolumeAdjustZoom = 0;
+
+    // Audio runs on the game thread. Walking owns a fixed listener, while ride
+    // mode owns a vehicle attachment that is resolved from current simulation
+    // state for every spatial query. This keeps emitters/listener in one time
+    // domain even when the renderer temporarily tweens vehicles for display.
+    struct FirstPersonActiveEffect
+    {
+        CoordsXYZ emitter;
+        int32_t sampleModifier;
+        std::shared_ptr<IAudioChannel> channel;
+    };
+    struct FirstPersonRideListenerAttachment
+    {
+        EntityId vehicleId = EntityId::GetNull();
+        RideId rideId = RideId::GetNull();
+        float headYaw = 0.0f;
+        float headPitch = 0.0f;
+        float eyeOffset = 0.0f;
+    };
+    static std::vector<FirstPersonActiveEffect> _firstPersonActiveEffects;
+    static std::optional<FirstPersonAudioListener> _firstPersonListener;
+    static std::optional<FirstPersonRideListenerAttachment> _firstPersonRideListener;
+
+    static std::optional<FirstPersonAudioListener> ResolveFirstPersonAudioListener()
+    {
+        if (_firstPersonRideListener)
+        {
+            const auto& attachment = *_firstPersonRideListener;
+            auto* vehicle = getGameState().entities.getEntity<Vehicle>(attachment.vehicleId);
+            if (vehicle == nullptr || vehicle->ride != attachment.rideId)
+                return std::nullopt;
+            const auto orientation = Paint::FirstPersonVehicleSimulationOrientation(*vehicle);
+            const auto carBasis = Paint::GetFirstPersonBasis(orientation);
+            const auto headBasis = Paint::GetPassengerHeadBasis(
+                carBasis, attachment.headYaw, attachment.headPitch);
+            const auto loc = vehicle->getLocation();
+            const auto eye = Paint::FirstPersonPassengerEye(
+                { float(loc.x), float(loc.y), float(loc.z) }, carBasis,
+                { 0.0f, 0.0f, attachment.eyeOffset });
+            return FirstPersonAudioListener{
+                { eye.x, eye.y, eye.z },
+                { headBasis.right.x, headBasis.right.y, headBasis.right.z }
+            };
+        }
+        return _firstPersonListener;
+    }
+
+    static void StopFirstPersonEffects()
+    {
+        for (auto& effect : _firstPersonActiveEffects)
+            if (effect.channel != nullptr)
+                effect.channel->Stop();
+        _firstPersonActiveEffects.clear();
+    }
+
+    static void RefreshFirstPersonEffects()
+    {
+        const auto listener = ResolveFirstPersonAudioListener();
+        if (!listener)
+            return;
+        std::erase_if(_firstPersonActiveEffects, [&listener](const FirstPersonActiveEffect& effect) {
+            if (effect.channel == nullptr || effect.channel->IsDone())
+                return true;
+            const auto spatial = CalculateFirstPersonSpatialParams(
+                *listener, { float(effect.emitter.x), float(effect.emitter.y), float(effect.emitter.z) });
+            // Temporarily mute distant sources. Do not stop them: the player
+            // can walk/ride back into range while the original sample is playing.
+            const int32_t volume = spatial.inRange
+                ? std::clamp(spatial.volume + effect.sampleModifier, -10000, 0) : -10000;
+            effect.channel->SetVolume(DStoMixerVolume(volume));
+            effect.channel->SetPan(DStoMixerPan(spatial.inRange ? spatial.pan : 0));
+            return false;
+        });
+    }
+
+    void SetFirstPersonAudioListener(const FirstPersonAudioListener& listener)
+    {
+        const auto& p = listener.position;
+        const auto& r = listener.right;
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)
+            || !std::isfinite(r.x) || !std::isfinite(r.y) || !std::isfinite(r.z)
+            || r.x * r.x + r.y * r.y + r.z * r.z < 1e-8f)
+        {
+            ClearFirstPersonAudioListener();
+            return;
+        }
+        const bool wasActive = HasFirstPersonAudioListener();
+        _firstPersonRideListener.reset();
+        _firstPersonListener = listener;
+        if (!wasActive)
+            PeepStopCrowdNoise();
+        RefreshFirstPersonEffects();
+    }
+
+    void SetFirstPersonRideAudioListener(
+        EntityId vehicleId, RideId rideId, float headYaw, float headPitch, float eyeOffset)
+    {
+        if (vehicleId.IsNull() || rideId.IsNull() || !std::isfinite(headYaw)
+            || !std::isfinite(headPitch) || !std::isfinite(eyeOffset))
+        {
+            ClearFirstPersonAudioListener();
+            return;
+        }
+        const bool wasActive = HasFirstPersonAudioListener();
+        _firstPersonListener.reset();
+        _firstPersonRideListener = FirstPersonRideListenerAttachment{
+            vehicleId, rideId, headYaw, headPitch, eyeOffset
+        };
+        if (!wasActive)
+            PeepStopCrowdNoise();
+        // Do not refresh channels here: this can be called from the render path
+        // while EntityTweener has temporarily moved the car to presentation time.
+    }
+
+    void RefreshFirstPersonSpatialAudio()
+    {
+        RefreshFirstPersonEffects();
+    }
+
+    void ClearFirstPersonAudioListener()
+    {
+        if (HasFirstPersonAudioListener())
+            PeepStopCrowdNoise();
+        StopFirstPersonEffects();
+        _firstPersonListener.reset();
+        _firstPersonRideListener.reset();
+    }
+
+    bool HasFirstPersonAudioListener()
+    {
+        return _firstPersonListener.has_value() || _firstPersonRideListener.has_value();
+    }
+
+    FirstPersonSpatialParams GetFirstPersonSpatialParams(const CoordsXYZ& source)
+    {
+        const auto listener = ResolveFirstPersonAudioListener();
+        if (!listener)
+            return {};
+        return CalculateFirstPersonSpatialParams(
+            *listener, { float(source.x), float(source.y), float(source.z) });
+    }
 
     static std::shared_ptr<IAudioChannel> _titleMusicChannel = nullptr;
 
@@ -151,6 +297,15 @@ namespace OpenRCT2::Audio
         params.volume = 0;
         params.pan = 0;
 
+        if (HasFirstPersonAudioListener())
+        {
+            const auto spatial = GetFirstPersonSpatialParams(location);
+            params.in_range = spatial.inRange;
+            params.volume = std::clamp(spatial.volume + obj->GetSampleModifier(sampleIndex), -10000, 0);
+            params.pan = spatial.pan;
+            return params;
+        }
+
         auto element = MapGetSurfaceElementAt(location);
         if (element != nullptr && (element->getBaseZ()) - 5 > location.z)
         {
@@ -228,7 +383,28 @@ namespace OpenRCT2::Audio
                 auto source = baseAudioObject->GetSample(sampleIndex);
                 if (source != nullptr)
                 {
-                    Play(source, params.volume, params.pan);
+                    if (HasFirstPersonAudioListener())
+                    {
+                        // Hold the channel and emitter, not a one-time snapshot
+                        // of the player's head orientation. Existing 3D effects
+                        // update via SetFirstPersonAudioListener each frame.
+                        constexpr size_t kMaxTrackedEffects = 128;
+                        const bool trackEffect = _firstPersonActiveEffects.size() < kMaxTrackedEffects;
+                        auto channel = CreateAudioChannel(source, MixerGroup::sound, false,
+                            DStoMixerVolume(params.volume), DStoMixerPan(params.pan), 1, !trackEffect);
+                        if (channel != nullptr && trackEffect)
+                        {
+                            // Saturation degrades only spatial FOLLOWING for the
+                            // new one-shot. No existing voice is stopped or evicted;
+                            // the mixer auto-reaps the untracked new channel.
+                            _firstPersonActiveEffects.push_back(
+                                { loc, baseAudioObject->GetSampleModifier(sampleIndex), std::move(channel) });
+                        }
+                    }
+                    else
+                    {
+                        Play(source, params.volume, params.pan);
+                    }
                 }
             }
         }
@@ -323,6 +499,7 @@ namespace OpenRCT2::Audio
 
     void StopSFX()
     {
+        StopFirstPersonEffects();
         StopVehicleSounds();
         PeepStopCrowdNoise();
         Weather::stopWeatherSound();
@@ -395,6 +572,7 @@ namespace OpenRCT2::Audio
 
     void Close()
     {
+        StopFirstPersonEffects();
         PeepStopCrowdNoise();
         StopTitleMusic();
         RideAudio::StopAllChannels();

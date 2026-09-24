@@ -15,6 +15,7 @@
 #include "OpenRCT2.h"
 #include "ReplayManager.h"
 #include "actions/GameActionRunner.h"
+#include "audio/Audio.h"
 #include "config/Config.h"
 #include "drawing/Palette.h"
 #include "entity/EntityTweener.h"
@@ -335,6 +336,7 @@ namespace OpenRCT2
         News::UpdateCurrentItem();
 
         MapAnimations::InvalidateAndUpdateAll();
+        Audio::RefreshFirstPersonSpatialAudio();
         VehicleSoundsUpdate();
         PeepUpdateCrowdNoise();
         Weather::updateSound();

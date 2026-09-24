@@ -16,6 +16,8 @@
 struct ScreenLine;
 struct TTFSurface;
 
+namespace OpenRCT2::Paint { struct FirstPersonScene; }
+
 namespace OpenRCT2::Drawing
 {
     struct IDrawingEngine;
@@ -43,6 +45,9 @@ namespace OpenRCT2::Drawing
         virtual void DrawTTFBitmap(
             RenderTarget& rt, const TextDrawInfo& info, TTFSurface* surface, int32_t x, int32_t y, uint8_t hintingThreshold)
             = 0;
+        // OpenGL's perspective pass is optional for the existing software drawing context.
+        virtual bool DrawFirstPersonScene(RenderTarget&, const Paint::FirstPersonScene&) { return false; }
+        virtual float GetFirstPersonGpuTimeMs() const { return 0.0f; }
     };
 
 } // namespace OpenRCT2::Drawing

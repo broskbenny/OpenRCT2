@@ -47,6 +47,7 @@
     <ClInclude Include="audio\AudioMixer.h" />
     <ClInclude Include="audio\SDLAudioSource.h" />
     <ClInclude Include="CursorData.h" />
+    <ClInclude Include="FirstPersonController.h" />
     <ClInclude Include="CursorRepository.h" />
     <ClInclude Include="drawing\BitmapReader.h" />
     <ClInclude Include="drawing\engines\DrawingEngineFactory.hpp" />
@@ -56,6 +57,8 @@
     <ClInclude Include="drawing\engines\opengl\DrawCommands.h" />
     <ClInclude Include="drawing\engines\opengl\DrawLineShader.h" />
     <ClInclude Include="drawing\engines\opengl\DrawRectShader.h" />
+    <ClInclude Include="drawing\engines\opengl\FirstPersonGLRenderer.h" />
+    <ClInclude Include="drawing\engines\opengl\FirstPersonGpuBatching.h" />
     <ClInclude Include="drawing\engines\opengl\GLSLTypes.h" />
     <ClInclude Include="drawing\engines\opengl\OpenGLAPI.h" />
     <ClInclude Include="drawing\engines\opengl\OpenGLAPIProc.h" />
@@ -116,6 +119,7 @@
     <ClCompile Include="audio\SDLAudioSource.cpp" />
     <ClCompile Include="audio\WavAudioSource.cpp" />
     <ClCompile Include="CursorData.cpp" />
+    <ClCompile Include="FirstPersonController.cpp" />
     <ClCompile Include="CursorRepository.cpp" />
     <ClCompile Include="drawing\BitmapReader.cpp" />
     <ClCompile Include="drawing\engines\HardwareDisplayDrawingEngine.cpp" />
@@ -124,6 +128,7 @@
     <ClCompile Include="drawing\engines\opengl\CopyRectShader.cpp" />
     <ClCompile Include="drawing\engines\opengl\DrawLineShader.cpp" />
     <ClCompile Include="drawing\engines\opengl\DrawRectShader.cpp" />
+    <ClCompile Include="drawing\engines\opengl\FirstPersonGLRenderer.cpp" />
     <ClCompile Include="drawing\engines\opengl\OpenGLAPI.cpp" />
     <ClCompile Include="drawing\engines\opengl\OpenGLDrawingEngine.cpp" />
     <ClCompile Include="drawing\engines\opengl\OpenGLFramebuffer.cpp" />

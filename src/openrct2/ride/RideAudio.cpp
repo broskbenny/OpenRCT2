@@ -380,8 +380,20 @@ namespace OpenRCT2::RideAudio
      */
     void UpdateMusicInstance(Ride& ride, const CoordsXYZ& rideCoords, uint16_t sampleRate)
     {
-        if (gLegacyScene != LegacyScene::scenarioEditor && !gGameSoundsOff && gMusicTrackingViewport != nullptr)
+        if (gLegacyScene != LegacyScene::scenarioEditor && !gGameSoundsOff
+            && (HasFirstPersonAudioListener() || gMusicTrackingViewport != nullptr))
         {
+            if (HasFirstPersonAudioListener())
+            {
+                const auto spatial = GetFirstPersonSpatialParams(rideCoords);
+                const auto volume = std::clamp(spatial.volume - 700, -10000, 0);
+                if (IsFirstPersonRideMusicAudible(spatial))
+                    RideUpdateMusicPosition(ride, static_cast<int16_t>(volume),
+                                            static_cast<int16_t>(spatial.pan), sampleRate);
+                else
+                    RideUpdateMusicPosition(ride);
+                return;
+            }
             auto rotatedCoords = Translate3DTo2DWithZ(GetCurrentRotation(), rideCoords);
             auto viewport = gMusicTrackingViewport;
             auto viewWidth = viewport->ViewWidth();

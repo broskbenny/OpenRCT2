@@ -23,6 +23,7 @@ namespace OpenRCT2::MapAnimations
     };
 
     void MarkTileForInvalidation(TileCoordsXY coords);
+    bool IsTileAnimatedForFirstPerson(TileCoordsXY coords);
     void MarkTileForUpdate(TileCoordsXY coords);
     void CreateTemporary(const CoordsXYZ& coords, TemporaryType type);
     void MarkAllTiles();

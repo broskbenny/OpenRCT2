@@ -16,6 +16,7 @@
     #include "DrawCommands.h"
     #include "DrawLineShader.h"
     #include "DrawRectShader.h"
+    #include "FirstPersonGLRenderer.h"
     #include "GLSLTypes.h"
     #include "OpenGLAPI.h"
     #include "OpenGLFramebuffer.h"
@@ -73,6 +74,7 @@ private:
     std::unique_ptr<SwapFramebuffer> _swapFramebuffer;
 
     std::unique_ptr<TextureCache> _textureCache;
+    std::unique_ptr<FirstPersonGLRenderer> _firstPerson;
 
     int32_t _drawCount = 0;
 
@@ -126,6 +128,8 @@ public:
         RenderTarget& rt, FilterPaletteID palette, int32_t left, int32_t top, int32_t right, int32_t bottom) override;
     void DrawLine(RenderTarget& rt, PaletteIndex colour, const ScreenLine& line) override;
     void DrawSprite(RenderTarget& rt, ImageId imageId, int32_t x, int32_t y) override;
+    bool DrawFirstPersonScene(RenderTarget& rt, const Paint::FirstPersonScene& scene) override;
+    float GetFirstPersonGpuTimeMs() const override;
     void DrawSpriteRawMasked(RenderTarget& rt, int32_t x, int32_t y, ImageId maskImage, ImageId colourImage) override;
     void DrawSpriteSolid(RenderTarget& rt, ImageId image, int32_t x, int32_t y, PaletteIndex colour) override;
     void DrawGlyph(RenderTarget& rt, ImageId image, int32_t x, int32_t y, const PaletteMap& palette) override;
@@ -680,6 +684,24 @@ void OpenGLDrawingContext::FinishDraw()
     Guard::Assert(_inDraw == true);
 
     _inDraw = false;
+}
+
+bool OpenGLDrawingContext::DrawFirstPersonScene(RenderTarget& rt, const Paint::FirstPersonScene& scene)
+{
+    Guard::Assert(_inDraw == true);
+    FlushCommandBuffers();
+    if (_firstPerson == nullptr)
+        _firstPerson = std::make_unique<FirstPersonGLRenderer>();
+    const auto clip = CalculateClipping(rt);
+    auto& framebuffer = _swapFramebuffer->GetFinalFramebuffer();
+    _firstPerson->Draw(scene, *_textureCache, *_swapFramebuffer, framebuffer.GetWidth(), framebuffer.GetHeight(),
+                       clip.getLeft(), clip.getTop());
+    return true;
+}
+
+float OpenGLDrawingContext::GetFirstPersonGpuTimeMs() const
+{
+    return _firstPerson ? _firstPerson->LastGpuTimeMs() : 0.0f;
 }
 
 void OpenGLDrawingContext::Clear(RenderTarget& rt, PaletteIndex paletteIndex)

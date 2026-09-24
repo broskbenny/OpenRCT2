@@ -74,7 +74,7 @@ namespace OpenRCT2
     void EntityTweener::populateEntities()
     {
         const auto vpList = GetUnzoomedViewports();
-        if (vpList.empty())
+        if (vpList.empty() && _trackedVehicle.IsNull())
         {
             // No viewports that fit the criteria, bail.
             return;
@@ -90,7 +90,17 @@ namespace OpenRCT2
         }
         for (auto ent : EntityList<Vehicle>())
         {
-            addEntity(vpList, ent);
+            // A first-person passenger can be far outside the last overhead viewport.
+            // Include their car in the SAME official render-time interpolator.
+            if (!_trackedVehicle.IsNull() && ent->id == _trackedVehicle)
+            {
+                entities.push_back(ent);
+                prePos.emplace_back(ent->getLocation());
+            }
+            else
+            {
+                addEntity(vpList, ent);
+            }
         }
     }
 
@@ -99,10 +109,35 @@ namespace OpenRCT2
         restore();
         reset();
         populateEntities();
+        _trackedVisuals.reset();
+        if (!_trackedVehicle.IsNull())
+        {
+            if (auto* vehicle = getGameState().entities.getEntity<Vehicle>(_trackedVehicle))
+            {
+                FirstPersonTrackedVehicleVisuals v{};
+                v.yawBefore = v.yawAfter = vehicle->orientation;
+                v.spinBefore = v.spinAfter = vehicle->spin_sprite;
+                v.pitchBefore = v.pitchAfter = static_cast<uint8_t>(vehicle->pitch);
+                v.rollBefore = v.rollAfter = static_cast<uint8_t>(vehicle->roll);
+                _trackedVisuals = v;
+            }
+        }
     }
 
     void EntityTweener::postTick()
     {
+        if (_trackedVisuals.has_value())
+        {
+            if (auto* vehicle = getGameState().entities.getEntity<Vehicle>(_trackedVehicle))
+            {
+                _trackedVisuals->yawAfter = vehicle->orientation;
+                _trackedVisuals->spinAfter = vehicle->spin_sprite;
+                _trackedVisuals->pitchAfter = static_cast<uint8_t>(vehicle->pitch);
+                _trackedVisuals->rollAfter = static_cast<uint8_t>(vehicle->roll);
+                _trackedVisuals->alpha = 1.0f;
+            }
+            else _trackedVisuals.reset();
+        }
         for (auto* ent : entities)
         {
             if (ent == nullptr)
@@ -132,6 +167,8 @@ namespace OpenRCT2
             return;
         }
 
+        if (!_trackedVehicle.IsNull() && entity->id == _trackedVehicle)
+            _trackedVisuals.reset();
         auto it = std::find(entities.begin(), entities.end(), entity);
         if (it != entities.end())
             *it = nullptr;
@@ -139,6 +176,8 @@ namespace OpenRCT2
 
     void EntityTweener::tween(float alpha)
     {
+        if (_trackedVisuals.has_value())
+            _trackedVisuals->alpha = std::clamp(alpha, 0.0f, 1.0f);
         const float inv = (1.0f - alpha);
         for (size_t i = 0; i < entities.size(); ++i)
         {

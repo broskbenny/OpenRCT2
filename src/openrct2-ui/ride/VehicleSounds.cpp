@@ -116,6 +116,13 @@ namespace OpenRCT2::Audio
         if (vehicle.x == kLocationNull)
             return false;
 
+        if (HasFirstPersonAudioListener())
+        {
+            const auto spatial = GetFirstPersonSpatialParams(vehicle.getLocation());
+            // No gain means this train must not occupy one of 14 channels.
+            return spatial.inRange && spatial.vehicleVolume > 0;
+        }
+
         if (gMusicTrackingViewport == nullptr)
             return false;
 
@@ -161,18 +168,35 @@ namespace OpenRCT2::Audio
         {
             if (vehicleSound.id == vehicle.id.ToUnderlying())
             {
-                // Vehicle sounds will get higher priority if they are already playing
+                if (HasFirstPersonAudioListener())
+                    return FirstPersonVehiclePriority(
+                        static_cast<uint32_t>(std::max(0, result)), true,
+                        GetFirstPersonSpatialParams(vehicle.getLocation()).vehicleVolume);
+                // Preserve native channel-continuity preference overhead.
                 return result + 300;
             }
         }
 
+        if (HasFirstPersonAudioListener())
+            return FirstPersonVehiclePriority(
+                static_cast<uint32_t>(std::max(0, result)), false,
+                GetFirstPersonSpatialParams(vehicle.getLocation()).vehicleVolume);
         return result;
     }
 
     static VehicleSoundParams CreateSoundParam(const Vehicle& vehicle, uint16_t priority)
     {
-        VehicleSoundParams param;
+        VehicleSoundParams param{};
         param.priority = priority;
+        if (HasFirstPersonAudioListener())
+        {
+            const auto spatial = GetFirstPersonSpatialParams(vehicle.getLocation());
+            param.panX = static_cast<int16_t>(spatial.pan);
+            param.panY = 0;
+            param.firstPersonVolume = spatial.vehicleVolume;
+        }
+        else
+        {
         int32_t panX = (vehicle.spriteData.spriteRect.getLeft() / 2) + (vehicle.spriteData.spriteRect.getRight() / 2)
             - gMusicTrackingViewport->viewPos.x;
         panX = gMusicTrackingViewport->zoom.ApplyInversedTo(panX);
@@ -196,6 +220,7 @@ namespace OpenRCT2::Audio
             screenHeight = 64;
         }
         param.panY = ((((panY * 65536) / screenHeight) - 0x8000) >> 4);
+        }
 
         int32_t frequency = std::abs(vehicle.velocity);
 
@@ -272,6 +297,12 @@ namespace OpenRCT2::Audio
     static void VehicleSoundsUpdateWindowSetup()
     {
         gMusicTrackingViewport = nullptr;
+        if (HasFirstPersonAudioListener())
+        {
+            // World-space listener supersedes the single legacy viewport.
+            gVolumeAdjustZoom = 0;
+            return;
+        }
 
         WindowBase* window = Ui::Windows::WindowGetListening();
         if (window == nullptr)
@@ -297,6 +328,8 @@ namespace OpenRCT2::Audio
 
     static uint8_t VehicleSoundsUpdateGetPanVolume(VehicleSoundParams* sound_params)
     {
+        if (HasFirstPersonAudioListener())
+            return sound_params->firstPersonVolume;
         uint8_t vol1 = 0xFF;
         uint8_t vol2 = 0xFF;
 

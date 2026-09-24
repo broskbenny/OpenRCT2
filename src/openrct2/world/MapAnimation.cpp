@@ -21,6 +21,7 @@
 #include "../object/WallSceneryEntry.h"
 #include "../profiling/Profiling.h"
 #include "../ride/Ride.h"
+#include "../ride/RideData.h"
 #include "../ride/ted/TrackElemType.h"
 #include "Map.h"
 #include "tile_element/EntranceElement.h"
@@ -591,6 +592,26 @@ static std::optional<UpdateType> IsElementAnimated(const TileElementBase& elemen
     }
 
     return std::nullopt;
+}
+
+bool MapAnimations::IsTileAnimatedForFirstPerson(const TileCoordsXY coords)
+{
+    const auto* element = MapGetFirstElementAt(coords.toCoordsXY());
+    if (element == nullptr) return false;
+    do
+    {
+        if (IsElementAnimated(*element).has_value()) return true;
+        if (const auto* track=element->asTrack();track!=nullptr)
+        {
+            // Some flat rides paint moving cars as part of their TRACK tile,
+            // rather than as independently painted entities. Caching those
+            // track sprites would freeze the ride although guests still move.
+            const auto* ride=GetRide(track->getRideIndex());
+            if (ride!=nullptr && ride->getRideTypeDescriptor().flags.has(RtdFlag::isFlatRide))
+                return true;
+        }
+    } while (!(element++)->isLastForTile());
+    return false;
 }
 
 void MapAnimations::MarkTileForInvalidation(const TileCoordsXY coords)

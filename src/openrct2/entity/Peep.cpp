@@ -1175,27 +1175,39 @@ namespace OpenRCT2
             return;
 
         auto viewport = gMusicTrackingViewport;
-        if (viewport == nullptr)
+        const bool firstPerson = HasFirstPersonAudioListener();
+        if (!firstPerson && viewport == nullptr)
             return;
 
-        // Count the number of peeps visible
-        auto visiblePeeps = 0;
-
+        // First person counts *nearby* guests, not an overhead camera's
+        // sprite rectangle. Retain the native crowd sample, loop and controls.
+        int32_t weightedPeeps = 0;
         for (auto peep : EntityList<Guest>())
         {
             if (peep->x == kLocationNull)
                 continue;
-            if (viewport->viewPos.x > peep->spriteData.spriteRect.getRight())
-                continue;
-            if (viewport->viewPos.x + viewport->ViewWidth() < peep->spriteData.spriteRect.getLeft())
-                continue;
-            if (viewport->viewPos.y > peep->spriteData.spriteRect.getBottom())
-                continue;
-            if (viewport->viewPos.y + viewport->ViewHeight() < peep->spriteData.spriteRect.getTop())
-                continue;
-
-            visiblePeeps += peep->state == PeepState::queuing ? 1 : 2;
+            if (firstPerson)
+            {
+                const auto spatial = GetFirstPersonSpatialParams(peep->getLocation());
+                if (!spatial.inRange || spatial.vehicleVolume == 0)
+                    continue;
+                weightedPeeps += FirstPersonCrowdWeight(
+                    spatial.vehicleVolume, peep->state == PeepState::queuing);
+            }
+            else
+            {
+                if (viewport->viewPos.x > peep->spriteData.spriteRect.getRight())
+                    continue;
+                if (viewport->viewPos.x + viewport->ViewWidth() < peep->spriteData.spriteRect.getLeft())
+                    continue;
+                if (viewport->viewPos.y > peep->spriteData.spriteRect.getBottom())
+                    continue;
+                if (viewport->viewPos.y + viewport->ViewHeight() < peep->spriteData.spriteRect.getTop())
+                    continue;
+                weightedPeeps += peep->state == PeepState::queuing ? 255 : 510;
+            }
         }
+        auto visiblePeeps = weightedPeeps / 255;
 
         // This function doesn't account for the fact that the screen might be so big that 100 peeps could potentially be very
         // spread out and therefore not produce any crowd noise. Perhaps a more sophisticated solution would check how many
@@ -1217,9 +1229,9 @@ namespace OpenRCT2
             // 207360000 maybe related to DSBVOLUME_MIN which is -10,000 (dB/100)
             int32_t volume = 120 - std::min(visiblePeeps, 120);
             volume = volume * volume * volume * volume;
-            volume = (viewport->zoom.ApplyInversedTo(207360000 - volume) - 207360000) / 65536 - 150;
-
-            // Load and play crowd noise if needed and set volume
+            const auto audibleCount = firstPerson ? 207360000 - volume
+                                                  : viewport->zoom.ApplyInversedTo(207360000 - volume);
+            volume = (audibleCount - 207360000) / 65536 - 150;
             if (_crowdSoundChannel == nullptr || _crowdSoundChannel->IsDone())
             {
                 _crowdSoundChannel = CreateAudioChannel(SoundId::crowdAmbience, true, 0);

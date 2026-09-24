@@ -7,6 +7,7 @@
  * OpenRCT2 is licensed under the GNU General Public License version 3.
  *****************************************************************************/
 
+#include "../FirstPersonController.h"
 #include "../UiContext.h"
 #include "../interface/InGameConsole.h"
 #include "../scripting/CustomMenu.h"
@@ -133,6 +134,8 @@ namespace OpenRCT2::Ui::Windows
         DDIDX_HIGHLIGHT_PATH_ISSUES = 19,
         // separator
         DDIDX_TRANSPARENCY = 21,
+        // separator
+        DDIDX_FIRST_PERSON_WALK = 23,
 
         TOP_TOOLBAR_VIEW_MENU_COUNT,
     };
@@ -300,6 +303,8 @@ namespace OpenRCT2::Ui::Windows
                 ToggleOption(DDIDX_HIGHLIGHT_PATH_ISSUES, STR_HIGHLIGHT_PATH_ISSUES_MENU),
                 ExtSeparator(),
                 ToggleOption(DDIDX_TRANSPARENCY, STR_TRANSPARENCY_OPTIONS),
+                ExtSeparator(),
+                ToggleOption(DDIDX_FIRST_PERSON_WALK, STR_WALKING),
             };
 
             static_assert(ItemIDsMatchIndices(items));
@@ -328,6 +333,8 @@ namespace OpenRCT2::Ui::Windows
             gDropdown.items[DDIDX_PATH_HEIGHTS].setChecked(mvpFlags & VIEWPORT_FLAG_PATH_HEIGHTS);
             gDropdown.items[DDIDX_VIEW_CLIPPING].setChecked(mvpFlags & VIEWPORT_FLAG_CLIP_VIEW);
             gDropdown.items[DDIDX_HIGHLIGHT_PATH_ISSUES].setChecked(mvpFlags & VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES);
+            gDropdown.items[DDIDX_FIRST_PERSON_WALK].setChecked(
+                FirstPerson::GetMode() == FirstPerson::Mode::walking);
 
             gDropdown.defaultIndex = DDIDX_UNDERGROUND_INSIDE;
         }
@@ -404,6 +411,9 @@ namespace OpenRCT2::Ui::Windows
                         break;
                     case DDIDX_TRANSPARENCY:
                         ContextOpenWindow(WindowClass::transparency);
+                        break;
+                    case DDIDX_FIRST_PERSON_WALK:
+                        FirstPerson::ToggleWalking();
                         break;
                     default:
                         return;

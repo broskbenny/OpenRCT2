@@ -404,6 +404,10 @@
     <ClInclude Include="paint\Boundbox.h" />
     <ClInclude Include="paint\Paint.Entity.h" />
     <ClInclude Include="paint\Paint.h" />
+    <ClInclude Include="paint\FirstPersonRenderer.h" />
+    <ClInclude Include="paint\FirstPersonMath.h" />
+    <ClInclude Include="paint\FirstPersonVehiclePose.h" />
+    <ClInclude Include="paint\FirstPersonStreaming.h" />
     <ClInclude Include="paint\Paint.SessionFlags.h" />
     <ClInclude Include="paint\Painter.h" />
     <ClInclude Include="paint\Balloon.h" />
@@ -1026,6 +1030,7 @@
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="paint\Paint.cpp" />
+    <ClCompile Include="paint\FirstPersonRenderer.cpp" />
     <ClCompile Include="paint\Paint.Entity.cpp" />
     <ClCompile Include="paint\Painter.cpp" />
     <ClCompile Include="paint\PaintHelpers.cpp" />
