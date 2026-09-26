@@ -255,7 +255,7 @@ TEST(FirstPersonPathArtworkTest, SharedNativeSurfaceSelectionRotatesConsistently
     EXPECT_EQ(GetPathSurfaceImageOffset(path, 3), 17);
 }
 
-TEST(FirstPersonVehiclePoseTest, NativeYawMatchesMovementVectors)
+TEST(FirstPersonVehiclePoseTest, NativeYawMatchesMovementConventionWithoutQuantising)
 {
     constexpr std::array<uint8_t, 4> orientations{ 0, 8, 16, 24 };
     constexpr float kExpectedX[4]{ -1.0f, 0.0f, 1.0f, 0.0f };
@@ -276,6 +276,14 @@ TEST(FirstPersonVehiclePoseTest, NativeYawMatchesMovementVectors)
         EXPECT_NEAR(basis.forward.x, kExpectedX[i], 0.000001f);
         EXPECT_NEAR(basis.forward.y, kExpectedY[i], 0.000001f);
     }
+
+    // Orientation 3 is between the free-roam table's 8-way headings. The
+    // camera must retain the native 32-step angle instead of snapping to 45°.
+    const auto yaw3 = FirstPersonVehicleYawRadians(3);
+    const auto basis3 = GetFirstPersonBasis(FirstPersonCamera{ {}, yaw3, 0.0f, 0.0f });
+    const float theta3 = 3.0f * (2.0f * kPi / 32.0f);
+    EXPECT_NEAR(basis3.forward.x, -std::cos(theta3), 0.000001f);
+    EXPECT_NEAR(basis3.forward.y, std::sin(theta3), 0.000001f);
 }
 
 TEST(FirstPersonVehiclePoseTest, SpecialPitchStatesUseAuthoritativeGeometry)
