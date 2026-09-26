@@ -770,6 +770,19 @@ namespace OpenRCT2::Paint
         };
         static std::unordered_map<uint64_t, StaticPaintCacheEntry> _staticPaintCache;
 
+        [[nodiscard]] std::optional<uint8_t> CachedVerticalTunnelHeight(uint64_t key)
+        {
+            const auto it = _staticPaintCache.find(key);
+            if (it == _staticPaintCache.end())
+                return std::nullopt;
+            for (const auto& variant : it->second.rotations)
+            {
+                if (variant.valid)
+                    return variant.verticalTunnelHeight;
+            }
+            return std::nullopt;
+        }
+
         struct ReconstructionRotationState
         {
             uint64_t lastSeen{};
@@ -1153,7 +1166,19 @@ namespace OpenRCT2::Paint
                         ? GetFirstPersonWaterMaskImage(*tile, sourceRotation) : ImageId{};
                     const ImageId waterOverlay = waterZ > baseZ
                         ? GetFirstPersonWaterOverlayImage(*tile, opt.viewFlags, sourceRotation) : ImageId{};
-                    auto& cache = _terrainCache.entries[TerrainKey(tx,ty)];
+                    const uint64_t terrainKey = TerrainKey(tx, ty);
+                    auto& cache = _terrainCache.entries[terrainKey];
+                    if (const auto cachedTunnelHeight = CachedVerticalTunnelHeight(terrainKey);
+                        cachedTunnelHeight.has_value())
+                    {
+                        const bool verticalOpening = FirstPersonVerticalTunnelCutsTerrain(
+                            baseZ, *cachedTunnelHeight);
+                        if (cache.verticalOpening != verticalOpening)
+                        {
+                            cache.verticalOpening = verticalOpening;
+                            MarkStaticRegionDirtyForTile(tx, ty);
+                        }
+                    }
                     const bool terrainChanged =
                         cache.source != image || cache.waterMaskImage != waterMask ||
                         cache.waterOverlayImage != waterOverlay || cache.baseZ != baseZ || cache.slope != slope ||

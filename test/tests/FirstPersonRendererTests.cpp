@@ -8,6 +8,7 @@
  *****************************************************************************/
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <openrct2/paint/FirstPersonRenderer.h>
 #include <openrct2/paint/Paint.h>
 #include <openrct2/entity/EntityBase.h>
