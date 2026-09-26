@@ -5,9 +5,7 @@
 #pragma once
 
 #include <openrct2/paint/FirstPersonRenderer.h>
-#include <bit>
 #include <cstdint>
-#include <vector>
 
 namespace OpenRCT2::Ui
 {
@@ -35,31 +33,6 @@ namespace OpenRCT2::Ui
             fingerprint ^= (value >> (8u*i)) & 255u;
             fingerprint *= 1099511628211ull;
         }
-    }
-    inline void ExtendFirstPersonSurfaceFingerprint(uint64_t& fingerprint, const Paint::FirstPersonSurface& s)
-    {
-        ExtendFirstPersonFingerprint(fingerprint,FirstPersonMaterialFingerprint(s.image));
-        ExtendFirstPersonFingerprint(fingerprint,s.mask.HasValue() ? FirstPersonMaterialFingerprint(s.mask) : 0);
-        ExtendFirstPersonFingerprint(fingerprint,s.depthBias ? 1u : 0u);
-        ExtendFirstPersonFingerprint(fingerprint,s.edgeCoverage ? 1u : 0u);
-        ExtendFirstPersonFingerprint(fingerprint,s.immutableFingerprint);
-        for (const auto& v : s.triangles)
-        {
-            ExtendFirstPersonFingerprint(fingerprint,std::bit_cast<uint32_t>(v.world.x));
-            ExtendFirstPersonFingerprint(fingerprint,std::bit_cast<uint32_t>(v.world.y));
-            ExtendFirstPersonFingerprint(fingerprint,std::bit_cast<uint32_t>(v.world.z));
-            ExtendFirstPersonFingerprint(fingerprint,std::bit_cast<uint32_t>(v.u));
-            ExtendFirstPersonFingerprint(fingerprint,std::bit_cast<uint32_t>(v.v));
-        }
-    }
-    [[nodiscard]] inline uint64_t FirstPersonRegionFingerprint(
-        const std::vector<const Paint::FirstPersonSurface*>& surfaces)
-    {
-        uint64_t fingerprint=14695981039346656037ull;
-        ExtendFirstPersonFingerprint(fingerprint,surfaces.size());
-        for (const auto* s : surfaces)
-            ExtendFirstPersonSurfaceFingerprint(fingerprint,*s);
-        return fingerprint;
     }
 } // namespace OpenRCT2::Ui
 
