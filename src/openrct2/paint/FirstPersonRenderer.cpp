@@ -752,25 +752,45 @@ namespace OpenRCT2::Paint
             _staticRegionPackets[FirstPersonGpuRegionKey(tileX, tileY)].dirty = true;
         }
 
-        // Hash the actual packed native tile elements, not only terrain height.
-        // This detects direct map mutations even if they bypass the ordinary
-        // viewport invalidation path. Ride-wide changes are covered by the
-        // explicit native redraw hooks and a bounded refresh interval below.
-        uint64_t NativeTileSignature(CoordsXY pos)
+        struct TileSemanticSnapshot
+        {
+            uint64_t signature = 0;
+            int32_t minZ = 0;
+            int32_t maxZ = 0;
+            bool populated = false;
+        };
+
+        TileSemanticSnapshot ReadTileSemanticSnapshot(CoordsXY pos)
         {
             const auto* elem = MapGetFirstElementAt(pos);
-            if (elem == nullptr) return 0;
-            uint64_t hash = 14695981039346656037ull;
+            if (elem == nullptr)
+                return {};
+
+            TileSemanticSnapshot result{};
+            result.signature = 14695981039346656037ull;
+            result.minZ = 4096;
+            result.maxZ = -512;
             do
             {
+                result.populated = true;
+                result.minZ = std::min(result.minZ, elem->getBaseZ());
+                result.maxZ = std::max(result.maxZ, SemanticClearanceZ(*elem));
+                if (elem->getType() == TileElementType::surface)
+                    result.maxZ = std::max(result.maxZ, elem->asSurface()->getWaterHeight());
+
                 const auto* bytes = reinterpret_cast<const uint8_t*>(elem);
-                for (size_t n=0;n<sizeof(TileElement);++n)
+                for (size_t n = 0; n < sizeof(TileElement); ++n)
                 {
-                    hash ^= uint64_t(bytes[n]);
-                    hash *= 1099511628211ull;
+                    result.signature ^= uint64_t(bytes[n]);
+                    result.signature *= 1099511628211ull;
                 }
             } while (!(elem++)->isLastForTile());
-            return hash;
+            return result;
+        }
+
+        uint64_t NativeTileSignature(CoordsXY pos)
+        {
+            return ReadTileSemanticSnapshot(pos).signature;
         }
 
         uint64_t TerrainKey(int32_t tx, int32_t ty)
@@ -832,6 +852,56 @@ namespace OpenRCT2::Paint
                      std::sqrt(dx*dx+dy*dy+dz*dz)+halo,populated};
         }
 
+        std::optional<FirstPersonSemanticSphere> CachedTileVisibilityBounds(
+            CoordsXY world, uint64_t frame)
+        {
+            const int32_t tx = world.x / kCoordsXYStep;
+            const int32_t ty = world.y / kCoordsXYStep;
+            const uint64_t key = TerrainKey(tx, ty);
+            auto& cached = _staticPaintCache[key];
+            constexpr uint64_t kVisibilityProbeInterval = 240;
+            const bool probeDue = !cached.visibilityBoundValid || cached.visibilityDirty
+                || FirstPersonRefreshDue(
+                    key ^ 0xd6e8feb86659fd93ull, frame,
+                    cached.lastVisibilityScan, kVisibilityProbeInterval);
+            if (probeDue)
+            {
+                const auto snapshot = ReadTileSemanticSnapshot(world);
+                if (!snapshot.populated)
+                {
+                    cached.visibilityBoundValid = false;
+                    cached.visibilityDirty = false;
+                    cached.lastVisibilityScan = frame;
+                    return std::nullopt;
+                }
+
+                if (cached.valid && cached.signature != snapshot.signature)
+                    cached.dirty = true;
+                cached.signature = snapshot.signature;
+                cached.visibilityMinZ = snapshot.minZ;
+                cached.visibilityMaxZ = snapshot.maxZ;
+                cached.visibilityBoundValid = true;
+                cached.visibilityDirty = false;
+                cached.lastVisibilityScan = frame;
+            }
+
+            if (!cached.visibilityBoundValid)
+                return std::nullopt;
+            const float halfZ = 0.5f
+                * float(cached.visibilityMaxZ - cached.visibilityMinZ);
+            const FirstPersonVec3 center{
+                float(world.x + kCoordsXYHalfTile),
+                float(world.y + kCoordsXYHalfTile),
+                0.5f * float(cached.visibilityMinZ + cached.visibilityMaxZ)
+            };
+            // Preserve the previous conservative overhang halo. Entity visual
+            // admission is handled separately from this static tile bound.
+            const float radius = std::sqrt(
+                2.0f * float(kCoordsXYHalfTile * kCoordsXYHalfTile)
+                + halfZ * halfZ) + 256.0f;
+            return FirstPersonSemanticSphere{ center, radius };
+        }
+
         // Complete-park coverage: partition the authoritative tile map, not a
         // camera-centred square. Region bounds are broad on purpose: the
         // base terrain of a tile cannot safely cull a tall ride on that tile.
@@ -850,28 +920,13 @@ namespace OpenRCT2::Paint
                 {
                     const CoordsXY world{ tx * kCoordsXYStep, ty * kCoordsXYStep };
                     if (!MapIsLocationValid(world)) continue;
-                    const auto* element = MapGetFirstElementAt(world);
-                    if (element == nullptr) continue;
-                    int32_t minZ = 4096;
-                    int32_t maxZ = -512;
-                    do
+                    const auto semantic = CachedTileVisibilityBounds(
+                        world, _terrainCache.frame + 1);
+                    if (semantic.has_value()
+                        && frustum.visible(semantic->center, semantic->radius))
                     {
-                        minZ = std::min(minZ, element->getBaseZ());
-                        maxZ = std::max(maxZ, SemanticClearanceZ(*element));
-                        if (element->getType() == TileElementType::surface)
-                        {
-                            maxZ = std::max(maxZ, element->asSurface()->getWaterHeight());
-                        }
-                    } while (!(element++)->isLastForTile());
-                    if (maxZ < minZ) continue;
-                    // Every tile's visible art may overhang its occupancy box.
-                    // A conservative margin is preferable to skyline popping.
-                    const float halfZ = 0.5f * float(maxZ - minZ);
-                    const FirstPersonVec3 center{ float(world.x + 16), float(world.y + 16),
-                                                  0.5f * float(minZ + maxZ) };
-                    const float radius = std::sqrt(2.0f * 16.0f * 16.0f + halfZ * halfZ) + 256.0f;
-                    if (frustum.visible(center, radius))
                         scene.visibleTiles.emplace_back(world);
+                    }
                 }
             };
             auto bounds = [](int32_t x0,int32_t y0,int32_t x1,int32_t y1) {
@@ -1717,7 +1772,10 @@ namespace OpenRCT2::Paint
             const int32_t tx=int32_t(key>>32);
             const int32_t ty=int32_t(key&0xffffffffu);
             if (tx>=x0 && tx<=x1 && ty>=y0 && ty<=y1)
-                cached.dirty=true;
+            {
+                cached.dirty = true;
+                cached.visibilityDirty = true;
+            }
         }
         // Generic native invalidation also covers shadows and moving objects,
         // so retain the cached data but mark it unfit for a region packet until
