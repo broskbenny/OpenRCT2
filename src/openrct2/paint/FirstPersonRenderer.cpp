@@ -774,6 +774,7 @@ namespace OpenRCT2::Paint
             bool animated = false;
             bool hasSelectedRotation = false;
             uint8_t selectedRotation = 0;
+            std::vector<ReconstructionGroupInfo> reconstructionGroups;
             // Last group rotation represented in this tile's persistent region.
             // This catches groups that changed while another region was visible.
             std::unordered_map<uint64_t, uint8_t> assembledGroupRotations;
@@ -1358,18 +1359,39 @@ namespace OpenRCT2::Paint
                 const auto key = TerrainKey(tx, ty);
                 auto& cached = _staticPaintCache[key];
 
-                const auto sig = NativeTileSignature(tile);
-                const bool semanticChanged = !cached.valid || cached.dirty ||
-                    cached.signature != sig || cached.viewFlags != opt.viewFlags;
+                const bool semanticChanged = !cached.valid || cached.dirty
+                    || cached.viewFlags != opt.viewFlags;
                 if (semanticChanged)
                 {
-                    cached.signature = sig;
+                    // Expensive packed-element hashing and group discovery belong
+                    // on the invalidation path, not the normal render path.
+                    cached.signature = NativeTileSignature(tile);
                     cached.viewFlags = opt.viewFlags;
                     cached.animated = MapAnimations::IsTileAnimatedForFirstPerson(
                         TileCoordsXY(tx, ty));
                     cached.valid = true;
                     cached.dirty = false;
+                    cached.reconstructionGroups.clear();
                     cached.assembledGroupRotations.clear();
+
+                    auto* element = MapGetFirstElementAt(tile);
+                    if (element != nullptr)
+                    {
+                        do
+                        {
+                            const auto group = GetReconstructionGroup(tile, element);
+                            if (!group.has_value())
+                                continue;
+                            const bool duplicate = std::any_of(
+                                cached.reconstructionGroups.begin(), cached.reconstructionGroups.end(),
+                                [&](const ReconstructionGroupInfo& existing) {
+                                    return existing.key == group->key;
+                                });
+                            if (!duplicate)
+                                cached.reconstructionGroups.push_back(*group);
+                        } while (!(element++)->isLastForTile());
+                    }
+
                     for (auto& variant : cached.rotations)
                     {
                         variant.valid = false;
@@ -1390,33 +1412,25 @@ namespace OpenRCT2::Paint
                 cached.lastSeen = frame;
 
                 uint8_t rotationMask = uint8_t(1u << tileRotation);
-                auto* element = MapGetFirstElementAt(tile);
-                if (element != nullptr)
+                for (const auto& group : cached.reconstructionGroups)
                 {
-                    do
+                    auto& state = _reconstructionRotations[group.key];
+                    const auto previous = state.hasSelectedRotation
+                        ? std::optional<uint8_t>{ state.selectedRotation }
+                        : std::nullopt;
+                    const auto selected = PaintRotationForPoint(
+                        opt.camera, group.anchor, previous);
+                    state.selectedRotation = selected;
+                    state.hasSelectedRotation = true;
+                    state.lastSeen = frame;
+                    rotationMask |= uint8_t(1u << selected);
+
+                    const auto assembled = cached.assembledGroupRotations.find(group.key);
+                    if (assembled == cached.assembledGroupRotations.end() || assembled->second != selected)
                     {
-                        const auto group = GetReconstructionGroup(tile, element);
-                        if (!group.has_value())
-                            continue;
-
-                        auto& state = _reconstructionRotations[group->key];
-                        const auto previous = state.hasSelectedRotation
-                            ? std::optional<uint8_t>{ state.selectedRotation }
-                            : std::nullopt;
-                        const auto selected = PaintRotationForPoint(
-                            opt.camera, group->anchor, previous);
-                        state.selectedRotation = selected;
-                        state.hasSelectedRotation = true;
-                        state.lastSeen = frame;
-                        rotationMask |= uint8_t(1u << selected);
-
-                        const auto assembled = cached.assembledGroupRotations.find(group->key);
-                        if (assembled == cached.assembledGroupRotations.end() || assembled->second != selected)
-                        {
-                            cached.assembledGroupRotations[group->key] = selected;
-                            MarkStaticRegionDirtyForTile(tx, ty);
-                        }
-                    } while (!(element++)->isLastForTile());
+                        cached.assembledGroupRotations[group.key] = selected;
+                        MarkStaticRegionDirtyForTile(tx, ty);
+                    }
                 }
 
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
