@@ -36,6 +36,118 @@
 using namespace OpenRCT2;
 using namespace OpenRCT2::Drawing;
 
+namespace
+{
+    bool EntityPassesViewportFilters(const PaintSession& session, EntityBase& entity)
+    {
+        if (gTrackDesignSaveMode || (session.ViewFlags & VIEWPORT_FLAG_HIDE_ENTITIES))
+            return false;
+        if (session.rt.zoom_level > ZoomLevel{ 2 })
+            return false;
+
+        if (session.ViewFlags & VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES)
+        {
+            const auto staff = entity.as<Staff>();
+            if (staff != nullptr)
+            {
+                if (staff->assignedStaffType != StaffType::handyman)
+                    return false;
+            }
+            else if (entity.type != EntityType::litter)
+            {
+                return false;
+            }
+        }
+
+        const auto entityPos = entity.getLocation();
+        if (session.ViewFlags & VIEWPORT_FLAG_CLIP_VIEW)
+        {
+            if (entityPos.z > (gClipHeight * kCoordsZStep)
+                && (session.ViewFlags & VIEWPORT_FLAG_CLIP_VIEW_SEE_THROUGH) == 0)
+                return false;
+            if (entityPos.x < gClipSelectionA.x || entityPos.x > (gClipSelectionB.x + kCoordsXYStep - 1))
+                return false;
+            if (entityPos.y < gClipSelectionA.y || entityPos.y > (gClipSelectionB.y + kCoordsXYStep - 1))
+                return false;
+        }
+
+        const auto screenCoords = Translate3DTo2DWithZ(session.CurrentRotation, entityPos);
+        const auto spriteRect = ScreenRect(
+            screenCoords - ScreenCoordsXY{ entity.spriteData.width, entity.spriteData.heightMin },
+            screenCoords + ScreenCoordsXY{ entity.spriteData.width, entity.spriteData.heightMax });
+        const ZoomLevel zoom = session.rt.zoom_level;
+        return !(session.rt.y + session.rt.height <= zoom.ApplyInversedTo(spriteRect.getTop())
+            || zoom.ApplyInversedTo(spriteRect.getBottom()) <= session.rt.y
+            || session.rt.x + session.rt.width <= zoom.ApplyInversedTo(spriteRect.getLeft())
+            || zoom.ApplyInversedTo(spriteRect.getRight()) <= session.rt.x);
+    }
+
+    void PaintOneEntity(PaintSession& session, EntityBase& entity)
+    {
+        if (!EntityPassesViewportFilters(session, entity))
+            return;
+
+        const auto entityPos = entity.getLocation();
+        int32_t imageDirection = session.CurrentRotation;
+        imageDirection <<= 3;
+        imageDirection += entity.orientation;
+        imageDirection &= 0x1F;
+
+        session.CurrentlyDrawnEntity = &entity;
+        session.SpritePosition.x = entityPos.x;
+        session.SpritePosition.y = entityPos.y;
+        session.InteractionType = ViewportInteractionItem::entity;
+
+        switch (entity.type)
+        {
+            case EntityType::vehicle:
+                PaintVehicle(session, *entity.cast<Vehicle>(), imageDirection);
+                if (LightFx::ForVehiclesIsAvailable())
+                    LightFx::AddLightsMagicVehicle(entity.cast<Vehicle>());
+                break;
+            case EntityType::guest:
+                PaintGuest(session, *entity.cast<Guest>(), imageDirection);
+                break;
+            case EntityType::staff:
+                PaintStaff(session, *entity.cast<Staff>(), imageDirection);
+                break;
+            case EntityType::steamParticle:
+                PaintSteamParticle(session, *entity.cast<SteamParticle>());
+                break;
+            case EntityType::moneyEffect:
+                PaintMoneyEffect(session, *entity.cast<MoneyEffect>());
+                break;
+            case EntityType::crashedVehicleParticle:
+                PaintVehicleCrashParticle(session, *entity.cast<VehicleCrashParticle>());
+                break;
+            case EntityType::explosionCloud:
+                PaintExplosionCloud(session, *entity.cast<ExplosionCloud>());
+                break;
+            case EntityType::crashSplash:
+                PaintCrashSplashParticle(session, *entity.cast<CrashSplashParticle>());
+                break;
+            case EntityType::explosionFlare:
+                PaintExplosionFlare(session, *entity.cast<ExplosionFlare>());
+                break;
+            case EntityType::jumpingFountain:
+                PaintJumpingFountain(session, *entity.cast<JumpingFountain>(), imageDirection);
+                break;
+            case EntityType::balloon:
+                PaintBalloon(session, *entity.cast<Balloon>(), imageDirection);
+                break;
+            case EntityType::duck:
+                PaintDuck(session, *entity.cast<Duck>(), imageDirection);
+                break;
+            case EntityType::litter:
+                PaintLitter(session, *entity.cast<Litter>(), imageDirection);
+                break;
+            default:
+                assert(false);
+                break;
+        }
+    }
+}
+
 /**
  * Paint Quadrant
  *  rct2: 0x0069E8B0
@@ -43,140 +155,14 @@ using namespace OpenRCT2::Drawing;
 void EntityPaintSetup(PaintSession& session, const CoordsXY& pos)
 {
     PROFILED_FUNCTION();
-
     if (!MapIsLocationValid(pos))
-    {
         return;
-    }
-    if (gTrackDesignSaveMode || (session.ViewFlags & VIEWPORT_FLAG_HIDE_ENTITIES))
-    {
-        return;
-    }
-
-    if (session.rt.zoom_level > ZoomLevel{ 2 })
-    {
-        return;
-    }
-
-    const bool highlightPathIssues = (session.ViewFlags & VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES);
 
     for (auto* entity : EntityTileList(pos))
-    {
-        if (highlightPathIssues)
-        {
-            const auto staff = entity->as<Staff>();
-            if (staff != nullptr)
-            {
-                if (staff->assignedStaffType != StaffType::handyman)
-                {
-                    continue;
-                }
-            }
-            else if (entity->type != EntityType::litter)
-            {
-                continue;
-            }
-        }
+        PaintOneEntity(session, *entity);
+}
 
-        const auto entityPos = entity->getLocation();
-
-        // Only paint sprites that are below the clip height and inside the clip selection.
-        // Here converting from land/path/etc height scale to pixel height scale.
-        // Note: peeps/scenery on slopes will be above the base
-        // height of the slope element, and consequently clipped.
-        if (session.ViewFlags & VIEWPORT_FLAG_CLIP_VIEW)
-        {
-            if (entityPos.z > (gClipHeight * kCoordsZStep))
-            {
-                // see-through off: don't paint this entity at all
-                // see-through on: paint this entity as partial or hidden later on
-                if ((session.ViewFlags & VIEWPORT_FLAG_CLIP_VIEW_SEE_THROUGH) == 0)
-                {
-                    continue;
-                }
-            }
-            if (entityPos.x < gClipSelectionA.x || entityPos.x > (gClipSelectionB.x + kCoordsXYStep - 1))
-            {
-                continue;
-            }
-            if (entityPos.y < gClipSelectionA.y || entityPos.y > (gClipSelectionB.y + kCoordsXYStep - 1))
-            {
-                continue;
-            }
-        }
-
-        auto screenCoords = Translate3DTo2DWithZ(session.CurrentRotation, entity->getLocation());
-        auto spriteRect = ScreenRect(
-            screenCoords - ScreenCoordsXY{ entity->spriteData.width, entity->spriteData.heightMin },
-            screenCoords + ScreenCoordsXY{ entity->spriteData.width, entity->spriteData.heightMax });
-
-        const ZoomLevel zoom = session.rt.zoom_level;
-        if (session.rt.y + session.rt.height <= zoom.ApplyInversedTo(spriteRect.getTop())
-            || zoom.ApplyInversedTo(spriteRect.getBottom()) <= session.rt.y
-            || session.rt.x + session.rt.width <= zoom.ApplyInversedTo(spriteRect.getLeft())
-            || zoom.ApplyInversedTo(spriteRect.getRight()) <= session.rt.x)
-        {
-            continue;
-        }
-
-        int32_t image_direction = session.CurrentRotation;
-        image_direction <<= 3;
-        image_direction += entity->orientation;
-        image_direction &= 0x1F;
-
-        session.CurrentlyDrawnEntity = entity;
-        session.SpritePosition.x = entityPos.x;
-        session.SpritePosition.y = entityPos.y;
-        session.InteractionType = ViewportInteractionItem::entity;
-
-        switch (entity->type)
-        {
-            case EntityType::vehicle:
-                PaintVehicle(session, *entity->cast<Vehicle>(), image_direction);
-                if (LightFx::ForVehiclesIsAvailable())
-                {
-                    LightFx::AddLightsMagicVehicle(entity->cast<Vehicle>());
-                }
-                break;
-            case EntityType::guest:
-                PaintGuest(session, *entity->cast<Guest>(), image_direction);
-                break;
-            case EntityType::staff:
-                PaintStaff(session, *entity->cast<Staff>(), image_direction);
-                break;
-            case EntityType::steamParticle:
-                PaintSteamParticle(session, *entity->cast<SteamParticle>());
-                break;
-            case EntityType::moneyEffect:
-                PaintMoneyEffect(session, *entity->cast<MoneyEffect>());
-                break;
-            case EntityType::crashedVehicleParticle:
-                PaintVehicleCrashParticle(session, *entity->cast<VehicleCrashParticle>());
-                break;
-            case EntityType::explosionCloud:
-                PaintExplosionCloud(session, *entity->cast<ExplosionCloud>());
-                break;
-            case EntityType::crashSplash:
-                PaintCrashSplashParticle(session, *entity->cast<CrashSplashParticle>());
-                break;
-            case EntityType::explosionFlare:
-                PaintExplosionFlare(session, *entity->cast<ExplosionFlare>());
-                break;
-            case EntityType::jumpingFountain:
-                PaintJumpingFountain(session, *entity->cast<JumpingFountain>(), image_direction);
-                break;
-            case EntityType::balloon:
-                PaintBalloon(session, *entity->cast<Balloon>(), image_direction);
-                break;
-            case EntityType::duck:
-                PaintDuck(session, *entity->cast<Duck>(), image_direction);
-                break;
-            case EntityType::litter:
-                PaintLitter(session, *entity->cast<Litter>(), image_direction);
-                break;
-            default:
-                assert(false);
-                break;
-        }
-    }
+void EntityPaintSetupEntity(PaintSession& session, EntityBase& entity)
+{
+    PaintOneEntity(session, entity);
 }
