@@ -86,6 +86,7 @@ namespace OpenRCT2::Paint
     struct FirstPersonScene
     {
         FirstPersonRenderOptions options{};
+        FirstPersonResolvedView resolvedView{};
         ScreenSize dimensions{};
         std::vector<FirstPersonSurface> surfaces;
         std::vector<CoordsXY> visibleTiles;
