@@ -64,6 +64,13 @@ namespace OpenRCT2::Paint
         // their silhouette. Permit a one-pixel inward coverage fallback at tile
         // edges so exact shared world vertices cannot expose background seams.
         bool edgeCoverage = false;
+        // Some native sprite IDs (notably scrolling text) reference mutable
+        // bitmap slots. When present, these bytes are the immutable content
+        // captured when the native PaintStruct was created.
+        std::vector<uint8_t> immutablePixels;
+        int16_t immutableWidth = 0;
+        int16_t immutableHeight = 0;
+        uint64_t immutableFingerprint = 0;
         uint64_t gpuRegion = 0; // Nonzero only for static WORLD-FIXED source art.
         FirstPersonVec3 billboardAnchor{};
         float billboardLeft{}, billboardTop{}, billboardWidth{}, billboardHeight{};
