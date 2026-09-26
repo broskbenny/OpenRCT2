@@ -219,6 +219,7 @@ static PaintStruct* CreateNormalPaintStruct(
     ps->MapPos = session.MapPosition;
     ps->Element = session.CurrentlyDrawnTileElement;
     ps->Entity = session.CurrentlyDrawnEntity;
+    ps->Source = session.CurrentSource;
 
     return ps;
 }
@@ -268,6 +269,7 @@ static PaintStruct* CreateNormalPaintStructHeight(
     ps->MapPos = session.MapPosition;
     ps->Element = session.CurrentlyDrawnTileElement;
     ps->Entity = session.CurrentlyDrawnEntity;
+    ps->Source = session.CurrentSource;
 
     return ps;
 }

@@ -55,6 +55,13 @@ struct PaintStructBoundBox
     int32_t z_end;
 };
 
+enum class PaintStructSource : uint8_t
+{
+    unknown,
+    tile,
+    entity,
+};
+
 struct PaintStruct
 {
     PaintStructBoundBox Bounds;
@@ -63,6 +70,9 @@ struct PaintStruct
     PaintStruct* NextQuadrantEntry;
     OpenRCT2::TileElement* Element;
     OpenRCT2::EntityBase* Entity;
+    // Which native painter produced this artwork. Entity remains interaction
+    // ownership and is not evidence that the entity painter produced the art.
+    PaintStructSource Source = PaintStructSource::unknown;
     ImageId image_id;
     ScreenCoordsXY ScreenPos;
     CoordsXY MapPos;
@@ -143,6 +153,7 @@ struct PaintSessionCore
     const OpenRCT2::SurfaceElement* Surface;
     OpenRCT2::EntityBase* CurrentlyDrawnEntity;
     OpenRCT2::TileElement* CurrentlyDrawnTileElement;
+    PaintStructSource CurrentSource = PaintStructSource::unknown;
     const OpenRCT2::TileElement* PathElementOnSameHeight;
     const OpenRCT2::TileElement* TrackElementOnSameHeight;
     const OpenRCT2::TileElement* SelectedElement;

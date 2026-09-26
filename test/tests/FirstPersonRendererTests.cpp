@@ -9,6 +9,9 @@
 
 #include <gtest/gtest.h>
 #include <openrct2/paint/FirstPersonRenderer.h>
+#include <openrct2/paint/Paint.h>
+#include <openrct2/entity/EntityBase.h>
+#include <openrct2/world/tile_element/Slope.h>
 #include <openrct2/paint/FirstPersonVehiclePose.h>
 #include <openrct2/paint/tile_element/Paint.Path.h>
 #include <openrct2/paint/tile_element/Paint.TileElement.h>
@@ -46,6 +49,59 @@ TEST(FirstPersonSourceRotationTest, HysteresisBelongsToTheTrackedPoint)
         FirstPersonSourceRotationForPoint(
             camera, { 100.0f, 123.0f, 0.0f }, uint8_t{ 0 }),
         1);
+}
+
+TEST(FirstPersonPaintProvenanceTest, InteractionOwnerDoesNotMakeTileArtworkDynamic)
+{
+    OpenRCT2::EntityBase owner{};
+    PaintStruct root{};
+    root.Entity = &owner;
+
+    root.Source = PaintStructSource::tile;
+    EXPECT_FALSE(IsFirstPersonEntityPaintRoot(root));
+
+    root.Source = PaintStructSource::entity;
+    EXPECT_TRUE(IsFirstPersonEntityPaintRoot(root));
+}
+
+TEST(FirstPersonTerrainTextureTest, ChosenSourceViewKeepsKnownDegenerateSlopesTwoDimensional)
+{
+    const auto minimumTriangleArea = [](uint8_t slope, uint8_t rotation) {
+        const auto corners = OpenRCT2::GetSlopeCornerHeights(0, slope);
+        const std::array<CoordsXYZ, 4> world{ {
+            { 0, 0, corners.south },
+            { kCoordsXYStep, 0, corners.east },
+            { kCoordsXYStep, kCoordsXYStep, corners.north },
+            { 0, kCoordsXYStep, corners.west },
+        } };
+        std::array<ScreenCoordsXY, 4> projected{};
+        for (size_t i = 0; i < world.size(); ++i)
+            projected[i] = Translate3DTo2DWithZ(rotation, world[i]);
+
+        const auto area = [&](size_t a, size_t b, size_t c) {
+            const int64_t abx = int64_t(projected[b].x) - projected[a].x;
+            const int64_t aby = int64_t(projected[b].y) - projected[a].y;
+            const int64_t acx = int64_t(projected[c].x) - projected[a].x;
+            const int64_t acy = int64_t(projected[c].y) - projected[a].y;
+            const int64_t value = abx * acy - aby * acx;
+            return uint64_t(value < 0 ? -value : value);
+        };
+        return std::min(area(0, 1, 3), area(1, 2, 3));
+    };
+
+    for (const uint8_t slope : { uint8_t{ 1 }, uint8_t{ 27 } })
+    {
+        EXPECT_EQ(minimumTriangleArea(slope, 0), 0u);
+        const auto rotation = GetFirstPersonTerrainSourceRotation(slope);
+        EXPECT_GT(minimumTriangleArea(slope, rotation), 0u);
+    }
+}
+
+TEST(FirstPersonTunnelTest, VerticalTunnelMarkerCutsMatchingTerrainOnly)
+{
+    EXPECT_TRUE(FirstPersonVerticalTunnelCutsTerrain(80, 5));
+    EXPECT_FALSE(FirstPersonVerticalTunnelCutsTerrain(96, 5));
+    EXPECT_FALSE(FirstPersonVerticalTunnelCutsTerrain(80, 0xFF));
 }
 
 TEST(FirstPersonWalkingTest, NativeStepAllowedButCliffRejected)
@@ -168,6 +224,19 @@ TEST(FirstPersonProjectionTest, SpinnerUsesEightBitFullTurn)
     EXPECT_NEAR(SpinSpriteYawRadians(64), kPi * 0.5f, 0.0001f);
     EXPECT_NEAR(SpinSpriteYawRadians(128), kPi, 0.0001f);
     EXPECT_NEAR(SpinSpriteYawRadians(192), kPi * 1.5f, 0.0001f);
+}
+
+TEST(FirstPersonVisibilityTest, ElevatedEntityIsVisibleEvenWhenUnderlyingTerrainIsNot)
+{
+    FirstPersonCamera camera{};
+    camera.position = { 0.0f, 0.0f, 1000.0f };
+
+    EXPECT_TRUE(FirstPersonSphereVisible(
+        camera, { 100.0f, 0.0f, 1000.0f }, 64.0f,
+        70.0f, 1000.0f / 600.0f, 2.0f, 8192.0f));
+    EXPECT_FALSE(FirstPersonSphereVisible(
+        camera, { 100.0f, 0.0f, 0.0f }, 304.0f,
+        70.0f, 1000.0f / 600.0f, 2.0f, 8192.0f));
 }
 
 TEST(FirstPersonVisibilityTest, TallLandmarkNotCulledWhenBaseIsOutOfFrame)

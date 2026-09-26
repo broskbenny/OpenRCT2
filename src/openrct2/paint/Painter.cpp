@@ -191,6 +191,7 @@ PaintSession* Painter::CreateSession(RenderTarget& rt, uint32_t viewFlags, uint8
     session->WoodenSupportsPrependTo = nullptr;
     session->CurrentlyDrawnEntity = nullptr;
     session->CurrentlyDrawnTileElement = nullptr;
+    session->CurrentSource = PaintStructSource::unknown;
     session->Surface = nullptr;
     session->SelectedElement = TileInspector::GetSelectedElement();
     session->InteractionType = ViewportInteractionItem::none;

@@ -17,6 +17,8 @@
 #include "../drawing/RenderTarget.h"
 #include "../drawing/ScrollingText.h"
 #include "../entity/EntityBase.h"
+#include "../ride/CarEntry.h"
+#include "../ride/Vehicle.h"
 #include "../interface/Viewport.h"
 #include "../profiling/Profiling.h"
 #include "../world/Footpath.h"
@@ -95,6 +97,57 @@ namespace OpenRCT2::Paint
                     return false;
             }
         }
+        [[nodiscard]] uint64_t ProjectedTriangleAreaTwice(
+            const ScreenCoordsXY& a, const ScreenCoordsXY& b, const ScreenCoordsXY& c)
+        {
+            const int64_t abx = int64_t(b.x) - a.x;
+            const int64_t aby = int64_t(b.y) - a.y;
+            const int64_t acx = int64_t(c.x) - a.x;
+            const int64_t acy = int64_t(c.y) - a.y;
+            const int64_t area = abx * acy - aby * acx;
+            return uint64_t(area < 0 ? -area : area);
+        }
+
+        [[nodiscard]] uint8_t ChooseTerrainSourceRotation(uint8_t slope)
+        {
+            const auto corners = GetSlopeCornerHeights(0, slope);
+            const std::array<CoordsXYZ, 4> world{ {
+                { 0, 0, corners.south },
+                { kCoordsXYStep, 0, corners.east },
+                { kCoordsXYStep, kCoordsXYStep, corners.north },
+                { 0, kCoordsXYStep, corners.west },
+            } };
+            const bool opposite = UsesOppositeTerrainDiagonal(slope);
+            const std::array<std::array<size_t, 3>, 2> triangleIndices = opposite
+                ? std::array<std::array<size_t, 3>, 2>{ { { 0, 1, 3 }, { 1, 2, 3 } } }
+                : std::array<std::array<size_t, 3>, 2>{ { { 0, 1, 2 }, { 0, 2, 3 } } };
+
+            uint8_t bestRotation = 0;
+            uint64_t bestMinimumArea = 0;
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
+            {
+                std::array<ScreenCoordsXY, 4> projected{};
+                for (size_t i = 0; i < world.size(); ++i)
+                    projected[i] = Translate3DTo2DWithZ(rotation, world[i]);
+
+                uint64_t minimumArea = std::numeric_limits<uint64_t>::max();
+                for (const auto& triangle : triangleIndices)
+                {
+                    minimumArea = std::min(
+                        minimumArea,
+                        ProjectedTriangleAreaTwice(
+                            projected[triangle[0]], projected[triangle[1]], projected[triangle[2]]));
+                }
+                // Stable world-space tie break: lower native quarter-turn wins.
+                if (minimumArea > bestMinimumArea)
+                {
+                    bestMinimumArea = minimumArea;
+                    bestRotation = rotation;
+                }
+            }
+            return bestRotation;
+        }
+
         [[nodiscard]] uint8_t PaintRotationForPoint(
             const FirstPersonCamera& camera, FirstPersonVec3 anchor, std::optional<uint8_t> previous)
         {
@@ -661,6 +714,8 @@ namespace OpenRCT2::Paint
             ImageId source{};
             int32_t baseZ{}, waterZ{};
             uint8_t slope{};
+            uint8_t sourceRotation{};
+            bool verticalOpening = false;
             int32_t spriteX{}, spriteY{}, spriteWidth{}, spriteHeight{};
             FirstPersonSurface ground{};
             std::optional<FirstPersonSurface> water;
@@ -684,6 +739,9 @@ namespace OpenRCT2::Paint
             uint32_t lastAnimationGeneration{};
             uint32_t lastSourceProbeGeneration{};
             bool valid = false;
+            uint8_t verticalTunnelHeight = 0xFF;
+            std::vector<TunnelEntry> leftTunnels;
+            std::vector<TunnelEntry> rightTunnels;
             std::vector<FirstPersonSurface> residentSurfaces;
             std::vector<FirstPersonSurface> streamedSurfaces;
         };
@@ -727,6 +785,131 @@ namespace OpenRCT2::Paint
             uint8_t selectedRotation = 0;
         };
         static std::unordered_map<uint16_t, EntityRotationState> _entityRotations;
+
+        struct DynamicEntityRegion
+        {
+            bool hasBounds = false;
+            FirstPersonVec3 low{};
+            FirstPersonVec3 high{};
+            FirstPersonVec3 center{};
+            float radius = 0.0f;
+            std::vector<EntityId> entities;
+        };
+        struct DynamicEntitySpatialCache
+        {
+            bool valid = false;
+            uint32_t generation = 0;
+            std::vector<DynamicEntityRegion> regions;
+        };
+        static DynamicEntitySpatialCache _dynamicEntitySpatialCache;
+
+        [[nodiscard]] FirstPersonSemanticSphere EntityVisualBounds(const EntityBase& entity)
+        {
+            const auto worldLoc = entity.getLocation();
+            float halfWidth = std::max(1.0f, float(entity.spriteData.width));
+            float verticalExtent = std::max(
+                float(entity.spriteData.heightMin), float(entity.spriteData.heightMax));
+            if (const auto* vehicle = entity.as<Vehicle>(); vehicle != nullptr)
+            {
+                if (const auto* entry = vehicle->Entry(); entry != nullptr)
+                {
+                    halfWidth = std::max(halfWidth, float(entry->spriteWidth));
+                    verticalExtent = std::max(
+                        verticalExtent,
+                        float(std::max(entry->spriteHeightNegative, entry->spriteHeightPositive)));
+                }
+            }
+            return {
+                { float(worldLoc.x), float(worldLoc.y), float(worldLoc.z) },
+                std::max(32.0f, std::hypot(halfWidth, verticalExtent) + 16.0f)
+            };
+        }
+
+        void RebuildDynamicEntitySpatialCache(uint32_t generation)
+        {
+            if (_dynamicEntitySpatialCache.valid
+                && _dynamicEntitySpatialCache.generation == generation)
+                return;
+
+            _dynamicEntitySpatialCache.valid = true;
+            _dynamicEntitySpatialCache.generation = generation;
+            _dynamicEntitySpatialCache.regions.clear();
+            std::unordered_map<uint64_t, size_t> regionSlots;
+            constexpr int32_t kDynamicRegionTiles = 16;
+            constexpr int32_t kDynamicRegionWorld = kDynamicRegionTiles * kCoordsXYStep;
+            const auto floorDiv = [](int32_t value, int32_t divisor) {
+                int32_t quotient = value / divisor;
+                if (value < 0 && value % divisor != 0)
+                    --quotient;
+                return quotient;
+            };
+
+            for (uint8_t rawType = 0; rawType < static_cast<uint8_t>(EntityType::count); ++rawType)
+            {
+                const auto type = static_cast<EntityType>(rawType);
+                for (const auto entityId : getGameState().entities.getEntityList(type))
+                {
+                    const auto* entity = getGameState().entities.tryGetEntity<EntityBase>(entityId);
+                    if (entity == nullptr)
+                        continue;
+                    const auto location = entity->getLocation();
+                    if (location.x == kLocationNull)
+                        continue;
+
+                    const int32_t rx = floorDiv(location.x, kDynamicRegionWorld);
+                    const int32_t ry = floorDiv(location.y, kDynamicRegionWorld);
+                    const uint64_t key =
+                        (uint64_t(uint32_t(rx)) << 32) | uint32_t(ry);
+                    auto [slotIt, inserted] = regionSlots.emplace(
+                        key, _dynamicEntitySpatialCache.regions.size());
+                    if (inserted)
+                        _dynamicEntitySpatialCache.regions.emplace_back();
+                    auto& region = _dynamicEntitySpatialCache.regions[slotIt->second];
+                    region.entities.push_back(entityId);
+
+                    const auto bounds = EntityVisualBounds(*entity);
+                    const FirstPersonVec3 low{
+                        bounds.center.x - bounds.radius,
+                        bounds.center.y - bounds.radius,
+                        bounds.center.z - bounds.radius
+                    };
+                    const FirstPersonVec3 high{
+                        bounds.center.x + bounds.radius,
+                        bounds.center.y + bounds.radius,
+                        bounds.center.z + bounds.radius
+                    };
+                    if (!region.hasBounds)
+                    {
+                        region.low = low;
+                        region.high = high;
+                        region.hasBounds = true;
+                    }
+                    else
+                    {
+                        region.low.x = std::min(region.low.x, low.x);
+                        region.low.y = std::min(region.low.y, low.y);
+                        region.low.z = std::min(region.low.z, low.z);
+                        region.high.x = std::max(region.high.x, high.x);
+                        region.high.y = std::max(region.high.y, high.y);
+                        region.high.z = std::max(region.high.z, high.z);
+                    }
+                }
+            }
+
+            for (auto& region : _dynamicEntitySpatialCache.regions)
+            {
+                region.center = {
+                    0.5f * (region.low.x + region.high.x),
+                    0.5f * (region.low.y + region.high.y),
+                    0.5f * (region.low.z + region.high.z)
+                };
+                const float dx = 0.5f * (region.high.x - region.low.x);
+                const float dy = 0.5f * (region.high.y - region.low.y);
+                const float dz = 0.5f * (region.high.z - region.low.z);
+                // Cover render-time tweening between adjacent simulation poses.
+                region.radius = std::sqrt(dx * dx + dy * dy + dz * dz) + 256.0f;
+            }
+        }
 
         struct StaticRegionPacketCache
         {
@@ -962,17 +1145,19 @@ namespace OpenRCT2::Paint
                 // itself can use its tighter real slope/water volume here.
                 if (!frustum.visible({float(x+16),float(y+16),0.5f*(low+high)},
                                     48.0f+0.5f*(high-low))) continue;
-                    const auto image = GetFirstPersonTerrainImage(*tile, origin);
+                    const uint8_t sourceRotation = ChooseTerrainSourceRotation(slope);
+                    const auto image = GetFirstPersonTerrainImage(*tile, origin, sourceRotation);
                     const auto* g1 = image.HasValue() ? GfxGetG1Element(image) : nullptr;
                     if (g1 == nullptr) continue;
-                    const ImageId waterMask = waterZ > baseZ ? GetFirstPersonWaterMaskImage(*tile) : ImageId{};
+                    const ImageId waterMask = waterZ > baseZ
+                        ? GetFirstPersonWaterMaskImage(*tile, sourceRotation) : ImageId{};
                     const ImageId waterOverlay = waterZ > baseZ
-                        ? GetFirstPersonWaterOverlayImage(*tile, opt.viewFlags) : ImageId{};
+                        ? GetFirstPersonWaterOverlayImage(*tile, opt.viewFlags, sourceRotation) : ImageId{};
                     auto& cache = _terrainCache.entries[TerrainKey(tx,ty)];
                     const bool terrainChanged =
                         cache.source != image || cache.waterMaskImage != waterMask ||
                         cache.waterOverlayImage != waterOverlay || cache.baseZ != baseZ || cache.slope != slope ||
-                        cache.waterZ != waterZ || cache.spriteX != g1->xOffset ||
+                        cache.sourceRotation != sourceRotation || cache.waterZ != waterZ || cache.spriteX != g1->xOffset ||
                         cache.spriteY != g1->yOffset || cache.spriteWidth != g1->width ||
                         cache.spriteHeight != g1->height;
                     if (terrainChanged)
@@ -981,6 +1166,7 @@ namespace OpenRCT2::Paint
                         cache.source = image;
                         cache.baseZ = baseZ;
                         cache.slope = slope;
+                        cache.sourceRotation = sourceRotation;
                         cache.waterZ = waterZ;
                         cache.spriteX = g1->xOffset;
                         cache.spriteY = g1->yOffset;
@@ -994,14 +1180,17 @@ namespace OpenRCT2::Paint
                             { float(x + kCoordsXYStep), float(y + kCoordsXYStep), float(corners.north) },
                             { float(x), float(y + kCoordsXYStep), float(corners.west) },
                         } };
-                        // Native image ID and four world corners determine the cached
-                        // mapping. A camera move does NOT reproject the source image.
-                        const auto isoOrigin = Translate3DTo2DWithZ(0, { origin, baseZ });
+                        // Use the matching native sprite origin for the selected
+                        // quarter-turn; source view is world-stable, not camera-driven.
+                        const auto sourceSpritePosition =
+                            GetTileElementPaintSpritePosition(origin, sourceRotation);
+                        const auto isoOrigin = Translate3DTo2DWithZ(
+                            sourceRotation, { sourceSpritePosition, baseZ });
                         std::array<FirstPersonVertex, 4> v{};
                         for (size_t i = 0; i < world.size(); ++i)
                         {
                             const CoordsXYZ point{ int32_t(world[i].x), int32_t(world[i].y), int32_t(world[i].z) };
-                            const auto src = Translate3DTo2DWithZ(0, point);
+                            const auto src = Translate3DTo2DWithZ(sourceRotation, point);
                             v[i] = { world[i], float(src.x - isoOrigin.x - g1->xOffset),
                                                float(src.y - isoOrigin.y - g1->yOffset) };
                         }
@@ -1021,11 +1210,12 @@ namespace OpenRCT2::Paint
                                 waterSurface.image = waterMask;
                                 waterSurface.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
                                 std::array<FirstPersonVertex, 4> w{};
-                                const auto waterIso = Translate3DTo2DWithZ(0, { origin, waterZ });
+                                const auto waterIso = Translate3DTo2DWithZ(
+                                    sourceRotation, { sourceSpritePosition, waterZ });
                                 for (size_t i = 0; i < world.size(); ++i)
                                 {
                                     const auto p = CoordsXYZ{ int32_t(world[i].x), int32_t(world[i].y), waterZ };
-                                    const auto src = Translate3DTo2DWithZ(0, p);
+                                    const auto src = Translate3DTo2DWithZ(sourceRotation, p);
                                     w[i] = { { world[i].x, world[i].y, float(waterZ) },
                                              float(src.x-waterIso.x-wg1->xOffset),
                                              float(src.y-waterIso.y-wg1->yOffset) };
@@ -1043,11 +1233,12 @@ namespace OpenRCT2::Paint
                                 overlay.image = waterOverlay;
                                 overlay.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
                                 std::array<FirstPersonVertex, 4> w{};
-                                const auto waterIso = Translate3DTo2DWithZ(0, { origin, waterZ });
+                                const auto waterIso = Translate3DTo2DWithZ(
+                                    sourceRotation, { sourceSpritePosition, waterZ });
                                 for (size_t i = 0; i < world.size(); ++i)
                                 {
                                     const auto p = CoordsXYZ{ int32_t(world[i].x), int32_t(world[i].y), waterZ };
-                                    const auto src = Translate3DTo2DWithZ(0, p);
+                                    const auto src = Translate3DTo2DWithZ(sourceRotation, p);
                                     w[i] = { { world[i].x, world[i].y, float(waterZ)+0.25f },
                                              float(src.x-waterIso.x-og1->xOffset),
                                              float(src.y-waterIso.y-og1->yOffset) };
@@ -1059,7 +1250,7 @@ namespace OpenRCT2::Paint
                     }
                     cache.lastSeen = frame;
                     cache.dirty = false;
-                    if (!IsResidentStaticSurface(cache.ground))
+                    if (!cache.verticalOpening && !IsResidentStaticSurface(cache.ground))
                         scene.surfaces.emplace_back(cache.ground);
                     if (cache.water.has_value() && !IsResidentStaticSurface(*cache.water))
                         scene.surfaces.emplace_back(*cache.water);
@@ -1150,7 +1341,8 @@ namespace OpenRCT2::Paint
                     terrainIt != _terrainCache.entries.end() && !terrainIt->second.dirty)
                 {
                     const auto& terrain = terrainIt->second;
-                    addSurface(terrain.ground);
+                    if (!terrain.verticalOpening)
+                        addSurface(terrain.ground);
                     if (terrain.water.has_value()) addSurface(*terrain.water);
                     if (terrain.waterOverlay.has_value()) addSurface(*terrain.waterOverlay);
                 }
@@ -1316,6 +1508,9 @@ namespace OpenRCT2::Paint
                         variant.lastPainted = 0;
                         variant.lastAnimationGeneration = 0;
                         variant.lastSourceProbeGeneration = 0;
+                        variant.verticalTunnelHeight = 0xFF;
+                        variant.leftTunnels.clear();
+                        variant.rightTunnels.clear();
                         variant.residentSurfaces.clear();
                         variant.streamedSurfaces.clear();
                     }
@@ -1397,12 +1592,18 @@ namespace OpenRCT2::Paint
                         workByRotation[rotation].push_back({ tile, key, true, EntityId::GetNull() });
                 }
 
-                const auto& entityIds = getGameState().entities.getEntityTileList(tile);
-                ++scene.dynamicTileQueries;
-                if (!entityIds.empty())
-                    ++scene.dynamicTilesPainted;
-                for (const auto entityId : entityIds)
+            }
+
+            // Separate dynamic hierarchy: rebuilt at simulation cadence, then
+            // culled at presentation cadence using current tweened entity bounds.
+            RebuildDynamicEntitySpatialCache(sourceGeneration);
+            for (const auto& region : _dynamicEntitySpatialCache.regions)
+            {
+                if (!region.hasBounds || !worldFrustum.visible(region.center, region.radius))
+                    continue;
+                for (const auto entityId : region.entities)
                 {
+                    ++scene.dynamicTileQueries;
                     auto* entity = getGameState().entities.tryGetEntity<EntityBase>(entityId);
                     if (entity == nullptr)
                         continue;
@@ -1410,19 +1611,24 @@ namespace OpenRCT2::Paint
                         continue;
 
                     const auto location = entity->getLocation();
+                    if (location.x == kLocationNull)
+                        continue;
+                    const auto visualBounds = EntityVisualBounds(*entity);
+                    if (!worldFrustum.visible(visualBounds.center, visualBounds.radius))
+                        continue;
+                    ++scene.dynamicTilesPainted;
+
                     auto& state = _entityRotations[entityId.ToUnderlying()];
                     const auto previous = state.hasSelectedRotation
                         ? std::optional<uint8_t>{ state.selectedRotation }
                         : std::nullopt;
                     const uint8_t rotation = PaintRotationForPoint(
-                        opt.camera,
-                        { float(location.x), float(location.y), float(location.z) },
-                        previous);
+                        opt.camera, visualBounds.center, previous);
                     state.selectedRotation = rotation;
                     state.hasSelectedRotation = true;
                     state.lastSeen = frame;
                     workByRotation[rotation].push_back({
-                        tile, key, false, entityId
+                        CoordsXY{ location.x, location.y }.toTileStart(), 0, false, entityId
                     });
                 }
             }
@@ -1484,13 +1690,43 @@ namespace OpenRCT2::Paint
                         session->CurrentlyDrawnTileElement = nullptr;
                         if (item.staticMiss)
                         {
+                            session->CurrentSource = PaintStructSource::tile;
                             TileElementPaintSetup(*session, item.position);
+
+                            // Tunnel data is transient session state and is reset
+                            // by the next tile. Preserve it while it is authoritative.
+                            auto cacheIt = _staticPaintCache.find(item.key);
+                            if (cacheIt != _staticPaintCache.end())
+                            {
+                                auto& variant = cacheIt->second.rotations[rotation];
+                                variant.verticalTunnelHeight = session->VerticalTunnelHeight;
+                                variant.leftTunnels.assign(
+                                    session->LeftTunnels.begin(), session->LeftTunnels.end());
+                                variant.rightTunnels.assign(
+                                    session->RightTunnels.begin(), session->RightTunnels.end());
+
+                                if (auto terrainIt = _terrainCache.entries.find(item.key);
+                                    terrainIt != _terrainCache.entries.end())
+                                {
+                                    const bool verticalOpening = FirstPersonVerticalTunnelCutsTerrain(
+                                        terrainIt->second.baseZ, session->VerticalTunnelHeight);
+                                    if (terrainIt->second.verticalOpening != verticalOpening)
+                                    {
+                                        terrainIt->second.verticalOpening = verticalOpening;
+                                        MarkStaticRegionDirtyForTile(
+                                            item.position.x / kCoordsXYStep,
+                                            item.position.y / kCoordsXYStep);
+                                    }
+                                }
+                            }
                         }
                         else if (!item.entity.IsNull())
                         {
                             if (auto* entity = getGameState().entities.tryGetEntity<EntityBase>(item.entity);
                                 entity != nullptr)
                             {
+                                session->CurrentSource = PaintStructSource::entity;
+                                session->MapPosition = item.position;
                                 EntityPaintSetupEntity(*session, *entity);
                             }
                         }
@@ -1500,7 +1736,7 @@ namespace OpenRCT2::Paint
                     std::unordered_set<const TileElement*> emittedPathDecks;
                     for (auto* root = session->PaintHead; root; root = root->NextQuadrantEntry)
                     {
-                        const bool dynamic = root->Entity != nullptr;
+                        const bool dynamic = IsFirstPersonEntityPaintRoot(*root);
                         const uint64_t key = TerrainKey(
                             root->MapPos.x / kCoordsXYStep, root->MapPos.y / kCoordsXYStep);
                         if (!dynamic && !missesByRotation[rotation].contains(key))
@@ -1549,6 +1785,15 @@ namespace OpenRCT2::Paint
                             const int32_t ty = root->MapPos.y / kCoordsXYStep;
                             const auto region = FirstPersonGpuRegionKey(tx, ty);
                             auto cacheIt = _staticPaintCache.find(key);
+                            // Flat-ride tile painters may attach a vehicle for
+                            // interaction ownership while producing the structure.
+                            // Cache those roots, but refresh them once per sim tick.
+                            if (root->Entity != nullptr && cacheIt != _staticPaintCache.end()
+                                && !cacheIt->second.animated)
+                            {
+                                cacheIt->second.animated = true;
+                                MarkStaticRegionDirtyForTile(tx, ty);
+                            }
                             for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
                             {
                                 scene.surfaces[i].reconstructionGroup = reconstruction.groupKey;
@@ -1681,6 +1926,23 @@ namespace OpenRCT2::Paint
 
     } // namespace
 
+    uint8_t GetFirstPersonTerrainSourceRotation(uint8_t slope)
+    {
+        return ChooseTerrainSourceRotation(slope);
+    }
+
+    bool IsFirstPersonEntityPaintRoot(const ::PaintStruct& root)
+    {
+        return root.Source == PaintStructSource::entity;
+    }
+
+    bool FirstPersonVerticalTunnelCutsTerrain(
+        int32_t terrainBaseZ, uint8_t verticalTunnelHeight)
+    {
+        return verticalTunnelHeight != 0xFF
+            && int32_t(verticalTunnelHeight) * kCoordsZPerTinyZ == terrainBaseZ;
+    }
+
     FirstPersonWallPlane BuildFirstPersonWallPlane(
         CoordsXY tileOrigin, int32_t baseZ, uint8_t direction, uint8_t slope, int32_t height)
     {
@@ -1748,6 +2010,7 @@ namespace OpenRCT2::Paint
         _staticPaintCache.clear();
         _reconstructionRotations.clear();
         _entityRotations.clear();
+        _dynamicEntitySpatialCache = {};
         _staticRegionPackets.clear();
     }
     void InvalidateFirstPersonSceneRegion(CoordsXY low, CoordsXY high)

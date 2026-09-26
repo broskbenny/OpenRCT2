@@ -16,6 +16,7 @@
 #include <vector>
 
 namespace OpenRCT2::Drawing { struct RenderTarget; }
+struct PaintStruct;
 
 namespace OpenRCT2::Paint
 {
@@ -112,8 +113,8 @@ namespace OpenRCT2::Paint
         // Diagnostics count native tile-paint work, not merely submitted quads.
         uint32_t staticTilePaints = 0;
         uint32_t staticTileCacheHits = 0;
-        uint32_t dynamicTileQueries = 0; // O(1) occupancy probes on admitted tiles.
-        uint32_t dynamicTilesPainted = 0; // Nonempty native entity tile paints.
+        uint32_t dynamicTileQueries = 0; // Dynamic entity candidates tested independently of terrain admission.
+        uint32_t dynamicTilesPainted = 0; // Dynamic entities admitted by their own visual bounds.
         // Component timings from the application process, never synthetic FPS.
         // Retained as diagnostics for native traversal, terrain projection and
         // source-art collection; they do not drive a hidden quality approximation.
@@ -128,6 +129,15 @@ namespace OpenRCT2::Paint
         // Clockwise physical wall quad: lower A, lower B, upper B, upper A.
         std::array<FirstPersonVec3, 4> corners{};
     };
+    // Stable native source view chosen from physical terrain geometry so every
+    // non-degenerate triangle retains two-dimensional texture information.
+    [[nodiscard]] uint8_t GetFirstPersonTerrainSourceRotation(uint8_t slope);
+    // Paint ownership and paint provenance are separate: a tile painter may set
+    // Entity solely so interaction points at a ride vehicle.
+    [[nodiscard]] bool IsFirstPersonEntityPaintRoot(const ::PaintStruct& root);
+    [[nodiscard]] bool FirstPersonVerticalTunnelCutsTerrain(
+        int32_t terrainBaseZ, uint8_t verticalTunnelHeight);
+
     // Authoritative full-tile wall geometry shared by rendering and walking
     // collision. Wall slope values are the native EDGE_SLOPE values stored in
     // WallElement (0, upwards, downwards).

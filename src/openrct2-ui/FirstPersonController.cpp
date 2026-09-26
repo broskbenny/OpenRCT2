@@ -53,6 +53,28 @@ namespace OpenRCT2::Ui::FirstPerson
         constexpr float kMouseSensitivity = 0.0035f;
         constexpr float kMaxPitch = 1.35f;
 
+        struct WalkingSupportIdentity
+        {
+            bool path = false;
+            CoordsXY tile{};
+            int32_t baseZ = 0;
+            ObjectEntryIndex surface = kObjectEntryIndexNull;
+            ObjectEntryIndex railings = kObjectEntryIndexNull;
+        };
+
+        struct WalkingFloorSample
+        {
+            float z{};
+            WalkingSupportIdentity support{};
+            uint8_t edges = 0;
+            uint8_t corners = 0;
+
+            [[nodiscard]] bool IsPath() const
+            {
+                return support.path;
+            }
+        };
+
         struct State
         {
             Mode mode = Mode::off;
@@ -67,7 +89,7 @@ namespace OpenRCT2::Ui::FirstPerson
             bool previousEscapeDown = false;
             SDL_bool previousRelativeMouseMode = SDL_FALSE;
             bool ownsRelativeMouseMode = false;
-            float previousFloorZ = 0.0f;
+            WalkingFloorSample previousFloor{};
         };
 
         State _state{};
@@ -127,57 +149,145 @@ namespace OpenRCT2::Ui::FirstPerson
             _state.ownsRelativeMouseMode = false;
         }
 
-        struct WalkingFloorSample
+        [[nodiscard]] bool SameWalkingPath(
+            const WalkingSupportIdentity& a, const WalkingSupportIdentity& b)
         {
-            float z{};
-            bool path = false;
-        };
+            return a.path && b.path
+                && a.tile.x == b.tile.x && a.tile.y == b.tile.y
+                && a.baseZ == b.baseZ && a.surface == b.surface && a.railings == b.railings;
+        }
 
-        WalkingFloorSample ResolveWalkingFloorSample(const CoordsXY& position, float previousFloorZ)
+        [[nodiscard]] bool PointOnPathDeck(const PathElement& path, const CoordsXY& position)
         {
-            const auto terrainZ = static_cast<float>(TileElementHeight(position));
-            float bestPathZ = terrainZ;
+            const auto tile = position.toTileStart();
+            const int32_t x = position.x - tile.x;
+            const int32_t y = position.y - tile.y;
+            const auto in = [](int32_t value, int32_t low, int32_t high) {
+                return value >= low && value <= high;
+            };
+
+            // Central deck plus native edge arms and corner fills. This avoids
+            // treating the entire tile as floor for a narrow raised path.
+            if (in(x, 8, 24) && in(y, 8, 24))
+                return true;
+
+            const uint8_t edges = path.getEdges();
+            if ((edges & (1u << 0)) != 0 && x <= 16 && in(y, 8, 24))
+                return true; // -X
+            if ((edges & (1u << 1)) != 0 && y >= 16 && in(x, 8, 24))
+                return true; // +Y
+            if ((edges & (1u << 2)) != 0 && x >= 16 && in(y, 8, 24))
+                return true; // +X
+            if ((edges & (1u << 3)) != 0 && y <= 16 && in(x, 8, 24))
+                return true; // -Y
+
+            const uint8_t corners = path.getCorners();
+            if ((corners & (1u << 0)) != 0 && x <= 16 && y >= 16)
+                return true;
+            if ((corners & (1u << 1)) != 0 && x >= 16 && y >= 16)
+                return true;
+            if ((corners & (1u << 2)) != 0 && x >= 16 && y <= 16)
+                return true;
+            if ((corners & (1u << 3)) != 0 && x <= 16 && y <= 16)
+                return true;
+            return false;
+        }
+
+        [[nodiscard]] bool WalkingPathsConnected(
+            const WalkingFloorSample& from, const WalkingFloorSample& to)
+        {
+            if (!from.IsPath() || !to.IsPath())
+                return false;
+            if (SameWalkingPath(from.support, to.support))
+                return true;
+
+            const int32_t dx = to.support.tile.x - from.support.tile.x;
+            const int32_t dy = to.support.tile.y - from.support.tile.y;
+            uint8_t direction = 0xFF;
+            if (dx == -kCoordsXYStep && dy == 0)
+                direction = 0;
+            else if (dx == 0 && dy == kCoordsXYStep)
+                direction = 1;
+            else if (dx == kCoordsXYStep && dy == 0)
+                direction = 2;
+            else if (dx == 0 && dy == -kCoordsXYStep)
+                direction = 3;
+            if (direction == 0xFF)
+                return false;
+
+            const uint8_t reverse = (direction + 2) & 3;
+            return (from.edges & (1u << direction)) != 0
+                && (to.edges & (1u << reverse)) != 0;
+        }
+
+        WalkingFloorSample ResolveWalkingFloorSample(
+            const CoordsXY& position, const WalkingFloorSample& previous)
+        {
+            WalkingFloorSample terrain{};
+            terrain.z = static_cast<float>(TileElementHeight(position));
+            terrain.support.tile = position.toTileStart();
+
             float bestDelta = std::numeric_limits<float>::max();
-            bool foundPath = false;
+            std::optional<WalkingFloorSample> bestPath;
 
             for (auto* path : TileElementsView<PathElement>(position))
             {
+                if (path == nullptr || path->isGhost() || path->isInvisible())
+                    continue;
+                if (!PointOnPathDeck(*path, position))
+                    continue;
+
                 auto pathZ = static_cast<float>(path->getBaseZ());
                 if (path->isSloped())
                 {
-                    const auto corners = GetSlopeCornerHeights(
+                    const auto slopeCorners = GetSlopeCornerHeights(
                         path->getBaseZ(), kPathSlopeToLandSlope[path->getSlopeDirection()]);
                     pathZ = Paint::FirstPersonPathHeight(
-                        float(corners.south), float(corners.east), float(corners.north), float(corners.west),
+                        float(slopeCorners.south), float(slopeCorners.east),
+                        float(slopeCorners.north), float(slopeCorners.west),
                         float(position.x & (kCoordsXYStep - 1)),
                         float(position.y & (kCoordsXYStep - 1)));
                 }
 
-                const auto delta = std::abs(pathZ - previousFloorZ);
+                WalkingFloorSample candidate{};
+                candidate.z = pathZ;
+                candidate.support.path = true;
+                candidate.support.tile = position.toTileStart();
+                candidate.support.baseZ = path->getBaseZ();
+                candidate.support.surface = path->getSurfaceEntryIndex();
+                candidate.support.railings = path->getRailingsEntryIndex();
+                candidate.edges = path->getEdges();
+                candidate.corners = path->getCorners();
+
+                if (previous.IsPath()
+                    && !SameWalkingPath(previous.support, candidate.support)
+                    && !WalkingPathsConnected(previous, candidate))
+                    continue;
+
+                const auto delta = std::abs(pathZ - previous.z);
                 if (delta < bestDelta)
                 {
                     bestDelta = delta;
-                    bestPathZ = pathZ;
-                    foundPath = true;
+                    bestPath = candidate;
                 }
             }
 
-            // Path choice is still continuity-based, but final legality is
-            // decided by the swept traversal below rather than by teleporting
-            // to whichever destination surface happened to be nearest.
-            if (foundPath && bestDelta <= 2.0f * kCoordsZStep)
-                return { bestPathZ, true };
-            return { terrainZ, false };
+            if (bestPath.has_value() && bestDelta <= 2.0f * kCoordsZStep)
+                return *bestPath;
+            return terrain;
         }
 
-        std::optional<float> ResolveWalkingTraversal(
-            float fromX, float fromY, float toX, float toY, float startFloorZ)
+        std::optional<WalkingFloorSample> ResolveWalkingTraversal(
+            float fromX, float fromY, float toX, float toY, const WalkingFloorSample& startFloor)
         {
             constexpr float kSampleSpacing = 4.0f;
             constexpr float kMaximumStep = float(kCoordsZStep);
             const float distance = std::hypot(toX - fromX, toY - fromY);
             const int32_t samples = std::max(1, int32_t(std::ceil(distance / kSampleSpacing)));
-            float floorZ = startFloorZ;
+            const CoordsXY startPosition{
+                int32_t(std::lround(fromX)), int32_t(std::lround(fromY))
+            };
+            auto floor = ResolveWalkingFloorSample(startPosition, startFloor);
 
             for (int32_t i = 1; i <= samples; ++i)
             {
@@ -188,23 +298,29 @@ namespace OpenRCT2::Ui::FirstPerson
                 if (!MapIsLocationValid(position))
                     return std::nullopt;
 
-                const auto floor = ResolveWalkingFloorSample(position, floorZ);
-                if (!floor.path)
+                const auto nextFloor = ResolveWalkingFloorSample(position, floor);
+                if (!nextFloor.IsPath())
                 {
                     const float waterZ = float(TileElementWaterHeight(position));
-                    if (waterZ > floor.z + 0.5f)
+                    if (waterZ > nextFloor.z + 0.5f)
+                        return std::nullopt;
+
+                    // Do not step sideways from a raised deck onto the terrain
+                    // beneath its unused tile area / railing boundary.
+                    if (floor.IsPath() && floor.z > nextFloor.z + 0.5f)
                         return std::nullopt;
                 }
 
-                // Continuous legal terrain/path slopes change gradually across
-                // these samples. A larger discontinuity is a cliff/ledge and is
-                // intentionally non-walkable in either direction.
-                if (!Paint::FirstPersonWalkingHeightTransitionAllowed(
-                        floorZ, floor.z, kMaximumStep))
+                if (floor.IsPath() && nextFloor.IsPath()
+                    && !WalkingPathsConnected(floor, nextFloor))
                     return std::nullopt;
-                floorZ = floor.z;
+
+                if (!Paint::FirstPersonWalkingHeightTransitionAllowed(
+                        floor.z, nextFloor.z, kMaximumStep))
+                    return std::nullopt;
+                floor = nextFloor;
             }
-            return floorZ;
+            return floor;
         }
 
         // Walls have authoritative positions and heights in the native map;
@@ -402,16 +518,16 @@ namespace OpenRCT2::Ui::FirstPerson
             const auto nextY = _state.camera.position.y
                 + dt * speed * (forwardAxis * sinYaw + strafeAxis * cosYaw);
             const Paint::FirstPersonVec3 from{
-                _state.camera.position.x,_state.camera.position.y,_state.previousFloorZ};
+                _state.camera.position.x,_state.camera.position.y,_state.previousFloor.z};
             auto tryMove = [&](float x,float y) {
-                const auto floorZ = ResolveWalkingTraversal(
-                    from.x, from.y, x, y, _state.previousFloorZ);
-                if (!floorZ.has_value()) return false;
-                if(WalkBlockedByWall(from,{x,y,*floorZ}) || WalkBlockedByLargeScenery(from,{x,y,*floorZ})) return false;
+                const auto floor = ResolveWalkingTraversal(
+                    from.x, from.y, x, y, _state.previousFloor);
+                if (!floor.has_value()) return false;
+                if(WalkBlockedByWall(from,{x,y,floor->z}) || WalkBlockedByLargeScenery(from,{x,y,floor->z})) return false;
                 _state.camera.position.x=x;
                 _state.camera.position.y=y;
-                _state.previousFloorZ=*floorZ;
-                _state.camera.position.z=*floorZ+kEyeHeight;
+                _state.previousFloor=*floor;
+                _state.camera.position.z=floor->z+kEyeHeight;
                 return true;
             };
             if(!tryMove(nextX,nextY))
@@ -486,9 +602,12 @@ namespace OpenRCT2::Ui::FirstPerson
         };
         _state.camera.yaw = static_cast<float>(viewport->rotation) * (kPi * 0.5f);
         _state.camera.pitch = 0.0f;
-        _state.previousFloorZ = ResolveWalkingFloorSample(
-            spawn, static_cast<float>(spawn.z)).z;
-        _state.camera.position.z = _state.previousFloorZ + kEyeHeight;
+        WalkingFloorSample initialFloor{};
+        initialFloor.z = static_cast<float>(spawn.z);
+        initialFloor.support.tile = CoordsXY{ spawn.x, spawn.y }.toTileStart();
+        _state.previousFloor = ResolveWalkingFloorSample(
+            CoordsXY{ spawn.x, spawn.y }, initialFloor);
+        _state.camera.position.z = _state.previousFloor.z + kEyeHeight;
         _state.previousEscapeDown = false;
         PublishTweenView();
         PublishAudioListener();

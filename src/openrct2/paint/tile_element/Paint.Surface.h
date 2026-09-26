@@ -122,8 +122,10 @@ std::optional<OpenRCT2::Drawing::Colour> GetPatrolAreaTileColour(const CoordsXY&
 
 // Use the same terrain-image selection as the isometric painter; no alternate terrain registry.
 struct ImageId;
-ImageId GetFirstPersonTerrainImage(const OpenRCT2::SurfaceElement& surface, const CoordsXY& worldPos);
-ImageId GetFirstPersonWaterMaskImage(const OpenRCT2::SurfaceElement& surface);
-ImageId GetFirstPersonWaterOverlayImage(const OpenRCT2::SurfaceElement& surface, uint32_t viewFlags);
+ImageId GetFirstPersonTerrainImage(
+    const OpenRCT2::SurfaceElement& surface, const CoordsXY& worldPos, uint8_t sourceRotation);
+ImageId GetFirstPersonWaterMaskImage(const OpenRCT2::SurfaceElement& surface, uint8_t sourceRotation);
+ImageId GetFirstPersonWaterOverlayImage(
+    const OpenRCT2::SurfaceElement& surface, uint32_t viewFlags, uint8_t sourceRotation);
 
 void PaintSurface(PaintSession& session, uint8_t direction, uint16_t height, const OpenRCT2::SurfaceElement& tileElement);
