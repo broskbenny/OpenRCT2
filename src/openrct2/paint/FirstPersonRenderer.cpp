@@ -1643,6 +1643,18 @@ namespace OpenRCT2::Paint
                 }
             }
 
+            // Cache entries can have been painted in different presentation
+            // epochs. Rebase blended surfaces to one unique logical order after
+            // deterministic scene assembly so equal-depth peeling always has a
+            // complete tie-break. Native-arranged roots preserve their relative
+            // order within the assembled stream.
+            uint32_t transparentOrdinal = 1;
+            for (auto& surface : scene.surfaces)
+            {
+                if (surface.image.HasValue() && surface.image.IsBlended())
+                    surface.nativePaintOrdinal = transparentOrdinal++;
+            }
+
             if (frame % 120 == 0)
             {
                 std::erase_if(_staticPaintCache, [frame](const auto& kv) {
