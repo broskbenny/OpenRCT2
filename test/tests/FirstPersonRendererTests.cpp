@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <openrct2/paint/FirstPersonRenderer.h>
+#include <openrct2/paint/FirstPersonTrackTrajectory.h>
 #include <openrct2/paint/Paint.h>
 #include <openrct2/entity/EntityBase.h>
 #include <openrct2/world/tile_element/Slope.h>
@@ -50,6 +51,52 @@ TEST(FirstPersonSourceRotationTest, HysteresisBelongsToTheTrackedPoint)
         FirstPersonSourceRotationForPoint(
             camera, { 100.0f, 123.0f, 0.0f }, uint8_t{ 0 }),
         1);
+}
+
+TEST(FirstPersonTrackTrajectoryTest, StandardSamplesMatchVehicleMotionSource)
+{
+    constexpr FirstPersonVec3 origin{ 320.0f, 640.0f, 80.0f };
+    const auto trajectory = BuildFirstPersonTrackTrajectory(
+        OpenRCT2::TrackElemType::flat, 0, origin);
+    ASSERT_TRUE(trajectory.has_value());
+
+    const size_t index = size_t(EnumValue(OpenRCT2::TrackElemType::flat))
+        * kNumOrthogonalDirections;
+    const auto* list = gTrackVehicleInfo[
+        EnumValue(OpenRCT2::VehicleTrackSubposition::standard)][index];
+    ASSERT_NE(list, nullptr);
+    ASSERT_EQ(trajectory->points.size(), list->size);
+
+    for (const size_t sampleIndex : {
+             size_t{ 0 }, trajectory->points.size() / 2,
+             trajectory->points.size() - 1 })
+    {
+        const auto& source = list->info[sampleIndex];
+        const auto& point = trajectory->points[sampleIndex];
+        EXPECT_FLOAT_EQ(point.position.x, origin.x + source.x);
+        EXPECT_FLOAT_EQ(point.position.y, origin.y + source.y);
+        EXPECT_FLOAT_EQ(point.position.z, origin.z + source.z);
+        EXPECT_EQ(point.progress, sampleIndex);
+    }
+    EXPECT_TRUE(FirstPersonTrackTrajectorySamplesContinuous(*trajectory));
+}
+
+TEST(FirstPersonTrackTrajectoryTest, EndpointGapMeasuresPhysicalDiscontinuity)
+{
+    FirstPersonTrackTrajectory first{};
+    first.points = {
+        { { 0.0f, 0.0f, 0.0f }, {}, 0 },
+        { { 4.0f, 0.0f, 0.0f }, {}, 1 },
+    };
+    FirstPersonTrackTrajectory next{};
+    next.points = {
+        { { 5.5f, 0.0f, 0.0f }, {}, 0 },
+        { { 8.0f, 0.0f, 0.0f }, {}, 1 },
+    };
+    EXPECT_FLOAT_EQ(FirstPersonTrackTrajectoryEndpointGap(first, next), 1.5f);
+    EXPECT_TRUE(FirstPersonTrackTrajectorySamplesContinuous(first, 4.0f));
+    EXPECT_TRUE(FirstPersonTrackTrajectorySamplesContinuous(next, 4.0f));
+    EXPECT_FALSE(FirstPersonTrackTrajectorySamplesContinuous(next, 2.0f));
 }
 
 TEST(FirstPersonPaintProvenanceTest, InteractionOwnerDoesNotMakeTileArtworkDynamic)

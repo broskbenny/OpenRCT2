@@ -3,6 +3,7 @@
  * OpenRCT2 is licensed under the GNU General Public License version 3.
  *****************************************************************************/
 #include "FirstPersonRenderer.h"
+#include "FirstPersonTrackTrajectory.h"
 #include "Paint.h"
 #include "tile_element/Paint.Surface.h"
 #include "tile_element/Paint.Path.h"
@@ -12,13 +13,22 @@
 #include "../Context.h"
 #include "../GameState.h"
 #include "../drawing/Drawing.Sprite.h"
+#include "../drawing/Colour.h"
+#include "../drawing/ColourMap.h"
+#include "../drawing/PaletteIndex.h"
 #include "../drawing/IDrawingContext.h"
 #include "../drawing/IDrawingEngine.h"
 #include "../drawing/RenderTarget.h"
 #include "../drawing/ScrollingText.h"
 #include "../entity/EntityBase.h"
 #include "../ride/CarEntry.h"
+#include "../ride/Ride.h"
+#include "../ride/RideData.h"
+#include "../ride/RideEntry.h"
+#include "../ride/TrackData.h"
+#include "../ride/TrackIteration.h"
 #include "../ride/Vehicle.h"
+#include "../ride/ted/TrackElementDescriptor.h"
 #include "../interface/Viewport.h"
 #include "../profiling/Profiling.h"
 #include "../world/Footpath.h"
@@ -28,6 +38,7 @@
 #include "../ride/Track.h"
 #include "../world/tile_element/SurfaceElement.h"
 #include "../world/tile_element/PathElement.h"
+#include "../world/tile_element/TrackElement.h"
 #include "../world/tile_element/SmallSceneryElement.h"
 #include "../world/tile_element/LargeSceneryElement.h"
 #include "../world/tile_element/Slope.h"
@@ -936,16 +947,360 @@ namespace OpenRCT2::Paint
         };
         static std::unordered_map<uint64_t, StaticRegionPacketCache> _staticRegionPackets;
 
+        struct TrackTrajectoryCacheEntry
+        {
+            uint64_t signature{};
+            uint64_t lastSeen{};
+            bool dirty = false;
+            bool boundaryContinuous = true;
+            bool hasBounds = false;
+            int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
+            std::vector<FirstPersonSurface> surfaces;
+        };
+        static std::unordered_map<uint64_t, TrackTrajectoryCacheEntry> _trackTrajectoryCache;
+
         [[nodiscard]] bool IsResidentStaticSurface(const FirstPersonSurface& surface)
         {
-            return surface.gpuRegion != 0 && !surface.viewFacing
-                && surface.image.HasValue() && !surface.image.IsBlended()
+            if (surface.gpuRegion == 0 || surface.viewFacing)
+                return false;
+            if (surface.solidColour != 0)
+                return true;
+            return surface.image.HasValue() && !surface.image.IsBlended()
                 && surface.immutablePixels.empty();
         }
 
         void MarkStaticRegionDirtyForTile(int32_t tileX, int32_t tileY)
         {
             _staticRegionPackets[FirstPersonGpuRegionKey(tileX, tileY)].dirty = true;
+        }
+
+        void MarkTrackTrajectoryRegionsDirty(const TrackTrajectoryCacheEntry& cached)
+        {
+            for (const auto& surface : cached.surfaces)
+            {
+                if (surface.gpuRegion != 0)
+                    _staticRegionPackets[surface.gpuRegion].dirty = true;
+            }
+        }
+
+        [[nodiscard]] bool RideUsesStandardFirstPersonTrajectory(const Ride& ride)
+        {
+            const auto& rtd = ride.getRideTypeDescriptor();
+            if (!rtd.flags.has(RtdFlag::hasTrack) || rtd.flags.has(RtdFlag::isFlatRide)
+                || rtd.flags.has(RtdFlag::layeredVehiclePreview)
+                || rtd.specialType != RtdSpecialType::none)
+                return false;
+
+            const auto* rideEntry = ride.getRideEntry();
+            const auto* car = rideEntry != nullptr ? rideEntry->GetDefaultCar() : nullptr;
+            if (car == nullptr)
+                return true;
+            return !car->flags.hasAny(
+                CarEntryFlag::isChairlift,
+                CarEntryFlag::isGoKart,
+                CarEntryFlag::isMiniGolf,
+                CarEntryFlag::isReverserCoasterBogie,
+                CarEntryFlag::isReverserCoasterPassengerCar);
+        }
+
+        [[nodiscard]] std::optional<CoordsXYZ> FirstPersonTrackSampleOrigin(
+            CoordsXY tile, TileElement* element)
+        {
+            const auto* track = element != nullptr ? element->asTrack() : nullptr;
+            const auto origin = GetTrackSegmentOrigin(CoordsXYE{ tile, element });
+            if (track == nullptr || !origin.has_value())
+                return std::nullopt;
+
+            const auto& ted = TrackMetadata::GetTrackElementDescriptor(track->getTrackType());
+            if (ted.sequenceData.numSequences == 0)
+                return std::nullopt;
+            const auto& block0 = ted.sequenceData.sequences[0].clearance;
+            CoordsXY sequence0{ origin->x, origin->y };
+            sequence0 += CoordsXY{ block0.x, block0.y }.rotate(track->getDirection());
+            return CoordsXYZ{ sequence0, origin->z + block0.z };
+        }
+
+        [[nodiscard]] TileElement* FindFirstPersonTrackOriginElement(
+            const CoordsXYZ& sampleOrigin, const TrackElement& source)
+        {
+            auto* element = MapGetFirstElementAt(sampleOrigin);
+            if (element == nullptr)
+                return nullptr;
+            do
+            {
+                if (element->getType() != TileElementType::track
+                    || element->getBaseZ() != sampleOrigin.z)
+                    continue;
+                auto* track = element->asTrack();
+                if (track != nullptr
+                    && track->getRideIndex() == source.getRideIndex()
+                    && track->getTrackType() == source.getTrackType()
+                    && track->getDirection() == source.getDirection()
+                    && track->getSequenceIndex() == 0)
+                    return element;
+            } while (!(element++)->isLastForTile());
+            return nullptr;
+        }
+
+        [[nodiscard]] uint8_t FirstPersonRailColour(
+            const Ride& ride, const TrackElement& track, bool lighter)
+        {
+            const auto scheme = std::min<uint8_t>(
+                track.getColourScheme(), uint8_t(kNumRideColourSchemes - 1));
+            auto colour = ride.trackColours[scheme].main;
+            if (!Drawing::colourIsValid(colour))
+                colour = Drawing::Colour::grey;
+            const auto shades = Drawing::getColourMap(colour);
+            uint8_t result = static_cast<uint8_t>(
+                lighter ? shades.midLight : shades.midDark);
+            if (result == 0)
+            {
+                result = static_cast<uint8_t>(
+                    lighter ? Drawing::PaletteIndex::trackRails2
+                            : Drawing::PaletteIndex::trackRails1);
+            }
+            return result;
+        }
+
+        void AppendTrajectoryRailSegment(
+            TrackTrajectoryCacheEntry& cached, uint64_t groupKey,
+            const FirstPersonTrackTrajectoryPoint& a,
+            const FirstPersonTrackTrajectoryPoint& b,
+            const FirstPersonTrackRailProfile& profile,
+            uint8_t topColour, uint8_t sideColour)
+        {
+            const auto midpoint = Mul(Add(a.position, b.position), 0.5f);
+            const int32_t tileX = int32_t(std::floor(midpoint.x / float(kCoordsXYStep)));
+            const int32_t tileY = int32_t(std::floor(midpoint.y / float(kCoordsXYStep)));
+            const uint64_t gpuRegion = FirstPersonGpuRegionKey(tileX, tileY);
+
+            for (const float gaugeSide : { -profile.halfGauge, profile.halfGauge })
+            {
+                const auto centreA = Add(a.position, Mul(a.basis.right, gaugeSide));
+                const auto centreB = Add(b.position, Mul(b.basis.right, gaugeSide));
+                const auto acrossA = Mul(a.basis.right, profile.halfWidth);
+                const auto acrossB = Mul(b.basis.right, profile.halfWidth);
+                const auto upA = Mul(a.basis.up, profile.halfHeight);
+                const auto upB = Mul(b.basis.up, profile.halfHeight);
+
+                FirstPersonSurface horizontal{};
+                horizontal.solidColour = topColour;
+                horizontal.gpuRegion = gpuRegion;
+                horizontal.reconstructionGroup = groupKey;
+                EmitQuad(horizontal, { {
+                    { Sub(centreA, acrossA), 0.0f, 0.0f },
+                    { Add(centreA, acrossA), 0.0f, 0.0f },
+                    { Add(centreB, acrossB), 0.0f, 0.0f },
+                    { Sub(centreB, acrossB), 0.0f, 0.0f },
+                } });
+                cached.surfaces.emplace_back(std::move(horizontal));
+
+                FirstPersonSurface vertical{};
+                vertical.solidColour = sideColour;
+                vertical.gpuRegion = gpuRegion;
+                vertical.reconstructionGroup = groupKey;
+                EmitQuad(vertical, { {
+                    { Sub(centreA, upA), 0.0f, 0.0f },
+                    { Add(centreA, upA), 0.0f, 0.0f },
+                    { Add(centreB, upB), 0.0f, 0.0f },
+                    { Sub(centreB, upB), 0.0f, 0.0f },
+                } });
+                cached.surfaces.emplace_back(std::move(vertical));
+            }
+        }
+
+        void UpdateTrackTrajectoryBounds(TrackTrajectoryCacheEntry& cached)
+        {
+            cached.hasBounds = false;
+            if (cached.surfaces.empty())
+                return;
+            FirstPersonVec3 low = cached.surfaces.front().triangles.front().world;
+            FirstPersonVec3 high = low;
+            for (const auto& surface : cached.surfaces)
+            for (const auto& vertex : surface.triangles)
+            {
+                const auto& p = vertex.world;
+                low.x = std::min(low.x, p.x);
+                low.y = std::min(low.y, p.y);
+                low.z = std::min(low.z, p.z);
+                high.x = std::max(high.x, p.x);
+                high.y = std::max(high.y, p.y);
+                high.z = std::max(high.z, p.z);
+            }
+            cached.minTileX = int32_t(std::floor(low.x / float(kCoordsXYStep)));
+            cached.minTileY = int32_t(std::floor(low.y / float(kCoordsXYStep)));
+            cached.maxTileX = int32_t(std::floor(high.x / float(kCoordsXYStep)));
+            cached.maxTileY = int32_t(std::floor(high.y / float(kCoordsXYStep)));
+            cached.hasBounds = true;
+        }
+
+        [[nodiscard]] std::optional<FirstPersonTrackTrajectory> NextFirstPersonTrackTrajectory(
+            const Ride& ride, const CoordsXYZ& sampleOrigin, TileElement* originElement)
+        {
+            CoordsXYE input{ sampleOrigin, originElement };
+            CoordsXYE next{};
+            int32_t nextZ{};
+            int32_t nextDirection{};
+            if (!trackBlockGetNext(&input, &next, &nextZ, &nextDirection)
+                || next.element == nullptr)
+                return std::nullopt;
+
+            const auto* nextTrack = next.element->asTrack();
+            if (nextTrack == nullptr || nextTrack->getRideIndex() != ride.id)
+                return std::nullopt;
+            return BuildFirstPersonTrackTrajectory(
+                nextTrack->getTrackType(), uint8_t(nextDirection),
+                { float(next.x), float(next.y), float(nextZ) });
+        }
+
+        TrackTrajectoryCacheEntry BuildTrackTrajectoryGeometry(
+            const Ride& ride, const TrackElement& track, TileElement* originElement,
+            const CoordsXYZ& sampleOrigin, uint64_t groupKey, uint64_t signature,
+            const FirstPersonTrackTrajectory& trajectory, uint64_t frame)
+        {
+            TrackTrajectoryCacheEntry result{};
+            result.signature = signature;
+            result.lastSeen = frame;
+            const FirstPersonTrackRailProfile profile{};
+            const uint8_t topColour = FirstPersonRailColour(ride, track, true);
+            const uint8_t sideColour = FirstPersonRailColour(ride, track, false);
+
+            size_t previous = 0;
+            for (size_t i = 1; i < trajectory.points.size(); ++i)
+            {
+                const auto& a = trajectory.points[previous];
+                const auto& b = trajectory.points[i];
+                const float distance = FirstPersonTrackTrajectoryPointDistance(a, b);
+                const bool turns = Dot(a.basis.forward, b.basis.forward) < 0.9914449f
+                    || Dot(a.basis.up, b.basis.up) < 0.9914449f;
+                const bool last = i + 1 == trajectory.points.size();
+                if (!last && distance < 3.0f && !turns)
+                    continue;
+                if (distance > 0.05f)
+                    AppendTrajectoryRailSegment(
+                        result, groupKey, a, b, profile, topColour, sideColour);
+                previous = i;
+            }
+
+            if (const auto next = NextFirstPersonTrackTrajectory(
+                    ride, sampleOrigin, originElement);
+                next.has_value() && FirstPersonTrackTrajectorySamplesContinuous(*next))
+            {
+                const float gap = FirstPersonTrackTrajectoryEndpointGap(trajectory, *next);
+                if (gap <= 4.0f)
+                {
+                    if (gap > 0.05f)
+                        AppendTrajectoryRailSegment(
+                            result, groupKey, trajectory.points.back(),
+                            next->points.front(), profile, topColour, sideColour);
+                }
+                else
+                {
+                    result.boundaryContinuous = false;
+                }
+            }
+
+            UpdateTrackTrajectoryBounds(result);
+            return result;
+        }
+
+        void CollectTrackTrajectories(FirstPersonScene& scene)
+        {
+            const uint64_t frame = _terrainCache.frame;
+            std::unordered_set<uint64_t> seenGroups;
+            seenGroups.reserve(scene.visibleTiles.size() / 2 + 1);
+
+            for (const auto tile : scene.visibleTiles)
+            {
+                auto* element = MapGetFirstElementAt(tile);
+                if (element == nullptr)
+                    continue;
+                do
+                {
+                    if (element->getType() != TileElementType::track
+                        || element->isGhost() || element->isInvisible())
+                        continue;
+                    auto* track = element->asTrack();
+                    const auto group = GetReconstructionGroup(tile, element);
+                    if (track == nullptr || !group.has_value()
+                        || !seenGroups.insert(group->key).second)
+                        continue;
+
+                    const auto* ride = GetRide(track->getRideIndex());
+                    if (ride == nullptr || !RideUsesStandardFirstPersonTrajectory(*ride))
+                    {
+                        if (auto old = _trackTrajectoryCache.find(group->key);
+                            old != _trackTrajectoryCache.end())
+                        {
+                            MarkTrackTrajectoryRegionsDirty(old->second);
+                            _trackTrajectoryCache.erase(old);
+                        }
+                        continue;
+                    }
+
+                    const auto sampleOrigin = FirstPersonTrackSampleOrigin(tile, element);
+                    if (!sampleOrigin.has_value())
+                        continue;
+                    auto* originElement = FindFirstPersonTrackOriginElement(
+                        *sampleOrigin, *track);
+                    if (originElement == nullptr)
+                        continue;
+
+                    const auto trajectory = BuildFirstPersonTrackTrajectory(
+                        track->getTrackType(), track->getDirection(),
+                        { float(sampleOrigin->x), float(sampleOrigin->y), float(sampleOrigin->z) });
+                    if (!trajectory.has_value()
+                        || !FirstPersonTrackTrajectorySamplesContinuous(*trajectory))
+                    {
+                        if (auto old = _trackTrajectoryCache.find(group->key);
+                            old != _trackTrajectoryCache.end())
+                        {
+                            MarkTrackTrajectoryRegionsDirty(old->second);
+                            _trackTrajectoryCache.erase(old);
+                        }
+                        continue;
+                    }
+
+                    uint64_t signature = group->key;
+                    ExtendStableKey(signature, track->getColourScheme());
+                    ExtendStableKey(signature, track->isInverted() ? 1 : 0);
+                    const auto scheme = std::min<uint8_t>(
+                        track->getColourScheme(), uint8_t(kNumRideColourSchemes - 1));
+                    ExtendStableKey(signature, EnumValue(ride->trackColours[scheme].main));
+                    ExtendStableKey(signature, trajectory->points.size());
+
+                    auto it = _trackTrajectoryCache.find(group->key);
+                    if (it == _trackTrajectoryCache.end() || it->second.signature != signature)
+                    {
+                        if (it != _trackTrajectoryCache.end())
+                            MarkTrackTrajectoryRegionsDirty(it->second);
+                        auto rebuilt = BuildTrackTrajectoryGeometry(
+                            *ride, *track, originElement, *sampleOrigin, group->key,
+                            signature, *trajectory, frame);
+                        MarkTrackTrajectoryRegionsDirty(rebuilt);
+                        _trackTrajectoryCache[group->key] = std::move(rebuilt);
+                    }
+                    else
+                    {
+                        it->second.lastSeen = frame;
+                        if (it->second.dirty)
+                        {
+                            it->second.dirty = false;
+                            MarkTrackTrajectoryRegionsDirty(it->second);
+                        }
+                    }
+                } while (!(element++)->isLastForTile());
+            }
+
+            if (frame % 120 == 0)
+            {
+                std::erase_if(_trackTrajectoryCache, [frame](const auto& kv) {
+                    const bool expired = frame - kv.second.lastSeen > 240;
+                    if (expired)
+                        MarkTrackTrajectoryRegionsDirty(kv.second);
+                    return expired;
+                });
+            }
         }
 
         struct TileSemanticSnapshot
@@ -1315,7 +1670,8 @@ namespace OpenRCT2::Paint
                 if (!IsResidentStaticSurface(surface) || surface.gpuRegion != regionKey)
                     return;
                 packet.surfaces.push_back(surface);
-                dependencies.insert(surface.image.GetIndex());
+                if (surface.image.HasValue())
+                    dependencies.insert(surface.image.GetIndex());
                 if (surface.mask.HasValue())
                     dependencies.insert(surface.mask.GetIndex());
 
@@ -1398,6 +1754,15 @@ namespace OpenRCT2::Paint
                 }
             }
 
+            for (const auto& [groupKey, trajectory] : _trackTrajectoryCache)
+            {
+                (void)groupKey;
+                if (trajectory.dirty)
+                    continue;
+                for (const auto& surface : trajectory.surfaces)
+                    addSurface(surface);
+            }
+
             packet.textureDependencies.assign(dependencies.begin(), dependencies.end());
             std::sort(packet.textureDependencies.begin(), packet.textureDependencies.end());
             if (haveBounds)
@@ -1434,6 +1799,20 @@ namespace OpenRCT2::Paint
             for (const auto tile : scene.visibleTiles)
                 visibleRegions.insert(FirstPersonGpuRegionKey(
                     tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+            // A single physical track piece can cross a 32x32 GPU-region edge.
+            // If any sequence made the piece visible this frame, submit every
+            // region occupied by its authoritative sampled trajectory.
+            for (const auto& [groupKey, trajectory] : _trackTrajectoryCache)
+            {
+                (void)groupKey;
+                if (trajectory.dirty || trajectory.lastSeen != frame)
+                    continue;
+                for (const auto& surface : trajectory.surfaces)
+                {
+                    if (surface.gpuRegion != 0)
+                        visibleRegions.insert(surface.gpuRegion);
+                }
+            }
 
             scene.staticRegions.reserve(visibleRegions.size());
             for (const auto key : visibleRegions)
@@ -2022,6 +2401,7 @@ namespace OpenRCT2::Paint
         const auto terrainStart=std::chrono::steady_clock::now();
         scene.visibilityCpuMs=std::chrono::duration<float,std::milli>(terrainStart-visibilityStart).count();
         CollectTerrain(scene);
+        CollectTrackTrajectories(scene);
         scene.terrainCpuMs=std::chrono::duration<float,std::milli>(
             std::chrono::steady_clock::now()-terrainStart).count();
         // This remains an explicitly identified compatibility bridge for complex sprite selection.
@@ -2036,12 +2416,14 @@ namespace OpenRCT2::Paint
         _reconstructionRotations.clear();
         _entityRotations.clear();
         _dynamicEntitySpatialCache = {};
+        _trackTrajectoryCache.clear();
         _staticRegionPackets.clear();
     }
     void InvalidateFirstPersonSceneRegion(CoordsXY low, CoordsXY high)
     {
         if (_regionBounds.empty() && _terrainCache.entries.empty()
-            && _staticPaintCache.empty() && _staticRegionPackets.empty()) return;
+            && _staticPaintCache.empty() && _trackTrajectoryCache.empty()
+            && _staticRegionPackets.empty()) return;
         const auto floorTile = [](int32_t x) {return int32_t(std::floor(float(x)/kCoordsXYStep));};
         const auto x0 = floorTile(std::min(low.x,high.x));
         const auto y0 = floorTile(std::min(low.y,high.y));
@@ -2073,6 +2455,18 @@ namespace OpenRCT2::Paint
             {
                 cached.dirty = true;
                 cached.visibilityDirty = true;
+            }
+        }
+        for (auto& [groupKey, trajectory] : _trackTrajectoryCache)
+        {
+            (void)groupKey;
+            if (!trajectory.hasBounds)
+                continue;
+            if (x0 <= trajectory.maxTileX && x1 >= trajectory.minTileX
+                && y0 <= trajectory.maxTileY && y1 >= trajectory.minTileY)
+            {
+                MarkTrackTrajectoryRegionsDirty(trajectory);
+                trajectory.dirty = true;
             }
         }
         // Generic native invalidation also covers shadows and moving objects,

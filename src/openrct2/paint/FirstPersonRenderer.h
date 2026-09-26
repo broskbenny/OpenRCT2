@@ -51,6 +51,9 @@ namespace OpenRCT2::Paint
     {
         ImageId image{};
         ImageId mask{}; // When present, mask zeroes out corresponding colour-image pixels.
+        // Nonzero palette index for semantic geometry that has no sprite
+        // texture (for example trajectory-derived physical rails).
+        uint8_t solidColour = 0;
         std::array<FirstPersonVertex, 6> triangles{}; // One quad: no heap allocation for every tile/sprite.
         // Cached upright sprites must always face the CURRENT camera: keep their
         // original native image-space offsets and world anchor, not old vertices.

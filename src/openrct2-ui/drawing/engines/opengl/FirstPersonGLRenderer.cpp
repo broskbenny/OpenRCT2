@@ -102,31 +102,39 @@ flat in int fMaskLayer;
 flat in uint fPaintOrdinal;
 layout(location=0) out uint oIndex;
 void main() {
-    // A texture sample outside the original sprite is EMPTY, not a stretched
-    // border pixel. This matters when an isometric sprite is mapped to a
-    // physical wall: the artwork often covers less than the entire wall plane.
-    if (any(lessThan(fUV,vec2(0.0))) || any(greaterThanEqual(fUV,fSize))) discard;
-    vec2 pixel = floor(fUV);
-    vec2 uv = (fAtlas.xy + pixel + vec2(0.5)) / fAtlas.zw;
-    uint col = texture(uSprites, vec3(uv, float(fAtlasLayer))).r;
-    if (col == 0u && (fFlags & 8) != 0) {
-        const ivec2 neighbours[4] = ivec2[4](
-            ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
-        ivec2 p = ivec2(pixel);
-        ivec2 limit = ivec2(fSize);
-        for (int i = 0; i < 4 && col == 0u; ++i) {
-            ivec2 q = p + neighbours[i];
-            if (q.x < 0 || q.y < 0 || q.x >= limit.x || q.y >= limit.y) continue;
-            vec2 neighbourUv = (fAtlas.xy + vec2(q) + vec2(0.5)) / fAtlas.zw;
-            col = texture(uSprites, vec3(neighbourUv, float(fAtlasLayer))).r;
+    uint col = 0u;
+    if ((fFlags & 16) != 0) {
+        // Geometry reconstructed from simulation semantics can carry a direct
+        // indexed palette colour without fabricating a sprite texture.
+        col = uint(fPalettes.w);
+    } else {
+        // A texture sample outside the original sprite is EMPTY, not a stretched
+        // border pixel. This matters when an isometric sprite is mapped to a
+        // physical wall: the artwork often covers less than the entire wall plane.
+        if (any(lessThan(fUV,vec2(0.0))) || any(greaterThanEqual(fUV,fSize))) discard;
+        vec2 pixel = floor(fUV);
+        vec2 uv = (fAtlas.xy + pixel + vec2(0.5)) / fAtlas.zw;
+        col = texture(uSprites, vec3(uv, float(fAtlasLayer))).r;
+        if (col == 0u && (fFlags & 8) != 0) {
+            const ivec2 neighbours[4] = ivec2[4](
+                ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
+            ivec2 p = ivec2(pixel);
+            ivec2 limit = ivec2(fSize);
+            for (int i = 0; i < 4 && col == 0u; ++i) {
+                ivec2 q = p + neighbours[i];
+                if (q.x < 0 || q.y < 0 || q.x >= limit.x || q.y >= limit.y) continue;
+                vec2 neighbourUv = (fAtlas.xy + vec2(q) + vec2(0.5)) / fAtlas.zw;
+                col = texture(uSprites, vec3(neighbourUv, float(fAtlasLayer))).r;
+            }
+        }
+        if (col == 0u) discard;
+        if (fMaskLayer >= 0) {
+            if (any(lessThan(fUV,vec2(0.0))) || any(greaterThanEqual(fUV,fMaskSize))) discard;
+            vec2 m = (fMaskAtlas.xy + floor(fUV) + vec2(0.5)) / fMaskAtlas.zw;
+            if (texture(uSprites, vec3(m, float(fMaskLayer))).r == 0u) discard;
         }
     }
     if (col == 0u) discard;
-    if (fMaskLayer >= 0) {
-        if (any(lessThan(fUV,vec2(0.0))) || any(greaterThanEqual(fUV,fMaskSize))) discard;
-        vec2 m = (fMaskAtlas.xy + floor(fUV) + vec2(0.5)) / fMaskAtlas.zw;
-        if (texture(uSprites, vec3(m, float(fMaskLayer))).r == 0u) discard;
-    }
     // Logarithmic physical depth leaves usable precision at the far end of
     // a complete RCT2 park while allowing the passenger near geometry.
     float depth = max(0.0, dot(fWorld - uEye, uForward));
@@ -411,6 +419,11 @@ void main() {
         std::vector<const Paint::FirstPersonSurface*> streamedTransparent;
         for (const auto& surface:scene.surfaces)
         {
+            if (surface.solidColour != 0)
+            {
+                streamedOpaque.push_back(&surface);
+                continue;
+            }
             if (!surface.image.HasValue()) continue;
             if (surface.image.IsBlended()) streamedTransparent.push_back(&surface);
             else streamedOpaque.push_back(&surface);
@@ -450,11 +463,16 @@ void main() {
         immutableTextures.reserve(scene.surfaces.size() / 16 + 1);
         auto appendVertices = [&](std::vector<GPUVertex>& vertices, const Paint::FirstPersonSurface& surface) {
             const auto image=surface.image;
-            const auto* g1=GfxGetG1Element(image);
+            const auto* g1=surface.solidColour == 0 ? GfxGetG1Element(image) : nullptr;
             BasicTextureInfo tex{};
             float imageWidth = 0.0f;
             float imageHeight = 0.0f;
-            if (!surface.immutablePixels.empty())
+            if (surface.solidColour != 0)
+            {
+                // The shader ignores atlas/UV fields for direct palette geometry.
+                imageWidth = imageHeight = 1.0f;
+            }
+            else if (!surface.immutablePixels.empty())
             {
                 if (surface.immutableWidth <= 0 || surface.immutableHeight <= 0)
                     return;
@@ -481,14 +499,14 @@ void main() {
             const auto* maskG1=surface.mask.HasValue()?GfxGetG1Element(surface.mask):nullptr;
             if(maskG1!=nullptr) maskTex=textures.GetOrLoadImageTexture(surface.mask);
             int32_t count=0,palettes[3]={};
-            if(image.HasSecondary())
+            if(surface.solidColour == 0 && image.HasSecondary())
             {
                 count=image.HasTertiary()?3:2;
                 palettes[0]=PaletteY(static_cast<Drawing::FilterPaletteID>(image.GetPrimary()));
                 palettes[1]=PaletteY(static_cast<Drawing::FilterPaletteID>(image.GetSecondary()));
                 palettes[2]=PaletteY(static_cast<Drawing::FilterPaletteID>(image.GetTertiary()));
             }
-            else if(image.IsRemap() || image.IsBlended())
+            else if(surface.solidColour == 0 && (image.IsRemap() || image.IsBlended()))
             {
                 count=1;
                 palettes[0]=PaletteY(static_cast<Drawing::FilterPaletteID>(image.GetRemap()));
@@ -498,12 +516,14 @@ void main() {
                     {p.world.x,p.world.y,p.world.z},{p.u,p.v},
                     {tex.coords.x,tex.coords.y,tex.coords.z,tex.coords.w},
                     {imageWidth,imageHeight},int32_t(tex.index),
-                    {count,palettes[0],palettes[1],palettes[2]},
-                    (image.IsBlended()
+                    {count,palettes[0],palettes[1],
+                     surface.solidColour != 0 ? int32_t(surface.solidColour) : palettes[2]},
+                    (surface.solidColour == 0 && image.IsBlended()
                         ? (image.GetRemap()==static_cast<uint8_t>(Drawing::FilterPaletteID::paletteWater)?3:1)
                         : 0)
                         | (surface.depthBias ? 4 : 0)
-                        | (surface.edgeCoverage ? 8 : 0),
+                        | (surface.edgeCoverage ? 8 : 0)
+                        | (surface.solidColour != 0 ? 16 : 0),
                     {maskTex.coords.x,maskTex.coords.y,maskTex.coords.z,maskTex.coords.w},
                     {maskG1?float(maskG1->width):0.0f,maskG1?float(maskG1->height):0.0f},
                     maskG1?int32_t(maskTex.index):-1,
