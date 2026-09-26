@@ -764,7 +764,8 @@ namespace OpenRCT2::Ui::FirstPerson
                     flatPrimaryFrame = Paint::FirstPersonLerpCyclicFrame(
                         float(interpolated->flatPrimaryBefore),
                         float(interpolated->flatPrimaryAfter),
-                        interpolated->alpha, 48.0f);
+                        interpolated->alpha,
+                        Paint::FirstPersonFlatRidePrimaryFrameCount(*car));
                     flatSecondaryFrame = Paint::FirstPersonLerpCyclicFrame(
                         float(interpolated->flatSecondaryBefore & 0x0F),
                         float(interpolated->flatSecondaryAfter & 0x0F),

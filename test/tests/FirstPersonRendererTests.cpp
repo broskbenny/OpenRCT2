@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <openrct2/paint/FirstPersonRenderer.h>
 #include <openrct2/paint/FirstPersonAssetReconstruction.h>
+#include <openrct2/paint/FirstPersonPeriodicPassengerMotion.h>
 #include <openrct2/paint/FirstPersonTrackTrajectory.h>
 #include <openrct2/paint/Paint.h>
 #include <openrct2/entity/EntityBase.h>
@@ -569,3 +570,132 @@ TEST(FirstPersonVehiclePoseTest, CyclicPassengerFrameInterpolationTakesShortestW
     EXPECT_NEAR(FirstPersonLerpCyclicFrame(15.0f, 0.0f, 0.5f, 16.0f), 15.5f, 0.0001f);
     EXPECT_NEAR(FirstPersonLerpCyclicFrame(0.0f, 1.0f, 0.5f, 16.0f), 0.5f, 0.0001f);
 }
+
+TEST(FirstPersonPeriodicPassengerMotionTest, FerrisRiderPhaseMatchesNativePairStride)
+{
+    EXPECT_FLOAT_EQ(FirstPersonFerrisWheelRiderPhase(7.0f, 0), 7.0f);
+    EXPECT_FLOAT_EQ(FirstPersonFerrisWheelRiderPhase(7.0f, 1), 7.0f);
+    EXPECT_FLOAT_EQ(FirstPersonFerrisWheelRiderPhase(7.0f, 2), 15.0f);
+    EXPECT_FLOAT_EQ(FirstPersonFerrisWheelRiderPhase(127.0f, 2), 7.0f);
+    EXPECT_NEAR(
+        FirstPersonLerpCyclicFrame(127.0f, 0.0f, 0.5f, 128.0f),
+        127.5f, 0.0001f);
+}
+
+TEST(FirstPersonPeriodicPassengerMotionTest, FerrisPainterOriginStaysAlignedForEveryRideDirection)
+{
+    constexpr FirstPersonPeriodicOrbitPoint painterOriginSeat{ 0.0f, 0.0f, 0.0f };
+    constexpr std::array<FirstPersonPeriodicOrbitPoint, 4> expected{ {
+        { -32.0f, -16.0f, 4.0f },
+        { -16.0f, 0.0f, 4.0f },
+        { 0.0f, -16.0f, 4.0f },
+        { -16.0f, -32.0f, 4.0f },
+    } };
+
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        const auto offset = FirstPersonFerrisWheelSeatBaseOffsetFromVehicle(
+            painterOriginSeat, direction, 3.0f);
+        EXPECT_FLOAT_EQ(offset.x, expected[direction].x);
+        EXPECT_FLOAT_EQ(offset.y, expected[direction].y);
+        EXPECT_FLOAT_EQ(offset.z, expected[direction].z);
+    }
+}
+
+TEST(FirstPersonPeriodicPassengerMotionTest, FourViewsRecoverConstrainedFerrisOrbit)
+{
+    FirstPersonFerrisWheelObservationSet observations{};
+    constexpr float radius = 42.0f;
+    constexpr float centreX = 6.0f;
+    constexpr float centreY = -3.0f;
+    constexpr float centreZ = 61.0f;
+    constexpr float phaseOffset = 0.61f;
+    const float cosX = radius * std::cos(phaseOffset);
+    const float cosZ = radius * std::sin(phaseOffset);
+    const float sinX = -radius * std::sin(phaseOffset);
+    const float sinZ = radius * std::cos(phaseOffset);
+
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    for (size_t sample = 0; sample < kFirstPersonFerrisWheelSampleCount; ++sample)
+    {
+        const float phase = float(sample * kFirstPersonFerrisWheelSampleStride)
+            * (2.0f * kPi / float(kFirstPersonFerrisWheelFrameCount));
+        const float x = centreX + cosX * std::cos(phase) + sinX * std::sin(phase);
+        const float y = centreY;
+        const float z = centreZ + cosZ * std::cos(phase) + sinZ * std::sin(phase);
+
+        float sx = 0.0f;
+        float sy = 0.0f;
+        switch (direction)
+        {
+            case 0:
+                sx = y - x;
+                sy = 0.5f * (x + y) - z;
+                break;
+            case 1:
+                sx = -x - y;
+                sy = 0.5f * (y - x) - z;
+                break;
+            case 2:
+                sx = x - y;
+                sy = -0.5f * (x + y) - z;
+                break;
+            case 3:
+                sx = x + y;
+                sy = 0.5f * (x - y) - z;
+                break;
+        }
+        observations[direction][sample] = {
+            true, sx, sy,
+            12.0f + 0.4f * std::cos(2.0f * phase),
+            16.0f + 0.5f * std::sin(2.0f * phase),
+        };
+    }
+
+    const auto calibration = FitFirstPersonFerrisWheelOrbit(observations);
+    ASSERT_TRUE(calibration.valid);
+    EXPECT_NEAR(calibration.centerX, centreX, 0.001f);
+    EXPECT_NEAR(calibration.centerY, centreY, 0.001f);
+    EXPECT_NEAR(calibration.centerZ, centreZ, 0.001f);
+    EXPECT_NEAR(calibration.radius, radius, 0.001f);
+    EXPECT_LT(calibration.trainingRmse, 0.001f);
+    EXPECT_LT(calibration.validationRmse, 0.001f);
+
+    const auto phaseZero = SampleFirstPersonPeriodicOrbit(calibration, 0.0f);
+    EXPECT_NEAR(phaseZero.x, centreX + cosX, 0.001f);
+    EXPECT_NEAR(phaseZero.z, centreZ + cosZ, 0.001f);
+    EXPECT_GT(calibration.eyeHeight, 6.0f);
+    EXPECT_GT(calibration.eyeHeightUncertainty, 0.0f);
+}
+
+TEST(FirstPersonPeriodicPassengerMotionTest, ContradictoryHeldOutViewRejectsOrbit)
+{
+    FirstPersonFerrisWheelObservationSet observations{};
+    constexpr float radius = 40.0f;
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    for (size_t sample = 0; sample < kFirstPersonFerrisWheelSampleCount; ++sample)
+    {
+        float phase = float(sample * kFirstPersonFerrisWheelSampleStride)
+            * (2.0f * kPi / float(kFirstPersonFerrisWheelFrameCount));
+        if (direction == 3)
+            phase += 0.5f * kPi;
+        const float x = radius * std::cos(phase);
+        const float y = 0.0f;
+        const float z = 64.0f + radius * std::sin(phase);
+
+        float sx = 0.0f;
+        float sy = 0.0f;
+        switch (direction)
+        {
+            case 0: sx = y - x; sy = 0.5f * (x + y) - z; break;
+            case 1: sx = -x - y; sy = 0.5f * (y - x) - z; break;
+            case 2: sx = x - y; sy = -0.5f * (x + y) - z; break;
+            case 3: sx = x + y; sy = 0.5f * (x - y) - z; break;
+        }
+        observations[direction][sample] = { true, sx, sy, 12.0f, 16.0f };
+    }
+
+    const auto calibration = FitFirstPersonFerrisWheelOrbit(observations);
+    EXPECT_FALSE(calibration.valid);
+}
+

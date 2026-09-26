@@ -5,6 +5,7 @@
 #pragma once
 
 #include "FirstPersonMath.h"
+#include "FirstPersonPeriodicPassengerMotion.h"
 #include "../entity/Yaw.hpp"
 #include "../ride/Angles.h"
 #include "../ride/CarEntry.h"
@@ -126,6 +127,18 @@ namespace OpenRCT2::Paint
         return 0;
     }
 
+    [[nodiscard]] inline float FirstPersonFlatRidePrimaryFrameCount(
+        const Vehicle& car)
+    {
+        const auto* ride = car.GetRide();
+        if (ride != nullptr && ride->getRideTypeDescriptor().Name == "ferris_wheel")
+            return float(kFirstPersonFerrisWheelFrameCount);
+        // Existing Top Spin arm geometry is a 48-frame source. Other flat
+        // rides keep the legacy interpolation period until their own native
+        // animation semantics are reconstructed explicitly.
+        return 48.0f;
+    }
+
     [[nodiscard]] inline FirstPersonVec3 FirstPersonPassengerFallbackEyeOffset(
         const Vehicle& car, uint8_t seatIndex)
     {
@@ -194,7 +207,48 @@ namespace OpenRCT2::Paint
         pose.seatingRow = row;
 
         const auto* ride = car.GetRide();
-        if (ride != nullptr && ride->getRideTypeDescriptor().Name == "top_spin")
+        if (ride != nullptr && ride->getRideTypeDescriptor().Name == "ferris_wheel")
+        {
+            const auto* rideEntry = car.GetRideEntry();
+            const auto* calibration = rideEntry != nullptr
+                ? GetFirstPersonFerrisWheelCalibration(*rideEntry)
+                : nullptr;
+            if (calibration != nullptr)
+            {
+                const float primaryFrame = flatPrimaryFrame >= 0.0f
+                    ? flatPrimaryFrame : float(car.flatRideAnimationFrame);
+                const float phase =
+                    FirstPersonFerrisWheelRiderPhase(primaryFrame, seatIndex);
+                const auto orbit =
+                    SampleFirstPersonPeriodicOrbit(*calibration, phase);
+
+                // For Ferris wheel's integral vehicle, native vehicle creation
+                // anchors the stationary entity at sequence-0 tile centre
+                // (+16,+16,+VehicleZOffset). The painter's sequence-0 wheel
+                // origin is (-16,0,+7) from that tile. Express the calibrated
+                // asset-space orbit relative to the vehicle so rotated ride
+                // placements reuse exactly the same recovered mechanism.
+                const auto seatBaseOffset =
+                    FirstPersonFerrisWheelSeatBaseOffsetFromVehicle(
+                        orbit, uint8_t((car.orientation >> 3) & 3u),
+                        float(ride->getRideTypeDescriptor().Heights.VehicleZOffset));
+                vehiclePosition.x += seatBaseOffset.x;
+                vehiclePosition.y += seatBaseOffset.y;
+                vehiclePosition.z += seatBaseOffset.z;
+
+                // The fitted orbit tracks a lower-body seat marker, not the
+                // changing rider-sprite centroid. Apply a separately measured
+                // eye height and pair separation inside the upright cabin.
+                const float lateral = (seatIndex & 1u) != 0
+                    ? calibration->seatHalfSeparation
+                    : -calibration->seatHalfSeparation;
+                pose.localEyeOffset = {
+                    0.0f, lateral, calibration->eyeHeight
+                };
+                pose.rideSpecificTransform = true;
+            }
+        }
+        else if (ride != nullptr && ride->getRideTypeDescriptor().Name == "top_spin")
         {
             // These are the same physical seat offsets used by the native Top
             // Spin painter. Unlike most flat rides, its cabin translation and
