@@ -151,7 +151,6 @@ namespace OpenRCT2::Paint
         {
             uint64_t key{};
             FirstPersonVec3 anchor{};
-            uint8_t direction{};
         };
 
         [[nodiscard]] std::optional<ReconstructionGroupInfo> GetReconstructionGroup(
@@ -184,7 +183,7 @@ namespace OpenRCT2::Paint
                 ExtendStableKey(key, direction);
                 ExtendStableKey(key, large->getEntryIndex());
                 if (key == 0) key = 1;
-                return ReconstructionGroupInfo{ key, anchor, direction };
+                return ReconstructionGroupInfo{ key, anchor };
             }
 
             if (element->getType() == TileElementType::track)
@@ -206,7 +205,7 @@ namespace OpenRCT2::Paint
                 ExtendStableKey(key, track->getRideIndex().ToUnderlying());
                 ExtendStableKey(key, static_cast<uint16_t>(track->getTrackType()));
                 if (key == 0) key = 1;
-                return ReconstructionGroupInfo{ key, anchor, origin->direction };
+                return ReconstructionGroupInfo{ key, anchor };
             }
 
             return std::nullopt;
