@@ -39,6 +39,12 @@ void PaintUtilForceSetGeneralSupportHeight(PaintSession& session, int16_t height
 void PaintUtilSetSegmentSupportHeight(PaintSession& session, int32_t segments, uint16_t height, uint8_t slope);
 uint16_t PaintUtilRotateSegments(uint16_t segments, uint8_t rotation);
 
+// Native isometric painting shifts the sprite-space tile origin to a
+// rotation-dependent corner while retaining the unshifted map position for
+// simulation semantics. Perspective reconstruction must use this same origin
+// when projecting source-art UVs.
+[[nodiscard]] CoordsXY GetTileElementPaintSpritePosition(CoordsXY mapCoords, uint8_t rotation);
+
 void TileElementPaintSetup(PaintSession& session, const CoordsXY& mapCoords, bool isTrackPiecePreview = false);
 
 bool PaintShouldShowHeightMarkers(const PaintSession& session, uint32_t viewportFlag);
