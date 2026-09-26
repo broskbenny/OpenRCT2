@@ -35,6 +35,7 @@
 #include "../world/Footpath.h"
 #include "../world/Map.h"
 #include "../world/MapAnimation.h"
+#include "../world/TileInspector.h"
 #include "../world/Wall.h"
 #include "../ride/Track.h"
 #include "../world/tile_element/SurfaceElement.h"
@@ -1441,7 +1442,16 @@ namespace OpenRCT2::Paint
                 | VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES
                 | VIEWPORT_FLAG_HIDE_SCENERY
                 | VIEWPORT_FLAG_INVISIBLE_SCENERY;
-            return (viewFlags & kIncompatible) == 0;
+            if ((viewFlags & kIncompatible) != 0 || gTrackDesignSaveMode)
+                return false;
+
+            // Native painting can temporarily recolour a selected large-scenery
+            // element. Until reconstruction carries that presentation state as
+            // part of its own immutable texture key, leave selection rendering
+            // entirely on the authoritative native path.
+            const auto* selected = TileInspector::GetSelectedElement();
+            return selected == nullptr
+                || selected->getType() != TileElementType::largeScenery;
         }
 
         void MarkLargeSceneryGeometryRegionsDirty(const LargeSceneryGeometryCacheEntry& cached)
@@ -1463,6 +1473,48 @@ namespace OpenRCT2::Paint
                 RotateQuarterMask(entry.tiles[sequence].corners, large.getDirection());
             const uint8_t actual = large.getOccupiedQuadrants() & 0x0F;
             return actual == 0 || actual == expected;
+        }
+
+        [[nodiscard]] bool LargeSceneryInstanceComplete(
+            const LargeSceneryEntry& entry, const ReconstructionGroupInfo& group,
+            uint8_t objectDirection)
+        {
+            const int32_t originX = int32_t(std::lround(group.anchor.x));
+            const int32_t originY = int32_t(std::lround(group.anchor.y));
+            const int32_t originZ = int32_t(std::lround(group.anchor.z));
+            for (size_t sequence = 0; sequence < entry.tiles.size(); ++sequence)
+            {
+                const auto& tile = entry.tiles[sequence];
+                const auto offset =
+                    CoordsXY{ tile.offset.x, tile.offset.y }.rotate(objectDirection);
+                const CoordsXY expectedTile{ originX + offset.x, originY + offset.y };
+                const int32_t expectedBaseZ = originZ + tile.offset.z;
+
+                auto* element = MapGetFirstElementAt(expectedTile);
+                if (element == nullptr)
+                    return false;
+
+                bool found = false;
+                do
+                {
+                    if (element->getType() != TileElementType::largeScenery)
+                        continue;
+                    const auto* candidate = element->asLargeScenery();
+                    if (candidate == nullptr
+                        || candidate->getEntry() != &entry
+                        || candidate->getSequenceIndex() != sequence
+                        || static_cast<uint8_t>(candidate->getDirection()) != objectDirection
+                        || candidate->getBaseZ() != expectedBaseZ
+                        || !LargeSceneryInstanceMetadataMatches(*candidate, entry))
+                        continue;
+                    found = true;
+                    break;
+                } while (!(element++)->isLastForTile());
+
+                if (!found)
+                    return false;
+            }
+            return true;
         }
 
         [[nodiscard]] ImageId LargeSceneryImageTemplate(
@@ -1692,6 +1744,15 @@ namespace OpenRCT2::Paint
                     {
                         if (cached != _largeSceneryGeometryCache.end())
                             MarkLargeSceneryGeometryRegionsDirty(cached->second);
+                        const uint8_t objectDirection =
+                            static_cast<uint8_t>(large->getDirection()) & 3u;
+                        if (!LargeSceneryInstanceComplete(
+                                *entry, *group, objectDirection))
+                        {
+                            if (cached != _largeSceneryGeometryCache.end())
+                                _largeSceneryGeometryCache.erase(cached);
+                            continue;
+                        }
                         auto rebuilt = BuildLargeSceneryInstanceGeometry(
                             *large, *entry, *model, *group, signature, frame);
                         if (rebuilt.surfaces.empty())
