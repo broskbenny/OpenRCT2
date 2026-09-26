@@ -46,6 +46,8 @@ namespace OpenRCT2::Drawing::ScrollingText
     static uint8_t _characterBitmaps[SPR_FONTS_GLYPH_COUNT][8];
     static uint32_t _drawScrollNextIndex = 0;
     static std::mutex _mutex;
+    static bool _firstPersonSnapshotCapture = false;
+    static std::vector<FirstPersonBitmapSnapshot> _firstPersonSnapshots;
 
     static void setBitmapForSprite(
         std::string_view text, int32_t scroll, PaletteIndex* bitmap, const int16_t* scrollPositionOffsets, PaletteIndex colour);
@@ -111,6 +113,50 @@ namespace OpenRCT2::Drawing::ScrollingText
     {
         initialiseCharacterBitmaps(SPR_FONTS_BEGIN, SPR_FONTS_GLYPH_COUNT);
         initialiseScrollingText();
+    }
+
+    void BeginFirstPersonSnapshotCapture()
+    {
+        std::scoped_lock<std::mutex> lock(_mutex);
+        _firstPersonSnapshots.clear();
+        _firstPersonSnapshotCapture = true;
+    }
+
+    void EndFirstPersonSnapshotCapture()
+    {
+        std::scoped_lock<std::mutex> lock(_mutex);
+        _firstPersonSnapshotCapture = false;
+    }
+
+    uint32_t CaptureFirstPersonSnapshot(ImageId image)
+    {
+        if (!_firstPersonSnapshotCapture || !image.HasValue())
+            return 0;
+
+        const auto index = image.GetIndex();
+        if (index < SPR_SCROLLING_TEXT_START || index >= SPR_SCROLLING_TEXT_START + kMaxEntries)
+            return 0;
+
+        const auto* g1 = GfxGetG1Element(image);
+        if (g1 == nullptr || g1->offset == nullptr || g1->width <= 0 || g1->height <= 0)
+            return 0;
+
+        FirstPersonBitmapSnapshot snapshot{};
+        snapshot.width = g1->width;
+        snapshot.height = g1->height;
+        snapshot.xOffset = g1->xOffset;
+        snapshot.yOffset = g1->yOffset;
+        const size_t pixelCount = size_t(g1->width) * size_t(g1->height);
+        snapshot.pixels.assign(g1->offset, g1->offset + pixelCount);
+        _firstPersonSnapshots.emplace_back(std::move(snapshot));
+        return static_cast<uint32_t>(_firstPersonSnapshots.size());
+    }
+
+    const FirstPersonBitmapSnapshot* GetFirstPersonSnapshot(uint32_t handle)
+    {
+        if (handle == 0 || handle > _firstPersonSnapshots.size())
+            return nullptr;
+        return &_firstPersonSnapshots[handle - 1];
     }
 
     static uint8_t* FontSpriteGetCodepointBitmap(int32_t codepoint)
