@@ -5,6 +5,7 @@
 #include "FirstPersonRenderer.h"
 #include "Paint.h"
 #include "tile_element/Paint.Surface.h"
+#include "tile_element/Paint.Path.h"
 #include "tile_element/Paint.TileElement.h"
 #include "Paint.Entity.h"
 
@@ -20,8 +21,10 @@
 #include "../world/Footpath.h"
 #include "../world/Map.h"
 #include "../world/MapAnimation.h"
+#include "../world/Wall.h"
 #include "../world/tile_element/SurfaceElement.h"
 #include "../world/tile_element/PathElement.h"
+#include "../world/tile_element/SmallSceneryElement.h"
 #include "../world/tile_element/LargeSceneryElement.h"
 #include "../world/tile_element/Slope.h"
 #include "../world/tile_element/TileElement.h"
@@ -29,6 +32,7 @@
 #include "../world/tile_element/WallElement.h"
 #include "../object/WallSceneryEntry.h"
 #include "../object/LargeSceneryEntry.h"
+#include "../object/SmallSceneryEntry.h"
 
 #include <algorithm>
 #include <array>
@@ -92,17 +96,35 @@ namespace OpenRCT2::Paint
                     return false;
             }
         }
-        [[nodiscard]] uint8_t PaintRotation(const FirstPersonCamera& camera)
+        [[nodiscard]] uint8_t PaintRotationForTile(const FirstPersonCamera& camera, CoordsXY tile)
         {
-            // In ride POV, yaw/pitch/roll fields describe the underlying car;
-            // the final view is an explicit head-relative basis. Select the
-            // native sprite direction from what the PASSENGER actually faces.
-            const auto f = GetFirstPersonBasis(camera).forward;
-            const float horizontal = std::hypot(f.x, f.y);
-            const float yaw = horizontal > 0.04f ? std::atan2(f.y,f.x) : camera.yaw;
-            float r = std::fmod(yaw, 2.0f * kPi);
-            if (r < 0) r += 2.0f * kPi;
-            return static_cast<uint8_t>(std::lround(r / (0.5f * kPi))) & 3;
+            // Native sprite direction is a property of VIEWPOINT, not head gaze.
+            // Use the passenger's position relative to this tile, so turning the
+            // head in place cannot repaint the park or abruptly swap sprite sides.
+            float dx = float(tile.x + kCoordsXYStep / 2) - camera.position.x;
+            float dy = float(tile.y + kCoordsXYStep / 2) - camera.position.y;
+            if (std::hypot(dx, dy) <= 0.1f)
+            {
+                const auto forward = GetFirstPersonBasis(camera).forward;
+                dx = forward.x;
+                dy = forward.y;
+            }
+            float yaw = std::atan2(dy, dx);
+            if (yaw < 0.0f) yaw += 2.0f * kPi;
+            return static_cast<uint8_t>(std::lround(yaw / (0.5f * kPi))) & 3;
+        }
+        [[nodiscard]] FirstPersonVec3 FixedSpriteRight(uint8_t rotation)
+        {
+            // Match the horizontal right axis of the corresponding quarter-turn
+            // view. Connected static artwork therefore shares a world-fixed axis
+            // instead of each component independently facing the passenger.
+            switch (rotation & 3)
+            {
+                case 0: return { 0.0f, 1.0f, 0.0f };
+                case 1: return { -1.0f, 0.0f, 0.0f };
+                case 2: return { 0.0f, -1.0f, 0.0f };
+                default: return { 1.0f, 0.0f, 0.0f };
+            }
         }
         FirstPersonVec3 Anchor(const PaintStruct& ps)
         {
@@ -145,39 +167,80 @@ namespace OpenRCT2::Paint
                     std::array<FirstPersonVec3,6>{p0,p1,p2,p0,p2,p3}[i];
             }
         }
+        struct SpriteCompositeLayout
+        {
+            const G1Element* colour{};
+            const G1Element* mask{};
+            int32_t xOffset{}, yOffset{}, width{}, height{};
+        };
+        [[nodiscard]] std::optional<SpriteCompositeLayout> GetSpriteCompositeLayout(ImageId image, ImageId mask)
+        {
+            const auto* colour = image.HasValue() ? GfxGetG1Element(image) : nullptr;
+            if (colour == nullptr || colour->width <= 0 || colour->height <= 0)
+                return std::nullopt;
+            if (!mask.HasValue())
+                return SpriteCompositeLayout{ colour, nullptr, colour->xOffset, colour->yOffset, colour->width, colour->height };
+
+            const auto* maskG1 = GfxGetG1Element(mask);
+            if (maskG1 == nullptr || maskG1->width <= 0 || maskG1->height <= 0)
+                return std::nullopt;
+            // DrawSpriteRawMasked positions the composite with MASK offsets and
+            // clips both images to the common rectangle. Colour offsets do not
+            // participate in placement.
+            return SpriteCompositeLayout{
+                colour, maskG1, maskG1->xOffset, maskG1->yOffset,
+                std::min<int32_t>(colour->width, maskG1->width),
+                std::min<int32_t>(colour->height, maskG1->height)
+            };
+        }
+        [[nodiscard]] bool UsesViewFacingImpostor(const PaintStruct& ps)
+        {
+            if (ps.Entity != nullptr)
+                return true;
+            if (ps.Element == nullptr)
+                return true;
+            if (ps.Element->getType() == TileElementType::smallScenery)
+            {
+                const auto* small = ps.Element->asSmallScenery();
+                const auto* entry = small != nullptr ? small->getEntry() : nullptr;
+                // Trees already read well as upright impostors. Architecture,
+                // rides, supports, signs and other connected static pieces need
+                // a shared world-fixed orientation to keep their corners joined.
+                return entry == nullptr || entry->flags.has(SmallSceneryFlag::isTree);
+            }
+            return false;
+        }
         void AppendLayer(
             FirstPersonScene& scene, const FirstPersonVec3& anchor, const FirstPersonBasis& basis,
             const ScreenCoordsXY& isoAnchor, ImageId image, const ScreenCoordsXY& spritePos,
-            ImageId mask = {})
+            uint8_t rotation, bool viewFacing, ImageId mask = {})
         {
-            const auto* g1 = image.HasValue() ? GfxGetG1Element(image) : nullptr;
-            if (g1 == nullptr || g1->width <= 0 || g1->height <= 0)
+            const auto layout = GetSpriteCompositeLayout(image, mask);
+            if (!layout.has_value())
                 return;
-            // Keep the native paint-group's offsets and overlay alignment.
-            // This unit-per-pixel impostor is a FALLBACK for unmodelled art;
-            // it must not be mistaken for reconstructed physical object depth.
-            const float left = float(spritePos.x + g1->xOffset - isoAnchor.x);
-            const float top = float(spritePos.y + g1->yOffset - isoAnchor.y);
-            const auto right=UprightBillboardRight(anchor,scene.options.camera.position,basis.right);
-            // This is a world-UP billboard that cannot twist with the head.
+            const float left = float(spritePos.x + layout->xOffset - isoAnchor.x);
+            const float top = float(spritePos.y + layout->yOffset - isoAnchor.y);
+            const auto right = viewFacing
+                ? UprightBillboardRight(anchor, scene.options.camera.position, basis.right)
+                : FixedSpriteRight(rotation);
             const auto up = FirstPersonVec3{ 0.0f, 0.0f, 1.0f };
             const auto p0 = Add(Add(anchor, Mul(right, left)), Mul(up, -top));
-            const auto p1 = Add(p0, Mul(right, float(g1->width)));
-            const auto p2 = Add(p1, Mul(up, -float(g1->height)));
-            const auto p3 = Add(p0, Mul(up, -float(g1->height)));
+            const auto p1 = Add(p0, Mul(right, float(layout->width)));
+            const auto p2 = Add(p1, Mul(up, -float(layout->height)));
+            const auto p3 = Add(p0, Mul(up, -float(layout->height)));
             FirstPersonSurface surface{};
             surface.image = image;
             surface.mask = mask;
-            surface.viewFacing = true;
+            surface.viewFacing = viewFacing;
             surface.billboardAnchor = anchor;
             surface.billboardLeft = left;
             surface.billboardTop = top;
-            surface.billboardWidth = float(g1->width);
-            surface.billboardHeight = float(g1->height);
+            surface.billboardWidth = float(layout->width);
+            surface.billboardHeight = float(layout->height);
             EmitQuad(surface, { {
-                { p0, 0.0f, 0.0f }, { p1, float(g1->width), 0.0f },
-                { p2, float(g1->width), float(g1->height) },
-                { p3, 0.0f, float(g1->height) },
+                { p0, 0.0f, 0.0f }, { p1, float(layout->width), 0.0f },
+                { p2, float(layout->width), float(layout->height) },
+                { p3, 0.0f, float(layout->height) },
             } });
             scene.surfaces.emplace_back(std::move(surface));
         }
@@ -190,9 +253,8 @@ namespace OpenRCT2::Paint
             FirstPersonScene& scene, const PaintStruct& ps, ImageId image,
             const ScreenCoordsXY& spritePos, uint8_t rotation, ImageId mask = {})
         {
-            if (!image.HasValue()) return false;
-            const auto* g1 = GfxGetG1Element(image);
-            if (g1 == nullptr || g1->width <= 0 || g1->height <= 0) return false;
+            const auto layout = GetSpriteCompositeLayout(image, mask);
+            if (!layout.has_value()) return false;
             const float x0 = float(std::min(ps.Bounds.x, ps.Bounds.x_end));
             const float x1 = float(std::max(ps.Bounds.x, ps.Bounds.x_end));
             const float y0 = float(std::min(ps.Bounds.y, ps.Bounds.y_end));
@@ -222,8 +284,8 @@ namespace OpenRCT2::Paint
                                      int32_t(std::lround(p.y)),
                                      int32_t(std::lround(p.z)) };
                 const auto iso = Translate3DTo2DWithZ(rotation, loc);
-                v[i] = { p, float(iso.x - spritePos.x - g1->xOffset),
-                            float(iso.y - spritePos.y - g1->yOffset) };
+                v[i] = { p, float(iso.x - spritePos.x - layout->xOffset),
+                            float(iso.y - spritePos.y - layout->yOffset) };
             }
             EmitQuad(surface,v);
             scene.surfaces.emplace_back(std::move(surface));
@@ -244,44 +306,27 @@ namespace OpenRCT2::Paint
                 return false;
             const auto* wall = ps.Element->asWall();
             const auto* entry = wall != nullptr ? wall->getEntry() : nullptr;
-            const auto* g1 = GfxGetG1Element(image);
-            if (entry == nullptr || g1 == nullptr || g1->width <= 0 || g1->height <= 0 ||
+            const auto layout = GetSpriteCompositeLayout(image, mask);
+            if (entry == nullptr || !layout.has_value() ||
                 entry->flags.has(WallSceneryFlag::isDoor) || entry->height == 0)
                 return false;
-            const float bx = float(ps.MapPos.x), by = float(ps.MapPos.y);
-            const float bottom = float(wall->getBaseZ() + 1);
-            const float top = bottom + float(entry->height * 8 - 2);
-            if (top <= bottom) return false;
-            const float d = 1.5f;
-            const std::array<FirstPersonVec3, 2> edge = [&] {
-                switch (wall->getDirection() & 3)
-                {
-                    case 0: return std::array<FirstPersonVec3, 2>{{ { bx+d, by+1, bottom },
-                                                                      { bx+d, by+29, bottom } }};
-                    case 1: return std::array<FirstPersonVec3, 2>{{ { bx+2, by+30.5f, bottom },
-                                                                      { bx+31, by+30.5f, bottom } }};
-                    case 2: return std::array<FirstPersonVec3, 2>{{ { bx+30.5f, by+2, bottom },
-                                                                      { bx+30.5f, by+31, bottom } }};
-                    default: return std::array<FirstPersonVec3, 2>{{ { bx+1, by+d, bottom },
-                                                                       { bx+29, by+d, bottom } }};
-                }
-            }();
-            const std::array<FirstPersonVec3,4> world{{
-                edge[0], edge[1], {edge[1].x,edge[1].y,top}, {edge[0].x,edge[0].y,top}
-            }};
+
+            const auto physical = BuildFirstPersonWallPlane(
+                ps.MapPos, wall->getBaseZ(), wall->getDirection(), wall->getSlope(),
+                int32_t(entry->height) * kCoordsZStep);
             FirstPersonSurface surface{};
-            surface.image=image;
-            surface.mask=mask;
-            std::array<FirstPersonVertex,4> vertices{};
-            for (size_t i=0;i<world.size();++i)
+            surface.image = image;
+            surface.mask = mask;
+            std::array<FirstPersonVertex, 4> vertices{};
+            for (size_t i = 0; i < physical.corners.size(); ++i)
             {
-                const auto& pos=world[i];
-                const auto iso=Translate3DTo2DWithZ(rotation,
-                    {int32_t(std::lround(pos.x)),int32_t(std::lround(pos.y)),int32_t(std::lround(pos.z))});
-                vertices[i]={pos,float(iso.x-spritePos.x-g1->xOffset),
-                                 float(iso.y-spritePos.y-g1->yOffset)};
+                const auto& pos = physical.corners[i];
+                const auto iso = Translate3DTo2DWithZ(rotation,
+                    { int32_t(std::lround(pos.x)), int32_t(std::lround(pos.y)), int32_t(std::lround(pos.z)) });
+                vertices[i] = { pos, float(iso.x - spritePos.x - layout->xOffset),
+                                    float(iso.y - spritePos.y - layout->yOffset) };
             }
-            EmitQuad(surface,vertices);
+            EmitQuad(surface, vertices);
             scene.surfaces.emplace_back(std::move(surface));
             return true;
         }
@@ -376,31 +421,35 @@ namespace OpenRCT2::Paint
             const float x=(high.x-low.x)*0.5f,y=(high.y-low.y)*0.5f,z=(high.z-low.z)*0.5f;
             return view.visible(center,std::sqrt(x*x+y*y+z*z)+2.0f);
         }
-        void AppendHorizontalPathLayer(FirstPersonScene& scene, const PaintStruct& ps, ImageId image, uint8_t rotation)
+        void AppendSemanticPathDeck(
+            FirstPersonScene& scene, const PaintStruct& ps, ImageId image,
+            const ScreenCoordsXY& spritePos, uint8_t rotation)
         {
             const auto* g1 = image.HasValue() ? GfxGetG1Element(image) : nullptr;
-            if (g1 == nullptr) return;
-            const auto* path = ps.Element->asPath();
-            if (path == nullptr) return;
+            const auto* path = ps.Element != nullptr ? ps.Element->asPath() : nullptr;
+            if (g1 == nullptr || path == nullptr) return;
             const auto origin = ps.MapPos;
             const int32_t baseZ = path->getBaseZ();
             const auto slope = path->isSloped() ? kPathSlopeToLandSlope[path->getSlopeDirection()] : kTileSlopeFlat;
-            const auto c = GetSlopeCornerHeights(baseZ, slope);
+            const auto heights = GetSlopeCornerHeights(baseZ, slope);
+            // Geometry is the REAL walking plane. Do not raise it to solve
+            // z-fighting; depth separation is a rendering concern.
             const std::array<CoordsXYZ, 4> world = { {
-                { origin.x, origin.y, c.south + 1 },
-                { origin.x + kCoordsXYStep, origin.y, c.east + 1 },
-                { origin.x + kCoordsXYStep, origin.y + kCoordsXYStep, c.north + 1 },
-                { origin.x, origin.y + kCoordsXYStep, c.west + 1 },
+                { origin.x, origin.y, heights.south },
+                { origin.x + kCoordsXYStep, origin.y, heights.east },
+                { origin.x + kCoordsXYStep, origin.y + kCoordsXYStep, heights.north },
+                { origin.x, origin.y + kCoordsXYStep, heights.west },
             } };
             FirstPersonSurface surface{};
             surface.image = image;
+            surface.depthBias = true;
             std::array<FirstPersonVertex, 4> v{};
             for (size_t i = 0; i < v.size(); ++i)
             {
                 const auto iso = Translate3DTo2DWithZ(rotation, world[i]);
                 v[i] = { { float(world[i].x), float(world[i].y), float(world[i].z) },
-                         float(iso.x - ps.ScreenPos.x - g1->xOffset),
-                         float(iso.y - ps.ScreenPos.y - g1->yOffset) };
+                         float(iso.x - spritePos.x - g1->xOffset),
+                         float(iso.y - spritePos.y - g1->yOffset) };
             }
             EmitQuad(surface, v, UsesOppositeTerrainDiagonal(slope));
             scene.surfaces.emplace_back(std::move(surface));
@@ -408,7 +457,7 @@ namespace OpenRCT2::Paint
         void AppendRoot(
             FirstPersonScene& scene, const PaintStruct& ps, const FirstPersonVec3& anchor,
             const FirstPersonBasis& basis, const ScreenCoordsXY& isoAnchor,
-            uint32_t viewFlags, EntityId hidden, uint8_t rotation)
+            uint32_t viewFlags, EntityId hidden, uint8_t rotation, bool emitPathDeck)
         {
             if (ps.Entity != nullptr && !hidden.IsNull() && ps.Entity->id == hidden)
                 return;
@@ -420,45 +469,59 @@ namespace OpenRCT2::Paint
                     ? id.WithTransparency(Drawing::FilterPaletteID::paletteDarken1)
                     : id;
             };
-            // Retain the existing painter's chosen remaps, animation frames and directions.
-            // The principal footpath sprites were painted as ground diamonds: lay them
-            // over terrain instead of making an upright camera-facing poster.
-            // Ancillary railings, lights and signs retain their original sprite layers.
             const bool physicallyPlanar = ps.Element != nullptr &&
                 (ps.Element->getType() == TileElementType::wall ||
                  ps.Element->getType() == TileElementType::surface);
             const auto* path = ps.Element != nullptr ? ps.Element->asPath() : nullptr;
             const auto* pathSurface = path != nullptr ? path->getSurfaceDescriptor() : nullptr;
             const auto spriteIndex = ps.image_id.GetIndex();
-            // A supported bridge also paints its own walls, beams and a floor as
-            // separate sprites. Only its original path SURFACE sprite belongs on
-            // the walking plane. Flattening the bridge/support sprite into the
-            // floor erases the bridge and paints side walls under the player's feet.
             const bool groundPathArtwork = pathSurface != nullptr && ps.image_id.HasValue()
                 && spriteIndex >= pathSurface->image && spriteIndex < pathSurface->image + 51;
-            if (groundPathArtwork && ps.Bounds.z_end == ps.Bounds.z)
-                AppendHorizontalPathLayer(scene, ps, colourify(ps.image_id), rotation);
-            else if (!AppendSemanticWallPlane(scene,ps,colourify(ps.image_id),ps.ScreenPos,rotation) &&
-                     (!physicallyPlanar ||
-                      !AppendPhysicalPlane(scene, ps, colourify(ps.image_id), ps.ScreenPos, rotation)))
-                AppendLayer(scene, anchor, basis, isoAnchor, colourify(ps.image_id), ps.ScreenPos);
+
+            // Emit one semantic walking deck per path element, regardless of
+            // whether native bridge painting omitted the separate surface sprite.
+            if (emitPathDeck && pathSurface != nullptr && ps.image_id.HasValue())
+            {
+                auto deckImage = ps.image_id.WithIndex(
+                    pathSurface->image + GetPathSurfaceImageOffset(*path, rotation));
+                AppendSemanticPathDeck(scene, ps, colourify(deckImage), ps.ScreenPos, rotation);
+            }
+
+            // Native path surface sprites are represented by the semantic deck
+            // above. Bridge/support sprites remain artwork and are never
+            // flattened into the walking plane.
+            if (!groundPathArtwork)
+            {
+                const bool viewFacing = UsesViewFacingImpostor(ps);
+                if (!AppendSemanticWallPlane(scene, ps, colourify(ps.image_id), ps.ScreenPos, rotation) &&
+                    (!physicallyPlanar ||
+                     !AppendPhysicalPlane(scene, ps, colourify(ps.image_id), ps.ScreenPos, rotation)))
+                {
+                    AppendLayer(
+                        scene, anchor, basis, isoAnchor, colourify(ps.image_id), ps.ScreenPos,
+                        rotation, viewFacing);
+                }
+            }
             if (ps.Children != nullptr)
             {
-                // This is the native paint-chain contract: attached sprites
-                // belong to the TERMINAL child when a parent has children.
-                AppendRoot(scene, *ps.Children, anchor, basis, isoAnchor, viewFlags, hidden, rotation);
+                AppendRoot(scene, *ps.Children, anchor, basis, isoAnchor, viewFlags, hidden, rotation, false);
             }
             else
             {
+                const bool viewFacing = UsesViewFacingImpostor(ps);
                 for (auto* a = ps.Attached; a != nullptr; a = a->NextEntry)
                 {
                     const auto colourImage = colourify(a->IsMasked ? a->ColourImageId : a->image_id);
                     const auto maskImage = a->IsMasked ? a->image_id : ImageId{};
                     const auto position = ps.ScreenPos + a->RelativePos;
-                    if (!AppendSemanticWallPlane(scene,ps,colourImage,position,rotation,maskImage) &&
+                    if (!AppendSemanticWallPlane(scene, ps, colourImage, position, rotation, maskImage) &&
                         (!physicallyPlanar ||
                          !AppendPhysicalPlane(scene, ps, colourImage, position, rotation, maskImage)))
-                        AppendLayer(scene, anchor, basis, isoAnchor, colourImage, position, maskImage);
+                    {
+                        AppendLayer(
+                            scene, anchor, basis, isoAnchor, colourImage, position,
+                            rotation, viewFacing, maskImage);
+                    }
                 }
             }
         }
@@ -489,15 +552,24 @@ namespace OpenRCT2::Paint
         // Persistent NATIVE PAINT results, separated from dynamic entity sprites.
         // A cached surface never retains a PaintStruct/TileElement pointer: all
         // native session pointers expire immediately after PaintSessionFree.
+        struct StaticPaintRotationCache
+        {
+            uint64_t lastPainted{};
+            bool valid = false;
+            std::vector<FirstPersonSurface> surfaces;
+        };
         struct StaticPaintCacheEntry
         {
             uint64_t signature{};
             uint64_t lastSeen{};
-            uint64_t lastPainted{};
             uint32_t viewFlags{};
-            uint8_t rotation{};
-            bool valid=false, dirty=true, animated=false;
-            std::vector<FirstPersonSurface> surfaces;
+            bool valid = false;
+            bool dirty = true;
+            bool animated = false;
+            // Keep all four native quarter-turn variants. Crossing a viewpoint
+            // boundary can paint a variant once without destroying the previous
+            // one, so moving back and forth does not thrash the whole park.
+            std::array<StaticPaintRotationCache, 4> rotations;
         };
         static std::unordered_map<uint64_t, StaticPaintCacheEntry> _staticPaintCache;
 
@@ -686,6 +758,7 @@ namespace OpenRCT2::Paint
             }
             FirstPersonSurface patch{};
             patch.image = image;
+            patch.edgeCoverage = true;
             patch.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
             const auto native = std::array<CoordsXYZ,4>{{
                 { origin.x, origin.y, height },
@@ -792,6 +865,7 @@ namespace OpenRCT2::Paint
                         }
                         cache.ground = {};
                         cache.ground.image = image;
+                        cache.ground.edgeCoverage = true;
                         cache.ground.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
                         EmitQuad(cache.ground, v, UsesOppositeTerrainDiagonal(slope));
                         cache.water.reset();
@@ -867,199 +941,293 @@ namespace OpenRCT2::Paint
         {
             PROFILED_FUNCTION();
             const auto& opt = scene.options;
-            const auto rotation = PaintRotation(opt.camera);
             const auto basis = GetFirstPersonBasis(opt.camera);
             const auto frame = _terrainCache.frame;
             constexpr uint64_t kMaxStaticAge = 240;
             std::unordered_set<uint64_t> misses;
-            misses.reserve(scene.visibleTiles.size()/8+1);
+            misses.reserve(scene.visibleTiles.size() / 8 + 1);
+            std::unordered_map<uint64_t, uint8_t> tileRotations;
+            tileRotations.reserve(scene.visibleTiles.size());
             const FirstPersonFrustum worldFrustum(
-                opt.camera,opt.fieldOfViewDegrees,
-                float(scene.dimensions.width)/float(std::max(scene.dimensions.height,1)),
-                opt.nearClip,opt.farClip);
+                opt.camera, opt.fieldOfViewDegrees,
+                float(scene.dimensions.width) / float(std::max(scene.dimensions.height, 1)),
+                opt.nearClip, opt.farClip);
+
             for (const auto tile : scene.visibleTiles)
             {
-                const auto key = TerrainKey(tile.x/kCoordsXYStep,tile.y/kCoordsXYStep);
+                const auto key = TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+                const auto rotation = PaintRotationForTile(opt.camera, tile);
+                tileRotations.emplace(key, rotation);
                 const auto sig = NativeTileSignature(tile);
                 auto& cached = _staticPaintCache[key];
-                const bool stale = !cached.valid || cached.dirty || cached.signature!=sig ||
-                    cached.viewFlags!=opt.viewFlags || cached.rotation!=rotation ||
-                    (cached.animated && cached.lastSeen!=frame) ||
-                    FirstPersonRefreshDue(key,frame,cached.lastPainted,kMaxStaticAge);
+                const bool semanticChanged = !cached.valid || cached.dirty ||
+                    cached.signature != sig || cached.viewFlags != opt.viewFlags;
+                if (semanticChanged)
+                {
+                    cached.signature = sig;
+                    cached.viewFlags = opt.viewFlags;
+                    cached.animated = MapAnimations::IsTileAnimatedForFirstPerson(
+                        TileCoordsXY(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+                    cached.valid = true;
+                    cached.dirty = false;
+                    for (auto& variant : cached.rotations)
+                    {
+                        variant.valid = false;
+                        variant.lastPainted = 0;
+                        variant.surfaces.clear();
+                    }
+                }
+                cached.lastSeen = frame;
+                auto& variant = cached.rotations[rotation];
+                const uint64_t refreshKey = key ^ (uint64_t(rotation + 1) << 60);
+                const bool stale = !variant.valid ||
+                    (cached.animated && variant.lastPainted != frame) ||
+                    FirstPersonRefreshDue(refreshKey, frame, variant.lastPainted, kMaxStaticAge);
                 if (stale)
                 {
-                    cached.signature=sig;
-                    cached.viewFlags=opt.viewFlags;
-                    cached.rotation=rotation;
-                    cached.animated=MapAnimations::IsTileAnimatedForFirstPerson(
-                        TileCoordsXY(tile.x/kCoordsXYStep,tile.y/kCoordsXYStep));
-                    cached.lastSeen=frame;
-                    cached.lastPainted=frame;
-                    cached.dirty=false;
-                    cached.valid=true;
-                    cached.surfaces.clear();
+                    variant.valid = true;
+                    variant.lastPainted = frame;
+                    variant.surfaces.clear();
                     misses.insert(key);
                     ++scene.staticTilePaints;
                 }
                 else
                 {
                     ++scene.staticTileCacheHits;
-                    cached.lastSeen=frame;
-                    for (const auto& staticSurface : cached.surfaces)
-                    {
-                        auto surface=staticSurface;
-                        ReorientBillboard(surface,opt.camera.position,basis.right);
-                        if (SurfaceMayBeVisible(surface,worldFrustum))
-                            scene.surfaces.emplace_back(std::move(surface));
-                    }
                 }
             }
-            // Enclose the ENTIRE map and conservative vertical range in the
-            // original painter's 2-D rectangle. It selects source art; it must
-            // NOT determine first-person visibility or draw distance.
-            const auto map = getGameState().mapSize;
-            int32_t minX = std::numeric_limits<int32_t>::max();
-            int32_t minY = std::numeric_limits<int32_t>::max();
-            int32_t maxX = std::numeric_limits<int32_t>::min();
-            int32_t maxY = std::numeric_limits<int32_t>::min();
-            for (const int32_t x : {0, map.x * kCoordsXYStep})
-            for (const int32_t y : {0, map.y * kCoordsXYStep})
-            for (const int32_t z : {-512, 4096})
+
+            struct WorkTile
             {
-                const auto screen=Translate3DTo2DWithZ(rotation,{x,y,z});
-                minX=std::min(minX,screen.x);maxX=std::max(maxX,screen.x);
-                minY=std::min(minY,screen.y);maxY=std::max(maxY,screen.y);
-            }
-            Drawing::RenderTarget collection{};
-            collection.x=minX-512;
-            collection.y=minY-512;
-            collection.width=maxX-minX+1024;
-            collection.height=maxY-minY+1024;
-            collection.cullingX=collection.x;
-            collection.cullingY=collection.y;
-            collection.cullingWidth=collection.width;
-            collection.cullingHeight=collection.height;
-            collection.zoom_level=ZoomLevel{0};
-            collection.DrawingEngine=rt.DrawingEngine;
-            // Native paint nodes are session-owned. Bound their lifetime to
-            // at most 256 admitted tiles. Cached static art and EMPTY entity
-            // tile lists require no native PaintSession at all. Probe the real
-            // EntityRegistry's spatial tile lists: do NOT enumerate the whole
-            // park's guest/vehicle inventory or suppress moving flat-ride art.
-            // Such art is still selected by the animated tile cache above.
-            constexpr size_t kTilesPerPaintSession = 256;
-            for (size_t offset=0;offset<scene.visibleTiles.size();offset+=kTilesPerPaintSession)
+                CoordsXY position{};
+                uint64_t key{};
+                bool staticMiss{};
+                bool hasEntities{};
+            };
+            std::array<std::vector<WorkTile>, 4> workByRotation;
+            for (const auto tile : scene.visibleTiles)
             {
-            const size_t end=std::min(offset+kTilesPerPaintSession,scene.visibleTiles.size());
-            struct WorkTile { CoordsXY position; bool staticMiss; bool hasEntities; };
-            std::vector<WorkTile> work;
-            work.reserve(end-offset);
-            for (size_t tileIndex=offset;tileIndex<end;++tileIndex)
-            {
-                const auto tile=scene.visibleTiles[tileIndex];
-                const auto key=TerrainKey(tile.x/kCoordsXYStep,tile.y/kCoordsXYStep);
-                const bool hasEntities=!getGameState().entities.getEntityTileList(tile).empty();
+                const auto key = TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+                const bool hasEntities = !getGameState().entities.getEntityTileList(tile).empty();
                 ++scene.dynamicTileQueries;
-                if (misses.contains(key) || hasEntities)
-                    work.push_back({tile,misses.contains(key),hasEntities});
+                const bool staticMiss = misses.contains(key);
+                if (staticMiss || hasEntities)
+                    workByRotation[tileRotations.at(key)].push_back({ tile, key, staticMiss, hasEntities });
             }
-            if (work.empty()) continue;
-            auto* session=PaintSessionAlloc(collection,opt.viewFlags,rotation);
-            if(session==nullptr)
-            {
-                // Never mark an uncaptured tile valid; recover if the native
-                // painter was unavailable during a park/context transition.
-                for (const auto key:misses) _staticPaintCache[key].dirty=true;
-                return;
-            }
-            for (const auto& item:work)
-            {
-                const auto tile=item.position;
-                if (item.staticMiss)
+
+            const auto map = getGameState().mapSize;
+            auto makeCollectionTarget = [&](uint8_t rotation) {
+                int32_t minX = std::numeric_limits<int32_t>::max();
+                int32_t minY = std::numeric_limits<int32_t>::max();
+                int32_t maxX = std::numeric_limits<int32_t>::min();
+                int32_t maxY = std::numeric_limits<int32_t>::min();
+                for (const int32_t x : { 0, map.x * kCoordsXYStep })
+                for (const int32_t y : { 0, map.y * kCoordsXYStep })
+                for (const int32_t z : { -512, 4096 })
                 {
-                    // Prevent an entity painted on the preceding tile from
-                    // acquiring a static scenery element pointer (or vice versa).
-                    session->CurrentlyDrawnEntity=nullptr;
-                    session->CurrentlyDrawnTileElement=nullptr;
-                    TileElementPaintSetup(*session,tile);
+                    const auto screen = Translate3DTo2DWithZ(rotation, { x, y, z });
+                    minX = std::min(minX, screen.x);
+                    maxX = std::max(maxX, screen.x);
+                    minY = std::min(minY, screen.y);
+                    maxY = std::max(maxY, screen.y);
                 }
-                if (item.hasEntities)
-                {
-                    session->CurrentlyDrawnEntity=nullptr;
-                    session->CurrentlyDrawnTileElement=nullptr;
-                    EntityPaintSetup(*session,tile);
-                    ++scene.dynamicTilesPainted;
-                }
-            }
-            PaintSessionArrange(*session);
-            for (auto* root=session->PaintHead;root;root=root->NextQuadrantEntry)
+                Drawing::RenderTarget collection{};
+                collection.x = minX - 512;
+                collection.y = minY - 512;
+                collection.width = maxX - minX + 1024;
+                collection.height = maxY - minY + 1024;
+                collection.cullingX = collection.x;
+                collection.cullingY = collection.y;
+                collection.cullingWidth = collection.width;
+                collection.cullingHeight = collection.height;
+                collection.zoom_level = ZoomLevel{ 0 };
+                collection.DrawingEngine = rt.DrawingEngine;
+                return collection;
+            };
+
+            constexpr size_t kTilesPerPaintSession = 256;
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
             {
-                const bool dynamic = root->Entity!=nullptr;
-                const uint64_t key=TerrainKey(root->MapPos.x/kCoordsXYStep,
-                                              root->MapPos.y/kCoordsXYStep);
-                // The native painter sometimes emits a root belonging to a
-                // different tile (e.g. an attached ride). Do not reuse its art
-                // in a cache entry unless that tile was truly repainted.
-                if(!dynamic && !misses.contains(key)) continue;
-                if (root->Element != nullptr && root->Element->getType() == TileElementType::surface)
+                auto& rotationWork = workByRotation[rotation];
+                if (rotationWork.empty())
+                    continue;
+                auto collection = makeCollectionTarget(rotation);
+
+                for (size_t offset = 0; offset < rotationWork.size(); offset += kTilesPerPaintSession)
                 {
-                    const auto sx=std::abs(root->Bounds.x_end-root->Bounds.x);
-                    const auto sy=std::abs(root->Bounds.y_end-root->Bounds.y);
-                    const auto sz=std::abs(root->Bounds.z_end-root->Bounds.z);
-                    if (sz<8 || std::min(sx,sy)>4 || std::max(sx,sy)<16)
-                        continue;
-                }
-                const auto anchor=Anchor(*root);
-                // Do not cull the root by its sorter bounds: that can cache an
-                // EMPTY tile while a tall/overhanging object is out of view and
-                // then omit it when the camera turns within the same paint
-                // rotation. Cache ALL its source surfaces and cull ONLY after
-                // the native painting and geometry projection are complete.
-                const CoordsXYZ point{int32_t(anchor.x),int32_t(anchor.y),int32_t(anchor.z)};
-                const auto isoAnchor=Translate3DTo2DWithZ(rotation,point);
-                // Move only the static surfaces belonging to this tile into
-                // owned memory. Entities remain instantaneous, never cached.
-                const auto start=scene.surfaces.size();
-                AppendRoot(scene,*root,anchor,basis,isoAnchor,opt.viewFlags,opt.hiddenEntity,rotation);
-                if (const auto semantic=LargeScenerySemanticBounds(*root); semantic.has_value())
-                {
-                    for (size_t i=start;i<scene.surfaces.size();++i)
+                    const size_t end = std::min(offset + kTilesPerPaintSession, rotationWork.size());
+                    auto* session = PaintSessionAlloc(collection, opt.viewFlags, rotation);
+                    if (session == nullptr)
                     {
-                        scene.surfaces[i].hasSemanticBounds=true;
-                        scene.surfaces[i].semanticCenter=semantic->center;
-                        scene.surfaces[i].semanticRadius=semantic->radius;
+                        for (const auto key : misses)
+                        {
+                            const auto rotationIt = tileRotations.find(key);
+                            if (rotationIt != tileRotations.end())
+                                _staticPaintCache[key].rotations[rotationIt->second].valid = false;
+                        }
+                        return;
                     }
+
+                    for (size_t i = offset; i < end; ++i)
+                    {
+                        const auto& item = rotationWork[i];
+                        if (item.staticMiss)
+                        {
+                            session->CurrentlyDrawnEntity = nullptr;
+                            session->CurrentlyDrawnTileElement = nullptr;
+                            TileElementPaintSetup(*session, item.position);
+                        }
+                        if (item.hasEntities)
+                        {
+                            session->CurrentlyDrawnEntity = nullptr;
+                            session->CurrentlyDrawnTileElement = nullptr;
+                            EntityPaintSetup(*session, item.position);
+                            ++scene.dynamicTilesPainted;
+                        }
+                    }
+
+                    PaintSessionArrange(*session);
+                    std::unordered_set<const TileElement*> emittedPathDecks;
+                    for (auto* root = session->PaintHead; root; root = root->NextQuadrantEntry)
+                    {
+                        const bool dynamic = root->Entity != nullptr;
+                        const uint64_t key = TerrainKey(
+                            root->MapPos.x / kCoordsXYStep, root->MapPos.y / kCoordsXYStep);
+                        if (!dynamic)
+                        {
+                            const auto expectedRotation = tileRotations.find(key);
+                            if (!misses.contains(key) || expectedRotation == tileRotations.end() ||
+                                expectedRotation->second != rotation)
+                                continue;
+                        }
+                        if (root->Element != nullptr && root->Element->getType() == TileElementType::surface)
+                        {
+                            const auto sx = std::abs(root->Bounds.x_end - root->Bounds.x);
+                            const auto sy = std::abs(root->Bounds.y_end - root->Bounds.y);
+                            const auto sz = std::abs(root->Bounds.z_end - root->Bounds.z);
+                            if (sz < 8 || std::min(sx, sy) > 4 || std::max(sx, sy) < 16)
+                                continue;
+                        }
+
+                        const auto anchor = Anchor(*root);
+                        const CoordsXYZ point{
+                            int32_t(anchor.x), int32_t(anchor.y), int32_t(anchor.z)
+                        };
+                        const auto isoAnchor = Translate3DTo2DWithZ(rotation, point);
+                        const auto start = scene.surfaces.size();
+                        const bool emitPathDeck = root->Element != nullptr &&
+                            root->Element->getType() == TileElementType::path &&
+                            emittedPathDecks.insert(root->Element).second;
+                        AppendRoot(
+                            scene, *root, anchor, basis, isoAnchor,
+                            opt.viewFlags, opt.hiddenEntity, rotation, emitPathDeck);
+
+                        if (const auto semantic = LargeScenerySemanticBounds(*root); semantic.has_value())
+                        {
+                            for (size_t i = start; i < scene.surfaces.size(); ++i)
+                            {
+                                scene.surfaces[i].hasSemanticBounds = true;
+                                scene.surfaces[i].semanticCenter = semantic->center;
+                                scene.surfaces[i].semanticRadius = semantic->radius;
+                            }
+                        }
+
+                        if (!dynamic)
+                        {
+                            const auto region = FirstPersonGpuRegionKey(
+                                root->MapPos.x / kCoordsXYStep, root->MapPos.y / kCoordsXYStep);
+                            for (size_t i = start; i < scene.surfaces.size(); ++i)
+                                if (!scene.surfaces[i].viewFacing)
+                                    scene.surfaces[i].gpuRegion = region;
+
+                            auto cacheIt = _staticPaintCache.find(key);
+                            if (cacheIt != _staticPaintCache.end())
+                            {
+                                auto& surfaces = cacheIt->second.rotations[rotation].surfaces;
+                                surfaces.insert(
+                                    surfaces.end(), scene.surfaces.begin() + start, scene.surfaces.end());
+                            }
+                            // Static display assembly happens once, in stable
+                            // visible-tile order after all misses are captured.
+                            scene.surfaces.erase(scene.surfaces.begin() + start, scene.surfaces.end());
+                        }
+                        else
+                        {
+                            const auto first = scene.surfaces.begin() + start;
+                            scene.surfaces.erase(
+                                std::remove_if(first, scene.surfaces.end(),
+                                    [&](const FirstPersonSurface& surface) {
+                                        return !SurfaceMayBeVisible(surface, worldFrustum);
+                                    }),
+                                scene.surfaces.end());
+                        }
+                    }
+                    PaintSessionFree(session);
                 }
-                if(!dynamic)
-                {
-                    const auto region=FirstPersonGpuRegionKey(
-                        root->MapPos.x/kCoordsXYStep, root->MapPos.y/kCoordsXYStep);
-                    for (size_t i=start;i<scene.surfaces.size();++i)
-                        if (!scene.surfaces[i].viewFacing) scene.surfaces[i].gpuRegion=region;
-                    auto it=_staticPaintCache.find(key);
-                    if(it!=_staticPaintCache.end())
-                        it->second.surfaces.insert(it->second.surfaces.end(),
-                            scene.surfaces.begin()+start,scene.surfaces.end());
-                }
-                // Filtering the completed geometry (rather than untrustworthy
-                // painter boxes) applies to fresh AND cached surfaces. Only
-                // the display list shrinks; the cache remains view-independent.
-                const auto first=scene.surfaces.begin()+start;
-                scene.surfaces.erase(std::remove_if(first,scene.surfaces.end(),
-                    [&](const FirstPersonSurface& surface) {
-                        return !SurfaceMayBeVisible(surface,worldFrustum);
-                    }),scene.surfaces.end());
             }
-            PaintSessionFree(session);
-            } // bounded native session
-            if (frame%120==0)
+
+            // Cache hits and freshly painted misses take the SAME deterministic
+            // path. This prevents [A,B] -> [B,A] reorder churn from invalidating
+            // otherwise identical resident GPU-region fingerprints.
+            for (const auto tile : scene.visibleTiles)
             {
-                std::erase_if(_staticPaintCache,[frame](const auto& kv) {
-                    return frame-kv.second.lastSeen>240;
+                const auto key = TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+                const auto cacheIt = _staticPaintCache.find(key);
+                if (cacheIt == _staticPaintCache.end())
+                    continue;
+                const auto rotationIt = tileRotations.find(key);
+                if (rotationIt == tileRotations.end())
+                    continue;
+                const auto& variant = cacheIt->second.rotations[rotationIt->second];
+                if (!variant.valid)
+                    continue;
+                for (const auto& staticSurface : variant.surfaces)
+                {
+                    auto surface = staticSurface;
+                    ReorientBillboard(surface, opt.camera.position, basis.right);
+                    if (SurfaceMayBeVisible(surface, worldFrustum))
+                        scene.surfaces.emplace_back(std::move(surface));
+                }
+            }
+
+            if (frame % 120 == 0)
+            {
+                std::erase_if(_staticPaintCache, [frame](const auto& kv) {
+                    return frame - kv.second.lastSeen > 240;
                 });
             }
         }
+
     } // namespace
+
+    FirstPersonWallPlane BuildFirstPersonWallPlane(
+        CoordsXY tileOrigin, int32_t baseZ, uint8_t direction, uint8_t slope, int32_t height)
+    {
+        const float x = float(tileOrigin.x);
+        const float y = float(tileOrigin.y);
+        FirstPersonVec3 a{}, b{};
+        // Clockwise edge order follows the native wall-slope convention:
+        // south->west, west->north, north->east, east->south.
+        switch (direction & 3)
+        {
+            case 0: a = { x, y, float(baseZ) }; b = { x, y + kCoordsXYStep, float(baseZ) }; break;
+            case 1: a = { x, y + kCoordsXYStep, float(baseZ) }; b = { x + kCoordsXYStep, y + kCoordsXYStep, float(baseZ) }; break;
+            case 2: a = { x + kCoordsXYStep, y + kCoordsXYStep, float(baseZ) }; b = { x + kCoordsXYStep, y, float(baseZ) }; break;
+            default: a = { x + kCoordsXYStep, y, float(baseZ) }; b = { x, y, float(baseZ) }; break;
+        }
+        if ((slope & EDGE_SLOPE_UPWARDS) != 0)
+            b.z += 2 * kCoordsZStep;
+        else if ((slope & EDGE_SLOPE_DOWNWARDS) != 0)
+            a.z += 2 * kCoordsZStep;
+
+        const float wallHeight = float(std::max(0, height));
+        return { { {
+            a,
+            b,
+            { b.x, b.y, b.z + wallHeight },
+            { a.x, a.y, a.z + wallHeight },
+        } } };
+    }
 
     std::optional<FirstPersonProjection> ProjectFirstPersonPoint(
         const FirstPersonCamera& c, const FirstPersonVec3& p, const ScreenSize& size,
