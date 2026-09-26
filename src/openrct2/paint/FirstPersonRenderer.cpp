@@ -851,7 +851,6 @@ namespace OpenRCT2::Paint
             bool dirty = true;
         };
         static std::unordered_map<uint64_t, RegionCacheEntry> _regionBounds;
-        static std::unordered_map<uint64_t, uint64_t> _coarseLastUsed;
 
         FirstPersonRegionSphere CachedRegionBounds(int32_t x0, int32_t y0, int32_t x1, int32_t y1)
         {
@@ -945,89 +944,6 @@ namespace OpenRCT2::Paint
                 return CachedRegionBounds(x0,y0,x1,y1);
             };
             VisitFirstPersonRegions(frustum,0,0,map.x,map.y,visit,bounds);
-        }
-
-        // Opaque terrain LOD merges only genuinely level, dry, identical
-        // source-art squares. Small cliffs, water, mixed textures and sloped
-        // corners cannot silently disappear into a coarse patch. The source
-        // image is stretched only when the entire patch is sufficiently small
-        // on screen that its repeated native tiles are not distinguishable.
-        bool AppendDistantFlatPatch(
-            FirstPersonScene& scene, CoordsXY origin, int32_t factor,
-            const std::unordered_set<uint64_t>& visible, std::unordered_set<uint64_t>& consumed,
-            const FirstPersonFrustum& frustum)
-        {
-            const auto tx = origin.x / kCoordsXYStep;
-            const auto ty = origin.y / kCoordsXYStep;
-            if (factor < 2 || tx % factor != 0 || ty % factor != 0)
-                return false;
-            const float dx = float(factor * kCoordsXYStep);
-            const FirstPersonVec3 center{ float(origin.x) + dx * 0.5f,
-                                          float(origin.y) + dx * 0.5f, 0.0f };
-            const FirstPersonVec3 delta = Sub(center, frustum.eye);
-            const float depth = Dot(delta, frustum.basis.forward);
-            if (depth <= dx) return false;
-            const float focal = float(scene.dimensions.width) * 0.5f /
-                frustum.tanHalfHorizontal;
-            const uint64_t lodKey = (TerrainKey(tx,ty) << 2) | (factor == 4 ? 2ull : 1ull);
-            const auto previous = _coarseLastUsed.find(lodKey);
-            const bool recentlySelected = previous != _coarseLastUsed.end() &&
-                previous->second + 1 >= _terrainCache.frame;
-            const float allowed = scene.activePixelTolerance * (recentlySelected ? 1.20f : 0.80f);
-            if (focal * dx / depth > allowed)
-                return false;
-            ImageId image{};
-            int32_t height = 0;
-            const G1Element* sprite = nullptr;
-            for (int32_t y = 0; y < factor; ++y)
-            for (int32_t x = 0; x < factor; ++x)
-            {
-                const CoordsXY pos{ origin.x + x * kCoordsXYStep, origin.y + y * kCoordsXYStep };
-                const auto key = TerrainKey(tx + x, ty + y);
-                if (visible.count(key) == 0 || consumed.count(key) != 0)
-                    return false;
-                auto* surface = MapGetSurfaceElementAt(pos);
-                if (surface == nullptr || surface->getSlope() != kTileSlopeFlat || surface->getWaterHeight() > 0)
-                    return false;
-                const auto selected = GetFirstPersonTerrainImage(*surface, pos);
-                if (!selected.HasValue()) return false;
-                if (x == 0 && y == 0)
-                {
-                    image = selected;
-                    height = surface->getBaseZ();
-                    sprite = GfxGetG1Element(image);
-                    if (sprite == nullptr) return false;
-                }
-                else if (selected != image || surface->getBaseZ() != height)
-                    return false;
-            }
-            FirstPersonSurface patch{};
-            patch.image = image;
-            patch.edgeCoverage = true;
-            patch.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
-            const auto native = std::array<CoordsXYZ,4>{{
-                { origin.x, origin.y, height },
-                { origin.x + kCoordsXYStep, origin.y, height },
-                { origin.x + kCoordsXYStep, origin.y + kCoordsXYStep, height },
-                { origin.x, origin.y + kCoordsXYStep, height },
-            }};
-            const auto isoOrigin = Translate3DTo2DWithZ(0, native[0]);
-            std::array<FirstPersonVertex,4> quad{};
-            for (size_t i = 0; i < quad.size(); ++i)
-            {
-                const auto projected = Translate3DTo2DWithZ(0, native[i]);
-                quad[i] = {{ float(origin.x + (i == 1 || i == 2 ? factor*kCoordsXYStep : 0)),
-                             float(origin.y + (i >= 2 ? factor*kCoordsXYStep : 0)), float(height) },
-                           float(projected.x - isoOrigin.x - sprite->xOffset),
-                           float(projected.y - isoOrigin.y - sprite->yOffset) };
-            }
-            EmitQuad(patch,quad);
-            scene.surfaces.emplace_back(std::move(patch));
-            _coarseLastUsed[lodKey] = _terrainCache.frame;
-            for (int32_t y = 0; y < factor; ++y)
-            for (int32_t x = 0; x < factor; ++x)
-                consumed.emplace(TerrainKey(tx+x,ty+y));
-            return true;
         }
 
         void CollectTerrain(FirstPersonScene& scene)
@@ -1173,9 +1089,6 @@ namespace OpenRCT2::Paint
                         MarkStaticRegionDirtyForTile(
                             int32_t(kv.first >> 32), int32_t(kv.first & 0xffffffffu));
                     return expired;
-                });
-                std::erase_if(_coarseLastUsed, [frame](const auto& kv) {
-                    return frame - kv.second > 240;
                 });
             }
         }
@@ -1790,7 +1703,6 @@ namespace OpenRCT2::Paint
         _staticPaintCache.clear();
         _reconstructionRotations.clear();
         _staticRegionPackets.clear();
-        _coarseLastUsed.clear();
         _quality = {};
     }
     void InvalidateFirstPersonSceneRegion(CoordsXY low, CoordsXY high)
