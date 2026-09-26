@@ -169,6 +169,82 @@ During a first-person native paint session, scrolling-text bitmap bytes are capt
 
 Snapshot-backed surfaces are streamed rather than stored in resident static-region VBOs, and tiles containing them are repainted as animated content. The normal 2-D renderer and its existing 256-slot scrolling-text cache remain unchanged.
 
+## Third independent audit corrections
+
+A further audit at `3d86396e2ae5033f4abd0ad6b5f7f39dd6e70f59` found five structural mismatches that remained after the second pass. They are corrected on the current development branch.
+
+### Native rotation is now reconstruction-group state
+
+The four native quarter-turn tile variants remain the source-image cache, but a tile no longer has to choose one native view for every object it contains.
+
+* multi-tile large scenery has a stable group key derived from its canonical placement origin, direction and object entry;
+* each connected track piece has a stable group key derived from `GetTrackSegmentOrigin()`, ride identity and track type;
+* native source rotation for those groups is selected from the passenger position relative to that canonical group origin;
+* each reconstructed surface retains its group provenance;
+* region assembly selects the matching cached native rotation independently for each group, so unrelated groups on one tile may legally come from different native variants;
+* a group records every persistent GPU region containing its resident geometry, so a viewpoint-sector change dirties all affected regions, including another region crossed by the same object.
+
+Physical reconstruction frames and native artwork-side selection therefore share one canonical origin instead of merely sharing a plane orientation.
+
+### Persistent static regions are the render unit
+
+Fixed opaque geometry no longer has to be copied into a fresh `FirstPersonScene`, individually frustum-tested, regrouped and vertex-fingerprinted every frame.
+
+The persistent CPU region packet now owns:
+
+* the selected fixed opaque surfaces;
+* a conservative region bound;
+* a generation number;
+* compact unique texture dependencies.
+
+The GL region buffer retains the matching generation and a texture-revision dependency stamp. If both still match, an ordinary frame region-frustum-tests the packet and draws the existing VBO without static surface traversal, vertex hashing or packing.
+
+Native tile caches also separate `residentSurfaces` from `streamedSurfaces`, so the collector does not iterate resident non-animated surfaces merely to skip them. Billboards, transparency, immutable scrolling text, animated tiles and entities remain streamed by design.
+
+Visibility discovery, live terrain admission and entity occupancy still perform tile-level work; this change specifically removes the previous O(visible static geometry) CPU reconstruction/hash path rather than claiming that the whole scene collector is O(regions).
+
+The existing flat/dry identical-terrain 2x/4x LOD is retained. Its selected patches are persistent region content and only dirty a region when the hysteretic LOD patch set or its source layout actually changes.
+
+### Walking follows swept floor topology
+
+Walking translation no longer accepts an arbitrary destination terrain height and snap the camera to it.
+
+The movement segment is sampled across the actual terrain/path floor field:
+
+* continuous native terrain and path slopes are followed sample-by-sample;
+* an explicit native 8-world-unit step is allowed;
+* larger upward or downward discontinuities are rejected as cliffs/ledges;
+* exposed water is non-walkable when terrain is the selected floor;
+* an actual path surface can still provide the accepted floor over water.
+
+The final camera Z comes from the same accepted swept floor traversal used to validate the move. The native-step limit is exposed in the math layer and has regression coverage.
+
+### Small scenery uses object semantics
+
+Non-tree small scenery is no longer automatically forced onto a permanent world-fixed plane.
+
+A fixed frame is selected for scenery whose object semantics are materially directional/structural, including explicit user rotation, diagonal/partial occupancy and support-related flags. Compact automatic-rotation props are retained as upright impostors instead of becoming a thin plane that can disappear edge-on.
+
+Trees remain impostors as before.
+
+### Renderer and tweener share one resolved view
+
+`FirstPersonResolvedView` now owns the resolved camera, FOV, aspect, near plane and complete-park far plane.
+
+`ResolveFirstPersonView()` applies `CompleteParkFarClip()` once, and the same resolved view contract is consumed by:
+
+* first-person scene/frustum collection;
+* OpenGL projection/depth range;
+* entity interpolation admission.
+
+There is therefore no longer a 32,768-unit interpolation cutoff inside a larger renderer far plane. Regression coverage verifies that a 1024x1024 park resolves beyond 46,000 world units.
+
+### Static-region invalidation details
+
+Region invalidation immediately dirties affected packets. Dirty tile-level terrain/static cache entries are excluded from a packet until their live state is revalidated, preventing an edited off-centre tile from surviving inside an otherwise visible old VBO.
+
+Expensive packed-tile signatures and reconstruction-group discovery are no longer performed every frame. They run on authoritative invalidation and on staggered fallback semantic probes, preserving protection against direct game-side mutations that bypass normal invalidation hooks.
+
 ## Required manual verification before creating a new stable tag
 
 Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HANDOFF.md`, then verify:
@@ -189,5 +265,13 @@ Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HA
 * masked/glass artwork with differing mask/colour offsets stays aligned;
 * repeated turns and edits do not cause avoidable resident-region `glBufferData()` churn;
 * walking collision meets adjacent full wall edges and remains consistent on sloped walls.
+* a multi-tile large-scenery object and a multi-sequence track piece keep one coherent native source view across tile and 32x32 GPU-region boundaries, including near 45-degree source-view thresholds;
+* a tile containing unrelated connected groups can select different native variants without mixing variants inside either group;
+* in a dense static park, steady camera frames reuse resident region packets/VBOs without static-surface copy, cull, grouping, vertex hashing or repacking; region rebuilds occur only for dirtiness, dependency changes or source-view/LOD transitions;
+* walking into a vertical terrain cliff stops instead of snapping upward, and stepping off a large ledge stops instead of snapping downward;
+* legal terrain/path slopes and an 8-world-unit step remain traversable;
+* exposed water blocks walking while valid path surfaces over water remain usable;
+* compact non-directional small scenery remains visible from arbitrary azimuths, while genuinely rotatable/diagonal/structural scenery retains its fixed orientation;
+* on a very large park, guests/staff/vehicles visible beyond 32,768 world units are admitted to the same presentation interpolation range as rendered scenery;
 
 Do not replace the existing stable tag until this manual runtime verification is complete.
