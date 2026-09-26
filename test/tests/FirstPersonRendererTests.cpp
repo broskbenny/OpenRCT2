@@ -26,6 +26,14 @@ namespace
     constexpr float kPi = 3.14159265358979323846f;
 }
 
+TEST(FirstPersonWalkingTest, NativeStepAllowedButCliffRejected)
+{
+    EXPECT_TRUE(FirstPersonWalkingHeightTransitionAllowed(100.0f, 108.0f));
+    EXPECT_TRUE(FirstPersonWalkingHeightTransitionAllowed(108.0f, 100.0f));
+    EXPECT_FALSE(FirstPersonWalkingHeightTransitionAllowed(100.0f, 116.0f));
+    EXPECT_FALSE(FirstPersonWalkingHeightTransitionAllowed(116.0f, 100.0f));
+}
+
 TEST(FirstPersonProjectionTest, ForwardPointProjectsToCentre)
 {
     FirstPersonCamera camera{};
