@@ -768,6 +768,7 @@ namespace OpenRCT2::Paint
         {
             uint64_t signature{};
             uint64_t lastSeen{};
+            uint64_t lastSemanticScan{};
             uint32_t viewFlags{};
             bool valid = false;
             bool dirty = true;
@@ -1359,13 +1360,24 @@ namespace OpenRCT2::Paint
                 const auto key = TerrainKey(tx, ty);
                 auto& cached = _staticPaintCache[key];
 
-                const bool semanticChanged = !cached.valid || cached.dirty
-                    || cached.viewFlags != opt.viewFlags;
-                if (semanticChanged)
+                const bool authoritativeInvalidation =
+                    !cached.valid || cached.dirty || cached.viewFlags != opt.viewFlags;
+                const bool semanticProbeDue = FirstPersonRefreshDue(
+                    key ^ 0x9e3779b97f4a7c15ull, frame, cached.lastSemanticScan, kMaxStaticAge);
+                uint64_t probedSignature = cached.signature;
+                if (authoritativeInvalidation || semanticProbeDue)
                 {
                     // Expensive packed-element hashing and group discovery belong
-                    // on the invalidation path, not the normal render path.
-                    cached.signature = NativeTileSignature(tile);
+                    // on invalidation or staggered fallback probes, never the
+                    // ordinary frame path.
+                    probedSignature = NativeTileSignature(tile);
+                    cached.lastSemanticScan = frame;
+                }
+                const bool semanticChanged = authoritativeInvalidation
+                    || (semanticProbeDue && probedSignature != cached.signature);
+                if (semanticChanged)
+                {
+                    cached.signature = probedSignature;
                     cached.viewFlags = opt.viewFlags;
                     cached.animated = MapAnimations::IsTileAnimatedForFirstPerson(
                         TileCoordsXY(tx, ty));
