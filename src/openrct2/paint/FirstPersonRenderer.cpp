@@ -182,7 +182,7 @@ namespace OpenRCT2::Paint
                 ExtendStableKey(key, uint32_t(int32_t(anchor.y)));
                 ExtendStableKey(key, uint32_t(int32_t(anchor.z)));
                 ExtendStableKey(key, direction);
-                ExtendStableKey(key, entry->image);
+                ExtendStableKey(key, large->getEntryIndex());
                 if (key == 0) key = 1;
                 return ReconstructionGroupInfo{ key, anchor, direction };
             }
