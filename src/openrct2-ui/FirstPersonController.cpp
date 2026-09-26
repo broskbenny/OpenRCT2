@@ -58,8 +58,8 @@ namespace OpenRCT2::Ui::FirstPerson
             bool path = false;
             CoordsXY tile{};
             int32_t baseZ = 0;
-            ObjectEntryIndex surface = kObjectEntryIndexNull;
-            ObjectEntryIndex railings = kObjectEntryIndexNull;
+            ObjectEntryIndex surface{};
+            ObjectEntryIndex railings{};
         };
 
         struct WalkingFloorSample
