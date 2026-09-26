@@ -57,6 +57,13 @@ namespace OpenRCT2::Paint
         // Cached upright sprites must always face the CURRENT camera: keep their
         // original native image-space offsets and world anchor, not old vertices.
         bool viewFacing = false;
+        // Semantic decks stay at their true physical height. A small depth-only
+        // bias resolves coplanar terrain without moving collision/ground geometry.
+        bool depthBias = false;
+        // Terrain source sprites are diamonds with transparent pixels outside
+        // their silhouette. Permit a one-pixel inward coverage fallback at tile
+        // edges so exact shared world vertices cannot expose background seams.
+        bool edgeCoverage = false;
         uint64_t gpuRegion = 0; // Nonzero only for static WORLD-FIXED source art.
         FirstPersonVec3 billboardAnchor{};
         float billboardLeft{}, billboardTop{}, billboardWidth{}, billboardHeight{};
@@ -89,6 +96,17 @@ namespace OpenRCT2::Paint
         float paintCpuMs = 0.0f;
         float prepareCpuMs = 0.0f;
     };
+
+    struct FirstPersonWallPlane
+    {
+        // Clockwise physical wall quad: lower A, lower B, upper B, upper A.
+        std::array<FirstPersonVec3, 4> corners{};
+    };
+    // Authoritative full-tile wall geometry shared by rendering and walking
+    // collision. Wall slope values are the native EDGE_SLOPE values stored in
+    // WallElement (0, upwards, downwards).
+    [[nodiscard]] FirstPersonWallPlane BuildFirstPersonWallPlane(
+        CoordsXY tileOrigin, int32_t baseZ, uint8_t direction, uint8_t slope, int32_t height);
 
     [[nodiscard]] std::optional<FirstPersonProjection> ProjectFirstPersonPoint(
         const FirstPersonCamera& camera, const FirstPersonVec3& worldPoint,
