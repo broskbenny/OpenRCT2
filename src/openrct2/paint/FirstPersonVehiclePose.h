@@ -13,6 +13,7 @@
 #include "../ride/Vehicle.h"
 #include "../ride/VehicleGeometry.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -159,9 +160,13 @@ namespace OpenRCT2::Paint
     [[nodiscard]] inline FirstPersonPassengerPose BuildFirstPersonPassengerPose(
         const Vehicle& car, FirstPersonVec3 vehiclePosition,
         const FirstPersonBasis& vehicleBasis,
-        float flatPrimaryFrame = -1.0f, float flatSecondaryFrame = -1.0f)
+        float flatPrimaryFrame = -1.0f, float flatSecondaryFrame = -1.0f,
+        uint8_t pinnedSeatIndex = 0xFF)
     {
-        const uint8_t seatIndex = FirstPersonPassengerSeatIndex(car);
+        const uint8_t seatCount = std::max<uint8_t>(car.num_seats, 1);
+        const uint8_t seatIndex = pinnedSeatIndex == 0xFF
+            ? FirstPersonPassengerSeatIndex(car)
+            : std::min<uint8_t>(pinnedSeatIndex, uint8_t(seatCount - 1));
         const auto* entry = car.Entry();
         const uint8_t rows = entry != nullptr
             ? std::max<uint8_t>(entry->numSeatingRows, 1) : 1;
@@ -243,13 +248,14 @@ namespace OpenRCT2::Paint
     }
 
     [[nodiscard]] inline FirstPersonPassengerPose FirstPersonVehicleSimulationPassengerPose(
-        const Vehicle& car)
+        const Vehicle& car, uint8_t pinnedSeatIndex = 0xFF)
     {
         const auto orientation = FirstPersonVehicleSimulationOrientation(car);
         const auto basis = GetFirstPersonBasis(orientation);
         const auto loc = car.getLocation();
         return BuildFirstPersonPassengerPose(
-            car, { float(loc.x), float(loc.y), float(loc.z) }, basis);
+            car, { float(loc.x), float(loc.y), float(loc.z) }, basis,
+            -1.0f, -1.0f, pinnedSeatIndex);
     }
 } // namespace OpenRCT2::Paint
 
