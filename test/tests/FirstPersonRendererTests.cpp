@@ -81,6 +81,20 @@ TEST(FirstPersonProjectionTest, YawRotatesViewBasis)
     EXPECT_NEAR(result->y, 300.0f, 0.01f);
 }
 
+TEST(FirstPersonStreamingTest, ResolvedViewUsesCompleteParkFarPlane)
+{
+    FirstPersonCamera camera{};
+    const auto view = ResolveFirstPersonView(
+        camera, 1600, 900, 1024, 1024, 70.0f, 2.0f, 32768.0f);
+
+    EXPECT_NEAR(view.aspect, 1600.0f / 900.0f, 0.000001f);
+    EXPECT_FLOAT_EQ(view.nearClip, 2.0f);
+    EXPECT_GT(view.farClip, 46000.0f);
+    EXPECT_FLOAT_EQ(
+        view.farClip,
+        CompleteParkFarClip(camera.position, 1024, 1024, 32768.0f));
+}
+
 TEST(FirstPersonProjectionTest, PassengerHeadYawTurnsRelativeToCar)
 {
     FirstPersonCamera car{};
