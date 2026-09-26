@@ -18,6 +18,16 @@
 
 namespace OpenRCT2::Paint
 {
+    [[nodiscard]] inline float FirstPersonVehicleYawRadians(uint8_t orientation)
+    {
+        // Vehicle orientation is not a conventional +X-zero angle. Derive the
+        // camera heading from the same native XY movement table used by
+        // free-roaming vehicles, which encodes orientation 0 as -X, 8 as +Y,
+        // 16 as +X and 24 as -Y.
+        const auto movement = RideVehicle::Geometry::getFreeroamVehicleMovementData(orientation & 0x1F);
+        return std::atan2(static_cast<float>(movement.y), static_cast<float>(movement.x));
+    }
+
     [[nodiscard]] inline float FirstPersonVehiclePitchRadians(VehiclePitch pitch)
     {
         const auto value = static_cast<uint8_t>(pitch);
@@ -79,9 +89,8 @@ namespace OpenRCT2::Paint
 
     [[nodiscard]] inline FirstPersonCamera FirstPersonVehicleSimulationOrientation(const Vehicle& car)
     {
-        constexpr float kTwoPi = 6.28318530717958647692f;
         FirstPersonCamera orientation{};
-        orientation.yaw = static_cast<float>(car.orientation & 0x1F) * (kTwoPi / Entity::Yaw::kBaseRotation);
+        orientation.yaw = FirstPersonVehicleYawRadians(car.orientation);
 
         // Vehicle::pitch/roll share storage with flat-ride animation fields.
         // They are physical track orientation only for non-flat rides.
