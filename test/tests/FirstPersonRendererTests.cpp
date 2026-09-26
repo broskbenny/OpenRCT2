@@ -357,3 +357,11 @@ TEST(FirstPersonVehiclePoseTest, UninvertingRollStatesPreservePhysicalBank)
     EXPECT_NEAR(FirstPersonVehicleRollRadians(VehicleRoll::uninvertingRight45), kPi / 4.0f, 0.000001f);
 }
 
+
+TEST(FirstPersonVehiclePoseTest, CyclicPassengerFrameInterpolationTakesShortestWrap)
+{
+    EXPECT_NEAR(FirstPersonLerpCyclicFrame(47.0f, 0.0f, 0.5f, 48.0f), 47.5f, 0.0001f);
+    EXPECT_NEAR(FirstPersonLerpCyclicFrame(0.0f, 47.0f, 0.5f, 48.0f), 47.5f, 0.0001f);
+    EXPECT_NEAR(FirstPersonLerpCyclicFrame(15.0f, 0.0f, 0.5f, 16.0f), 15.5f, 0.0001f);
+    EXPECT_NEAR(FirstPersonLerpCyclicFrame(0.0f, 1.0f, 0.5f, 16.0f), 0.5f, 0.0001f);
+}
