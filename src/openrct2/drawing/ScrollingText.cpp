@@ -130,6 +130,7 @@ namespace OpenRCT2::Drawing::ScrollingText
 
     uint32_t CaptureFirstPersonSnapshot(ImageId image)
     {
+        std::scoped_lock<std::mutex> lock(_mutex);
         if (!_firstPersonSnapshotCapture || !image.HasValue())
             return 0;
 
