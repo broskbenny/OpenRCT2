@@ -159,7 +159,7 @@ TEST(FirstPersonVisibilityTest, ObjectsJustCrossingNearPlaneRemainEligible)
 
 TEST(FirstPersonWallGeometryTest, UsesCompleteTileEdgesWithoutPainterInsets)
 {
-    const OpenRCT2::CoordsXY origin{ 64, 96 };
+    const CoordsXY origin{ 64, 96 };
     const auto westEdge = BuildFirstPersonWallPlane(origin, 80, 0, 0, 40);
     EXPECT_FLOAT_EQ(westEdge.corners[0].x, 64.0f);
     EXPECT_FLOAT_EQ(westEdge.corners[0].y, 96.0f);
@@ -180,7 +180,7 @@ TEST(FirstPersonWallGeometryTest, UsesCompleteTileEdgesWithoutPainterInsets)
 
 TEST(FirstPersonWallGeometryTest, NativeSlopeRaisesTheCorrectEndpoint)
 {
-    const OpenRCT2::CoordsXY origin{ 32, 64 };
+    const CoordsXY origin{ 32, 64 };
     const auto upwards = BuildFirstPersonWallPlane(origin, 100, 1, EDGE_SLOPE_UPWARDS, 48);
     EXPECT_FLOAT_EQ(upwards.corners[0].z, 100.0f);
     EXPECT_FLOAT_EQ(upwards.corners[1].z, 116.0f);
