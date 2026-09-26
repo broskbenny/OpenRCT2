@@ -19,3 +19,8 @@ namespace OpenRCT2
 }
 
 void PaintPath(PaintSession& session, uint16_t height, const OpenRCT2::PathElement& tileElement);
+
+// Returns the native surface-art offset for a path at a specific paint rotation.
+// First-person rendering uses the same selection even when supported paths omit
+// the separate surface sprite and put the visible deck inside bridge artwork.
+uint8_t GetPathSurfaceImageOffset(const OpenRCT2::PathElement& pathElement, uint8_t rotation);
