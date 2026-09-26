@@ -758,6 +758,14 @@ namespace OpenRCT2::Paint
         };
         static std::unordered_map<uint64_t, ReconstructionRotationState> _reconstructionRotations;
 
+        struct EntityRotationState
+        {
+            uint64_t lastSeen{};
+            bool hasSelectedRotation = false;
+            uint8_t selectedRotation = 0;
+        };
+        static std::unordered_map<uint16_t, EntityRotationState> _entityRotations;
+
         struct StaticRegionPacketCache
         {
             uint64_t generation{};
@@ -1517,28 +1525,50 @@ namespace OpenRCT2::Paint
                 }
             }
 
-            struct WorkTile
+            struct PaintWorkItem
             {
                 CoordsXY position{};
                 uint64_t key{};
-                bool staticMiss{};
-                bool hasEntities{};
+                bool staticMiss = false;
+                EntityId entity = EntityId::GetNull();
             };
-            std::array<std::vector<WorkTile>, 4> workByRotation;
+            std::array<std::vector<PaintWorkItem>, 4> workByRotation;
             for (const auto tile : scene.visibleTiles)
             {
                 const auto key = TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
-                const auto cacheIt = _staticPaintCache.find(key);
-                if (cacheIt == _staticPaintCache.end())
-                    continue;
-                const bool hasEntities = !getGameState().entities.getEntityTileList(tile).empty();
-                ++scene.dynamicTileQueries;
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
-                    const bool staticMiss = missesByRotation[rotation].contains(key);
-                    const bool entityPaint = hasEntities && rotation == cacheIt->second.selectedRotation;
-                    if (staticMiss || entityPaint)
-                        workByRotation[rotation].push_back({ tile, key, staticMiss, entityPaint });
+                    if (missesByRotation[rotation].contains(key))
+                        workByRotation[rotation].push_back({ tile, key, true, EntityId::GetNull() });
+                }
+
+                const auto& entityIds = getGameState().entities.getEntityTileList(tile);
+                ++scene.dynamicTileQueries;
+                if (!entityIds.empty())
+                    ++scene.dynamicTilesPainted;
+                for (const auto entityId : entityIds)
+                {
+                    auto* entity = getGameState().entities.tryGetEntity<EntityBase>(entityId);
+                    if (entity == nullptr)
+                        continue;
+                    if (!opt.hiddenEntity.IsNull() && entity->id == opt.hiddenEntity)
+                        continue;
+
+                    const auto location = entity->getLocation();
+                    auto& state = _entityRotations[entityId.ToUnderlying()];
+                    const auto previous = state.hasSelectedRotation
+                        ? std::optional<uint8_t>{ state.selectedRotation }
+                        : std::nullopt;
+                    const uint8_t rotation = PaintRotationForPoint(
+                        opt.camera,
+                        { float(location.x), float(location.y), float(location.z) },
+                        previous);
+                    state.selectedRotation = rotation;
+                    state.hasSelectedRotation = true;
+                    state.lastSeen = frame;
+                    workByRotation[rotation].push_back({
+                        tile, key, false, entityId
+                    });
                 }
             }
 
@@ -1595,18 +1625,19 @@ namespace OpenRCT2::Paint
                     for (size_t i = offset; i < end; ++i)
                     {
                         const auto& item = rotationWork[i];
+                        session->CurrentlyDrawnEntity = nullptr;
+                        session->CurrentlyDrawnTileElement = nullptr;
                         if (item.staticMiss)
                         {
-                            session->CurrentlyDrawnEntity = nullptr;
-                            session->CurrentlyDrawnTileElement = nullptr;
                             TileElementPaintSetup(*session, item.position);
                         }
-                        if (item.hasEntities)
+                        else if (!item.entity.IsNull())
                         {
-                            session->CurrentlyDrawnEntity = nullptr;
-                            session->CurrentlyDrawnTileElement = nullptr;
-                            EntityPaintSetup(*session, item.position);
-                            ++scene.dynamicTilesPainted;
+                            if (auto* entity = getGameState().entities.tryGetEntity<EntityBase>(item.entity);
+                                entity != nullptr)
+                            {
+                                EntityPaintSetupEntity(*session, *entity);
+                            }
                         }
                     }
 
@@ -1773,6 +1804,9 @@ namespace OpenRCT2::Paint
                 std::erase_if(_staticRegionPackets, [frame](const auto& kv) {
                     return frame - kv.second.lastSeen > 240;
                 });
+                std::erase_if(_entityRotations, [frame](const auto& kv) {
+                    return frame - kv.second.lastSeen > 240;
+                });
             }
 
             SubmitVisibleStaticRegions(scene, worldFrustum, frame);
@@ -1849,6 +1883,7 @@ namespace OpenRCT2::Paint
         _regionBounds.clear();
         _staticPaintCache.clear();
         _reconstructionRotations.clear();
+        _entityRotations.clear();
         _staticRegionPackets.clear();
         _quality = {};
     }
