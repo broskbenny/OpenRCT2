@@ -337,8 +337,8 @@ void main() {
         PROFILED_FUNCTION();
         if (scene.dimensions.width <= 0 || scene.dimensions.height <= 0) return;
         textures.ClearFirstPersonTransientBitmaps();
-        // GPU timing queries are polled, never waited on, so the budget
-        // controller cannot force a CPU/GPU synchronisation every frame.
+        // GPU timing remains diagnostic only. Queries are polled, never waited
+        // on, so diagnostics cannot force a CPU/GPU synchronisation every frame.
         for (size_t i=0;i<_timerQueries.size();++i)
         {
             if (!_timerPending[i]) continue;
