@@ -682,6 +682,7 @@ namespace OpenRCT2::Paint
         {
             uint64_t lastPainted{};
             uint32_t lastAnimationGeneration{};
+            uint32_t lastSourceProbeGeneration{};
             bool valid = false;
             std::vector<FirstPersonSurface> residentSurfaces;
             std::vector<FirstPersonSurface> streamedSurfaces;
@@ -690,7 +691,7 @@ namespace OpenRCT2::Paint
         {
             uint64_t signature{};
             uint64_t lastSeen{};
-            uint64_t lastSemanticScan{};
+            uint32_t lastSemanticGeneration{};
             uint32_t viewFlags{};
             bool valid = false;
             bool dirty = true;
@@ -702,7 +703,7 @@ namespace OpenRCT2::Paint
             bool visibilityDirty = true;
             int32_t visibilityMinZ = 0;
             int32_t visibilityMaxZ = 0;
-            uint64_t lastVisibilityScan = 0;
+            uint32_t lastVisibilityGeneration = 0;
             std::vector<ReconstructionGroupInfo> reconstructionGroups;
             // Keep all four native quarter-turn variants. Crossing a viewpoint
             // boundary can paint a variant once without destroying the previous
@@ -852,7 +853,7 @@ namespace OpenRCT2::Paint
         }
 
         std::optional<FirstPersonSemanticSphere> CachedTileVisibilityBounds(
-            CoordsXY world, uint64_t frame)
+            CoordsXY world, uint32_t sourceGeneration)
         {
             const int32_t tx = world.x / kCoordsXYStep;
             const int32_t ty = world.y / kCoordsXYStep;
@@ -861,8 +862,8 @@ namespace OpenRCT2::Paint
             constexpr uint64_t kVisibilityProbeInterval = 240;
             const bool probeDue = !cached.visibilityBoundValid || cached.visibilityDirty
                 || FirstPersonRefreshDue(
-                    key ^ 0xd6e8feb86659fd93ull, frame,
-                    cached.lastVisibilityScan, kVisibilityProbeInterval);
+                    key ^ 0xd6e8feb86659fd93ull, sourceGeneration,
+                    cached.lastVisibilityGeneration, kVisibilityProbeInterval);
             if (probeDue)
             {
                 const auto snapshot = ReadTileSemanticSnapshot(world);
@@ -870,7 +871,7 @@ namespace OpenRCT2::Paint
                 {
                     cached.visibilityBoundValid = false;
                     cached.visibilityDirty = false;
-                    cached.lastVisibilityScan = frame;
+                    cached.lastVisibilityGeneration = sourceGeneration;
                     return std::nullopt;
                 }
 
@@ -920,7 +921,7 @@ namespace OpenRCT2::Paint
                     const CoordsXY world{ tx * kCoordsXYStep, ty * kCoordsXYStep };
                     if (!MapIsLocationValid(world)) continue;
                     const auto semantic = CachedTileVisibilityBounds(
-                        world, _terrainCache.frame + 1);
+                        world, getGameState().currentTicks);
                     if (semantic.has_value()
                         && frustum.visible(semantic->center, semantic->radius))
                     {
@@ -1246,6 +1247,7 @@ namespace OpenRCT2::Paint
             const auto& opt = scene.options;
             const auto basis = GetFirstPersonBasis(opt.camera);
             const auto frame = _terrainCache.frame;
+            const uint32_t sourceGeneration = getGameState().currentTicks;
             uint32_t nextNativePaintOrdinal = 1u << 20;
             constexpr uint64_t kMaxStaticAge = 240;
             std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
@@ -1266,7 +1268,8 @@ namespace OpenRCT2::Paint
                 const bool authoritativeInvalidation =
                     !cached.valid || cached.dirty || cached.viewFlags != opt.viewFlags;
                 const bool semanticProbeDue = FirstPersonRefreshDue(
-                    key ^ 0x9e3779b97f4a7c15ull, frame, cached.lastSemanticScan, kMaxStaticAge);
+                    key ^ 0x9e3779b97f4a7c15ull, sourceGeneration,
+                    cached.lastSemanticGeneration, kMaxStaticAge);
                 uint64_t probedSignature = cached.signature;
                 bool probedAnimated = cached.animated;
                 if (authoritativeInvalidation || semanticProbeDue)
@@ -1277,7 +1280,7 @@ namespace OpenRCT2::Paint
                     probedSignature = NativeTileSignature(tile);
                     probedAnimated = MapAnimations::IsTileAnimatedForFirstPerson(
                         TileCoordsXY(tx, ty));
-                    cached.lastSemanticScan = frame;
+                    cached.lastSemanticGeneration = sourceGeneration;
                 }
                 const bool semanticChanged = authoritativeInvalidation
                     || (semanticProbeDue && probedSignature != cached.signature)
@@ -1315,6 +1318,7 @@ namespace OpenRCT2::Paint
                         variant.valid = false;
                         variant.lastPainted = 0;
                         variant.lastAnimationGeneration = 0;
+                        variant.lastSourceProbeGeneration = 0;
                         variant.residentSurfaces.clear();
                         variant.streamedSurfaces.clear();
                     }
@@ -1354,15 +1358,18 @@ namespace OpenRCT2::Paint
                         continue;
                     auto& variant = cached.rotations[rotation];
                     const uint64_t refreshKey = key ^ (uint64_t(rotation + 1) << 60);
-                    const uint32_t animationGeneration = getGameState().currentTicks;
+                    const uint32_t animationGeneration = sourceGeneration;
                     const bool stale = !variant.valid ||
                         (cached.animated && variant.lastAnimationGeneration != animationGeneration) ||
-                        FirstPersonRefreshDue(refreshKey, frame, variant.lastPainted, kMaxStaticAge);
+                        FirstPersonRefreshDue(
+                            refreshKey, sourceGeneration,
+                            variant.lastSourceProbeGeneration, kMaxStaticAge);
                     if (stale)
                     {
                         variant.valid = true;
                         variant.lastPainted = frame;
                         variant.lastAnimationGeneration = animationGeneration;
+                        variant.lastSourceProbeGeneration = sourceGeneration;
                         variant.residentSurfaces.clear();
                         variant.streamedSurfaces.clear();
                         missesByRotation[rotation].insert(key);
