@@ -42,6 +42,7 @@ struct AttachedPaintStruct
     // This is relative to the parent where we are attached to.
     ScreenCoordsXY RelativePos;
     bool IsMasked;
+    uint32_t FirstPersonSnapshot = 0;
 };
 
 struct PaintStructBoundBox
@@ -68,6 +69,7 @@ struct PaintStruct
     uint16_t QuadrantIndex;
     uint8_t SortFlags;
     ViewportInteractionItem InteractionItem;
+    uint32_t FirstPersonSnapshot = 0;
 };
 
 struct PaintStringStruct
