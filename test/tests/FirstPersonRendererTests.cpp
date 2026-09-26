@@ -254,6 +254,29 @@ TEST(FirstPersonPathArtworkTest, SharedNativeSurfaceSelectionRotatesConsistently
     EXPECT_EQ(GetPathSurfaceImageOffset(path, 3), 17);
 }
 
+TEST(FirstPersonVehiclePoseTest, NativeYawMatchesMovementVectors)
+{
+    constexpr std::array<uint8_t, 4> orientations{ 0, 8, 16, 24 };
+    constexpr float kExpectedX[4]{ -1.0f, 0.0f, 1.0f, 0.0f };
+    constexpr float kExpectedY[4]{ 0.0f, 1.0f, 0.0f, -1.0f };
+
+    for (size_t i = 0; i < orientations.size(); ++i)
+    {
+        const auto orientation = orientations[i];
+        const auto movement = OpenRCT2::RideVehicle::Geometry::getFreeroamVehicleMovementData(orientation);
+        const auto yaw = FirstPersonVehicleYawRadians(orientation);
+        const FirstPersonCamera camera{ {}, yaw, 0.0f, 0.0f };
+        const auto basis = GetFirstPersonBasis(camera);
+
+        const float movementLength = std::hypot(float(movement.x), float(movement.y));
+        ASSERT_GT(movementLength, 0.0f);
+        EXPECT_NEAR(basis.forward.x, float(movement.x) / movementLength, 0.000001f);
+        EXPECT_NEAR(basis.forward.y, float(movement.y) / movementLength, 0.000001f);
+        EXPECT_NEAR(basis.forward.x, kExpectedX[i], 0.000001f);
+        EXPECT_NEAR(basis.forward.y, kExpectedY[i], 0.000001f);
+    }
+}
+
 TEST(FirstPersonVehiclePoseTest, SpecialPitchStatesUseAuthoritativeGeometry)
 {
     for (const auto pitch : {
