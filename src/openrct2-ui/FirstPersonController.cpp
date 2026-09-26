@@ -199,7 +199,8 @@ namespace OpenRCT2::Ui::FirstPerson
                 // Continuous legal terrain/path slopes change gradually across
                 // these samples. A larger discontinuity is a cliff/ledge and is
                 // intentionally non-walkable in either direction.
-                if (std::abs(floor.z - floorZ) > kMaximumStep)
+                if (!Paint::FirstPersonWalkingHeightTransitionAllowed(
+                        floorZ, floor.z, kMaximumStep))
                     return std::nullopt;
                 floorZ = floor.z;
             }
