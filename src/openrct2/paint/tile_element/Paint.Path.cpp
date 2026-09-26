@@ -820,22 +820,26 @@ static std::pair<uint8_t, uint8_t> PathPaintGetRotatedEdgesAndCorners(
     return std::make_pair(edges, corners);
 }
 
-static ImageIndex PathPaintGetBaseImage(
-    const PaintSession& session, const PathElement& pathElement, const FootpathPaintInfo& pathPaintInfo,
-    const uint8_t rotatedEdgesAndCorners)
+uint8_t GetPathSurfaceImageOffset(const PathElement& pathElement, uint8_t rotation)
 {
-    ImageIndex surfaceBaseImageIndex = pathPaintInfo.surface.image;
+    rotation &= 3;
     if (pathElement.isSloped())
     {
-        auto directionOffset = (pathElement.getSlopeDirection() + session.CurrentRotation) % kNumOrthogonalDirections;
-        surfaceBaseImageIndex += 16 + directionOffset;
-    }
-    else
-    {
-        surfaceBaseImageIndex += kPathEdgesAndCornersToSurfaceImageIndexOffset[rotatedEdgesAndCorners];
+        return uint8_t(16 + ((pathElement.getSlopeDirection() + rotation) % kNumOrthogonalDirections));
     }
 
-    return surfaceBaseImageIndex;
+    const uint8_t edges = uint8_t(
+        ((pathElement.getEdges() << rotation) & 0xF) | ((pathElement.getEdges() << rotation) >> 4));
+    const uint8_t corners = uint8_t(
+        ((pathElement.getCorners() << rotation) & 0xF) | ((pathElement.getCorners() << rotation) >> 4));
+    const uint8_t edgesAndCorners = pathElement.isQueue() ? edges : uint8_t(edges | (corners << 4));
+    return kPathEdgesAndCornersToSurfaceImageIndexOffset[edgesAndCorners];
+}
+
+static ImageIndex PathPaintGetBaseImage(
+    const PaintSession& session, const PathElement& pathElement, const FootpathPaintInfo& pathPaintInfo)
+{
+    return pathPaintInfo.surface.image + GetPathSurfaceImageOffset(pathElement, session.CurrentRotation);
 }
 
 static BoundBoxXYZ PathPaintGetBoundbox(const PaintSession& session, int32_t height, uint8_t edges)
@@ -922,7 +926,7 @@ static void PathPaintBoxSupport(
     auto [edges, corners] = PathPaintGetRotatedEdgesAndCorners(session, pathElement);
     const uint8_t edgesAndCorners = pathElement.isQueue() ? edges : edges | (corners << 4);
 
-    const auto surfaceBaseImageIndex = PathPaintGetBaseImage(session, pathElement, pathPaintInfo, edgesAndCorners);
+    const auto surfaceBaseImageIndex = PathPaintGetBaseImage(session, pathElement, pathPaintInfo);
     auto boundbox = PathPaintGetBoundbox(session, height, edges);
 
     const bool hasPassedSurface = (session.Flags & PaintSessionFlags::PassedSurface) != 0;
@@ -976,7 +980,7 @@ static void PathPaintPoleSupport(
     auto [edges, corners] = PathPaintGetRotatedEdgesAndCorners(session, pathElement);
     const uint8_t edgesAndCorners = pathElement.isQueue() ? edges : edges | (corners << 4);
 
-    const auto surfaceBaseImageIndex = PathPaintGetBaseImage(session, pathElement, pathPaintInfo, edgesAndCorners);
+    const auto surfaceBaseImageIndex = PathPaintGetBaseImage(session, pathElement, pathPaintInfo);
     auto boundbox = PathPaintGetBoundbox(session, height, edges);
 
     // Below Surface
