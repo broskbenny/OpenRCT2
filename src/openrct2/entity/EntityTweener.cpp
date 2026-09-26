@@ -43,7 +43,7 @@ namespace OpenRCT2
         return viewports;
     }
 
-    static inline bool IsEntityVisible(const ViewportList& vpList, const EntityBase* entity) noexcept
+    bool EntityTweener::isEntityVisible(const ViewportList& vpList, const EntityBase* entity) const noexcept
     {
         const auto worldLoc = entity->getLocation();
 
@@ -52,9 +52,24 @@ namespace OpenRCT2
             const auto screenPos = Translate3DTo2DWithZ(vp->rotation, worldLoc);
             if (vp->Contains(screenPos))
             {
-                // Entity is visible in at least one viewport, tween.
+                // Entity is visible in at least one overhead viewport.
                 return true;
             }
+        }
+
+        if (_firstPersonView.has_value())
+        {
+            const auto& view = *_firstPersonView;
+            // Entity sprites and vehicles extend well above their map anchor.
+            // A conservative sphere avoids dropping interpolation just as a
+            // guest or car crosses a first-person frustum plane.
+            const Paint::FirstPersonVec3 centre{
+                float(worldLoc.x), float(worldLoc.y), float(worldLoc.z) + 16.0f
+            };
+            if (Paint::FirstPersonSphereVisible(
+                    view.camera, centre, 64.0f, view.fieldOfViewDegrees,
+                    view.aspect, view.nearClip, view.farClip))
+                return true;
         }
 
         return false;
@@ -62,7 +77,7 @@ namespace OpenRCT2
 
     void EntityTweener::addEntity(const ViewportList& vpList, EntityBase* entity)
     {
-        if (!IsEntityVisible(vpList, entity))
+        if (!isEntityVisible(vpList, entity))
         {
             return;
         }
@@ -74,9 +89,9 @@ namespace OpenRCT2
     void EntityTweener::populateEntities()
     {
         const auto vpList = GetUnzoomedViewports();
-        if (vpList.empty() && _trackedVehicle.IsNull())
+        if (vpList.empty() && _trackedVehicle.IsNull() && !_firstPersonView.has_value())
         {
-            // No viewports that fit the criteria, bail.
+            // No overhead or first-person view needs interpolation.
             return;
         }
 
