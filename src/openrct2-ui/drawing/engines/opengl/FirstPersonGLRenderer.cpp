@@ -295,6 +295,7 @@ void main() {
     {
         PROFILED_FUNCTION();
         if (scene.dimensions.width <= 0 || scene.dimensions.height <= 0) return;
+        textures.ClearFirstPersonTransientBitmaps();
         // GPU timing queries are polled, never waited on, so the budget
         // controller cannot force a CPU/GPU synchronisation every frame.
         for (size_t i=0;i<_timerQueries.size();++i)
@@ -379,7 +380,7 @@ void main() {
         seenTextures.reserve(scene.surfaces.size()/2+1);
         for(const auto& surface:scene.surfaces)
         {
-            if(surface.image.HasValue() &&
+            if(surface.image.HasValue() && surface.immutablePixels.empty() &&
                seenTextures.insert(FirstPersonMaterialFingerprint(surface.image)).second)
                 textures.GetOrLoadImageTexture(surface.image);
             if(surface.mask.HasValue() &&
@@ -392,11 +393,37 @@ void main() {
             DiscardAllRegionBuffers();
             _atlasHandle=currentAtlas;
         }
+        std::unordered_map<uint64_t, BasicTextureInfo> immutableTextures;
+        immutableTextures.reserve(scene.surfaces.size() / 16 + 1);
         auto appendVertices = [&](std::vector<GPUVertex>& vertices, const Paint::FirstPersonSurface& surface) {
             const auto image=surface.image;
             const auto* g1=GfxGetG1Element(image);
-            if(g1==nullptr || g1->width<=0 || g1->height<=0) return;
-            const auto tex=textures.GetOrLoadImageTexture(image);
+            BasicTextureInfo tex{};
+            float imageWidth = 0.0f;
+            float imageHeight = 0.0f;
+            if (!surface.immutablePixels.empty())
+            {
+                if (surface.immutableWidth <= 0 || surface.immutableHeight <= 0)
+                    return;
+                auto it = immutableTextures.find(surface.immutableFingerprint);
+                if (it == immutableTextures.end())
+                {
+                    const auto loaded = textures.LoadFirstPersonTransientBitmap(
+                        surface.immutablePixels.data(),
+                        size_t(surface.immutableWidth), size_t(surface.immutableHeight));
+                    it = immutableTextures.emplace(surface.immutableFingerprint, loaded).first;
+                }
+                tex = it->second;
+                imageWidth = float(surface.immutableWidth);
+                imageHeight = float(surface.immutableHeight);
+            }
+            else
+            {
+                if(g1==nullptr || g1->width<=0 || g1->height<=0) return;
+                tex=textures.GetOrLoadImageTexture(image);
+                imageWidth = float(g1->width);
+                imageHeight = float(g1->height);
+            }
             BasicTextureInfo maskTex{};
             const auto* maskG1=surface.mask.HasValue()?GfxGetG1Element(surface.mask):nullptr;
             if(maskG1!=nullptr) maskTex=textures.GetOrLoadImageTexture(surface.mask);
@@ -417,7 +444,7 @@ void main() {
                 vertices.push_back({
                     {p.world.x,p.world.y,p.world.z},{p.u,p.v},
                     {tex.coords.x,tex.coords.y,tex.coords.z,tex.coords.w},
-                    {float(g1->width),float(g1->height)},int32_t(tex.index),
+                    {imageWidth,imageHeight},int32_t(tex.index),
                     {count,palettes[0],palettes[1],palettes[2]},
                     (image.IsBlended()
                         ? (image.GetRemap()==static_cast<uint8_t>(Drawing::FilterPaletteID::paletteWater)?3:1)
