@@ -704,7 +704,6 @@ void main() {
             glCall(glBlitFramebuffer,0,0,screenWidth,screenHeight,
                    0,0,screenWidth,screenHeight,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,GL_NEAREST);
 
-            constexpr size_t kMaxExactPeelPasses = 6;
             const int32_t viewportBottom = screenHeight - top - height;
             auto setTileScissor = [&](const TransparentScreenTile& tile) {
                 glCall(glScissor,
