@@ -15,6 +15,7 @@
 #include "../drawing/IDrawingContext.h"
 #include "../drawing/IDrawingEngine.h"
 #include "../drawing/RenderTarget.h"
+#include "../drawing/ScrollingText.h"
 #include "../entity/EntityBase.h"
 #include "../interface/Viewport.h"
 #include "../profiling/Profiling.h"
@@ -209,6 +210,27 @@ namespace OpenRCT2::Paint
                 std::min<int32_t>(colour->height, maskG1->height)
             };
         }
+        void ApplyImmutablePaintSnapshot(FirstPersonSurface& surface, uint32_t handle)
+        {
+            const auto* snapshot = Drawing::ScrollingText::GetFirstPersonSnapshot(handle);
+            if (snapshot == nullptr || snapshot->pixels.empty())
+                return;
+
+            surface.immutablePixels = snapshot->pixels;
+            surface.immutableWidth = snapshot->width;
+            surface.immutableHeight = snapshot->height;
+            uint64_t fingerprint = 1469598103934665603ULL;
+            const auto extend = [&](uint64_t value) mutable {
+                fingerprint ^= value;
+                fingerprint *= 1099511628211ULL;
+            };
+            extend(uint16_t(snapshot->width));
+            extend(uint16_t(snapshot->height));
+            for (const auto pixel : snapshot->pixels)
+                extend(pixel);
+            surface.immutableFingerprint = fingerprint;
+        }
+
         [[nodiscard]] bool UsesViewFacingImpostor(const PaintStruct& ps)
         {
             if (ps.Entity != nullptr)
@@ -591,6 +613,7 @@ namespace OpenRCT2::Paint
             // flattened into the walking plane.
             if (!groundPathArtwork)
             {
+                const auto surfaceStart = scene.surfaces.size();
                 const bool viewFacing = UsesViewFacingImpostor(ps);
                 if (!AppendSemanticWallPlane(scene, ps, colourify(ps.image_id), ps.ScreenPos, rotation) &&
                     (!physicallyPlanar ||
@@ -600,6 +623,8 @@ namespace OpenRCT2::Paint
                         scene, anchor, basis, isoAnchor, colourify(ps.image_id), ps.ScreenPos,
                         staticRight, viewFacing);
                 }
+                if (scene.surfaces.size() > surfaceStart)
+                    ApplyImmutablePaintSnapshot(scene.surfaces.back(), ps.FirstPersonSnapshot);
             }
             if (ps.Children != nullptr)
             {
@@ -613,6 +638,7 @@ namespace OpenRCT2::Paint
                     const auto colourImage = colourify(a->IsMasked ? a->ColourImageId : a->image_id);
                     const auto maskImage = a->IsMasked ? a->image_id : ImageId{};
                     const auto position = ps.ScreenPos + a->RelativePos;
+                    const auto surfaceStart = scene.surfaces.size();
                     if (!AppendSemanticWallPlane(scene, ps, colourImage, position, rotation, maskImage) &&
                         (!physicallyPlanar ||
                          !AppendPhysicalPlane(scene, ps, colourImage, position, rotation, maskImage)))
@@ -621,6 +647,8 @@ namespace OpenRCT2::Paint
                             scene, anchor, basis, isoAnchor, colourImage, position,
                             staticRight, viewFacing, maskImage);
                     }
+                    if (scene.surfaces.size() > surfaceStart)
+                        ApplyImmutablePaintSnapshot(scene.surfaces.back(), a->FirstPersonSnapshot);
                 }
             }
         }
@@ -1173,6 +1201,7 @@ namespace OpenRCT2::Paint
                         }
                         return;
                     }
+                    Drawing::ScrollingText::BeginFirstPersonSnapshotCapture();
 
                     for (size_t i = offset; i < end; ++i)
                     {
@@ -1248,11 +1277,21 @@ namespace OpenRCT2::Paint
                         {
                             const auto region = FirstPersonGpuRegionKey(
                                 root->MapPos.x / kCoordsXYStep, root->MapPos.y / kCoordsXYStep);
-                            for (size_t i = start; i < scene.surfaces.size(); ++i)
-                                if (!scene.surfaces[i].viewFacing)
-                                    scene.surfaces[i].gpuRegion = region;
-
                             auto cacheIt = _staticPaintCache.find(key);
+                            for (size_t i = start; i < scene.surfaces.size(); ++i)
+                            {
+                                if (!scene.surfaces[i].immutablePixels.empty())
+                                {
+                                    scene.surfaces[i].gpuRegion = 0;
+                                    if (cacheIt != _staticPaintCache.end())
+                                        cacheIt->second.animated = true;
+                                }
+                                else if (!scene.surfaces[i].viewFacing)
+                                {
+                                    scene.surfaces[i].gpuRegion = region;
+                                }
+                            }
+
                             if (cacheIt != _staticPaintCache.end())
                             {
                                 auto& surfaces = cacheIt->second.rotations[rotation].surfaces;
@@ -1274,6 +1313,7 @@ namespace OpenRCT2::Paint
                                 scene.surfaces.end());
                         }
                     }
+                    Drawing::ScrollingText::EndFirstPersonSnapshotCapture();
                     PaintSessionFree(session);
                 }
             }
