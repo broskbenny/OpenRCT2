@@ -1019,8 +1019,6 @@ namespace OpenRCT2::Paint
                             {
                                 FirstPersonSurface waterSurface{};
                                 waterSurface.image = waterMask;
-                                waterSurface.nativePaintOrdinal =
-                                    1u + uint32_t((ty & 1023) * 1024 + (tx & 1023));
                                 waterSurface.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
                                 std::array<FirstPersonVertex, 4> w{};
                                 const auto waterIso = Translate3DTo2DWithZ(0, { origin, waterZ });
@@ -1248,7 +1246,6 @@ namespace OpenRCT2::Paint
             const auto basis = GetFirstPersonBasis(opt.camera);
             const auto frame = _terrainCache.frame;
             const uint32_t sourceGeneration = getGameState().currentTicks;
-            uint32_t nextNativePaintOrdinal = 1u << 20;
             constexpr uint64_t kMaxStaticAge = 240;
             std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
             for (auto& misses : missesByRotation)
@@ -1536,9 +1533,6 @@ namespace OpenRCT2::Paint
                         AppendRoot(
                             scene, *root, anchor, basis, isoAnchor,
                             opt.viewFlags, opt.hiddenEntity, rotation, emitPathDeck);
-                        for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
-                            scene.surfaces[i].nativePaintOrdinal = nextNativePaintOrdinal++;
-
                         if (const auto semantic = LargeScenerySemanticBounds(*root); semantic.has_value())
                         {
                             for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
