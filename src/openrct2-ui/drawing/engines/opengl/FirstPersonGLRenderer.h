@@ -35,7 +35,8 @@ namespace OpenRCT2::Ui
         float _lastGpuTimeMs{};
         std::unique_ptr<OpenGLFramebuffer> _background; // indexed composite scratch
         std::unique_ptr<OpenGLFramebuffer> _opaqueSnapshot; // indexed pixels AND physical depth
-        std::array<std::unique_ptr<OpenGLFramebuffer>,2> _peelLayers; // R16UI encoded filters + depth
+        std::array<std::unique_ptr<OpenGLFramebuffer>,2> _peelLayers; // R32UI filter row + native ordinal
+        std::array<std::unique_ptr<OpenGLFramebuffer>,2> _peelDepthLayers; // selected physical depth per logical layer
         struct RegionBuffer
         {
             GLuint vao{}, vbo{};
