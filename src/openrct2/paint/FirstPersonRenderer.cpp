@@ -246,6 +246,12 @@ namespace OpenRCT2::Paint
                 // a shared world-fixed orientation to keep their corners joined.
                 return entry == nullptr || entry->flags.has(SmallSceneryFlag::isTree);
             }
+            if (ps.Element->getType() == TileElementType::largeScenery)
+            {
+                const auto* large = ps.Element->asLargeScenery();
+                const auto* entry = large != nullptr ? large->getEntry() : nullptr;
+                return entry != nullptr && entry->flags.has(LargeSceneryFlag::isTree);
+            }
             return false;
         }
         struct SpriteReconstructionFrame
