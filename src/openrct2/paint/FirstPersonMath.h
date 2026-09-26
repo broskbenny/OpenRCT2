@@ -67,6 +67,13 @@ namespace OpenRCT2::Paint
         if (delta <= -kPi) delta += kTwoPi;
         return a + std::clamp(alpha, 0.0f, 1.0f) * delta;
     }
+    [[nodiscard]] inline bool FirstPersonWalkingHeightTransitionAllowed(
+        float fromZ, float toZ, float maximumStep = 8.0f)
+    {
+        return std::isfinite(fromZ) && std::isfinite(toZ)
+            && std::abs(toZ - fromZ) <= std::max(0.0f, maximumStep);
+    }
+
     // The native footpath and terrain tiles share 32-unit, axis-aligned
     // coordinates. Path ramps have two high and two low corners. Bilinear
     // interpolation gives their exact height at an arbitrary walking point,
