@@ -1167,7 +1167,11 @@ namespace OpenRCT2::Paint
             if ((frame % 120) == 0)
             {
                 std::erase_if(_terrainCache.entries, [frame](const auto& kv) {
-                    return frame - kv.second.lastSeen > 240;
+                    const bool expired = frame - kv.second.lastSeen > 240;
+                    if (expired)
+                        MarkStaticRegionDirtyForTile(
+                            int32_t(kv.first >> 32), int32_t(kv.first & 0xffffffffu));
+                    return expired;
                 });
                 std::erase_if(_coarseLastUsed, [frame](const auto& kv) {
                     return frame - kv.second > 240;
@@ -1343,8 +1347,6 @@ namespace OpenRCT2::Paint
             std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
             for (auto& misses : missesByRotation)
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
-            std::unordered_map<uint64_t, uint8_t> requestedRotations;
-            requestedRotations.reserve(scene.visibleTiles.size());
             const auto& view = scene.resolvedView;
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
@@ -1417,7 +1419,6 @@ namespace OpenRCT2::Paint
                         }
                     } while (!(element++)->isLastForTile());
                 }
-                requestedRotations.emplace(key, rotationMask);
 
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
@@ -1676,7 +1677,11 @@ namespace OpenRCT2::Paint
             if (frame % 120 == 0)
             {
                 std::erase_if(_staticPaintCache, [frame](const auto& kv) {
-                    return frame - kv.second.lastSeen > 240;
+                    const bool expired = frame - kv.second.lastSeen > 240;
+                    if (expired)
+                        MarkStaticRegionDirtyForTile(
+                            int32_t(kv.first >> 32), int32_t(kv.first & 0xffffffffu));
+                    return expired;
                 });
                 std::erase_if(_reconstructionRotations, [frame](const auto& kv) {
                     return frame - kv.second.lastSeen > 240;
@@ -1755,6 +1760,8 @@ namespace OpenRCT2::Paint
         _terrainCache.frame = 0;
         _regionBounds.clear();
         _staticPaintCache.clear();
+        _reconstructionRotations.clear();
+        _staticRegionPackets.clear();
         _coarseLastUsed.clear();
         _quality = {};
     }
