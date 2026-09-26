@@ -59,6 +59,7 @@ namespace OpenRCT2::Ui::FirstPerson
             Paint::FirstPersonCamera camera{};
             EntityId attachedVehicle = EntityId::GetNull();
             RideId attachedRide = RideId::GetNull();
+            uint8_t attachedSeat = 0;
             float headYaw = 0.0f;
             float headPitch = 0.0f;
             bool previousResetDown = false;
@@ -326,7 +327,8 @@ namespace OpenRCT2::Ui::FirstPerson
         void PublishRideAudioAttachment()
         {
             Audio::SetFirstPersonRideAudioListener(
-                _state.attachedVehicle, _state.attachedRide, _state.headYaw, _state.headPitch);
+                _state.attachedVehicle, _state.attachedRide, _state.attachedSeat,
+                _state.headYaw, _state.headPitch);
         }
 
         // Relative mouse deltas are presentation input. Consume them from the
@@ -509,8 +511,10 @@ namespace OpenRCT2::Ui::FirstPerson
         EntityTweener::get().setTrackedVehicle(vehicleId);
         _state.attachedVehicle = vehicleId;
         _state.attachedRide = vehicle->ride;
+        _state.attachedSeat = Paint::FirstPersonPassengerSeatIndex(*vehicle);
         const auto initialOrientation = Paint::FirstPersonVehicleSimulationOrientation(*vehicle);
-        const auto initialPassenger = Paint::FirstPersonVehicleSimulationPassengerPose(*vehicle);
+        const auto initialPassenger = Paint::FirstPersonVehicleSimulationPassengerPose(
+            *vehicle, _state.attachedSeat);
         _state.camera.position = initialPassenger.position;
         _state.camera.yaw = initialOrientation.yaw;
         _state.camera.pitch = initialOrientation.pitch;
@@ -655,7 +659,7 @@ namespace OpenRCT2::Ui::FirstPerson
                 const auto loc = car->getLocation();
                 const auto passenger = Paint::BuildFirstPersonPassengerPose(
                     *car, { float(loc.x), float(loc.y), float(loc.z) }, cb,
-                    flatPrimaryFrame, flatSecondaryFrame);
+                    flatPrimaryFrame, flatSecondaryFrame, _state.attachedSeat);
                 const auto headBasis = Paint::GetPassengerHeadBasis(
                     passenger.basis, _state.headYaw, _state.headPitch);
 
