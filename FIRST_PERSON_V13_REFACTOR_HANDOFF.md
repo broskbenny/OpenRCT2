@@ -315,13 +315,13 @@ Other sprite-baked flat rides deliberately remain on the explicit calibrated fal
 
 Animated static tile variants no longer become stale merely because another presentation frame was rendered.
 
-Each cached native-paint rotation records the last simulation animation generation (`currentTicks`). It is repainted when that generation changes, on authoritative invalidation, or on the existing bounded fallback refresh. Multiple 120/144 Hz renders between game updates therefore reuse the same native animation paint result.
+Each cached native-paint rotation records the last simulation animation generation (`currentTicks`). It is repainted when that generation changes, on authoritative invalidation, or on a bounded fallback refresh that is itself keyed to simulation generation. Multiple 120/144 Hz renders between game updates therefore reuse the same native animation paint result and do not accelerate fallback source probes.
 
 ### Leaf visibility bounds are persistent
 
 `DiscoverVisibleTiles()` no longer decodes every tile-element stack on every rendered frame.
 
-Each static tile cache entry now retains a semantic min/max-Z visibility bound and its last fallback scan. Normal map invalidation marks that bound dirty immediately. A staggered signature probe remains as protection against mutation paths that bypass normal invalidation. Dynamic entity admission remains independent through the entity spatial index.
+Each static tile cache entry now retains a semantic min/max-Z visibility bound and its last simulation-generation fallback scan. Normal map invalidation marks that bound dirty immediately. A staggered signature probe remains as protection against mutation paths that bypass normal invalidation without scaling with presentation refresh rate. Dynamic entity admission remains independent through the entity spatial index.
 
 ### The dead adaptive quality actuator was removed
 
@@ -345,7 +345,7 @@ The existing underground attenuation rule is shared by overhead and first-person
 
 First-person crowd noise no longer runs a full 3-D spatial calculation over every guest in the park.
 
-It resolves the current first-person listener, visits only entity tiles intersecting the existing 48-tile hard audio cutoff, and then applies the unchanged exact 3-D distance/gain calculation to those guest candidates. Guests outside the cutoff contributed zero before and still contribute zero.
+It resolves the current first-person listener once, visits only entity tiles whose XY bounds intersect the existing 48-tile hard audio cutoff, and then applies the unchanged exact 3-D distance/gain calculation to those guest candidates. Guests outside the cutoff contributed zero before and still contribute zero.
 
 ### Reconstruction-group state is lifetime-bounded
 
