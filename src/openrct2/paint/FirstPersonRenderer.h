@@ -71,6 +71,10 @@ namespace OpenRCT2::Paint
         int16_t immutableWidth = 0;
         int16_t immutableHeight = 0;
         uint64_t immutableFingerprint = 0;
+        // Zero means tile-local/unconnected artwork. Nonzero identifies a
+        // multi-tile reconstruction group whose native source rotation is
+        // selected from one canonical object/track origin.
+        uint64_t reconstructionGroup = 0;
         uint64_t gpuRegion = 0; // Nonzero only for static WORLD-FIXED source art.
         FirstPersonVec3 billboardAnchor{};
         float billboardLeft{}, billboardTop{}, billboardWidth{}, billboardHeight{};
@@ -83,12 +87,26 @@ namespace OpenRCT2::Paint
         float semanticRadius = 0.0f;
         // Masked/blended image IDs must be handled separately from opaque cutouts.
     };
+    struct FirstPersonStaticRegion
+    {
+        uint64_t key{};
+        uint64_t generation{};
+        FirstPersonVec3 center{};
+        float radius{};
+        const std::vector<FirstPersonSurface>* surfaces = nullptr;
+        const std::vector<ImageIndex>* textureDependencies = nullptr;
+    };
+
     struct FirstPersonScene
     {
         FirstPersonRenderOptions options{};
         FirstPersonResolvedView resolvedView{};
         ScreenSize dimensions{};
+        // Dynamic, camera-facing, transparent and animated surfaces only.
         std::vector<FirstPersonSurface> surfaces;
+        // Persistent fixed opaque geometry is submitted by region descriptor;
+        // individual static surfaces are exposed only when that region rebuilds.
+        std::vector<FirstPersonStaticRegion> staticRegions;
         std::vector<CoordsXY> visibleTiles;
         float activePixelTolerance = 3.0f;
         // Diagnostics count native tile-paint work, not merely submitted quads.
