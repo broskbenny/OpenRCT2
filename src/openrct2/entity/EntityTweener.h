@@ -10,6 +10,7 @@
 #pragma once
 
 #include "../interface/Window.h"
+#include "../paint/FirstPersonMath.h"
 #include "../Identifiers.h"
 
 #include <sfl/static_vector.hpp>
@@ -38,13 +39,36 @@ namespace OpenRCT2
         std::vector<CoordsXYZ> postPos;
         EntityId _trackedVehicle = EntityId::GetNull();
         std::optional<FirstPersonTrackedVehicleVisuals> _trackedVisuals;
+        struct FirstPersonTweenView
+        {
+            Paint::FirstPersonCamera camera{};
+            float fieldOfViewDegrees = 70.0f;
+            float aspect = 1.0f;
+            float nearClip = 2.0f;
+            float farClip = 32768.0f;
+        };
+        std::optional<FirstPersonTweenView> _firstPersonView;
 
     private:
         void populateEntities();
         void addEntity(const ViewportList& vp, EntityBase* entity);
+        [[nodiscard]] bool isEntityVisible(const ViewportList& vp, const EntityBase* entity) const noexcept;
 
     public:
         static EntityTweener& get();
+
+        void setFirstPersonView(
+            const Paint::FirstPersonCamera& camera, float fieldOfViewDegrees,
+            float aspect, float nearClip, float farClip)
+        {
+            _firstPersonView = FirstPersonTweenView{
+                camera, fieldOfViewDegrees, aspect, nearClip, farClip
+            };
+        }
+        void clearFirstPersonView()
+        {
+            _firstPersonView.reset();
+        }
 
         void setTrackedVehicle(EntityId id)
         {
