@@ -1180,22 +1180,49 @@ namespace OpenRCT2
             return;
 
         // First person counts *nearby* guests, not an overhead camera's
-        // sprite rectangle. Retain the native crowd sample, loop and controls.
+        // sprite rectangle. Use the entity spatial index to avoid doing 3-D
+        // gain/log calculations for guests that are outside the hard cutoff.
         int32_t weightedPeeps = 0;
-        for (auto peep : EntityList<Guest>())
+        if (firstPerson)
         {
-            if (peep->x == kLocationNull)
-                continue;
-            if (firstPerson)
+            const auto listener = GetFirstPersonAudioListener();
+            if (listener.has_value())
             {
-                const auto spatial = GetFirstPersonSpatialParams(peep->getLocation());
-                if (!spatial.inRange || spatial.vehicleVolume == 0)
-                    continue;
-                weightedPeeps += FirstPersonCrowdWeight(
-                    spatial.vehicleVolume, peep->state == PeepState::queuing);
+                const int32_t radiusTiles = int32_t(std::ceil(
+                    kFirstPersonAudioMaxDistance / float(kCoordsXYStep)));
+                const int32_t centreTileX = int32_t(std::floor(
+                    listener->position.x / float(kCoordsXYStep)));
+                const int32_t centreTileY = int32_t(std::floor(
+                    listener->position.y / float(kCoordsXYStep)));
+                const auto mapSize = getGameState().mapSize;
+                const int32_t minTileX = std::max(0, centreTileX - radiusTiles);
+                const int32_t maxTileX = std::min(mapSize.x - 1, centreTileX + radiusTiles);
+                const int32_t minTileY = std::max(0, centreTileY - radiusTiles);
+                const int32_t maxTileY = std::min(mapSize.y - 1, centreTileY + radiusTiles);
+
+                for (int32_t ty = minTileY; ty <= maxTileY; ++ty)
+                for (int32_t tx = minTileX; tx <= maxTileX; ++tx)
+                {
+                    const CoordsXY tilePos{ tx * kCoordsXYStep, ty * kCoordsXYStep };
+                    for (auto* peep : EntityTileList<Guest>(tilePos))
+                    {
+                        if (peep->x == kLocationNull)
+                            continue;
+                        const auto spatial = GetFirstPersonSpatialParams(peep->getLocation());
+                        if (!spatial.inRange || spatial.vehicleVolume == 0)
+                            continue;
+                        weightedPeeps += FirstPersonCrowdWeight(
+                            spatial.vehicleVolume, peep->state == PeepState::queuing);
+                    }
+                }
             }
-            else
+        }
+        else
+        {
+            for (auto* peep : EntityList<Guest>())
             {
+                if (peep->x == kLocationNull)
+                    continue;
                 if (viewport->viewPos.x > peep->spriteData.spriteRect.getRight())
                     continue;
                 if (viewport->viewPos.x + viewport->ViewWidth() < peep->spriteData.spriteRect.getLeft())
