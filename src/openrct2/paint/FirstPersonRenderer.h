@@ -75,6 +75,10 @@ namespace OpenRCT2::Paint
         // multi-tile reconstruction group whose native source rotation is
         // selected from one canonical object/track origin.
         uint64_t reconstructionGroup = 0;
+        // Stable native painter order for palette-filter tie breaking. Physical
+        // depth remains authoritative; this ordinal is consulted only when two
+        // transparent fragments occupy the same physical depth.
+        uint32_t nativePaintOrdinal = 0;
         uint64_t gpuRegion = 0; // Nonzero only for static WORLD-FIXED source art.
         FirstPersonVec3 billboardAnchor{};
         float billboardLeft{}, billboardTop{}, billboardWidth{}, billboardHeight{};
