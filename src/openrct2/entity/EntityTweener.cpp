@@ -13,6 +13,7 @@
 #include "../interface/Viewport.h"
 #include "../interface/WindowTypes.h"
 #include "../ride/Vehicle.h"
+#include "../ride/CarEntry.h"
 #include "EntityList.h"
 
 #include <algorithm>
@@ -60,14 +61,32 @@ namespace OpenRCT2
         if (_firstPersonView.has_value())
         {
             const auto& view = *_firstPersonView;
-            // Entity sprites and vehicles extend well above their map anchor.
-            // A conservative sphere avoids dropping interpolation just as a
-            // guest or car crosses a first-person frustum plane.
+
+            // The first-person renderer maps native entity sprite pixels onto
+            // upright world-space impostors. Use the same native sprite bounds
+            // as a conservative visual sphere instead of assuming every entity
+            // fits inside 64 world units.
+            float halfWidth = std::max(1.0f, float(entity->spriteData.width));
+            float verticalExtent = std::max(
+                float(entity->spriteData.heightMin),
+                float(entity->spriteData.heightMax));
+            if (const auto* vehicle = entity->as<Vehicle>(); vehicle != nullptr)
+            {
+                if (const auto* entry = vehicle->Entry(); entry != nullptr)
+                {
+                    halfWidth = std::max(halfWidth, float(entry->spriteWidth));
+                    verticalExtent = std::max(verticalExtent,
+                        float(std::max(entry->spriteHeightNegative, entry->spriteHeightPositive)));
+                }
+            }
+
+            const float radius = std::max(
+                32.0f, std::hypot(halfWidth, verticalExtent) + 16.0f);
             const Paint::FirstPersonVec3 centre{
-                float(worldLoc.x), float(worldLoc.y), float(worldLoc.z) + 16.0f
+                float(worldLoc.x), float(worldLoc.y), float(worldLoc.z)
             };
             if (Paint::FirstPersonSphereVisible(
-                    view.camera, centre, 64.0f, view.fieldOfViewDegrees,
+                    view.camera, centre, radius, view.fieldOfViewDegrees,
                     view.aspect, view.nearClip, view.farClip))
                 return true;
         }
