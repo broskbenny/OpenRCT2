@@ -117,6 +117,58 @@ The repository's CI workflow is configured for push, but the fork currently repo
 
 The Windows 7 / VS2019 build constraints documented in `FIRST_PERSON_V13_HANDOFF.md` remain unchanged. The prebuilt GoogleTest binary incompatibility on that host also remains unchanged.
 
+## Second independent audit corrections
+
+A subsequent audit at `d6f67d06a42a36b72b47b8d66f0577b032361b8c` found five additional first-principles defects. They are corrected on the current development branch.
+
+### Native path sprite origin
+
+Semantic path UV projection now uses the exact rotation-adjusted tile sprite origin shared with `TileElementPaintSetup`.
+
+The regression suite verifies the former wrong-minus-native projection deltas explicitly:
+
+* rotation 0: `(0, 0)`
+* rotation 1: `(-32, -16)`
+* rotation 2: `(0, -32)`
+* rotation 3: `(+32, -16)`
+
+Geometry remains in unrotated world coordinates; only source-art projection uses the native shifted sprite origin.
+
+### Vehicle yaw convention
+
+Ride POV no longer treats the 32-step native vehicle orientation as a conventional +X-zero angle.
+
+`FirstPersonVehicleYawRadians()` now preserves all 32 heading steps while reflecting the X component into camera coordinates:
+
+`native forward = { -cos(theta), +sin(theta) }`
+
+This gives the audited cardinal mapping `0=-X, 8=+Y, 16=+X, 24=-Y` without quantising curved headings through the eight-way free-roam table. Presentation interpolation and simulation-time ride audio both consume this same conversion.
+
+### Connected static-art reconstruction frames
+
+Native artwork selection and physical fallback-plane orientation are now separate concerns.
+
+* multi-tile large scenery reconstructs around the canonical object placement origin derived from its sequence offset and placement direction;
+* multi-sequence track/support artwork reconstructs around `GetTrackSegmentOrigin()`;
+* non-tree small scenery uses its stable tile/placement frame;
+* trees (small and large scenery) and entities remain passenger-facing impostors.
+
+Adjacent tiles belonging to one connected object therefore no longer acquire perpendicular physical sprite planes merely because their tile centres select different native paint rotations.
+
+### First-person interpolation admission
+
+`EntityTweener` now accepts ordinary guests, staff and vehicles when they intersect the first-person camera frustum, independently of overhead viewport bounds or zoom.
+
+The first-person controller publishes the current presentation camera/frustum to the tweener and clears it on POV exit. The existing attached-vehicle tracking remains in place.
+
+### Immutable scrolling text
+
+First-person collection no longer relies on the eventual meaning of one of the 256 mutable scrolling-text image IDs.
+
+During a first-person native paint session, scrolling-text bitmap bytes are captured when the corresponding `PaintStruct` or attached paint entry is created. The resulting `FirstPersonSurface` owns immutable pixels. At draw time those pixels are uploaded to transient atlas slots which are released for reuse on the following frame.
+
+Snapshot-backed surfaces are streamed rather than stored in resident static-region VBOs, and tiles containing them are repainted as animated content. The normal 2-D renderer and its existing 256-slot scrolling-text cache remain unchanged.
+
 ## Required manual verification before creating a new stable tag
 
 Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HANDOFF.md`, then verify:
@@ -124,11 +176,14 @@ Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HA
 * walking mode and ride-attached POV still enter, render and exit normally;
 * repeated flat walls and 90-degree wall corners have no gaps;
 * sloped walls follow their terrain edge without open wedges;
-* flat and sloped supported paths always show a horizontal/ramped walking deck;
+* flat and sloped supported paths always show a horizontal/ramped walking deck in all four native paint rotations, without texture displacement or disappearance;
+* ride POV heading agrees with native vehicle travel at cardinal and intermediate 32-step orientations, including ride audio left/right orientation;
 * guests on flat and sloped paths are reassessed for foot contact before any peep offset is considered;
 * ordinary terrain tile boundaries are seam-free at near and far viewing distances;
 * trees retain the desirable upright impostor appearance;
-* buildings, large scenery, ride parts and supports no longer independently swivel at shared corners;
+* buildings, multi-tile large scenery, ride parts and supports retain a common physical reconstruction frame across tile boundaries while trees remain upright impostors;
+* guests, staff and non-attached vehicles remain smoothly interpolated when visible only to the first-person camera, including after entering from a zoomed-out overhead view;
+* parks with more than 256 distinct simultaneously collected scrolling-text variants do not show text from later signs on earlier signs;
 * head turns in place do not swap native sprite sides or trigger park-wide static repaints;
 * slow physical movement across sprite-sector boundaries does not chatter;
 * masked/glass artwork with differing mask/colour offsets stays aligned;
