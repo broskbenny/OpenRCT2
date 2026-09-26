@@ -39,7 +39,7 @@ namespace OpenRCT2::Ui
         struct RegionBuffer
         {
             GLuint vao{}, vbo{};
-            uint64_t fingerprint{}, lastSeen{};
+            uint64_t generation{}, dependencyStamp{}, lastSeen{};
             size_t bytes{};
             GLsizei count{};
         };
