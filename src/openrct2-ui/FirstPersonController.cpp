@@ -84,6 +84,28 @@ namespace OpenRCT2::Ui::FirstPerson
             });
         }
 
+        void PublishTweenView(int32_t width = 0, int32_t height = 0)
+        {
+            if (_state.mode == Mode::off)
+            {
+                EntityTweener::get().clearFirstPersonView();
+                return;
+            }
+
+            if (width <= 0 || height <= 0)
+            {
+                if (auto* mainWindow = WindowGetMain();
+                    mainWindow != nullptr && mainWindow->viewport != nullptr)
+                {
+                    width = mainWindow->viewport->ViewWidth();
+                    height = mainWindow->viewport->ViewHeight();
+                }
+            }
+            const float aspect = height > 0 ? float(std::max(width, 1)) / float(height) : 1.0f;
+            EntityTweener::get().setFirstPersonView(
+                _state.camera, 70.0f, aspect, 2.0f, 32768.0f);
+        }
+
         void CaptureMouse()
         {
             if (_state.ownsRelativeMouseMode)
@@ -419,6 +441,7 @@ namespace OpenRCT2::Ui::FirstPerson
         _state.previousFloorZ = ResolveWalkingFloor(spawn, static_cast<float>(spawn.z));
         _state.camera.position.z = _state.previousFloorZ + kEyeHeight;
         _state.previousEscapeDown = false;
+        PublishTweenView();
         PublishAudioListener();
         CaptureMouse();
         mainWindow->invalidate();
@@ -449,6 +472,7 @@ namespace OpenRCT2::Ui::FirstPerson
         _state.camera.pitch = initialOrientation.pitch;
         _state.camera.roll = initialOrientation.roll;
         _state.previousEscapeDown = false;
+        PublishTweenView();
         PublishRideAudioAttachment();
         CaptureMouse();
 
@@ -462,6 +486,7 @@ namespace OpenRCT2::Ui::FirstPerson
         const bool wasActive = IsActive();
         Audio::ClearFirstPersonAudioListener();
         ReleaseMouse();
+        EntityTweener::get().clearFirstPersonView();
         EntityTweener::get().setTrackedVehicle(EntityId::GetNull());
         Paint::ClearFirstPersonSceneCache();
         _state = State{};
@@ -499,6 +524,7 @@ namespace OpenRCT2::Ui::FirstPerson
             case Mode::off:
                 break;
         }
+        PublishTweenView();
     }
 
     void Render(Drawing::RenderTarget& rt)
@@ -573,6 +599,11 @@ namespace OpenRCT2::Ui::FirstPerson
                 _state.camera.explicitBasis = Paint::GetPassengerHeadBasis(cb, _state.headYaw, _state.headPitch);
             }
         }
+        // Publish the presentation-rate first-person frustum for interpolation
+        // admission on the next simulation tick. This is independent of the
+        // overhead viewport's bounds and zoom.
+        PublishTweenView(rt.width, rt.height);
+
         // Ride audio intentionally remains in simulation time. The renderer may
         // temporarily tween Vehicle::position for presentation, but the audio
         // layer stores the vehicle attachment and resolves it during game audio
