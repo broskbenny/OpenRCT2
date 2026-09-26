@@ -67,6 +67,38 @@ namespace OpenRCT2::Paint
         if (delta <= -kPi) delta += kTwoPi;
         return a + std::clamp(alpha, 0.0f, 1.0f) * delta;
     }
+    [[nodiscard]] inline uint8_t FirstPersonSourceRotationForPoint(
+        const FirstPersonCamera& camera, FirstPersonVec3 anchor,
+        std::optional<uint8_t> previous = std::nullopt,
+        float hysteresisDegrees = 5.0f)
+    {
+        constexpr float kPi = 3.14159265358979323846f;
+        constexpr float kTwoPi = 2.0f * kPi;
+        float dx = anchor.x - camera.position.x;
+        float dy = anchor.y - camera.position.y;
+        if (std::hypot(dx, dy) <= 0.1f)
+        {
+            if (previous.has_value())
+                return *previous & 3;
+            const auto forward = GetFirstPersonBasis(camera).forward;
+            dx = forward.x;
+            dy = forward.y;
+        }
+
+        float yaw = std::atan2(dy, dx);
+        if (yaw < 0.0f)
+            yaw += kTwoPi;
+        if (previous.has_value())
+        {
+            const float hysteresis = std::max(0.0f, hysteresisDegrees) * kPi / 180.0f;
+            const float centre = float(*previous & 3) * 0.5f * kPi;
+            const float delta = std::abs(std::remainder(yaw - centre, kTwoPi));
+            if (delta <= 0.25f * kPi + hysteresis)
+                return *previous & 3;
+        }
+        return static_cast<uint8_t>(std::lround(yaw / (0.5f * kPi))) & 3;
+    }
+
     [[nodiscard]] inline bool FirstPersonWalkingHeightTransitionAllowed(
         float fromZ, float toZ, float maximumStep = 8.0f)
     {
