@@ -96,57 +96,6 @@ namespace OpenRCT2::Paint
         };
     }
 
-    // Frame-budget controller governs only geometric error, NEVER coverage.
-    // CPU & GPU samples are the time used by the first-person renderer rather
-    // than the whole game; false inferences from unrelated simulation stalls
-    // would otherwise permanently reduce visual quality without improving FPS.
-    struct FirstPersonQualityController
-    {
-        float pixelTolerance = 3.0f;
-        float averageCpuMs = 0.0f;
-        float averageGpuMs = 0.0f;
-        uint32_t overBudgetFrames = 0;
-        uint32_t underBudgetFrames = 0;
-
-        void observe(float cpuMs, float gpuMs, float frameBudgetMs)
-        {
-            if (!std::isfinite(cpuMs) || cpuMs < 0.0f || !std::isfinite(gpuMs) || gpuMs < 0.0f)
-                return;
-            averageCpuMs = averageCpuMs == 0.0f ? cpuMs : averageCpuMs * 0.94f + cpuMs * 0.06f;
-            if (gpuMs > 0.0f)
-                averageGpuMs = averageGpuMs == 0.0f ? gpuMs : averageGpuMs * 0.94f + gpuMs * 0.06f;
-            const float allowed = std::max(2.0f, frameBudgetMs * 0.72f);
-            const float demand = std::max(averageCpuMs, averageGpuMs);
-            // The smoothed mean alone must not cause further degradation
-            // after the measured workload has already recovered.
-            if (demand > allowed * 1.12f && std::max(cpuMs, gpuMs) > allowed * 1.12f)
-            {
-                ++overBudgetFrames;
-                underBudgetFrames = 0;
-                if (overBudgetFrames >= 16)
-                {
-                    pixelTolerance = std::min(24.0f, pixelTolerance * 1.17f + 0.25f);
-                    overBudgetFrames = 0;
-                }
-            }
-            else if (demand < allowed * 0.67f && std::max(cpuMs, gpuMs) < allowed * 0.67f)
-            {
-                ++underBudgetFrames;
-                overBudgetFrames = 0;
-                if (underBudgetFrames >= 100)
-                {
-                    pixelTolerance = std::max(2.0f, pixelTolerance * 0.90f);
-                    underBudgetFrames = 0;
-                }
-            }
-            else
-            {
-                overBudgetFrames = 0;
-                underBudgetFrames = 0;
-            }
-        }
-    };
-
     // Periodic fallback repaint protects against game-side art changes that do
     // not edit tile bytes and do not emit a map invalidation. Spread a cold
     // park's subsequent repaints across frames instead of repainting every
