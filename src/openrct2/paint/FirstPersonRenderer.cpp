@@ -1365,22 +1365,25 @@ namespace OpenRCT2::Paint
                 const bool semanticProbeDue = FirstPersonRefreshDue(
                     key ^ 0x9e3779b97f4a7c15ull, frame, cached.lastSemanticScan, kMaxStaticAge);
                 uint64_t probedSignature = cached.signature;
+                bool probedAnimated = cached.animated;
                 if (authoritativeInvalidation || semanticProbeDue)
                 {
                     // Expensive packed-element hashing and group discovery belong
                     // on invalidation or staggered fallback probes, never the
                     // ordinary frame path.
                     probedSignature = NativeTileSignature(tile);
+                    probedAnimated = MapAnimations::IsTileAnimatedForFirstPerson(
+                        TileCoordsXY(tx, ty));
                     cached.lastSemanticScan = frame;
                 }
                 const bool semanticChanged = authoritativeInvalidation
-                    || (semanticProbeDue && probedSignature != cached.signature);
+                    || (semanticProbeDue && probedSignature != cached.signature)
+                    || (cached.valid && probedAnimated != cached.animated);
                 if (semanticChanged)
                 {
                     cached.signature = probedSignature;
                     cached.viewFlags = opt.viewFlags;
-                    cached.animated = MapAnimations::IsTileAnimatedForFirstPerson(
-                        TileCoordsXY(tx, ty));
+                    cached.animated = probedAnimated;
                     cached.valid = true;
                     cached.dirty = false;
                     cached.reconstructionGroups.clear();
