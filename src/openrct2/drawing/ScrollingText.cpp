@@ -27,6 +27,7 @@
 
 #include <cassert>
 #include <mutex>
+#include <utility>
 
 using namespace OpenRCT2;
 
