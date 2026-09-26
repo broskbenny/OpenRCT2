@@ -197,6 +197,7 @@ namespace OpenRCT2::Ui
         std::vector<Atlas> _atlases;
         std::unordered_map<GlyphId, AtlasTextureInfo, GlyphId::Hash, GlyphId::Equal> _glyphTextureMap;
         std::vector<AtlasTextureInfo> _textureCache;
+        std::vector<AtlasTextureInfo> _firstPersonTransientBitmaps;
         std::array<uint32_t, SPR_IMAGE_LIST_END> _indexMap;
 
         GLuint _paletteTexture = 0;
@@ -209,6 +210,8 @@ namespace OpenRCT2::Ui
         BasicTextureInfo GetOrLoadImageTexture(ImageId imageId);
         BasicTextureInfo GetOrLoadGlyphTexture(ImageId imageId, const Drawing::PaletteMap& paletteMap);
         BasicTextureInfo GetOrLoadBitmapTexture(ImageIndex image, const void* pixels, size_t width, size_t height);
+        BasicTextureInfo LoadFirstPersonTransientBitmap(const void* pixels, size_t width, size_t height);
+        void ClearFirstPersonTransientBitmaps();
 
         GLuint GetAtlasesTexture();
         // Per-G1 revision: invalidating animated text must not rebuild all static park geometry.
