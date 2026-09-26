@@ -1184,6 +1184,7 @@ namespace OpenRCT2::Paint
             const auto& opt = scene.options;
             const auto basis = GetFirstPersonBasis(opt.camera);
             const auto frame = _terrainCache.frame;
+            uint32_t nextNativePaintOrdinal = 1;
             constexpr uint64_t kMaxStaticAge = 240;
             std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
             for (auto& misses : missesByRotation)
@@ -1463,6 +1464,8 @@ namespace OpenRCT2::Paint
                         AppendRoot(
                             scene, *root, anchor, basis, isoAnchor,
                             opt.viewFlags, opt.hiddenEntity, rotation, emitPathDeck);
+                        for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
+                            scene.surfaces[i].nativePaintOrdinal = nextNativePaintOrdinal++;
 
                         if (const auto semantic = LargeScenerySemanticBounds(*root); semantic.has_value())
                         {
