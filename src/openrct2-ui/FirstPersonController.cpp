@@ -162,18 +162,17 @@ namespace OpenRCT2::Ui::FirstPerson
                     const auto* entry=wall->getEntry();
                     if(entry==nullptr || entry->height==0 ||
                        entry->flags.has(WallSceneryFlag::isDoor)) continue;
-                    const float x=float(tile.x), y=float(tile.y);
-                    const float z=float(wall->getBaseZ()+1);
-                    Paint::FirstPersonVec3 a{},b{};
-                    switch(wall->getDirection() & 3)
-                    {
-                        case 0: a={x+1.5f,y+1.0f,z}; b={x+1.5f,y+29.0f,z}; break;
-                        case 1: a={x+2.0f,y+30.5f,z}; b={x+31.0f,y+30.5f,z}; break;
-                        case 2: a={x+30.5f,y+2.0f,z}; b={x+30.5f,y+31.0f,z}; break;
-                        default:a={x+1.0f,y+1.5f,z}; b={x+29.0f,y+1.5f,z}; break;
-                    }
+                    const auto plane = Paint::BuildFirstPersonWallPlane(
+                        tile, wall->getBaseZ(), wall->getDirection(), wall->getSlope(),
+                        int32_t(entry->height) * kCoordsZStep);
+                    const auto& lowerA = plane.corners[0];
+                    const auto& lowerB = plane.corners[1];
+                    const float bottom = std::min(lowerA.z, lowerB.z);
+                    const float top = std::max(plane.corners[2].z, plane.corners[3].z);
+                    const Paint::FirstPersonVec3 a{ lowerA.x, lowerA.y, bottom };
+                    const Paint::FirstPersonVec3 b{ lowerB.x, lowerB.y, bottom };
                     if(Paint::FirstPersonWallIntersectsWalkStep(
-                           from,to,a,b,z+float(entry->height*8-2),kEyeHeight))
+                           from,to,a,b,top,kEyeHeight))
                         return true;
                 }
             }
