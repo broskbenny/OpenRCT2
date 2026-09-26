@@ -521,13 +521,13 @@ namespace OpenRCT2::Ui::FirstPerson
             }
             {
                 Paint::FirstPersonCamera carOrientation{};
-                carOrientation.yaw = float(car->orientation & 0x1F) * (kTwoPi / Entity::Yaw::kBaseRotation);
+                carOrientation.yaw = Paint::FirstPersonVehicleYawRadians(car->orientation);
                 const auto interpolated = EntityTweener::get().trackedVehicleVisuals(_state.attachedVehicle);
                 if (interpolated.has_value())
                 {
                     carOrientation.yaw = Paint::FirstPersonLerpAngle(
-                        float(interpolated->yawBefore) * (kTwoPi / Entity::Yaw::kBaseRotation),
-                        float(interpolated->yawAfter) * (kTwoPi / Entity::Yaw::kBaseRotation),
+                        Paint::FirstPersonVehicleYawRadians(interpolated->yawBefore),
+                        Paint::FirstPersonVehicleYawRadians(interpolated->yawAfter),
                         interpolated->alpha);
                 }
                 // Vehicle::pitch and Vehicle::roll UNION with flat-ride animation bytes.
