@@ -210,6 +210,26 @@ namespace OpenRCT2::Paint
             }
             return false;
         }
+        [[nodiscard]] bool IsPathDeckCarrier(const PaintStruct& ps)
+        {
+            const auto* path = ps.Element != nullptr ? ps.Element->asPath() : nullptr;
+            const auto* surface = path != nullptr ? path->getSurfaceDescriptor() : nullptr;
+            const auto* railings = path != nullptr ? path->getRailingsDescriptor() : nullptr;
+            if (surface == nullptr || railings == nullptr || !ps.image_id.HasValue())
+                return false;
+
+            const auto image = ps.image_id.GetIndex();
+            if (image >= surface->image && image < surface->image + 51)
+                return true;
+
+            // Supported paths may omit the separate surface sprite. In that
+            // case the bridge parent still carries the path image template
+            // (ghost/highlight remap included), so it is the authoritative
+            // source from which to synthesize the missing semantic deck.
+            if (railings->supportType == RailingEntrySupportType::pole)
+                return image >= railings->bridgeImage && image < railings->bridgeImage + 20;
+            return image >= railings->bridgeImage + 49 && image < railings->bridgeImage + 55;
+        }
         void AppendLayer(
             FirstPersonScene& scene, const FirstPersonVec3& anchor, const FirstPersonBasis& basis,
             const ScreenCoordsXY& isoAnchor, ImageId image, const ScreenCoordsXY& spritePos,
@@ -1120,6 +1140,7 @@ namespace OpenRCT2::Paint
                         const auto start = scene.surfaces.size();
                         const bool emitPathDeck = root->Element != nullptr &&
                             root->Element->getType() == TileElementType::path &&
+                            IsPathDeckCarrier(*root) &&
                             emittedPathDecks.insert(root->Element).second;
                         AppendRoot(
                             scene, *root, anchor, basis, isoAnchor,
