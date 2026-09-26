@@ -10,7 +10,7 @@
 #pragma once
 
 #include "../interface/Window.h"
-#include "../paint/FirstPersonMath.h"
+#include "../paint/FirstPersonStreaming.h"
 #include "../Identifiers.h"
 
 #include <sfl/static_vector.hpp>
