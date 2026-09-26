@@ -747,6 +747,7 @@ namespace OpenRCT2::Paint
             std::optional<FirstPersonSurface> waterOverlay;
             ImageId waterMaskImage{}, waterOverlayImage{};
             uint64_t lastSeen{};
+            uint64_t suppressedFrame{};
             bool dirty = true;
         };
         struct TerrainCache
@@ -755,6 +756,18 @@ namespace OpenRCT2::Paint
             uint64_t frame{};
         };
         static TerrainCache _terrainCache;
+        struct TerrainLodPatchCache
+        {
+            uint64_t regionKey{};
+            uint64_t lastSeen{};
+            bool active = false;
+            ImageId source{};
+            int32_t height{};
+            int32_t factor{};
+            FirstPersonSurface surface{};
+        };
+        static std::unordered_map<uint64_t, TerrainLodPatchCache> _terrainLodPatches;
+        static std::unordered_map<uint64_t, uint64_t> _coarseLastUsed;
 
         // Persistent NATIVE PAINT results, separated from dynamic entity sprites.
         // A cached surface never retains a PaintStruct/TileElement pointer: all
