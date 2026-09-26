@@ -1044,7 +1044,6 @@ namespace OpenRCT2::Paint
             {
                 const int32_t tx = origin.x / kCoordsXYStep;
                 const int32_t ty = origin.y / kCoordsXYStep;
-                const uint64_t key = TerrainKey(tx, ty);
                 const int32_t x = origin.x;
                 const int32_t y = origin.y;
                 auto* tile = MapGetSurfaceElementAt(origin);
