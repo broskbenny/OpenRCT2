@@ -364,15 +364,12 @@ void main() {
         // not upload every unchanged terrain tile and ordinary wall again.
         ++_frame;
         constexpr size_t kRegionGpuLimit = 96u * 1024u * 1024u;
-        std::map<uint64_t,std::vector<const Paint::FirstPersonSurface*>> staticGroups;
         std::vector<const Paint::FirstPersonSurface*> streamedOpaque;
         std::vector<const Paint::FirstPersonSurface*> streamedTransparent;
         for (const auto& surface:scene.surfaces)
         {
             if (!surface.image.HasValue()) continue;
             if (surface.image.IsBlended()) streamedTransparent.push_back(&surface);
-            else if (surface.gpuRegion!=0 && !surface.viewFacing)
-                staticGroups[surface.gpuRegion].push_back(&surface);
             else streamedOpaque.push_back(&surface);
         }
         // Native texture-cache atlas handles can change on sprite loads or
@@ -388,6 +385,17 @@ void main() {
             if(surface.mask.HasValue() &&
                seenTextures.insert(FirstPersonMaterialFingerprint(surface.mask)).second)
                 textures.GetOrLoadImageTexture(surface.mask);
+        }
+        for (const auto& region : scene.staticRegions)
+        {
+            if (region.textureDependencies == nullptr)
+                continue;
+            for (const auto image : *region.textureDependencies)
+            {
+                const ImageId id(image);
+                if (seenTextures.insert(FirstPersonMaterialFingerprint(id)).second)
+                    textures.GetOrLoadImageTexture(id);
+            }
         }
         const GLuint currentAtlas=textures.GetAtlasesTexture();
         if(_atlasHandle!=currentAtlas)
@@ -462,32 +470,37 @@ void main() {
         for(const auto* surface:streamedOpaque) appendVertices(opaqueVertices,*surface);
         for(const auto* surface:streamedTransparent) appendVertices(transparentVertices,*surface);
         std::vector<uint64_t> regionDraws;
-        regionDraws.reserve(staticGroups.size());
-        for(const auto& [key,surfaces]:staticGroups)
+        regionDraws.reserve(scene.staticRegions.size());
+        for (const auto& packet : scene.staticRegions)
         {
-            uint64_t fingerprint=FirstPersonRegionFingerprint(surfaces);
-            // Native OpenRCT2 can invalidate and re-pack one sprite inside
-            // the SAME GL texture name. Refresh only regions USING that
-            // particular original sprite; scrolling text elsewhere must not
-            // force the entire park geometry back over the GPU bus.
-            for(const auto* surface:surfaces)
+            const uint64_t key = packet.key;
+            uint64_t dependencyStamp = 14695981039346656037ull;
+            if (packet.textureDependencies != nullptr)
             {
-                ExtendFirstPersonFingerprint(fingerprint,
-                    textures.GetImageTextureRevision(surface->image.GetIndex()));
-                if(surface->mask.HasValue())
-                    ExtendFirstPersonFingerprint(fingerprint,
-                        textures.GetImageTextureRevision(surface->mask.GetIndex()));
+                for (const auto image : *packet.textureDependencies)
+                {
+                    ExtendFirstPersonFingerprint(dependencyStamp, image);
+                    ExtendFirstPersonFingerprint(
+                        dependencyStamp, textures.GetImageTextureRevision(image));
+                }
             }
+
             auto found=_staticOpaqueRegions.find(key);
-            if(found!=_staticOpaqueRegions.end() && found->second.fingerprint==fingerprint)
+            if(found!=_staticOpaqueRegions.end()
+                && found->second.generation==packet.generation
+                && found->second.dependencyStamp==dependencyStamp)
             {
                 found->second.lastSeen=_frame;
                 regionDraws.push_back(key);
                 continue;
             }
+
+            if (packet.surfaces == nullptr)
+                continue;
             std::vector<GPUVertex> packed;
-            packed.reserve(surfaces.size()*6);
-            for(const auto* surface:surfaces) appendVertices(packed,*surface);
+            packed.reserve(packet.surfaces->size()*6);
+            for(const auto& surface:*packet.surfaces)
+                appendVertices(packed,surface);
             const size_t bytes=packed.size()*sizeof(GPUVertex);
             if(bytes==0) continue;
             const size_t oldBytes=found!=_staticOpaqueRegions.end()?found->second.bytes:0;
@@ -526,7 +539,8 @@ void main() {
             _staticRegionBytes=_staticRegionBytes-region.bytes+bytes;
             region.bytes=bytes;
             region.count=GLsizei(packed.size());
-            region.fingerprint=fingerprint;
+            region.generation=packet.generation;
+            region.dependencyStamp=dependencyStamp;
             region.lastSeen=_frame;
             regionDraws.push_back(key);
         }
