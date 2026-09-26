@@ -106,6 +106,26 @@ static void BlankTilesPaint(PaintSession& session, int32_t x, int32_t y)
 
 bool gShowSupportSegmentHeights = false;
 
+CoordsXY GetTileElementPaintSpritePosition(CoordsXY coords, uint8_t rotation)
+{
+    switch (rotation & 3)
+    {
+        case 1:
+            coords.x += kCoordsXYStep;
+            break;
+        case 2:
+            coords.x += kCoordsXYStep;
+            coords.y += kCoordsXYStep;
+            break;
+        case 3:
+            coords.y += kCoordsXYStep;
+            break;
+        default:
+            break;
+    }
+    return coords;
+}
+
 /**
  *
  *  rct2: 0x0068B3FB
@@ -142,21 +162,7 @@ static void PaintTileElementBase(PaintSession& session, const CoordsXY& origCoor
         partOfVirtualFloor = VirtualFloorTileIsFloor(session.MapPosition);
     }
 
-    switch (rotation)
-    {
-        case 0:
-            break;
-        case 1:
-            coords.x += kCoordsXYStep;
-            break;
-        case 2:
-            coords.x += kCoordsXYStep;
-            coords.y += kCoordsXYStep;
-            break;
-        case 3:
-            coords.y += kCoordsXYStep;
-            break;
-    }
+    coords = GetTileElementPaintSpritePosition(coords, rotation);
 
     int32_t screenMinY = Translate3DTo2DWithZ(rotation, { coords, 0 }).y;
 
