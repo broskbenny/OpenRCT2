@@ -1209,7 +1209,10 @@ namespace OpenRCT2
                     {
                         if (peep->x == kLocationNull)
                             continue;
-                        const auto spatial = GetFirstPersonSpatialParams(peep->getLocation());
+                        const auto peepLoc = peep->getLocation();
+                        const auto spatial = CalculateFirstPersonSpatialParams(
+                            *listener,
+                            { float(peepLoc.x), float(peepLoc.y), float(peepLoc.z) });
                         if (!spatial.inRange || spatial.vehicleVolume == 0)
                             continue;
                         weightedPeeps += FirstPersonCrowdWeight(
