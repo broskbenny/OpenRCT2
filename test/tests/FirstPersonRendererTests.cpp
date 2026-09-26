@@ -194,6 +194,23 @@ TEST(FirstPersonWallGeometryTest, NativeSlopeRaisesTheCorrectEndpoint)
     EXPECT_FLOAT_EQ(downwards.corners[2].z, 148.0f);
 }
 
+TEST(FirstPersonWallGeometryTest, SlopedCollisionUsesHeightAtActualContactPoint)
+{
+    const FirstPersonVec3 wallA{ 0.0f, 0.0f, 100.0f };
+    const FirstPersonVec3 wallB{ 32.0f, 0.0f, 116.0f };
+
+    // At x=8 the sloped wall base is z=104. An eye ending exactly at
+    // z=104 does not overlap the wall and must be allowed underneath it.
+    EXPECT_FALSE(FirstPersonSlopedWallIntersectsWalkStep(
+        { 8.0f, -4.0f, 84.0f }, { 8.0f, 4.0f, 84.0f },
+        wallA, wallB, 48.0f, 20.0f, 2.0f));
+
+    // One unit higher produces a real vertical overlap at the same XY contact.
+    EXPECT_TRUE(FirstPersonSlopedWallIntersectsWalkStep(
+        { 8.0f, -4.0f, 85.0f }, { 8.0f, 4.0f, 85.0f },
+        wallA, wallB, 48.0f, 20.0f, 2.0f));
+}
+
 TEST(FirstPersonPathArtworkTest, SharedNativeSurfaceSelectionRotatesConsistently)
 {
     OpenRCT2::PathElement path{};
