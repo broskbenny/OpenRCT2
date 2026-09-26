@@ -39,15 +39,7 @@ namespace OpenRCT2
         std::vector<CoordsXYZ> postPos;
         EntityId _trackedVehicle = EntityId::GetNull();
         std::optional<FirstPersonTrackedVehicleVisuals> _trackedVisuals;
-        struct FirstPersonTweenView
-        {
-            Paint::FirstPersonCamera camera{};
-            float fieldOfViewDegrees = 70.0f;
-            float aspect = 1.0f;
-            float nearClip = 2.0f;
-            float farClip = 32768.0f;
-        };
-        std::optional<FirstPersonTweenView> _firstPersonView;
+        std::optional<Paint::FirstPersonResolvedView> _firstPersonView;
 
     private:
         void populateEntities();
@@ -57,13 +49,9 @@ namespace OpenRCT2
     public:
         static EntityTweener& get();
 
-        void setFirstPersonView(
-            const Paint::FirstPersonCamera& camera, float fieldOfViewDegrees,
-            float aspect, float nearClip, float farClip)
+        void setFirstPersonView(const Paint::FirstPersonResolvedView& view)
         {
-            _firstPersonView = FirstPersonTweenView{
-                camera, fieldOfViewDegrees, aspect, nearClip, farClip
-            };
+            _firstPersonView = view;
         }
         void clearFirstPersonView()
         {
