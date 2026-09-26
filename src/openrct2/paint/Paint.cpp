@@ -15,6 +15,7 @@
 #include "../core/Numerics.hpp"
 #include "../drawing/Drawing.Sprite.h"
 #include "../drawing/Drawing.String.h"
+#include "../drawing/ScrollingText.h"
 #include "../drawing/Drawing.h"
 #include "../drawing/Font.h"
 #include "../drawing/Line.h"
@@ -203,6 +204,7 @@ static PaintStruct* CreateNormalPaintStruct(
     }
 
     ps->image_id = image_id;
+    ps->FirstPersonSnapshot = Drawing::ScrollingText::CaptureFirstPersonSnapshot(image_id);
     ps->ScreenPos = imagePos;
     ps->Bounds.x_end = rotBoundBoxSize.x + rotBoundBoxOffset.x + session.SpritePosition.x;
     ps->Bounds.y_end = rotBoundBoxSize.y + rotBoundBoxOffset.y + session.SpritePosition.y;
@@ -251,6 +253,7 @@ static PaintStruct* CreateNormalPaintStructHeight(
     }
 
     ps->image_id = imageId;
+    ps->FirstPersonSnapshot = Drawing::ScrollingText::CaptureFirstPersonSnapshot(imageId);
     ps->ScreenPos = imagePos;
     ps->Bounds.x_end = rotBoundBoxSize.x + rotBoundBoxOffset.x + session.SpritePosition.x;
     ps->Bounds.y_end = rotBoundBoxSize.y + rotBoundBoxOffset.y + session.SpritePosition.y;
@@ -992,6 +995,7 @@ bool PaintAttachToPreviousAttach(PaintSession& session, const ImageId imageId, i
     }
 
     ps->image_id = imageId;
+    ps->FirstPersonSnapshot = Drawing::ScrollingText::CaptureFirstPersonSnapshot(imageId);
     ps->RelativePos = { x, y };
     ps->IsMasked = false;
     ps->NextEntry = nullptr;
@@ -1024,6 +1028,7 @@ bool PaintAttachToPreviousPS(PaintSession& session, const ImageId image_id, int3
     }
 
     ps->image_id = image_id;
+    ps->FirstPersonSnapshot = Drawing::ScrollingText::CaptureFirstPersonSnapshot(image_id);
     ps->RelativePos = { x, y };
     ps->IsMasked = false;
 
