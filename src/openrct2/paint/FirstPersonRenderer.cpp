@@ -754,7 +754,6 @@ namespace OpenRCT2::Paint
             uint64_t lastSeen{};
             bool hasSelectedRotation = false;
             uint8_t selectedRotation = 0;
-            std::unordered_set<uint64_t> regions;
         };
         static std::unordered_map<uint64_t, ReconstructionRotationState> _reconstructionRotations;
 
@@ -788,6 +787,34 @@ namespace OpenRCT2::Paint
         void MarkStaticRegionDirtyForTile(int32_t tileX, int32_t tileY)
         {
             _staticRegionPackets[FirstPersonGpuRegionKey(tileX, tileY)].dirty = true;
+        }
+
+        void DirtyExistingRegionsForReconstructionGroup(uint64_t groupKey)
+        {
+            std::unordered_set<uint64_t> dirtyRegions;
+            for (const auto& [tileKey, cached] : _staticPaintCache)
+            {
+                if (!cached.valid)
+                    continue;
+                const bool containsGroup = std::any_of(
+                    cached.reconstructionGroups.begin(), cached.reconstructionGroups.end(),
+                    [&](const ReconstructionGroupInfo& group) {
+                        return group.key == groupKey;
+                    });
+                if (!containsGroup)
+                    continue;
+
+                const int32_t tx = int32_t(tileKey >> 32);
+                const int32_t ty = int32_t(tileKey & 0xffffffffu);
+                dirtyRegions.insert(FirstPersonGpuRegionKey(tx, ty));
+            }
+
+            for (const auto regionKey : dirtyRegions)
+            {
+                const auto packet = _staticRegionPackets.find(regionKey);
+                if (packet != _staticRegionPackets.end())
+                    packet->second.dirty = true;
+            }
         }
 
         // Hash the actual packed native tile elements, not only terrain height.
@@ -1478,8 +1505,6 @@ namespace OpenRCT2::Paint
                 for (const auto& group : cached.reconstructionGroups)
                 {
                     auto& state = _reconstructionRotations[group.key];
-                    if (!cached.animated)
-                        state.regions.insert(FirstPersonGpuRegionKey(tx, ty));
                     const auto previous = state.hasSelectedRotation
                         ? std::optional<uint8_t>{ state.selectedRotation }
                         : std::nullopt;
@@ -1491,10 +1516,7 @@ namespace OpenRCT2::Paint
                     state.hasSelectedRotation = true;
                     state.lastSeen = frame;
                     if (rotationChanged)
-                    {
-                        for (const auto regionKey : state.regions)
-                            _staticRegionPackets[regionKey].dirty = true;
-                    }
+                        DirtyExistingRegionsForReconstructionGroup(group.key);
                     rotationMask |= uint8_t(1u << selected);
 
                 }
@@ -1694,8 +1716,6 @@ namespace OpenRCT2::Paint
                             const int32_t tx = root->MapPos.x / kCoordsXYStep;
                             const int32_t ty = root->MapPos.y / kCoordsXYStep;
                             const auto region = FirstPersonGpuRegionKey(tx, ty);
-                            if (reconstruction.groupKey != 0)
-                                _reconstructionRotations[reconstruction.groupKey].regions.insert(region);
                             auto cacheIt = _staticPaintCache.find(key);
                             for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
                             {
@@ -1800,6 +1820,9 @@ namespace OpenRCT2::Paint
                         MarkStaticRegionDirtyForTile(
                             int32_t(kv.first >> 32), int32_t(kv.first & 0xffffffffu));
                     return expired;
+                });
+                std::erase_if(_reconstructionRotations, [frame](const auto& kv) {
+                    return frame - kv.second.lastSeen > 240;
                 });
                 std::erase_if(_staticRegionPackets, [frame](const auto& kv) {
                     return frame - kv.second.lastSeen > 240;
