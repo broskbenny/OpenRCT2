@@ -40,6 +40,8 @@ namespace OpenRCT2::Ui
     {
         ExtendFirstPersonFingerprint(fingerprint,FirstPersonMaterialFingerprint(s.image));
         ExtendFirstPersonFingerprint(fingerprint,s.mask.HasValue() ? FirstPersonMaterialFingerprint(s.mask) : 0);
+        ExtendFirstPersonFingerprint(fingerprint,s.depthBias ? 1u : 0u);
+        ExtendFirstPersonFingerprint(fingerprint,s.edgeCoverage ? 1u : 0u);
         for (const auto& v : s.triangles)
         {
             ExtendFirstPersonFingerprint(fingerprint,std::bit_cast<uint32_t>(v.world.x));
