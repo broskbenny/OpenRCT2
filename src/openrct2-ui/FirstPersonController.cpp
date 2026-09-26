@@ -167,12 +167,9 @@ namespace OpenRCT2::Ui::FirstPerson
                         int32_t(entry->height) * kCoordsZStep);
                     const auto& lowerA = plane.corners[0];
                     const auto& lowerB = plane.corners[1];
-                    const float bottom = std::min(lowerA.z, lowerB.z);
-                    const float top = std::max(plane.corners[2].z, plane.corners[3].z);
-                    const Paint::FirstPersonVec3 a{ lowerA.x, lowerA.y, bottom };
-                    const Paint::FirstPersonVec3 b{ lowerB.x, lowerB.y, bottom };
-                    if(Paint::FirstPersonWallIntersectsWalkStep(
-                           from,to,a,b,top,kEyeHeight))
+                    const float wallHeight = float(int32_t(entry->height) * kCoordsZStep);
+                    if(Paint::FirstPersonSlopedWallIntersectsWalkStep(
+                           from,to,lowerA,lowerB,wallHeight,kEyeHeight))
                         return true;
                 }
             }
