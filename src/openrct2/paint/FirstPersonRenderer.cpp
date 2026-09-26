@@ -211,19 +211,6 @@ namespace OpenRCT2::Paint
 
             return std::nullopt;
         }
-        [[nodiscard]] FirstPersonVec3 FixedSpriteRight(uint8_t rotation)
-        {
-            // Match the horizontal right axis of the corresponding quarter-turn
-            // view. Connected static artwork therefore shares a world-fixed axis
-            // instead of each component independently facing the passenger.
-            switch (rotation & 3)
-            {
-                case 0: return { 0.0f, 1.0f, 0.0f };
-                case 1: return { -1.0f, 0.0f, 0.0f };
-                case 2: return { 0.0f, -1.0f, 0.0f };
-                default: return { 1.0f, 0.0f, 0.0f };
-            }
-        }
         FirstPersonVec3 Anchor(const PaintStruct& ps)
         {
             if (ps.Entity != nullptr)
@@ -312,80 +299,46 @@ namespace OpenRCT2::Paint
             surface.immutableFingerprint = fingerprint;
         }
 
-        [[nodiscard]] bool SmallSceneryUsesFixedFrame(const SmallSceneryEntry& entry)
-        {
-            const auto& flags = entry.flags;
-            // A fixed vertical plane is appropriate only when the object model
-            // says orientation/occupancy is materially directional. Compact
-            // automatic-rotation props are better represented as impostors;
-            // forcing them onto one world axis makes a volumetric prop vanish
-            // edge-on from otherwise valid viewpoints.
-            return flags.has(SmallSceneryFlag::isRotatable)
-                || flags.has(SmallSceneryFlag::isDiagonal)
-                || flags.has(SmallSceneryFlag::occupiesHalfTile)
-                || flags.has(SmallSceneryFlag::occupiesThreeQuarters)
-                || flags.has(SmallSceneryFlag::allowSupportsAbove)
-                || flags.has(SmallSceneryFlag::supportsHavePrimaryColour);
-        }
-
-        [[nodiscard]] bool UsesViewFacingImpostor(const PaintStruct& ps)
-        {
-            if (ps.Entity != nullptr)
-                return true;
-            if (ps.Element == nullptr)
-                return true;
-            if (ps.Element->getType() == TileElementType::smallScenery)
-            {
-                const auto* small = ps.Element->asSmallScenery();
-                const auto* entry = small != nullptr ? small->getEntry() : nullptr;
-                if (entry == nullptr || entry->flags.has(SmallSceneryFlag::isTree))
-                    return true;
-                return !SmallSceneryUsesFixedFrame(*entry);
-            }
-            if (ps.Element->getType() == TileElementType::largeScenery)
-            {
-                const auto* large = ps.Element->asLargeScenery();
-                const auto* entry = large != nullptr ? large->getEntry() : nullptr;
-                return entry != nullptr && entry->flags.has(LargeSceneryFlag::isTree);
-            }
-            return false;
-        }
         struct SpriteReconstructionFrame
         {
             FirstPersonVec3 anchor{};
-            FirstPersonVec3 right{};
             uint64_t groupKey{};
         };
+
         [[nodiscard]] SpriteReconstructionFrame GetSpriteReconstructionFrame(
-            const PaintStruct& ps, FirstPersonVec3 fallbackAnchor, uint8_t paintRotation)
+            const PaintStruct& ps, FirstPersonVec3 fallbackAnchor)
         {
-            SpriteReconstructionFrame frame{ fallbackAnchor, FixedSpriteRight(paintRotation), 0 };
-            if (UsesViewFacingImpostor(ps) || ps.Element == nullptr)
-                return frame;
+            SpriteReconstructionFrame frame{ fallbackAnchor, 0 };
 
-            if (const auto group = GetReconstructionGroup(ps.MapPos, ps.Element); group.has_value())
+            // Connected native sprite fragments remain one visual impostor:
+            // they share the canonical object/track origin and source rotation.
+            // This preserves their relative native-image placement without
+            // pretending the 2-D artwork lies on an arbitrary world-fixed plane.
+            if (ps.Element != nullptr)
             {
-                frame.anchor = group->anchor;
-                frame.right = FixedSpriteRight(group->direction);
-                frame.groupKey = group->key;
-                return frame;
-            }
-
-            if (ps.Element->getType() == TileElementType::smallScenery)
-            {
-                const auto* small = ps.Element->asSmallScenery();
-                if (small != nullptr)
+                if (const auto group = GetReconstructionGroup(ps.MapPos, ps.Element); group.has_value())
                 {
-                    frame.anchor = {
-                        float(ps.MapPos.x + kCoordsXYHalfTile),
-                        float(ps.MapPos.y + kCoordsXYHalfTile),
-                        float(small->getBaseZ()),
-                    };
-                    frame.right = FixedSpriteRight(small->getDirection());
+                    frame.anchor = group->anchor;
+                    frame.groupKey = group->key;
+                    return frame;
+                }
+
+                if (ps.Element->getType() == TileElementType::smallScenery)
+                {
+                    const auto* small = ps.Element->asSmallScenery();
+                    if (small != nullptr)
+                    {
+                        frame.anchor = {
+                            float(ps.MapPos.x + kCoordsXYHalfTile),
+                            float(ps.MapPos.y + kCoordsXYHalfTile),
+                            float(small->getBaseZ()),
+                        };
+                    }
                 }
             }
             return frame;
         }
+
         [[nodiscard]] bool IsPathDeckCarrier(const PaintStruct& ps)
         {
             const auto* path = ps.Element != nullptr ? ps.Element->asPath() : nullptr;
@@ -409,16 +362,15 @@ namespace OpenRCT2::Paint
         void AppendLayer(
             FirstPersonScene& scene, const FirstPersonVec3& anchor, const FirstPersonBasis& basis,
             const ScreenCoordsXY& isoAnchor, ImageId image, const ScreenCoordsXY& spritePos,
-            const FirstPersonVec3& staticRight, bool viewFacing, ImageId mask = {})
+            ImageId mask = {})
         {
             const auto layout = GetSpriteCompositeLayout(image, mask);
             if (!layout.has_value())
                 return;
             const float left = float(spritePos.x + layout->xOffset - isoAnchor.x);
             const float top = float(spritePos.y + layout->yOffset - isoAnchor.y);
-            const auto right = viewFacing
-                ? UprightBillboardRight(anchor, scene.options.camera.position, basis.right)
-                : staticRight;
+            const auto right = UprightBillboardRight(
+                anchor, scene.options.camera.position, basis.right);
             const auto up = FirstPersonVec3{ 0.0f, 0.0f, 1.0f };
             const auto p0 = Add(Add(anchor, Mul(right, left)), Mul(up, -top));
             const auto p1 = Add(p0, Mul(right, float(layout->width)));
@@ -427,7 +379,7 @@ namespace OpenRCT2::Paint
             FirstPersonSurface surface{};
             surface.image = image;
             surface.mask = mask;
-            surface.viewFacing = viewFacing;
+            surface.viewFacing = true;
             surface.billboardAnchor = anchor;
             surface.billboardLeft = left;
             surface.billboardTop = top;
@@ -440,6 +392,7 @@ namespace OpenRCT2::Paint
             } });
             scene.surfaces.emplace_back(std::move(surface));
         }
+
         // OpenRCT2 paints walls and exposed land edges using narrow, tall world-space
         // bounding boxes. Those are actual geometric constraints, unlike the bounds of
         // a tree or house. Project the original sprite onto that plane rather than
@@ -656,7 +609,7 @@ namespace OpenRCT2::Paint
         }
         void AppendRoot(
             FirstPersonScene& scene, const PaintStruct& ps, const FirstPersonVec3& anchor,
-            const FirstPersonVec3& staticRight, const FirstPersonBasis& basis, const ScreenCoordsXY& isoAnchor,
+            const FirstPersonBasis& basis, const ScreenCoordsXY& isoAnchor,
             uint32_t viewFlags, EntityId hidden, uint8_t rotation, bool emitPathDeck)
         {
             if (ps.Entity != nullptr && !hidden.IsNull() && ps.Entity->id == hidden)
@@ -693,25 +646,22 @@ namespace OpenRCT2::Paint
             if (!groundPathArtwork)
             {
                 const auto surfaceStart = scene.surfaces.size();
-                const bool viewFacing = UsesViewFacingImpostor(ps);
                 if (!AppendSemanticWallPlane(scene, ps, colourify(ps.image_id), ps.ScreenPos, rotation) &&
                     (!physicallyPlanar ||
                      !AppendPhysicalPlane(scene, ps, colourify(ps.image_id), ps.ScreenPos, rotation)))
                 {
                     AppendLayer(
-                        scene, anchor, basis, isoAnchor, colourify(ps.image_id), ps.ScreenPos,
-                        staticRight, viewFacing);
+                        scene, anchor, basis, isoAnchor, colourify(ps.image_id), ps.ScreenPos);
                 }
                 if (scene.surfaces.size() > surfaceStart)
                     ApplyImmutablePaintSnapshot(scene.surfaces.back(), ps.FirstPersonSnapshot);
             }
             if (ps.Children != nullptr)
             {
-                AppendRoot(scene, *ps.Children, anchor, staticRight, basis, isoAnchor, viewFlags, hidden, rotation, false);
+                AppendRoot(scene, *ps.Children, anchor, basis, isoAnchor, viewFlags, hidden, rotation, false);
             }
             else
             {
-                const bool viewFacing = UsesViewFacingImpostor(ps);
                 for (auto* a = ps.Attached; a != nullptr; a = a->NextEntry)
                 {
                     const auto colourImage = colourify(a->IsMasked ? a->ColourImageId : a->image_id);
@@ -723,8 +673,7 @@ namespace OpenRCT2::Paint
                          !AppendPhysicalPlane(scene, ps, colourImage, position, rotation, maskImage)))
                     {
                         AppendLayer(
-                            scene, anchor, basis, isoAnchor, colourImage, position,
-                            staticRight, viewFacing, maskImage);
+                            scene, anchor, basis, isoAnchor, colourImage, position, maskImage);
                     }
                     if (scene.surfaces.size() > surfaceStart)
                         ApplyImmutablePaintSnapshot(scene.surfaces.back(), a->FirstPersonSnapshot);
@@ -1682,7 +1631,7 @@ namespace OpenRCT2::Paint
 
                         const auto fallbackAnchor = Anchor(*root);
                         const auto reconstruction = GetSpriteReconstructionFrame(
-                            *root, fallbackAnchor, rotation);
+                            *root, fallbackAnchor);
                         const auto anchor = reconstruction.anchor;
                         const CoordsXYZ point{
                             int32_t(std::lround(anchor.x)),
@@ -1696,7 +1645,7 @@ namespace OpenRCT2::Paint
                             IsPathDeckCarrier(*root) &&
                             emittedPathDecks.insert(root->Element).second;
                         AppendRoot(
-                            scene, *root, anchor, reconstruction.right, basis, isoAnchor,
+                            scene, *root, anchor, basis, isoAnchor,
                             opt.viewFlags, opt.hiddenEntity, rotation, emitPathDeck);
 
                         if (const auto semantic = LargeScenerySemanticBounds(*root); semantic.has_value())
