@@ -274,6 +274,20 @@ The 2x/4x terrain patch substitution has been removed. It stretched one 32x32 ti
 
 Static-region residency already removes the principal CPU/VBO cost of exact terrain, so every admitted terrain tile now retains its native world dimensions and UV mapping at all distances.
 
+### Transparency workload is screen-local
+
+The previous global transparency workload has already been replaced by conservative screen-space tiling. Transparent candidates are projected into local viewport tiles so disjoint glass/water does not multiply every other transparent surface's geometry work.
+
+### Reconstruction-group state is lifetime-bounded
+
+Reconstruction groups no longer retain historical GPU-region sets.
+
+A group now stores only source rotation and `lastSeen`; stale entries expire with the ordinary 240-frame cache policy. Because arbitrary grouped sprite artwork is streamed rather than resident fixed geometry, group-sector changes do not recreate or dirty historical static-region packets.
+
+## Fifth independent audit corrections
+
+A further audit at `1778d5f813c8d91e4234ea26eedc334c900db035` identified eight remaining correctness/performance contracts. They are corrected on the current development branch.
+
 ### Palette-filter transparency uses a complete logical order
 
 Transparent palette filters remain order-dependent and are not converted to ordinary alpha blending.
@@ -346,12 +360,6 @@ The existing underground attenuation rule is shared by overhead and first-person
 First-person crowd noise no longer runs a full 3-D spatial calculation over every guest in the park.
 
 It resolves the current first-person listener once, visits only entity tiles whose XY bounds intersect the existing 48-tile hard audio cutoff, and then applies the unchanged exact 3-D distance/gain calculation to those guest candidates. Guests outside the cutoff contributed zero before and still contribute zero.
-
-### Reconstruction-group state is lifetime-bounded
-
-Reconstruction groups no longer retain historical GPU-region sets.
-
-A group now stores only source rotation and `lastSeen`; stale entries expire with the ordinary 240-frame cache policy. Because arbitrary grouped sprite artwork is streamed rather than resident fixed geometry, group-sector changes do not recreate or dirty historical static-region packets.
 
 ## Required manual verification before creating a new stable tag
 
