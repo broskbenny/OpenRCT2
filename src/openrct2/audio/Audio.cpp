@@ -78,7 +78,6 @@ namespace OpenRCT2::Audio
         RideId rideId = RideId::GetNull();
         float headYaw = 0.0f;
         float headPitch = 0.0f;
-        float eyeOffset = 0.0f;
     };
     static std::vector<FirstPersonActiveEffect> _firstPersonActiveEffects;
     static std::optional<FirstPersonAudioListener> _firstPersonListener;
@@ -92,16 +91,11 @@ namespace OpenRCT2::Audio
             auto* vehicle = getGameState().entities.getEntity<Vehicle>(attachment.vehicleId);
             if (vehicle == nullptr || vehicle->ride != attachment.rideId)
                 return std::nullopt;
-            const auto orientation = Paint::FirstPersonVehicleSimulationOrientation(*vehicle);
-            const auto carBasis = Paint::GetFirstPersonBasis(orientation);
+            const auto passenger = Paint::FirstPersonVehicleSimulationPassengerPose(*vehicle);
             const auto headBasis = Paint::GetPassengerHeadBasis(
-                carBasis, attachment.headYaw, attachment.headPitch);
-            const auto loc = vehicle->getLocation();
-            const auto eye = Paint::FirstPersonPassengerEye(
-                { float(loc.x), float(loc.y), float(loc.z) }, carBasis,
-                { 0.0f, 0.0f, attachment.eyeOffset });
+                passenger.basis, attachment.headYaw, attachment.headPitch);
             return FirstPersonAudioListener{
-                { eye.x, eye.y, eye.z },
+                { passenger.position.x, passenger.position.y, passenger.position.z },
                 { headBasis.right.x, headBasis.right.y, headBasis.right.z }
             };
         }
@@ -172,10 +166,10 @@ namespace OpenRCT2::Audio
     }
 
     void SetFirstPersonRideAudioListener(
-        EntityId vehicleId, RideId rideId, float headYaw, float headPitch, float eyeOffset)
+        EntityId vehicleId, RideId rideId, float headYaw, float headPitch)
     {
         if (vehicleId.IsNull() || rideId.IsNull() || !std::isfinite(headYaw)
-            || !std::isfinite(headPitch) || !std::isfinite(eyeOffset))
+            || !std::isfinite(headPitch))
         {
             ClearFirstPersonAudioListener();
             return;
@@ -183,7 +177,7 @@ namespace OpenRCT2::Audio
         const bool wasActive = HasFirstPersonAudioListener();
         _firstPersonListener.reset();
         _firstPersonRideListener = FirstPersonRideListenerAttachment{
-            vehicleId, rideId, headYaw, headPitch, eyeOffset
+            vehicleId, rideId, headYaw, headPitch
         };
         if (!wasActive)
             PeepStopCrowdNoise();
