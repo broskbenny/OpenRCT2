@@ -96,7 +96,8 @@ namespace OpenRCT2::Paint
                     return false;
             }
         }
-        [[nodiscard]] uint8_t PaintRotationForTile(const FirstPersonCamera& camera, CoordsXY tile)
+        [[nodiscard]] uint8_t PaintRotationForTile(
+            const FirstPersonCamera& camera, CoordsXY tile, std::optional<uint8_t> previous)
         {
             // Native sprite direction is a property of VIEWPOINT, not head gaze.
             // Use the passenger's position relative to this tile, so turning the
@@ -105,12 +106,26 @@ namespace OpenRCT2::Paint
             float dy = float(tile.y + kCoordsXYStep / 2) - camera.position.y;
             if (std::hypot(dx, dy) <= 0.1f)
             {
+                // At the exact tile centre there is no meaningful azimuth.
+                // Preserve the last physical side rather than letting head-look
+                // choose one and reintroduce gaze-dependent popping.
+                if (previous.has_value())
+                    return *previous;
                 const auto forward = GetFirstPersonBasis(camera).forward;
                 dx = forward.x;
                 dy = forward.y;
             }
+
             float yaw = std::atan2(dy, dx);
             if (yaw < 0.0f) yaw += 2.0f * kPi;
+            if (previous.has_value())
+            {
+                constexpr float kRotationHysteresis = 5.0f * kDegToRad;
+                const float centre = float(*previous & 3) * 0.5f * kPi;
+                const float delta = std::abs(std::remainder(yaw - centre, 2.0f * kPi));
+                if (delta <= 0.25f * kPi + kRotationHysteresis)
+                    return *previous & 3;
+            }
             return static_cast<uint8_t>(std::lround(yaw / (0.5f * kPi))) & 3;
         }
         [[nodiscard]] FirstPersonVec3 FixedSpriteRight(uint8_t rotation)
@@ -589,6 +604,8 @@ namespace OpenRCT2::Paint
             bool valid = false;
             bool dirty = true;
             bool animated = false;
+            bool hasSelectedRotation = false;
+            uint8_t selectedRotation = 0;
             // Keep all four native quarter-turn variants. Crossing a viewpoint
             // boundary can paint a variant once without destroying the previous
             // one, so moving back and forth does not thrash the whole park.
@@ -979,10 +996,15 @@ namespace OpenRCT2::Paint
             for (const auto tile : scene.visibleTiles)
             {
                 const auto key = TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
-                const auto rotation = PaintRotationForTile(opt.camera, tile);
+                auto& cached = _staticPaintCache[key];
+                const auto previousRotation = cached.hasSelectedRotation
+                    ? std::optional<uint8_t>{ cached.selectedRotation }
+                    : std::nullopt;
+                const auto rotation = PaintRotationForTile(opt.camera, tile, previousRotation);
+                cached.selectedRotation = rotation;
+                cached.hasSelectedRotation = true;
                 tileRotations.emplace(key, rotation);
                 const auto sig = NativeTileSignature(tile);
-                auto& cached = _staticPaintCache[key];
                 const bool semanticChanged = !cached.valid || cached.dirty ||
                     cached.signature != sig || cached.viewFlags != opt.viewFlags;
                 if (semanticChanged)
