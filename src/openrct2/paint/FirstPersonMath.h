@@ -106,44 +106,113 @@ namespace OpenRCT2::Paint
         const float ex = px-ax-t*dx, ey = py-ay-t*dy;
         return ex*ex+ey*ey;
     }
+    [[nodiscard]] inline float FirstPersonPointSegmentParameter2(
+        float px, float py, float ax, float ay, float bx, float by)
+    {
+        const float dx = bx - ax;
+        const float dy = by - ay;
+        const float length2 = dx * dx + dy * dy;
+        if (length2 <= 1e-8f)
+            return 0.0f;
+        return std::clamp(((px - ax) * dx + (py - ay) * dy) / length2, 0.0f, 1.0f);
+    }
+
+    // Swept circular walking collision against a wall whose lower and upper
+    // edges may slope. The wall endpoints come directly from semantic wall
+    // geometry; evaluate vertical overlap at the actual XY contact point rather
+    // than expanding a sloped wall into one conservative rectangular prism.
+    [[nodiscard]] inline bool FirstPersonSlopedWallIntersectsWalkStep(
+        FirstPersonVec3 from, FirstPersonVec3 to,
+        FirstPersonVec3 wallA, FirstPersonVec3 wallB,
+        float wallHeight, float eyeHeight = 20.0f, float radius = 2.0f)
+    {
+        if (wallHeight <= 0.0f)
+            return false;
+
+        const float rad2 = radius * radius;
+        const float wallX = wallB.x - wallA.x;
+        const float wallY = wallB.y - wallA.y;
+        const float stepX = to.x - from.x;
+        const float stepY = to.y - from.y;
+
+        const float fromDist = FirstPersonPointSegmentDistance2(
+            from.x, from.y, wallA.x, wallA.y, wallB.x, wallB.y);
+        const float toDist = FirstPersonPointSegmentDistance2(
+            to.x, to.y, wallA.x, wallA.y, wallB.x, wallB.y);
+        const float crossFrom = wallX * (from.y - wallA.y) - wallY * (from.x - wallA.x);
+        const float crossTo = wallX * (to.y - wallA.y) - wallY * (to.x - wallA.x);
+
+        // Let someone already overlapping a wall move away from it instead of
+        // becoming trapped by a map edit or mode transition.
+        if (fromDist <= rad2 && toDist > fromDist && crossFrom * crossTo >= 0.0f)
+            return false;
+
+        const auto verticalOverlap = [&](float stepT, float wallT) {
+            const float walkBase = from.z + (to.z - from.z) * stepT;
+            const float wallBase = wallA.z + (wallB.z - wallA.z) * wallT;
+            return walkBase + eyeHeight > wallBase && walkBase < wallBase + wallHeight;
+        };
+        const auto distance2 = [](float ax, float ay, float bx, float by) {
+            const float dx = ax - bx;
+            const float dy = ay - by;
+            return dx * dx + dy * dy;
+        };
+
+        // Exact finite-segment crossing.
+        const float det = stepX * wallY - stepY * wallX;
+        if (std::abs(det) > 1e-7f)
+        {
+            const float stepT = ((wallA.x - from.x) * wallY - (wallA.y - from.y) * wallX) / det;
+            const float wallT = ((wallA.x - from.x) * stepY - (wallA.y - from.y) * stepX) / det;
+            if (stepT >= 0.0f && stepT <= 1.0f && wallT >= 0.0f && wallT <= 1.0f
+                && verticalOverlap(stepT, wallT))
+                return true;
+        }
+
+        // If the finite segments do not cross, their closest pair contains at
+        // least one endpoint. Check all four endpoint-to-segment candidates and
+        // evaluate the sloped wall height at the corresponding parameter.
+        const float wallFromT = FirstPersonPointSegmentParameter2(
+            from.x, from.y, wallA.x, wallA.y, wallB.x, wallB.y);
+        const float wallFromX = wallA.x + wallX * wallFromT;
+        const float wallFromY = wallA.y + wallY * wallFromT;
+        if (distance2(from.x, from.y, wallFromX, wallFromY) <= rad2
+            && verticalOverlap(0.0f, wallFromT))
+            return true;
+
+        const float wallToT = FirstPersonPointSegmentParameter2(
+            to.x, to.y, wallA.x, wallA.y, wallB.x, wallB.y);
+        const float wallToX = wallA.x + wallX * wallToT;
+        const float wallToY = wallA.y + wallY * wallToT;
+        if (distance2(to.x, to.y, wallToX, wallToY) <= rad2
+            && verticalOverlap(1.0f, wallToT))
+            return true;
+
+        const float stepAT = FirstPersonPointSegmentParameter2(
+            wallA.x, wallA.y, from.x, from.y, to.x, to.y);
+        const float stepAX = from.x + stepX * stepAT;
+        const float stepAY = from.y + stepY * stepAT;
+        if (distance2(wallA.x, wallA.y, stepAX, stepAY) <= rad2
+            && verticalOverlap(stepAT, 0.0f))
+            return true;
+
+        const float stepBT = FirstPersonPointSegmentParameter2(
+            wallB.x, wallB.y, from.x, from.y, to.x, to.y);
+        const float stepBX = from.x + stepX * stepBT;
+        const float stepBY = from.y + stepY * stepBT;
+        return distance2(wallB.x, wallB.y, stepBX, stepBY) <= rad2
+            && verticalOverlap(stepBT, 1.0f);
+    }
+
     [[nodiscard]] inline bool FirstPersonWallIntersectsWalkStep(
         FirstPersonVec3 from, FirstPersonVec3 to,
         FirstPersonVec3 wallA, FirstPersonVec3 wallB,
         float wallTop, float eyeHeight = 20.0f, float radius = 2.0f)
     {
-        const float low = std::min(from.z,to.z);
-        const float high = std::max(from.z,to.z)+eyeHeight;
-        if (high <= wallA.z || low >= wallTop) return false;
-        const float rad2=radius*radius;
-        const float fromDist=FirstPersonPointSegmentDistance2(
-            from.x,from.y,wallA.x,wallA.y,wallB.x,wallB.y);
-        const float toDist=FirstPersonPointSegmentDistance2(
-            to.x,to.y,wallA.x,wallA.y,wallB.x,wallB.y);
-        // Let someone already overlapping a wall back OUT, never trap them.
-        const float crossFrom=(wallB.x-wallA.x)*(from.y-wallA.y)
-                             -(wallB.y-wallA.y)*(from.x-wallA.x);
-        const float crossTo=(wallB.x-wallA.x)*(to.y-wallA.y)
-                           -(wallB.y-wallA.y)*(to.x-wallA.x);
-        if (fromDist<=rad2 && toDist>fromDist && crossFrom*crossTo>=0.0f)
-            return false;
-        if (fromDist<=rad2 || toDist<=rad2) return true;
-        // Test the interiors of both finite segments, not their infinite lines.
-        if (crossFrom*crossTo <= 0.0f)
-        {
-            const float stepX=to.x-from.x,stepY=to.y-from.y;
-            const float wallX=wallB.x-wallA.x,wallY=wallB.y-wallA.y;
-            const float det=stepX*wallY-stepY*wallX;
-            if (std::abs(det)>1e-7f)
-            {
-                const float t=((wallA.x-from.x)*wallY-(wallA.y-from.y)*wallX)/det;
-                const float u=((wallA.x-from.x)*stepY-(wallA.y-from.y)*stepX)/det;
-                if(t>=0.0f && t<=1.0f && u>=0.0f && u<=1.0f) return true;
-            }
-        }
-        return FirstPersonPointSegmentDistance2(
-                   wallA.x,wallA.y,from.x,from.y,to.x,to.y)<=rad2
-            || FirstPersonPointSegmentDistance2(
-                   wallB.x,wallB.y,from.x,from.y,to.x,to.y)<=rad2;
+        // Compatibility wrapper for flat-bottom callers/tests.
+        wallB.z = wallA.z;
+        return FirstPersonSlopedWallIntersectsWalkStep(
+            from, to, wallA, wallB, wallTop - wallA.z, eyeHeight, radius);
     }
     // Swept walking collision against an authoritative axis-aligned occupancy
     // prism. Large-scenery object data exposes occupied quarter-tiles and an
