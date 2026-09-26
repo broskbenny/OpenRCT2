@@ -274,19 +274,78 @@ The 2x/4x terrain patch substitution has been removed. It stretched one 32x32 ti
 
 Static-region residency already removes the principal CPU/VBO cost of exact terrain, so every admitted terrain tile now retains its native world dimensions and UV mapping at all distances.
 
-### Palette-filter transparency is peeled per screen-space tile
+### Palette-filter transparency uses a complete logical order
 
 Transparent palette filters remain order-dependent and are not converted to ordinary alpha blending.
 
-Instead of using the total number of transparent quads in the entire view as the peel depth:
+Screen-space tiling is retained only as a cost bound: transparent quads are conservatively projected into 128x128 viewport tiles, and a near-plane-crossing surface is assigned to the whole viewport rather than risk missing fragments. There is no six-layer overflow approximation.
 
-* transparent surfaces are conservatively projected into 256x256 viewport tiles;
-* each screen tile contains only surfaces whose projected quad can touch its pixels;
-* the exact peel count is bounded by that tile's local candidate count, up to the existing six-pass exact limit;
-* overflow approximation is also tile-local;
-* a near-plane-crossing surface is conservatively assigned to the whole viewport rather than risk missing fragments.
+Within each screen tile every local candidate is peeled exactly with a two-stage ordering rule:
+
+* stage one selects the farthest remaining **physical** depth;
+* stage two considers only fragments at that exact physical depth and selects the earliest remaining stable paint ordinal;
+* the selected layer stores the palette-filter row plus ordinal in an R32UI target;
+* subsequent passes advance lexicographically by **(physical depth, paint order)**.
+
+The ordinal is a logical tie-break only. World geometry is not moved by arbitrary Z epsilons. After deterministic scene assembly, blended surfaces are rebased to one unique logical order so cached surfaces painted in different presentation epochs cannot lose a coplanar layer.
 
 Screen tiles are disjoint in pixel space, so a surface listed in multiple tiles is scissor-restricted and cannot be composed twice at one pixel.
+
+### Ride POV now consumes one passenger-pose contract
+
+Ride POV is no longer defined as vehicle origin plus a universal eight-world-unit Z offset.
+
+`FirstPersonPassengerPose` now carries:
+
+* world eye position;
+* passenger forward/right/up basis;
+* car-local calibrated eye offset;
+* pinned seat index and seating row;
+* whether a ride-specific cabin transform was recovered.
+
+The seat is selected once on ride entry (first occupied seat, otherwise seat zero) and remains stable for the POV session. Render-time presentation and simulation-time spatial audio both consume the same pinned-seat pose contract.
+
+For ordinary tracked/spinning vehicles, native 32-step yaw, track pitch/roll and spinning-car rotation remain authoritative. Seating-row/left-right placement is calibrated from the vehicle object's native sprite bounds because RCT2 rider rows are baked into artwork rather than stored as 3-D seat coordinates.
+
+Top Spin is the first flat ride with a recovered cabin transform: the passenger pose reuses the same native arm X/Y/Z offsets and independent seat-bank frame used by the ride painter. Both 48-frame arm motion and 16-frame seat-bank motion are interpolated cyclically at presentation rate, including wrap boundaries such as 47→0.
+
+Other sprite-baked flat rides deliberately remain on the explicit calibrated fallback until a real ride-specific transform is derived; their animation bytes are not reinterpreted as track pitch/roll.
+
+### Animated static paint is keyed to simulation generation
+
+Animated static tile variants no longer become stale merely because another presentation frame was rendered.
+
+Each cached native-paint rotation records the last simulation animation generation (`currentTicks`). It is repainted when that generation changes, on authoritative invalidation, or on the existing bounded fallback refresh. Multiple 120/144 Hz renders between game updates therefore reuse the same native animation paint result.
+
+### Leaf visibility bounds are persistent
+
+`DiscoverVisibleTiles()` no longer decodes every tile-element stack on every rendered frame.
+
+Each static tile cache entry now retains a semantic min/max-Z visibility bound and its last fallback scan. Normal map invalidation marks that bound dirty immediately. A staggered signature probe remains as protection against mutation paths that bypass normal invalidation. Dynamic entity admission remains independent through the entity spatial index.
+
+### The dead adaptive quality actuator was removed
+
+The old `FirstPersonQualityController`, `pixelTolerance`, target-frame feedback and scene tolerance field were removed because no renderer choice consumed them after distant-terrain substitution was deleted.
+
+CPU/GPU timings remain diagnostic only. No topology-changing approximation was reintroduced merely to keep the old control loop alive.
+
+### Interpolation admission uses entity-specific visual bounds
+
+First-person tweener admission no longer assumes every guest/staff/vehicle fits a sphere centered 16 units above its anchor with radius 64.
+
+The conservative sphere now derives from the entity's native `spriteData` extents and, for vehicles, the current `CarEntry` sprite bounds. The invariant is that interpolation admission should contain renderer-visible art, especially for unusually large/tall vehicle sprites near a frustum edge.
+
+### First-person positional audio retains native environment semantics
+
+Ordinary positional SFX now derive world/environment attenuation before choosing listener projection.
+
+The existing underground attenuation rule is shared by overhead and first-person listener modes, including continuously refreshed first-person one-shot channels. First-person mode changes listener position/pan/distance; it no longer bypasses that unrelated world acoustic rule.
+
+### Crowd ambience uses the entity spatial index
+
+First-person crowd noise no longer runs a full 3-D spatial calculation over every guest in the park.
+
+It resolves the current first-person listener, visits only entity tiles intersecting the existing 48-tile hard audio cutoff, and then applies the unchanged exact 3-D distance/gain calculation to those guest candidates. Guests outside the cutoff contributed zero before and still contribute zero.
 
 ### Reconstruction-group state is lifetime-bounded
 
@@ -325,8 +384,16 @@ Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HA
 * two guests/vehicles within one tile but on opposite sides of a 45-degree camera-relative source boundary can show different native sprite quadrants without waiting for a tile crossing;
 * a moving entity crossing a native source-view boundary changes side with its own hysteresis and does not pop merely because its spatial-index tile changes;
 * flat terrain keeps identical apparent texel scale before and after distances that previously selected 2x/4x substitutions, including elevated terrain and pitched cameras;
-* many screen-disjoint glass/water surfaces do not trigger six global redraw passes; transparency cost scales with local screen-tile overlap instead;
-* a genuinely layered stack of more than six palette-filter surfaces still uses six exact local peel passes plus the deterministic overflow surface;
+* many screen-disjoint glass/water surfaces scale transparency work with local screen-tile overlap rather than a global layer count;
+* several coplanar palette filters on one wall/water plane all survive and compose in deterministic paint order without Z offsets;
+* a genuinely layered stack of more than six palette-filter surfaces remains exact rather than entering an overflow approximation;
 * long first-person exploration/editing does not monotonically grow reconstruction-group state or recreate expired static-region packets when a group changes source quadrant;
+* at 120/144 Hz, an animated static tile is natively repainted at most once per simulation animation generation unless invalidated/fallback-refreshed;
+* a stationary dense park no longer walks every admitted tile-element stack every presentation frame merely to rebuild min/max Z;
+* first-person ride audio and camera remain attached to the same pinned seat through inversions/spinning and Top Spin cabin motion;
+* Top Spin presentation interpolation crosses 47→0 arm and 15→0 seat-bank boundaries without sweeping through the opposite half of the animation;
+* unusually large vehicle artwork remains presentation-interpolated until the whole conservative visual bound leaves the first-person frustum;
+* ordinary positional SFX retain the native underground attenuation rule in first person;
+* first-person crowd ambience is unchanged audibly while large parks avoid full all-guest 3-D distance/gain work;
 
 Do not replace the existing stable tag until this manual runtime verification is complete.
