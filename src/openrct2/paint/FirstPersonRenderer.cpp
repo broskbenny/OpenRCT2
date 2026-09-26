@@ -231,6 +231,22 @@ namespace OpenRCT2::Paint
             surface.immutableFingerprint = fingerprint;
         }
 
+        [[nodiscard]] bool SmallSceneryUsesFixedFrame(const SmallSceneryEntry& entry)
+        {
+            const auto& flags = entry.flags;
+            // A fixed vertical plane is appropriate only when the object model
+            // says orientation/occupancy is materially directional. Compact
+            // automatic-rotation props are better represented as impostors;
+            // forcing them onto one world axis makes a volumetric prop vanish
+            // edge-on from otherwise valid viewpoints.
+            return flags.has(SmallSceneryFlag::isRotatable)
+                || flags.has(SmallSceneryFlag::isDiagonal)
+                || flags.has(SmallSceneryFlag::occupiesHalfTile)
+                || flags.has(SmallSceneryFlag::occupiesThreeQuarters)
+                || flags.has(SmallSceneryFlag::allowSupportsAbove)
+                || flags.has(SmallSceneryFlag::supportsHavePrimaryColour);
+        }
+
         [[nodiscard]] bool UsesViewFacingImpostor(const PaintStruct& ps)
         {
             if (ps.Entity != nullptr)
@@ -241,10 +257,9 @@ namespace OpenRCT2::Paint
             {
                 const auto* small = ps.Element->asSmallScenery();
                 const auto* entry = small != nullptr ? small->getEntry() : nullptr;
-                // Trees already read well as upright impostors. Architecture,
-                // rides, supports, signs and other connected static pieces need
-                // a shared world-fixed orientation to keep their corners joined.
-                return entry == nullptr || entry->flags.has(SmallSceneryFlag::isTree);
+                if (entry == nullptr || entry->flags.has(SmallSceneryFlag::isTree))
+                    return true;
+                return !SmallSceneryUsesFixedFrame(*entry);
             }
             if (ps.Element->getType() == TileElementType::largeScenery)
             {
