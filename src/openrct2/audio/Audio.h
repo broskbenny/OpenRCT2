@@ -157,7 +157,8 @@ namespace OpenRCT2::Audio
     // same simulation-time car transform as emitters.
     void SetFirstPersonAudioListener(const FirstPersonAudioListener& listener);
     void SetFirstPersonRideAudioListener(
-        EntityId vehicleId, RideId rideId, float headYaw, float headPitch);
+        EntityId vehicleId, RideId rideId, uint8_t seatIndex,
+        float headYaw, float headPitch);
     void RefreshFirstPersonSpatialAudio();
     void ClearFirstPersonAudioListener();
     [[nodiscard]] bool HasFirstPersonAudioListener();
