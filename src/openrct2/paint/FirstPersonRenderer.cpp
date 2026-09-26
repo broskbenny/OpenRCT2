@@ -98,19 +98,17 @@ namespace OpenRCT2::Paint
                     return false;
             }
         }
-        [[nodiscard]] uint8_t PaintRotationForTile(
-            const FirstPersonCamera& camera, CoordsXY tile, std::optional<uint8_t> previous)
+        [[nodiscard]] uint8_t PaintRotationForPoint(
+            const FirstPersonCamera& camera, FirstPersonVec3 anchor, std::optional<uint8_t> previous)
         {
-            // Native sprite direction is a property of VIEWPOINT, not head gaze.
-            // Use the passenger's position relative to this tile, so turning the
-            // head in place cannot repaint the park or abruptly swap sprite sides.
-            float dx = float(tile.x + kCoordsXYStep / 2) - camera.position.x;
-            float dy = float(tile.y + kCoordsXYStep / 2) - camera.position.y;
+            // Native sprite direction is a property of viewpoint relative to the
+            // reconstructed object, never head gaze. Connected objects call this
+            // with one canonical origin so every constituent tile chooses the
+            // same native orthographic source view.
+            float dx = anchor.x - camera.position.x;
+            float dy = anchor.y - camera.position.y;
             if (std::hypot(dx, dy) <= 0.1f)
             {
-                // At the exact tile centre there is no meaningful azimuth.
-                // Preserve the last physical side rather than letting head-look
-                // choose one and reintroduce gaze-dependent popping.
                 if (previous.has_value())
                     return *previous;
                 const auto forward = GetFirstPersonBasis(camera).forward;
@@ -129,6 +127,89 @@ namespace OpenRCT2::Paint
                     return *previous & 3;
             }
             return static_cast<uint8_t>(std::lround(yaw / (0.5f * kPi))) & 3;
+        }
+
+        [[nodiscard]] uint8_t PaintRotationForTile(
+            const FirstPersonCamera& camera, CoordsXY tile, std::optional<uint8_t> previous)
+        {
+            return PaintRotationForPoint(
+                camera,
+                { float(tile.x + kCoordsXYHalfTile), float(tile.y + kCoordsXYHalfTile), 0.0f },
+                previous);
+        }
+
+        inline void ExtendStableKey(uint64_t& key, uint64_t value)
+        {
+            for (unsigned i = 0; i < 8; ++i)
+            {
+                key ^= (value >> (8u * i)) & 255u;
+                key *= 1099511628211ull;
+            }
+        }
+
+        struct ReconstructionGroupInfo
+        {
+            uint64_t key{};
+            FirstPersonVec3 anchor{};
+            uint8_t direction{};
+        };
+
+        [[nodiscard]] std::optional<ReconstructionGroupInfo> GetReconstructionGroup(
+            CoordsXY tile, TileElement* element)
+        {
+            if (element == nullptr)
+                return std::nullopt;
+
+            if (element->getType() == TileElementType::largeScenery)
+            {
+                auto* large = element->asLargeScenery();
+                const auto* entry = large != nullptr ? large->getEntry() : nullptr;
+                const size_t sequence = large != nullptr ? large->getSequenceIndex() : 0;
+                if (entry == nullptr || sequence >= entry->tiles.size()
+                    || entry->flags.has(LargeSceneryFlag::isTree))
+                    return std::nullopt;
+
+                const auto direction = large->getDirection();
+                const auto offset = CoordsXY{ entry->tiles[sequence].offset }.rotate(direction);
+                const FirstPersonVec3 anchor{
+                    float(tile.x - offset.x),
+                    float(tile.y - offset.y),
+                    float(large->getBaseZ() - entry->tiles[sequence].offset.z),
+                };
+                uint64_t key = 14695981039346656037ull;
+                ExtendStableKey(key, 1);
+                ExtendStableKey(key, uint32_t(int32_t(anchor.x)));
+                ExtendStableKey(key, uint32_t(int32_t(anchor.y)));
+                ExtendStableKey(key, uint32_t(int32_t(anchor.z)));
+                ExtendStableKey(key, direction);
+                ExtendStableKey(key, entry->image);
+                if (key == 0) key = 1;
+                return ReconstructionGroupInfo{ key, anchor, direction };
+            }
+
+            if (element->getType() == TileElementType::track)
+            {
+                auto* track = element->asTrack();
+                const auto origin = GetTrackSegmentOrigin(CoordsXYE{ tile, element });
+                if (track == nullptr || !origin.has_value())
+                    return std::nullopt;
+
+                const FirstPersonVec3 anchor{
+                    float(origin->x), float(origin->y), float(origin->z)
+                };
+                uint64_t key = 14695981039346656037ull;
+                ExtendStableKey(key, 2);
+                ExtendStableKey(key, uint32_t(origin->x));
+                ExtendStableKey(key, uint32_t(origin->y));
+                ExtendStableKey(key, uint32_t(origin->z));
+                ExtendStableKey(key, origin->direction);
+                ExtendStableKey(key, track->getRideIndex().ToUnderlying());
+                ExtendStableKey(key, static_cast<uint16_t>(track->getTrackType()));
+                if (key == 0) key = 1;
+                return ReconstructionGroupInfo{ key, anchor, origin->direction };
+            }
+
+            return std::nullopt;
         }
         [[nodiscard]] FirstPersonVec3 FixedSpriteRight(uint8_t rotation)
         {
@@ -273,43 +354,20 @@ namespace OpenRCT2::Paint
         {
             FirstPersonVec3 anchor{};
             FirstPersonVec3 right{};
+            uint64_t groupKey{};
         };
         [[nodiscard]] SpriteReconstructionFrame GetSpriteReconstructionFrame(
             const PaintStruct& ps, FirstPersonVec3 fallbackAnchor, uint8_t paintRotation)
         {
-            SpriteReconstructionFrame frame{ fallbackAnchor, FixedSpriteRight(paintRotation) };
+            SpriteReconstructionFrame frame{ fallbackAnchor, FixedSpriteRight(paintRotation), 0 };
             if (UsesViewFacingImpostor(ps) || ps.Element == nullptr)
                 return frame;
 
-            if (ps.Element->getType() == TileElementType::largeScenery)
+            if (const auto group = GetReconstructionGroup(ps.MapPos, ps.Element); group.has_value())
             {
-                const auto* large = ps.Element->asLargeScenery();
-                const auto* entry = large != nullptr ? large->getEntry() : nullptr;
-                const size_t sequence = large != nullptr ? large->getSequenceIndex() : 0;
-                if (entry != nullptr && sequence < entry->tiles.size())
-                {
-                    const auto direction = large->getDirection();
-                    const auto offset = CoordsXY{ entry->tiles[sequence].offset }.rotate(direction);
-                    frame.anchor = {
-                        float(ps.MapPos.x - offset.x),
-                        float(ps.MapPos.y - offset.y),
-                        float(large->getBaseZ() - entry->tiles[sequence].offset.z),
-                    };
-                    frame.right = FixedSpriteRight(direction);
-                }
-                return frame;
-            }
-
-            if (ps.Element->getType() == TileElementType::track)
-            {
-                const auto origin = GetTrackSegmentOrigin(CoordsXYE{ ps.MapPos, ps.Element });
-                if (origin.has_value())
-                {
-                    frame.anchor = {
-                        float(origin->x), float(origin->y), float(origin->z)
-                    };
-                    frame.right = FixedSpriteRight(origin->direction);
-                }
+                frame.anchor = group->anchor;
+                frame.right = FixedSpriteRight(group->direction);
+                frame.groupKey = group->key;
                 return frame;
             }
 
