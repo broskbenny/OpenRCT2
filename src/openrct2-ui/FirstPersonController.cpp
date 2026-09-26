@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <chrono>
 #include <openrct2/drawing/IDrawingEngine.h>
 #include <openrct2/audio/Audio.h>
@@ -126,7 +127,13 @@ namespace OpenRCT2::Ui::FirstPerson
             _state.ownsRelativeMouseMode = false;
         }
 
-        float ResolveWalkingFloor(const CoordsXY& position, float previousFloorZ)
+        struct WalkingFloorSample
+        {
+            float z{};
+            bool path = false;
+        };
+
+        WalkingFloorSample ResolveWalkingFloorSample(const CoordsXY& position, float previousFloorZ)
         {
             const auto terrainZ = static_cast<float>(TileElementHeight(position));
             float bestPathZ = terrainZ;
@@ -138,10 +145,10 @@ namespace OpenRCT2::Ui::FirstPerson
                 auto pathZ = static_cast<float>(path->getBaseZ());
                 if (path->isSloped())
                 {
-                    const auto c = GetSlopeCornerHeights(
+                    const auto corners = GetSlopeCornerHeights(
                         path->getBaseZ(), kPathSlopeToLandSlope[path->getSlopeDirection()]);
                     pathZ = Paint::FirstPersonPathHeight(
-                        float(c.south), float(c.east), float(c.north), float(c.west),
+                        float(corners.south), float(corners.east), float(corners.north), float(corners.west),
                         float(position.x & (kCoordsXYStep - 1)),
                         float(position.y & (kCoordsXYStep - 1)));
                 }
@@ -155,9 +162,48 @@ namespace OpenRCT2::Ui::FirstPerson
                 }
             }
 
-            if (foundPath && std::abs(bestPathZ - previousFloorZ) <= 16.0f)
-                return bestPathZ;
-            return terrainZ;
+            // Path choice is still continuity-based, but final legality is
+            // decided by the swept traversal below rather than by teleporting
+            // to whichever destination surface happened to be nearest.
+            if (foundPath && bestDelta <= 2.0f * kCoordsZStep)
+                return { bestPathZ, true };
+            return { terrainZ, false };
+        }
+
+        std::optional<float> ResolveWalkingTraversal(
+            float fromX, float fromY, float toX, float toY, float startFloorZ)
+        {
+            constexpr float kSampleSpacing = 4.0f;
+            constexpr float kMaximumStep = float(kCoordsZStep);
+            const float distance = std::hypot(toX - fromX, toY - fromY);
+            const int32_t samples = std::max(1, int32_t(std::ceil(distance / kSampleSpacing)));
+            float floorZ = startFloorZ;
+
+            for (int32_t i = 1; i <= samples; ++i)
+            {
+                const float t = float(i) / float(samples);
+                const float x = fromX + (toX - fromX) * t;
+                const float y = fromY + (toY - fromY) * t;
+                const CoordsXY position{ int32_t(std::lround(x)), int32_t(std::lround(y)) };
+                if (!MapIsLocationValid(position))
+                    return std::nullopt;
+
+                const auto floor = ResolveWalkingFloorSample(position, floorZ);
+                if (!floor.path)
+                {
+                    const float waterZ = float(TileElementWaterHeight(position));
+                    if (waterZ > floor.z + 0.5f)
+                        return std::nullopt;
+                }
+
+                // Continuous legal terrain/path slopes change gradually across
+                // these samples. A larger discontinuity is a cliff/ledge and is
+                // intentionally non-walkable in either direction.
+                if (std::abs(floor.z - floorZ) > kMaximumStep)
+                    return std::nullopt;
+                floorZ = floor.z;
+            }
+            return floorZ;
         }
 
         // Walls have authoritative positions and heights in the native map;
@@ -356,14 +402,14 @@ namespace OpenRCT2::Ui::FirstPerson
             const Paint::FirstPersonVec3 from{
                 _state.camera.position.x,_state.camera.position.y,_state.previousFloorZ};
             auto tryMove = [&](float x,float y) {
-                const CoordsXY position{int32_t(std::lround(x)),int32_t(std::lround(y))};
-                if(!MapIsLocationValid(position)) return false;
-                const float floorZ=ResolveWalkingFloor(position,_state.previousFloorZ);
-                if(WalkBlockedByWall(from,{x,y,floorZ}) || WalkBlockedByLargeScenery(from,{x,y,floorZ})) return false;
+                const auto floorZ = ResolveWalkingTraversal(
+                    from.x, from.y, x, y, _state.previousFloorZ);
+                if (!floorZ.has_value()) return false;
+                if(WalkBlockedByWall(from,{x,y,*floorZ}) || WalkBlockedByLargeScenery(from,{x,y,*floorZ})) return false;
                 _state.camera.position.x=x;
                 _state.camera.position.y=y;
-                _state.previousFloorZ=floorZ;
-                _state.camera.position.z=floorZ+kEyeHeight;
+                _state.previousFloorZ=*floorZ;
+                _state.camera.position.z=*floorZ+kEyeHeight;
                 return true;
             };
             if(!tryMove(nextX,nextY))
@@ -438,7 +484,8 @@ namespace OpenRCT2::Ui::FirstPerson
         };
         _state.camera.yaw = static_cast<float>(viewport->rotation) * (kPi * 0.5f);
         _state.camera.pitch = 0.0f;
-        _state.previousFloorZ = ResolveWalkingFloor(spawn, static_cast<float>(spawn.z));
+        _state.previousFloorZ = ResolveWalkingFloorSample(
+            spawn, static_cast<float>(spawn.z)).z;
         _state.camera.position.z = _state.previousFloorZ + kEyeHeight;
         _state.previousEscapeDown = false;
         PublishTweenView();
