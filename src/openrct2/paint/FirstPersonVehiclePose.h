@@ -90,6 +90,121 @@ namespace OpenRCT2::Paint
         }
     }
 
+    struct FirstPersonPassengerPose
+    {
+        FirstPersonVec3 position{};
+        FirstPersonBasis basis{};
+        FirstPersonVec3 localEyeOffset{};
+        uint8_t seatIndex = 0;
+        uint8_t seatingRow = 0;
+        bool rideSpecificTransform = false;
+    };
+
+    [[nodiscard]] inline uint8_t FirstPersonPassengerSeatIndex(const Vehicle& car)
+    {
+        const uint8_t seatCount = std::min<uint8_t>(car.num_seats, 32);
+        for (uint8_t i = 0; i < seatCount; ++i)
+        {
+            if (!car.peep[i].IsNull())
+                return i;
+        }
+        return 0;
+    }
+
+    [[nodiscard]] inline FirstPersonVec3 FirstPersonPassengerFallbackEyeOffset(
+        const Vehicle& car, uint8_t seatIndex)
+    {
+        const auto* entry = car.Entry();
+        if (entry == nullptr)
+            return { 0.0f, 0.0f, 8.0f };
+
+        const uint8_t rows = std::max<uint8_t>(entry->numSeatingRows, 1);
+        const uint8_t row = std::min<uint8_t>(seatIndex / 2, rows - 1);
+        const float visualRadius = std::max(8.0f, float(entry->spriteWidth));
+        const float rowSpan = std::min(16.0f, visualRadius * 0.5f);
+        const float forward = rows > 1
+            ? (0.5f - float(row) / float(rows - 1)) * rowSpan
+            : 0.0f;
+        const float lateralMagnitude = car.num_seats > 1
+            ? std::clamp(visualRadius * 0.125f, 2.0f, 4.0f)
+            : 0.0f;
+        const float lateral = (seatIndex & 1) != 0
+            ? lateralMagnitude : -lateralMagnitude;
+        const float eyeHeight = std::clamp(
+            0.35f * float(std::max<uint8_t>(entry->spriteHeightPositive, 1)),
+            8.0f, 20.0f);
+        return { forward, lateral, eyeHeight };
+    }
+
+    [[nodiscard]] inline FirstPersonBasis FirstPersonRotatePassengerPitch(
+        const FirstPersonBasis& basis, float angle)
+    {
+        const float c = std::cos(angle);
+        const float s = std::sin(angle);
+        return {
+            {
+                basis.forward.x * c + basis.up.x * s,
+                basis.forward.y * c + basis.up.y * s,
+                basis.forward.z * c + basis.up.z * s,
+            },
+            basis.right,
+            {
+                basis.up.x * c - basis.forward.x * s,
+                basis.up.y * c - basis.forward.y * s,
+                basis.up.z * c - basis.forward.z * s,
+            },
+        };
+    }
+
+    [[nodiscard]] inline FirstPersonPassengerPose BuildFirstPersonPassengerPose(
+        const Vehicle& car, FirstPersonVec3 vehiclePosition,
+        const FirstPersonBasis& vehicleBasis)
+    {
+        const uint8_t seatIndex = FirstPersonPassengerSeatIndex(car);
+        const auto* entry = car.Entry();
+        const uint8_t rows = entry != nullptr
+            ? std::max<uint8_t>(entry->numSeatingRows, 1) : 1;
+        const uint8_t row = std::min<uint8_t>(seatIndex / 2, rows - 1);
+        const auto localEye = FirstPersonPassengerFallbackEyeOffset(car, seatIndex);
+
+        FirstPersonPassengerPose pose{};
+        pose.basis = vehicleBasis;
+        pose.localEyeOffset = localEye;
+        pose.seatIndex = seatIndex;
+        pose.seatingRow = row;
+
+        const auto* ride = car.GetRide();
+        if (ride != nullptr && ride->getRideTypeDescriptor().Name == "top_spin")
+        {
+            // These are the same physical seat offsets used by the native Top
+            // Spin painter. Unlike most flat rides, its cabin translation and
+            // independent seat-bank frame are recoverable from simulation state.
+            static constexpr int16_t kSeatHeight[48] = {
+                -10,-10,-9,-7,-4,-1,2,6,11,16,21,26,31,37,42,47,52,57,61,64,67,70,72,73,
+                73,73,72,70,67,64,61,57,52,47,42,37,31,26,21,16,11,6,2,-1,-4,-7,-9,-10
+            };
+            static constexpr int8_t kSeatPosition[48] = {
+                0,4,9,13,17,21,24,27,29,31,33,34,34,34,33,31,29,27,24,21,17,13,9,4,
+                0,-3,-8,-12,-16,-20,-23,-26,-28,-30,-32,-33,-33,-33,-32,-30,-28,-26,-23,-20,-16,-12,-8,-3
+            };
+            const uint8_t arm = std::min<uint8_t>(car.flatRideAnimationFrame, 47);
+            const float seatAngle =
+                float(car.flatRideSecondaryAnimationFrame & 0x0F)
+                * (6.28318530717958647692f / 16.0f);
+            pose.basis = FirstPersonRotatePassengerPitch(vehicleBasis, seatAngle);
+            vehiclePosition = {
+                vehiclePosition.x + vehicleBasis.forward.x * float(kSeatPosition[arm]),
+                vehiclePosition.y + vehicleBasis.forward.y * float(kSeatPosition[arm]),
+                vehiclePosition.z + 3.0f + float(kSeatHeight[arm]),
+            };
+            pose.rideSpecificTransform = true;
+        }
+
+        pose.position = FirstPersonPassengerEye(
+            vehiclePosition, pose.basis, pose.localEyeOffset);
+        return pose;
+    }
+
     [[nodiscard]] inline FirstPersonCamera FirstPersonVehicleSimulationOrientation(const Vehicle& car)
     {
         FirstPersonCamera orientation{};
@@ -109,6 +224,16 @@ namespace OpenRCT2::Paint
         if (entry != nullptr && entry->flags.has(CarEntryFlag::hasSpinning))
             orientation.yaw += SpinSpriteYawRadians(car.spin_sprite);
         return orientation;
+    }
+
+    [[nodiscard]] inline FirstPersonPassengerPose FirstPersonVehicleSimulationPassengerPose(
+        const Vehicle& car)
+    {
+        const auto orientation = FirstPersonVehicleSimulationOrientation(car);
+        const auto basis = GetFirstPersonBasis(orientation);
+        const auto loc = car.getLocation();
+        return BuildFirstPersonPassengerPose(
+            car, { float(loc.x), float(loc.y), float(loc.z) }, basis);
     }
 } // namespace OpenRCT2::Paint
 
