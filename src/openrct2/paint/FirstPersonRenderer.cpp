@@ -796,10 +796,10 @@ namespace OpenRCT2::Paint
         {
             PROFILED_FUNCTION();
             const auto& opt = scene.options;
+            const auto& view = scene.resolvedView;
             const auto frustum = FirstPersonFrustum(
-                opt.camera, opt.fieldOfViewDegrees,
-                float(scene.dimensions.width) / float(std::max(1, scene.dimensions.height)),
-                opt.nearClip, opt.farClip);
+                view.camera, view.fieldOfViewDegrees, view.aspect,
+                view.nearClip, view.farClip);
             const auto map = getGameState().mapSize;
             auto visit = [&](int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
                 for (int32_t ty = y0; ty < y1; ++ty)
@@ -925,10 +925,10 @@ namespace OpenRCT2::Paint
             PROFILED_FUNCTION();
             const auto& opt = scene.options;
             const auto frame = ++_terrainCache.frame;
+            const auto& view = scene.resolvedView;
             const auto frustum = FirstPersonFrustum(
-                opt.camera, opt.fieldOfViewDegrees,
-                float(scene.dimensions.width) / float(std::max(1, scene.dimensions.height)),
-                opt.nearClip, opt.farClip);
+                view.camera, view.fieldOfViewDegrees, view.aspect,
+                view.nearClip, view.farClip);
             std::unordered_set<uint64_t> visible;
             visible.reserve(scene.visibleTiles.size());
             for (const auto tile : scene.visibleTiles)
@@ -1083,10 +1083,10 @@ namespace OpenRCT2::Paint
             misses.reserve(scene.visibleTiles.size() / 8 + 1);
             std::unordered_map<uint64_t, uint8_t> tileRotations;
             tileRotations.reserve(scene.visibleTiles.size());
+            const auto& view = scene.resolvedView;
             const FirstPersonFrustum worldFrustum(
-                opt.camera, opt.fieldOfViewDegrees,
-                float(scene.dimensions.width) / float(std::max(scene.dimensions.height, 1)),
-                opt.nearClip, opt.farClip);
+                view.camera, view.fieldOfViewDegrees, view.aspect,
+                view.nearClip, view.farClip);
 
             for (const auto tile : scene.visibleTiles)
             {
@@ -1400,9 +1400,12 @@ namespace OpenRCT2::Paint
     {
         FirstPersonScene scene{};
         scene.options = opt;
-        const auto map = getGameState().mapSize;
-        scene.options.farClip=CompleteParkFarClip(opt.camera.position,map.x,map.y,opt.farClip);
         scene.dimensions = dimensions;
+        const auto map = getGameState().mapSize;
+        scene.resolvedView = ResolveFirstPersonView(
+            opt.camera, dimensions.width, dimensions.height, map.x, map.y,
+            opt.fieldOfViewDegrees, opt.nearClip, opt.farClip);
+        scene.options.farClip = scene.resolvedView.farClip;
         // Independent of the overhead paint collector: geometry is derived from live map state.
         scene.activePixelTolerance = opt.fixedPixelTolerance > 0.0f ? opt.fixedPixelTolerance : _quality.pixelTolerance;
         const auto visibilityStart=std::chrono::steady_clock::now();
