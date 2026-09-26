@@ -12,6 +12,7 @@
 #include <openrct2/paint/FirstPersonVehiclePose.h>
 #include <openrct2/paint/tile_element/Paint.Path.h>
 #include <openrct2/paint/tile_element/Paint.TileElement.h>
+#include <openrct2/interface/Viewport.h>
 #include <openrct2/world/Wall.h>
 #include <openrct2/world/tile_element/PathElement.h>
 
