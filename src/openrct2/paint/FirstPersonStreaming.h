@@ -72,6 +72,30 @@ namespace OpenRCT2::Paint
         return farthest;
     }
 
+    struct FirstPersonResolvedView
+    {
+        FirstPersonCamera camera{};
+        float fieldOfViewDegrees = 70.0f;
+        float aspect = 1.0f;
+        float nearClip = 2.0f;
+        float farClip = 32768.0f;
+    };
+
+    [[nodiscard]] inline FirstPersonResolvedView ResolveFirstPersonView(
+        const FirstPersonCamera& camera, int32_t width, int32_t height,
+        int32_t mapTilesX, int32_t mapTilesY,
+        float fieldOfViewDegrees = 70.0f, float nearClip = 2.0f,
+        float requestedFar = 32768.0f)
+    {
+        return {
+            camera,
+            fieldOfViewDegrees,
+            height > 0 ? float(std::max(width, 1)) / float(height) : 1.0f,
+            nearClip,
+            CompleteParkFarClip(camera.position, mapTilesX, mapTilesY, requestedFar),
+        };
+    }
+
     // Frame-budget controller governs only geometric error, NEVER coverage.
     // CPU & GPU samples are the time used by the first-person renderer rather
     // than the whole game; false inferences from unrelated simulation stalls
