@@ -26,6 +26,28 @@ namespace
     constexpr float kPi = 3.14159265358979323846f;
 }
 
+TEST(FirstPersonSourceRotationTest, CameraRelativePointOwnsNativeQuadrant)
+{
+    FirstPersonCamera camera{};
+    // Both points lie inside the same 32x32 world tile, but their azimuths
+    // from the camera straddle the native 45-degree source-view boundary.
+    EXPECT_EQ(FirstPersonSourceRotationForPoint(camera, { 30.0f, 28.0f, 0.0f }), 0);
+    EXPECT_EQ(FirstPersonSourceRotationForPoint(camera, { 1.0f, 31.0f, 0.0f }), 1);
+}
+
+TEST(FirstPersonSourceRotationTest, HysteresisBelongsToTheTrackedPoint)
+{
+    FirstPersonCamera camera{};
+    EXPECT_EQ(
+        FirstPersonSourceRotationForPoint(
+            camera, { 100.0f, 111.0f, 0.0f }, uint8_t{ 0 }),
+        0);
+    EXPECT_EQ(
+        FirstPersonSourceRotationForPoint(
+            camera, { 100.0f, 123.0f, 0.0f }, uint8_t{ 0 }),
+        1);
+}
+
 TEST(FirstPersonWalkingTest, NativeStepAllowedButCliffRejected)
 {
     EXPECT_TRUE(FirstPersonWalkingHeightTransitionAllowed(100.0f, 108.0f));
