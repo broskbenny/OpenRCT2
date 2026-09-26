@@ -124,6 +124,22 @@ TEST(FirstPersonAssetReconstructionTest, ProjectedQuadRasterizesAreaNotJustEdges
     EXPECT_FALSE(silhouette.contains(20, 8));
 }
 
+TEST(FirstPersonAssetReconstructionTest, OversizedProjectedFaceForcesFallback)
+{
+    auto observed = MakeSilhouetteRect(-20, -40, 21, 1);
+    FirstPersonSilhouette candidate{};
+    AddFirstPersonSilhouetteQuad(
+        candidate,
+        { {
+            { -1000000, 0 }, { 1000000, 0 },
+            { 1000000, 1000000 }, { -1000000, 1000000 },
+        } });
+
+    EXPECT_TRUE(candidate.overflowed);
+    const auto fit = CompareFirstPersonSilhouettes(observed, candidate);
+    EXPECT_FALSE(fit.valid);
+}
+
 TEST(FirstPersonTrackTrajectoryTest, StandardSamplesMatchVehicleMotionSource)
 {
     constexpr FirstPersonVec3 origin{ 320.0f, 640.0f, 80.0f };

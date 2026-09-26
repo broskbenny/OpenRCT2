@@ -37,6 +37,7 @@ namespace OpenRCT2::Paint
         int32_t minY = std::numeric_limits<int32_t>::max();
         int32_t maxX = std::numeric_limits<int32_t>::min(); // exclusive
         int32_t maxY = std::numeric_limits<int32_t>::min(); // exclusive
+        bool overflowed = false;
 
         void add(int32_t x, int32_t y)
         {
@@ -72,8 +73,20 @@ namespace OpenRCT2::Paint
         const int32_t minY = std::min({ a.y, b.y, c.y });
         const int32_t maxX = std::max({ a.x, b.x, c.x });
         const int32_t maxY = std::max({ a.y, b.y, c.y });
-        if (minX == maxX || minY == maxY)
+        const int64_t spanX = int64_t(maxX) - int64_t(minX);
+        const int64_t spanY = int64_t(maxY) - int64_t(minY);
+        if (spanX <= 0 || spanY <= 0)
             return;
+
+        // Reconstruction is optional evidence. Malformed custom-object metadata
+        // must never turn one projected face into an unbounded CPU raster job.
+        constexpr int64_t kMaxRasterPixels = 262144;
+        if (spanX > kMaxRasterPixels || spanY > kMaxRasterPixels
+            || spanX * spanY > kMaxRasterPixels)
+        {
+            silhouette.overflowed = true;
+            return;
+        }
 
         const auto edge = [](const ScreenCoordsXY& p0, const ScreenCoordsXY& p1, double x, double y) {
             return (x - double(p0.x)) * double(p1.y - p0.y)
@@ -116,7 +129,8 @@ namespace OpenRCT2::Paint
         const FirstPersonSilhouette& observed, const FirstPersonSilhouette& candidate)
     {
         FirstPersonSilhouetteFit fit{};
-        if (observed.empty() || candidate.empty())
+        if (observed.overflowed || candidate.overflowed
+            || observed.empty() || candidate.empty())
             return fit;
 
         size_t intersection = 0;
