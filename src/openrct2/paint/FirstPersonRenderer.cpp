@@ -807,6 +807,7 @@ namespace OpenRCT2::Paint
             uint64_t lastSeen{};
             bool hasSelectedRotation = false;
             uint8_t selectedRotation = 0;
+            std::unordered_set<uint64_t> regions;
         };
         static std::unordered_map<uint64_t, ReconstructionRotationState> _reconstructionRotations;
 
@@ -1521,14 +1522,22 @@ namespace OpenRCT2::Paint
                 for (const auto& group : cached.reconstructionGroups)
                 {
                     auto& state = _reconstructionRotations[group.key];
+                    state.regions.insert(FirstPersonGpuRegionKey(tx, ty));
                     const auto previous = state.hasSelectedRotation
                         ? std::optional<uint8_t>{ state.selectedRotation }
                         : std::nullopt;
                     const auto selected = PaintRotationForPoint(
                         opt.camera, group.anchor, previous);
+                    const bool rotationChanged =
+                        !state.hasSelectedRotation || state.selectedRotation != selected;
                     state.selectedRotation = selected;
                     state.hasSelectedRotation = true;
                     state.lastSeen = frame;
+                    if (rotationChanged)
+                    {
+                        for (const auto regionKey : state.regions)
+                            _staticRegionPackets[regionKey].dirty = true;
+                    }
                     rotationMask |= uint8_t(1u << selected);
 
                     const auto assembled = cached.assembledGroupRotations.find(group.key);
@@ -1711,6 +1720,8 @@ namespace OpenRCT2::Paint
                             const int32_t tx = root->MapPos.x / kCoordsXYStep;
                             const int32_t ty = root->MapPos.y / kCoordsXYStep;
                             const auto region = FirstPersonGpuRegionKey(tx, ty);
+                            if (reconstruction.groupKey != 0)
+                                _reconstructionRotations[reconstruction.groupKey].regions.insert(region);
                             auto cacheIt = _staticPaintCache.find(key);
                             for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
                             {
@@ -1809,9 +1820,6 @@ namespace OpenRCT2::Paint
                         MarkStaticRegionDirtyForTile(
                             int32_t(kv.first >> 32), int32_t(kv.first & 0xffffffffu));
                     return expired;
-                });
-                std::erase_if(_reconstructionRotations, [frame](const auto& kv) {
-                    return frame - kv.second.lastSeen > 240;
                 });
                 std::erase_if(_staticRegionPackets, [frame](const auto& kv) {
                     return frame - kv.second.lastSeen > 240;
