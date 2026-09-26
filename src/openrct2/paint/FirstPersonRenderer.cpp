@@ -747,6 +747,7 @@ namespace OpenRCT2::Paint
             std::optional<FirstPersonSurface> waterOverlay;
             ImageId waterMaskImage{}, waterOverlayImage{};
             uint64_t lastSeen{};
+            bool dirty = true;
         };
         struct TerrainCache
         {
@@ -1073,6 +1074,7 @@ namespace OpenRCT2::Paint
                         }
                     }
                     cache.lastSeen = frame;
+                    cache.dirty = false;
                     if (!IsResidentStaticSurface(cache.ground))
                         scene.surfaces.emplace_back(cache.ground);
                     if (cache.water.has_value() && !IsResidentStaticSurface(*cache.water))
@@ -1161,7 +1163,7 @@ namespace OpenRCT2::Paint
             {
                 const auto tileKey = TerrainKey(tx, ty);
                 if (const auto terrainIt = _terrainCache.entries.find(tileKey);
-                    terrainIt != _terrainCache.entries.end())
+                    terrainIt != _terrainCache.entries.end() && !terrainIt->second.dirty)
                 {
                     const auto& terrain = terrainIt->second;
                     addSurface(terrain.ground);
@@ -1170,7 +1172,8 @@ namespace OpenRCT2::Paint
                 }
 
                 const auto cacheIt = _staticPaintCache.find(tileKey);
-                if (cacheIt == _staticPaintCache.end() || !cacheIt->second.valid || cacheIt->second.animated)
+                if (cacheIt == _staticPaintCache.end() || !cacheIt->second.valid
+                    || cacheIt->second.dirty || cacheIt->second.animated)
                     continue;
                 const auto& cached = cacheIt->second;
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
@@ -1719,18 +1722,30 @@ namespace OpenRCT2::Paint
     }
     void InvalidateFirstPersonSceneRegion(CoordsXY low, CoordsXY high)
     {
-        if (_regionBounds.empty() && _terrainCache.entries.empty() && _staticPaintCache.empty()) return;
+        if (_regionBounds.empty() && _terrainCache.entries.empty()
+            && _staticPaintCache.empty() && _staticRegionPackets.empty()) return;
         const auto floorTile = [](int32_t x) {return int32_t(std::floor(float(x)/kCoordsXYStep));};
         const auto x0 = floorTile(std::min(low.x,high.x));
         const auto y0 = floorTile(std::min(low.y,high.y));
         const auto x1 = floorTile(std::max(low.x,high.x));
         const auto y1 = floorTile(std::max(low.y,high.y));
+        for (int32_t regionY = y0 / 32; regionY <= y1 / 32; ++regionY)
+        for (int32_t regionX = x0 / 32; regionX <= x1 / 32; ++regionX)
+            _staticRegionPackets[
+                FirstPersonGpuRegionKey(regionX * 32, regionY * 32)].dirty = true;
         for (auto& [key, entry] : _regionBounds)
         {
             const int32_t originX = int32_t(key >> 32);
             const int32_t originY = int32_t(key & 0xffffffffu);
             if (x0 < entry.x1 && x1 >= originX && y0 < entry.y1 && y1 >= originY)
                 entry.dirty = true;
+        }
+        for (auto& [key, terrain] : _terrainCache.entries)
+        {
+            const int32_t tx = int32_t(key >> 32);
+            const int32_t ty = int32_t(key & 0xffffffffu);
+            if (tx >= x0 && tx <= x1 && ty >= y0 && ty <= y1)
+                terrain.dirty = true;
         }
         for (auto& [key,cached] : _staticPaintCache)
         {
@@ -1739,14 +1754,11 @@ namespace OpenRCT2::Paint
             if (tx>=x0 && tx<=x1 && ty>=y0 && ty<=y1)
                 cached.dirty=true;
         }
-        // Do not erase cached terrain on generic isometric invalidation. Native
-        // invalidation also happens for shadows, animations and moving objects.
-        // CollectTerrain validates actual terrain style, slope, ground height,
-        // water state and G1 sprite dimensions against live map data BEFORE
-        // reusing the surface. Clearing every time would defeat static caching
-        // in an animated park. Likewise, retain LOD hysteresis: an edited tile
-        // is revalidated for eligibility on its next admission, rather than
-        // oscillating because unrelated entities moved nearby.
+        // Generic native invalidation also covers shadows and moving objects,
+        // so retain the cached data but mark it unfit for a region packet until
+        // the tile is next admitted and its live terrain/static state is
+        // revalidated. This prevents stale region VBOs without forcing a full
+        // terrain reconstruction on every unrelated invalidation.
     }
     void InvalidateFirstPersonSceneTile(CoordsXY world)
     {
