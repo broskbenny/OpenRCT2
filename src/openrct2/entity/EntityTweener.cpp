@@ -155,6 +155,8 @@ namespace OpenRCT2
                 v.rollBefore = v.rollAfter = static_cast<uint8_t>(vehicle->roll);
                 v.flatPrimaryBefore = v.flatPrimaryAfter = vehicle->flatRideAnimationFrame;
                 v.flatSecondaryBefore = v.flatSecondaryAfter = vehicle->flatRideSecondaryAnimationFrame;
+                v.swingPositionBefore = v.swingPositionAfter = vehicle->SwingPosition;
+                v.swingSpriteBefore = v.swingSpriteAfter = vehicle->SwingSprite;
                 _trackedVisuals = v;
             }
         }
@@ -172,6 +174,8 @@ namespace OpenRCT2
                 _trackedVisuals->rollAfter = static_cast<uint8_t>(vehicle->roll);
                 _trackedVisuals->flatPrimaryAfter = vehicle->flatRideAnimationFrame;
                 _trackedVisuals->flatSecondaryAfter = vehicle->flatRideSecondaryAnimationFrame;
+                _trackedVisuals->swingPositionAfter = vehicle->SwingPosition;
+                _trackedVisuals->swingSpriteAfter = vehicle->SwingSprite;
                 _trackedVisuals->alpha = 1.0f;
             }
             else _trackedVisuals.reset();

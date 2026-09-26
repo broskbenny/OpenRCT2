@@ -744,19 +744,33 @@ namespace OpenRCT2::Ui::FirstPerson
                         Paint::FirstPersonVehicleRollRadians(static_cast<VehicleRoll>(interpolated->rollAfter)),
                         interpolated->alpha);
                 }
-                // RCT2 stores the spinning carriage angle on an eight-bit turn;
-                // preserve it even if the underlying track and car are stationary.
+                // Carriage effects are local-frame transforms. Do not fold
+                // spin into world yaw: on pitched track that rotates about the
+                // wrong axis. Swing likewise follows its simulation state.
                 const auto* entry = car->Entry();
+                float spinAngle = 0.0f;
                 if (entry != nullptr && entry->flags.has(CarEntryFlag::hasSpinning))
                 {
-                    const float spin = interpolated.has_value()
+                    spinAngle = interpolated.has_value()
                         ? Paint::FirstPersonLerpAngle(
                               Paint::SpinSpriteYawRadians(interpolated->spinBefore),
                               Paint::SpinSpriteYawRadians(interpolated->spinAfter), interpolated->alpha)
                         : Paint::SpinSpriteYawRadians(car->spin_sprite);
-                    carOrientation.yaw += spin;
                 }
-                const auto cb = Paint::GetFirstPersonBasis(carOrientation);
+                float swingPosition = float(car->SwingPosition);
+                if (interpolated.has_value())
+                {
+                    swingPosition =
+                        float(interpolated->swingPositionBefore)
+                        + (float(interpolated->swingPositionAfter)
+                            - float(interpolated->swingPositionBefore))
+                            * interpolated->alpha;
+                }
+                const auto trackBasis = Paint::FirstPersonVehicleTrackBasis(
+                    *car, carOrientation.yaw, carOrientation.pitch, carOrientation.roll);
+                const auto carriage = Paint::BuildFirstPersonCarriageTransform(
+                    *car, trackBasis, spinAngle, swingPosition);
+
                 float flatPrimaryFrame = float(car->flatRideAnimationFrame);
                 float flatSecondaryFrame = float(car->flatRideSecondaryAnimationFrame);
                 if (interpolated.has_value())
@@ -774,7 +788,13 @@ namespace OpenRCT2::Ui::FirstPerson
 
                 const auto loc = car->getLocation();
                 const auto passenger = Paint::BuildFirstPersonPassengerPose(
-                    *car, { float(loc.x), float(loc.y), float(loc.z) }, cb,
+                    *car,
+                    {
+                        float(loc.x) + carriage.originOffset.x,
+                        float(loc.y) + carriage.originOffset.y,
+                        float(loc.z) + carriage.originOffset.z,
+                    },
+                    carriage.basis,
                     flatPrimaryFrame, flatSecondaryFrame, _state.attachedSeat);
                 const auto headBasis = Paint::GetPassengerHeadBasis(
                     passenger.basis, _state.headYaw, _state.headPitch);
@@ -801,6 +821,7 @@ namespace OpenRCT2::Ui::FirstPerson
         Paint::FirstPersonRenderOptions options{};
         options.camera = _state.camera;
         options.hiddenEntity = _state.mode == Mode::rideAttached ? _state.attachedVehicle : EntityId::GetNull();
+        options.hiddenSeatIndex = _state.mode == Mode::rideAttached ? _state.attachedSeat : 0xFF;
         options.radiusTiles = 64;
         if (auto* mainWindow = WindowGetMain(); mainWindow != nullptr && mainWindow->viewport != nullptr)
             options.viewFlags = mainWindow->viewport->flags;

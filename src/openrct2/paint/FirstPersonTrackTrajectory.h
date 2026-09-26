@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 namespace OpenRCT2::Paint
@@ -34,14 +35,15 @@ namespace OpenRCT2::Paint
         std::vector<FirstPersonTrackTrajectoryPoint> points;
     };
 
-    // Conservative generic rail cross-section. Ride families that deliberately
-    // offset the vehicle reference path can override this in future rather than
-    // corrupting the authoritative trajectory itself.
+    // A vehicle trajectory proves a reference curve, not a visible rail shape.
+    // Profiles remain separate evidence and must be explicitly verified before
+    // any generated running surface may replace native track artwork.
     struct FirstPersonTrackRailProfile
     {
-        float halfGauge = 4.0f;
-        float halfWidth = 0.75f;
-        float halfHeight = 0.75f;
+        bool verified = false;
+        float halfGauge = 0.0f;
+        float halfWidth = 0.0f;
+        float halfHeight = 0.0f;
     };
 
     [[nodiscard]] inline const VehicleInfoList* GetFirstPersonStandardTrackVehicleInfo(
@@ -60,15 +62,25 @@ namespace OpenRCT2::Paint
         return list;
     }
 
-    [[nodiscard]] inline std::optional<FirstPersonTrackTrajectory> BuildFirstPersonTrackTrajectory(
-        TrackElemType type, uint8_t direction, FirstPersonVec3 trackLocation)
+    [[nodiscard]] inline const FirstPersonTrackTrajectory*
+        GetFirstPersonTrackTrajectoryTemplate(
+            TrackElemType type, uint8_t direction)
     {
+        const size_t key =
+            size_t(EnumValue(type)) * kNumOrthogonalDirections + (direction & 3);
+        static std::unordered_map<size_t, std::optional<FirstPersonTrackTrajectory>> cache;
+        if (const auto found = cache.find(key); found != cache.end())
+            return found->second.has_value() ? &*found->second : nullptr;
+
         const auto* list = GetFirstPersonStandardTrackVehicleInfo(type, direction);
         if (list == nullptr)
-            return std::nullopt;
+        {
+            cache.emplace(key, std::nullopt);
+            return nullptr;
+        }
 
-        FirstPersonTrackTrajectory result{};
-        result.points.reserve(list->size);
+        FirstPersonTrackTrajectory local{};
+        local.points.reserve(list->size);
         for (uint16_t progress = 0; progress < list->size; ++progress)
         {
             const auto& sample = list->info[progress];
@@ -76,15 +88,31 @@ namespace OpenRCT2::Paint
             orientation.yaw = FirstPersonVehicleYawRadians(sample.yaw);
             orientation.pitch = FirstPersonVehiclePitchRadians(sample.pitch);
             orientation.roll = FirstPersonVehicleRollRadians(sample.roll);
-            result.points.push_back({
-                {
-                    trackLocation.x + float(sample.x),
-                    trackLocation.y + float(sample.y),
-                    trackLocation.z + float(sample.z),
-                },
+            local.points.push_back({
+                { float(sample.x), float(sample.y), float(sample.z) },
                 GetFirstPersonBasis(orientation),
                 progress,
             });
+        }
+        auto [it, inserted] = cache.emplace(key, std::move(local));
+        (void)inserted;
+        return &*it->second;
+    }
+
+    [[nodiscard]] inline std::optional<FirstPersonTrackTrajectory> BuildFirstPersonTrackTrajectory(
+        TrackElemType type, uint8_t direction, FirstPersonVec3 trackLocation)
+    {
+        const auto* local =
+            GetFirstPersonTrackTrajectoryTemplate(type, direction);
+        if (local == nullptr)
+            return std::nullopt;
+
+        FirstPersonTrackTrajectory result = *local;
+        for (auto& point : result.points)
+        {
+            point.position.x += trackLocation.x;
+            point.position.y += trackLocation.y;
+            point.position.z += trackLocation.z;
         }
         return result;
     }

@@ -189,6 +189,8 @@ namespace OpenRCT2::Paint
         {
             uint64_t key{};
             FirstPersonVec3 anchor{};
+            CoordsXY sourceTile{};
+            TileElementType type = TileElementType::surface;
         };
 
         [[nodiscard]] std::optional<ReconstructionGroupInfo> GetReconstructionGroup(
@@ -221,7 +223,9 @@ namespace OpenRCT2::Paint
                 ExtendStableKey(key, direction);
                 ExtendStableKey(key, large->getEntryIndex());
                 if (key == 0) key = 1;
-                return ReconstructionGroupInfo{ key, anchor };
+                return ReconstructionGroupInfo{
+                    key, anchor, tile, TileElementType::largeScenery
+                };
             }
 
             if (element->getType() == TileElementType::track)
@@ -243,7 +247,9 @@ namespace OpenRCT2::Paint
                 ExtendStableKey(key, track->getRideIndex().ToUnderlying());
                 ExtendStableKey(key, static_cast<uint16_t>(track->getTrackType()));
                 if (key == 0) key = 1;
-                return ReconstructionGroupInfo{ key, anchor };
+                return ReconstructionGroupInfo{
+                    key, anchor, tile, TileElementType::track
+                };
             }
 
             return std::nullopt;
@@ -612,6 +618,7 @@ namespace OpenRCT2::Paint
             uint32_t bodyImageLast = 0;
             FirstPersonMultiViewFit fit{};
             float minimumFaceSourceCoverage = 0.0f;
+            float minimumFaceOwnership = 0.0f;
             FirstPersonVec3 low{};
             FirstPersonVec3 high{};
             std::vector<LargeSceneryAssetFace> faces;
@@ -927,15 +934,54 @@ namespace OpenRCT2::Paint
             return result;
         }
 
+        [[nodiscard]] std::array<FirstPersonDepthOwnerMap, 4>
+            BuildLargeSceneryAssetDepthOwners(
+                const std::vector<LargeSceneryAssetFace>& faces)
+        {
+            std::array<FirstPersonDepthOwnerMap, 4> result{};
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
+            {
+                for (size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex)
+                {
+                    const auto& face = faces[faceIndex];
+                    if (!LargeSceneryFaceVisibleFromDirection(face.kind, rotation))
+                        continue;
+
+                    std::array<ScreenCoordsXY, 4> screen{};
+                    std::array<float, 4> depth{};
+                    for (size_t i = 0; i < face.corners.size(); ++i)
+                    {
+                        screen[i] = Translate3DTo2DWithZ(rotation, face.corners[i]);
+                        depth[i] = FirstPersonIsoDepth(rotation, face.corners[i]);
+                    }
+                    AddFirstPersonDepthTriangle(
+                        result[rotation], uint32_t(faceIndex),
+                        { screen[0], screen[1], screen[2] },
+                        { depth[0], depth[1], depth[2] });
+                    AddFirstPersonDepthTriangle(
+                        result[rotation], uint32_t(faceIndex),
+                        { screen[0], screen[2], screen[3] },
+                        { depth[0], depth[2], depth[3] });
+                }
+            }
+            return result;
+        }
+
         [[nodiscard]] LargeSceneryAssetModel BuildLargeSceneryAssetModel(
-            const LargeSceneryEntry& entry)
+            const LargeSceneryEntry& entry,
+            std::chrono::steady_clock::time_point deadline)
         {
             LargeSceneryAssetModel model{};
-            model.attempted = true;
             model.bodyImageFirst = entry.image + 4;
             model.bodyImageLast = model.bodyImageFirst + uint32_t(entry.tiles.size() * 4);
             if (!LargeSceneryAssetEligible(entry))
+            {
+                model.attempted = true;
                 return model;
+            }
+            if (std::chrono::steady_clock::now() >= deadline)
+                return model;
+            model.attempted = true;
 
             const auto cells = BuildLargeSceneryAssetCells(entry);
             if (!cells.has_value())
@@ -943,12 +989,22 @@ namespace OpenRCT2::Paint
             const auto observed = CollectLargeSceneryObservedViews(entry);
             if (!observed.valid)
                 return model;
+            if (std::chrono::steady_clock::now() >= deadline)
+            {
+                model.attempted = false;
+                return model;
+            }
 
             static constexpr std::array<int32_t, 7> kHeightTrims{ { 0, 2, 4, 6, 8, 12, 16 } };
             float bestScore = -std::numeric_limits<float>::infinity();
             std::vector<LargeSceneryAssetFace> bestFaces;
             for (const int32_t trim : kHeightTrims)
             {
+                if (std::chrono::steady_clock::now() >= deadline)
+                {
+                    model.attempted = false;
+                    return model;
+                }
                 const auto faces = BuildLargeSceneryAssetFaces(*cells, trim);
                 if (faces.empty())
                     continue;
@@ -969,32 +1025,66 @@ namespace OpenRCT2::Paint
             if (bestFaces.empty() || !IsFirstPersonMultiViewFitReliable(model.fit))
                 return model;
 
+            const auto depthOwners =
+                BuildLargeSceneryAssetDepthOwners(bestFaces);
             float minimumFaceCoverage = 1.0f;
-            for (auto& face : bestFaces)
+            float minimumFaceOwnership = 1.0f;
+            for (size_t faceIndex = 0; faceIndex < bestFaces.size(); ++faceIndex)
             {
-                float bestCoverage = -1.0f;
+                if (std::chrono::steady_clock::now() >= deadline)
+                {
+                    model.attempted = false;
+                    return model;
+                }
+                auto& face = bestFaces[faceIndex];
+                float bestScore = -1.0f;
+                float bestCoverage = 0.0f;
+                float bestOwnership = 0.0f;
                 uint8_t bestDirection = 0;
                 for (uint8_t direction = 0; direction < 4; ++direction)
                 {
                     if (!LargeSceneryFaceVisibleFromDirection(face.kind, direction))
                         continue;
-                    const auto projectedFace = RasterizeLargeSceneryAssetFace(face, direction);
+                    const auto projectedFace =
+                        RasterizeLargeSceneryAssetFace(face, direction);
                     if (projectedFace.empty())
                         continue;
-                    const auto& source = observed.bySequence[face.sequence][direction];
-                    const auto fit = CompareFirstPersonSilhouettes(source, projectedFace);
-                    if (!fit.valid || fit.candidateCoverage <= bestCoverage)
+
+                    const float ownership = FirstPersonDepthOwnerCoverage(
+                        depthOwners[direction], uint32_t(faceIndex), projectedFace);
+                    // Silhouette agreement says "something is opaque here";
+                    // the depth-owner map additionally says THIS face owns it.
+                    // Reject source views where another candidate surface is in
+                    // front rather than baking foreground pixels onto a recess.
+                    if (ownership < 0.97f)
                         continue;
+
+                    const auto& source =
+                        observed.bySequence[face.sequence][direction];
+                    const auto fit =
+                        CompareFirstPersonSilhouettes(source, projectedFace);
+                    if (!fit.valid)
+                        continue;
+                    const float score =
+                        std::min(fit.candidateCoverage, ownership);
+                    if (score <= bestScore)
+                        continue;
+                    bestScore = score;
                     bestCoverage = fit.candidateCoverage;
+                    bestOwnership = ownership;
                     bestDirection = direction;
                 }
-                if (bestCoverage < 0.0f)
+                if (bestScore < 0.0f)
                     return model;
                 face.sourceDirection = bestDirection;
-                minimumFaceCoverage = std::min(minimumFaceCoverage, bestCoverage);
+                minimumFaceCoverage =
+                    std::min(minimumFaceCoverage, bestCoverage);
+                minimumFaceOwnership =
+                    std::min(minimumFaceOwnership, bestOwnership);
             }
             model.minimumFaceSourceCoverage = minimumFaceCoverage;
-            if (minimumFaceCoverage < 0.55f)
+            model.minimumFaceOwnership = minimumFaceOwnership;
+            if (minimumFaceCoverage < 0.55f || minimumFaceOwnership < 0.97f)
                 return model;
 
             model.low = {
@@ -1019,7 +1109,8 @@ namespace OpenRCT2::Paint
         }
 
         [[nodiscard]] const LargeSceneryAssetModel* GetLargeSceneryAssetModel(
-            const LargeSceneryEntry& entry, bool allowBuild)
+            const LargeSceneryEntry& entry, bool allowBuild,
+            std::chrono::steady_clock::time_point deadline)
         {
             auto [it, inserted] = _largeSceneryAssetModels.try_emplace(&entry);
             if (inserted)
@@ -1028,7 +1119,7 @@ namespace OpenRCT2::Paint
             {
                 if (!allowBuild)
                     return nullptr;
-                it->second = BuildLargeSceneryAssetModel(entry);
+                it->second = BuildLargeSceneryAssetModel(entry, deadline);
             }
             return &it->second;
         }
@@ -1101,13 +1192,48 @@ namespace OpenRCT2::Paint
             EmitQuad(surface, v, UsesOppositeTerrainDiagonal(slope));
             scene.surfaces.emplace_back(std::move(surface));
         }
+        [[nodiscard]] bool IsHiddenPassengerTileComponent(
+            const PaintStruct& ps, EntityId hiddenEntity, uint8_t hiddenSeatIndex)
+        {
+            if (ps.Source != PaintStructSource::tile || ps.Entity == nullptr
+                || hiddenEntity.IsNull() || ps.Entity->id != hiddenEntity
+                || hiddenSeatIndex == 0xFF || !ps.image_id.HasValue())
+                return false;
+
+            const auto* vehicle = ps.Entity->as<Vehicle>();
+            const auto* ride = vehicle != nullptr ? vehicle->GetRide() : nullptr;
+            const auto* rideEntry = vehicle != nullptr ? vehicle->GetRideEntry() : nullptr;
+            if (vehicle == nullptr || ride == nullptr || rideEntry == nullptr
+                || ride->getRideTypeDescriptor().Name != "ferris_wheel")
+                return false;
+
+            const uint32_t image = ps.image_id.GetIndex();
+            for (uint8_t direction = 0; direction < 4; ++direction)
+            {
+                if (image == FirstPersonFerrisWheelRiderImageIndex(
+                        rideEntry->Cars[0].baseImageId, direction,
+                        vehicle->flatRideAnimationFrame, hiddenSeatIndex))
+                    return true;
+            }
+            return false;
+        }
+
         void AppendRoot(
             FirstPersonScene& scene, const PaintStruct& ps, const FirstPersonVec3& anchor,
             const FirstPersonBasis& basis, const ScreenCoordsXY& isoAnchor,
-            uint32_t viewFlags, EntityId hidden, uint8_t rotation, bool emitPathDeck)
+            uint32_t viewFlags, EntityId hidden, uint8_t hiddenSeatIndex,
+            uint8_t rotation, bool emitPathDeck)
         {
             if (ps.Entity != nullptr && !hidden.IsNull() && ps.Entity->id == hidden)
-                return;
+            {
+                // Entity-painted art is the attached vehicle body. Tile-painted
+                // art can merely borrow that entity for interaction ownership;
+                // hiding it wholesale deletes mechanisms such as Ferris wheels.
+                if (ps.Source == PaintStructSource::entity
+                    || IsHiddenPassengerTileComponent(
+                        ps, hidden, hiddenSeatIndex))
+                    return;
+            }
             const auto visibility = GetPaintStructVisibility(&ps, viewFlags);
             if (visibility == VisibilityKind::hidden)
                 return;
@@ -1152,7 +1278,9 @@ namespace OpenRCT2::Paint
             }
             if (ps.Children != nullptr)
             {
-                AppendRoot(scene, *ps.Children, anchor, basis, isoAnchor, viewFlags, hidden, rotation, false);
+                AppendRoot(
+                    scene, *ps.Children, anchor, basis, isoAnchor,
+                    viewFlags, hidden, hiddenSeatIndex, rotation, false);
             }
             else
             {
@@ -1432,6 +1560,9 @@ namespace OpenRCT2::Paint
             std::vector<FirstPersonSurface> surfaces;
         };
         static std::unordered_map<uint64_t, LargeSceneryGeometryCacheEntry> _largeSceneryGeometryCache;
+        static std::unordered_map<uint64_t, std::unordered_set<uint64_t>>
+            _largeSceneryGroupsByRegion;
+        static std::unordered_set<uint64_t> _activeLargeSceneryRegions;
         static bool _largeSceneryGeometryEnabled = false;
 
         [[nodiscard]] bool LargeSceneryGeometryAllowedForView(uint32_t viewFlags)
@@ -1460,6 +1591,46 @@ namespace OpenRCT2::Paint
             {
                 if (surface.gpuRegion != 0)
                     _staticRegionPackets[surface.gpuRegion].dirty = true;
+            }
+        }
+
+        void UnregisterLargeSceneryRegionMembership(
+            uint64_t groupKey, const LargeSceneryGeometryCacheEntry& cached)
+        {
+            std::unordered_set<uint64_t> regions;
+            for (const auto& surface : cached.surfaces)
+            {
+                if (surface.gpuRegion != 0)
+                    regions.insert(surface.gpuRegion);
+            }
+            for (const auto region : regions)
+            {
+                const auto found = _largeSceneryGroupsByRegion.find(region);
+                if (found == _largeSceneryGroupsByRegion.end())
+                    continue;
+                found->second.erase(groupKey);
+                if (found->second.empty())
+                    _largeSceneryGroupsByRegion.erase(found);
+            }
+        }
+
+        void RegisterLargeSceneryRegionMembership(
+            uint64_t groupKey, const LargeSceneryGeometryCacheEntry& cached)
+        {
+            for (const auto& surface : cached.surfaces)
+            {
+                if (surface.gpuRegion != 0)
+                    _largeSceneryGroupsByRegion[surface.gpuRegion].insert(groupKey);
+            }
+        }
+
+        void ActivateLargeSceneryRegions(
+            const LargeSceneryGeometryCacheEntry& cached)
+        {
+            for (const auto& surface : cached.surfaces)
+            {
+                if (surface.gpuRegion != 0)
+                    _activeLargeSceneryRegions.insert(surface.gpuRegion);
             }
         }
 
@@ -1581,7 +1752,10 @@ namespace OpenRCT2::Paint
                 for (size_t i = 0; i < face.corners.size(); ++i)
                 {
                     const auto localXY =
-                        CoordsXY{ face.corners[i].x, face.corners[i].y }.rotate(objectDirection);
+                        FirstPersonLargeSceneryPlacedPoint(
+                            { tile.offset.x, tile.offset.y },
+                            { face.corners[i].x, face.corners[i].y },
+                            objectDirection);
                     const FirstPersonVec3 world{
                         group.anchor.x + float(localXY.x),
                         group.anchor.y + float(localXY.y),
@@ -1650,24 +1824,11 @@ namespace OpenRCT2::Paint
             return result;
         }
 
-        [[nodiscard]] bool VisibleTilesTouchLargeSceneryGeometry(
-            const LargeSceneryGeometryCacheEntry& cached,
-            const std::unordered_set<uint64_t>& visibleTileKeys)
-        {
-            if (!cached.hasBounds)
-                return false;
-            for (int32_t y = cached.minTileY; y <= cached.maxTileY; ++y)
-            for (int32_t x = cached.minTileX; x <= cached.maxTileX; ++x)
-            {
-                if (visibleTileKeys.contains(TerrainKey(x, y)))
-                    return true;
-            }
-            return false;
-        }
-
         void UpdateLargeSceneryReconstructions(FirstPersonScene& scene, uint64_t frame)
         {
-            const bool enabled = LargeSceneryGeometryAllowedForView(scene.options.viewFlags);
+            _activeLargeSceneryRegions.clear();
+            const bool enabled =
+                LargeSceneryGeometryAllowedForView(scene.options.viewFlags);
             if (_largeSceneryGeometryEnabled != enabled)
             {
                 for (const auto& [groupKey, cached] : _largeSceneryGeometryCache)
@@ -1680,121 +1841,171 @@ namespace OpenRCT2::Paint
             if (!enabled)
                 return;
 
-            // Fitting all four silhouettes is deliberately staggered. Until an
-            // asset has been accepted, its native group impostor remains intact.
+            // Discovery reuses the reconstruction groups already collected by
+            // the static-tile semantic cache. Ordinary presentation frames no
+            // longer walk every visible tile-element stack a second time.
+            constexpr auto kColdFitBudget = std::chrono::microseconds(1500);
+            const auto fitDeadline =
+                std::chrono::steady_clock::now() + kColdFitBudget;
             size_t assetFitBudget = 1;
             std::unordered_set<uint64_t> seenGroups;
-            std::unordered_set<uint64_t> visibleTileKeys;
             seenGroups.reserve(scene.visibleTiles.size() / 2 + 1);
-            visibleTileKeys.reserve(scene.visibleTiles.size() * 2 + 1);
-            for (const auto tile : scene.visibleTiles)
-                visibleTileKeys.insert(TerrainKey(
-                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
 
             for (const auto tile : scene.visibleTiles)
             {
-                auto* element = MapGetFirstElementAt(tile);
-                if (element == nullptr)
+                const auto tileKey = TerrainKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+                const auto paintCache = _staticPaintCache.find(tileKey);
+                if (paintCache == _staticPaintCache.end()
+                    || !paintCache->second.valid || paintCache->second.dirty)
                     continue;
-                do
+
+                for (const auto& group : paintCache->second.reconstructionGroups)
                 {
-                    if (element->getType() != TileElementType::largeScenery
-                        || element->isGhost() || element->isInvisible())
-                        continue;
-                    auto* large = element->asLargeScenery();
-                    const auto* entry = large != nullptr ? large->getEntry() : nullptr;
-                    const auto group = GetReconstructionGroup(tile, element);
-                    if (large == nullptr || entry == nullptr || !group.has_value()
-                        || !seenGroups.insert(group->key).second)
+                    if (group.type != TileElementType::largeScenery
+                        || !seenGroups.insert(group.key).second)
                         continue;
 
-                    if (!LargeSceneryAssetEligible(*entry)
+                    auto cached = _largeSceneryGeometryCache.find(group.key);
+                    if (cached != _largeSceneryGeometryCache.end()
+                        && !cached->second.dirty)
+                    {
+                        cached->second.lastSeen = frame;
+                        ActivateLargeSceneryRegions(cached->second);
+                        continue;
+                    }
+
+                    // Resolve live instance state only on a cold/dirty build.
+                    // sourceTile is the tile whose semantic cache produced this
+                    // group and is therefore invalidated with that tile.
+                    LargeSceneryElement* large = nullptr;
+                    auto* element = MapGetFirstElementAt(group.sourceTile);
+                    if (element != nullptr)
+                    {
+                        do
+                        {
+                            if (element->getType() != TileElementType::largeScenery
+                                || element->isGhost() || element->isInvisible())
+                                continue;
+                            const auto candidateGroup =
+                                GetReconstructionGroup(group.sourceTile, element);
+                            if (candidateGroup.has_value()
+                                && candidateGroup->key == group.key)
+                            {
+                                large = element->asLargeScenery();
+                                break;
+                            }
+                        } while (!(element++)->isLastForTile());
+                    }
+
+                    const auto* entry =
+                        large != nullptr ? large->getEntry() : nullptr;
+                    if (large == nullptr || entry == nullptr
+                        || !LargeSceneryAssetEligible(*entry)
                         || !LargeSceneryInstanceMetadataMatches(*large, *entry))
                     {
-                        if (auto old = _largeSceneryGeometryCache.find(group->key);
-                            old != _largeSceneryGeometryCache.end())
+                        if (cached != _largeSceneryGeometryCache.end())
                         {
-                            MarkLargeSceneryGeometryRegionsDirty(old->second);
-                            _largeSceneryGeometryCache.erase(old);
+                            MarkLargeSceneryGeometryRegionsDirty(cached->second);
+                            UnregisterLargeSceneryRegionMembership(
+                                group.key, cached->second);
+                            _largeSceneryGeometryCache.erase(cached);
                         }
                         continue;
                     }
 
-                    const auto existingModel = _largeSceneryAssetModels.find(entry);
+                    const auto existingModel =
+                        _largeSceneryAssetModels.find(entry);
                     const bool alreadyAttempted =
                         existingModel != _largeSceneryAssetModels.end()
                         && existingModel->second.attempted;
+                    const bool allowBuild =
+                        alreadyAttempted
+                        || (assetFitBudget > 0
+                            && std::chrono::steady_clock::now() < fitDeadline);
                     const auto* model = GetLargeSceneryAssetModel(
-                        *entry, alreadyAttempted || assetFitBudget > 0);
+                        *entry, allowBuild, fitDeadline);
                     if (!alreadyAttempted && model != nullptr)
                         --assetFitBudget;
                     if (model == nullptr || !model->reliable)
                         continue;
 
-                    uint64_t signature = group->key;
-                    ExtendStableKey(signature, static_cast<uint8_t>(large->getPrimaryColour()));
-                    ExtendStableKey(signature, static_cast<uint8_t>(large->getSecondaryColour()));
-                    ExtendStableKey(signature, static_cast<uint8_t>(large->getTertiaryColour()));
+                    uint64_t signature = group.key;
+                    ExtendStableKey(
+                        signature,
+                        static_cast<uint8_t>(large->getPrimaryColour()));
+                    ExtendStableKey(
+                        signature,
+                        static_cast<uint8_t>(large->getSecondaryColour()));
+                    ExtendStableKey(
+                        signature,
+                        static_cast<uint8_t>(large->getTertiaryColour()));
                     ExtendStableKey(signature, uint32_t(model->heightTrim));
                     ExtendStableKey(signature, model->faces.size());
+                    ExtendStableKey(
+                        signature,
+                        uint32_t(std::lround(
+                            model->minimumFaceOwnership * 1000.0f)));
 
-                    auto cached = _largeSceneryGeometryCache.find(group->key);
-                    if (cached == _largeSceneryGeometryCache.end()
-                        || cached->second.signature != signature || cached->second.dirty)
-                    {
-                        if (cached != _largeSceneryGeometryCache.end())
-                            MarkLargeSceneryGeometryRegionsDirty(cached->second);
-                        const uint8_t objectDirection =
-                            static_cast<uint8_t>(large->getDirection()) & 3u;
-                        if (!LargeSceneryInstanceComplete(
-                                *entry, *group, objectDirection))
-                        {
-                            if (cached != _largeSceneryGeometryCache.end())
-                                _largeSceneryGeometryCache.erase(cached);
-                            continue;
-                        }
-                        auto rebuilt = BuildLargeSceneryInstanceGeometry(
-                            *large, *entry, *model, *group, signature, frame);
-                        if (rebuilt.surfaces.empty())
-                        {
-                            if (cached != _largeSceneryGeometryCache.end())
-                                _largeSceneryGeometryCache.erase(cached);
-                            continue;
-                        }
-                        MarkLargeSceneryGeometryRegionsDirty(rebuilt);
-                        _largeSceneryGeometryCache[group->key] = std::move(rebuilt);
-                    }
-                    else
+                    if (cached != _largeSceneryGeometryCache.end()
+                        && cached->second.signature == signature
+                        && !cached->second.dirty)
                     {
                         cached->second.lastSeen = frame;
+                        ActivateLargeSceneryRegions(cached->second);
+                        continue;
                     }
-                } while (!(element++)->isLastForTile());
+
+                    if (cached != _largeSceneryGeometryCache.end())
+                    {
+                        MarkLargeSceneryGeometryRegionsDirty(cached->second);
+                        UnregisterLargeSceneryRegionMembership(
+                            group.key, cached->second);
+                    }
+
+                    const uint8_t objectDirection =
+                        static_cast<uint8_t>(large->getDirection()) & 3u;
+                    if (!LargeSceneryInstanceComplete(
+                            *entry, group, objectDirection))
+                    {
+                        if (cached != _largeSceneryGeometryCache.end())
+                            _largeSceneryGeometryCache.erase(cached);
+                        continue;
+                    }
+
+                    auto rebuilt = BuildLargeSceneryInstanceGeometry(
+                        *large, *entry, *model, group, signature, frame);
+                    if (rebuilt.surfaces.empty())
+                    {
+                        if (cached != _largeSceneryGeometryCache.end())
+                            _largeSceneryGeometryCache.erase(cached);
+                        continue;
+                    }
+
+                    MarkLargeSceneryGeometryRegionsDirty(rebuilt);
+                    RegisterLargeSceneryRegionMembership(group.key, rebuilt);
+                    ActivateLargeSceneryRegions(rebuilt);
+                    _largeSceneryGeometryCache[group.key] = std::move(rebuilt);
+                }
             }
 
-            for (auto it = _largeSceneryGeometryCache.begin();
-                 it != _largeSceneryGeometryCache.end();)
-            {
-                if (it->second.lastSeen != frame
-                    && VisibleTilesTouchLargeSceneryGeometry(
-                        it->second, visibleTileKeys))
-                {
-                    MarkLargeSceneryGeometryRegionsDirty(it->second);
-                    it = _largeSceneryGeometryCache.erase(it);
-                }
-                else
-                {
-                    ++it;
-                }
-            }
-
+            // Expiry is maintenance cadence, not presentation cadence. Region
+            // membership lets packet rebuilds avoid a full geometry-cache scan.
             if (frame % 120 == 0)
             {
-                std::erase_if(_largeSceneryGeometryCache, [frame](const auto& kv) {
-                    const bool expired = frame - kv.second.lastSeen > 240;
-                    if (expired)
-                        MarkLargeSceneryGeometryRegionsDirty(kv.second);
-                    return expired;
-                });
+                for (auto it = _largeSceneryGeometryCache.begin();
+                     it != _largeSceneryGeometryCache.end();)
+                {
+                    if (frame - it->second.lastSeen <= 240)
+                    {
+                        ++it;
+                        continue;
+                    }
+                    MarkLargeSceneryGeometryRegionsDirty(it->second);
+                    UnregisterLargeSceneryRegionMembership(
+                        it->first, it->second);
+                    it = _largeSceneryGeometryCache.erase(it);
+                }
             }
         }
 
@@ -1835,6 +2046,24 @@ namespace OpenRCT2::Paint
                 if (surface.gpuRegion != 0)
                     _staticRegionPackets[surface.gpuRegion].dirty = true;
             }
+        }
+
+        [[nodiscard]] constexpr bool FirstPersonHasVerifiedTrackProfiles()
+        {
+            // A sampled vehicle path is not evidence for a universal rail
+            // cross-section. Keep trajectory recovery available, but do not
+            // emit replacement running surfaces until a track-style-specific
+            // profile has been calibrated and independently validated.
+            return false;
+        }
+
+        [[nodiscard]] std::optional<FirstPersonTrackRailProfile>
+            FirstPersonVerifiedTrackRailProfile(
+                const Ride& ride, const TrackElement& track)
+        {
+            (void)ride;
+            (void)track;
+            return std::nullopt;
         }
 
         [[nodiscard]] bool RideUsesStandardFirstPersonTrajectory(const Ride& ride)
@@ -2015,7 +2244,11 @@ namespace OpenRCT2::Paint
             TrackTrajectoryCacheEntry result{};
             result.signature = signature;
             result.lastSeen = frame;
-            const FirstPersonTrackRailProfile profile{};
+            const auto verifiedProfile =
+                FirstPersonVerifiedTrackRailProfile(ride, track);
+            if (!verifiedProfile.has_value() || !verifiedProfile->verified)
+                return result;
+            const auto& profile = *verifiedProfile;
             const uint8_t topColour = FirstPersonRailColour(ride, track, true);
             const uint8_t sideColour = FirstPersonRailColour(ride, track, false);
 
@@ -2061,6 +2294,19 @@ namespace OpenRCT2::Paint
         void CollectTrackTrajectories(FirstPersonScene& scene)
         {
             const uint64_t frame = _terrainCache.frame;
+            if (!FirstPersonHasVerifiedTrackProfiles())
+            {
+                if (!_trackTrajectoryCache.empty())
+                {
+                    for (const auto& [groupKey, cached] : _trackTrajectoryCache)
+                    {
+                        (void)groupKey;
+                        MarkTrackTrajectoryRegionsDirty(cached);
+                    }
+                    _trackTrajectoryCache.clear();
+                }
+                return;
+            }
             std::unordered_set<uint64_t> seenGroups;
             seenGroups.reserve(scene.visibleTiles.size() / 2 + 1);
 
@@ -2618,13 +2864,20 @@ namespace OpenRCT2::Paint
             }
             if (_largeSceneryGeometryEnabled)
             {
-                for (const auto& [groupKey, geometry] : _largeSceneryGeometryCache)
+                if (const auto membership =
+                        _largeSceneryGroupsByRegion.find(regionKey);
+                    membership != _largeSceneryGroupsByRegion.end())
                 {
-                    (void)groupKey;
-                    if (geometry.dirty)
-                        continue;
-                    for (const auto& surface : geometry.surfaces)
-                        addSurface(surface);
+                    for (const auto groupKey : membership->second)
+                    {
+                        const auto geometry =
+                            _largeSceneryGeometryCache.find(groupKey);
+                        if (geometry == _largeSceneryGeometryCache.end()
+                            || geometry->second.dirty)
+                            continue;
+                        for (const auto& surface : geometry->second.surfaces)
+                            addSurface(surface);
+                    }
                 }
             }
 
@@ -2680,17 +2933,9 @@ namespace OpenRCT2::Paint
             }
             if (_largeSceneryGeometryEnabled)
             {
-                for (const auto& [groupKey, geometry] : _largeSceneryGeometryCache)
-                {
-                    (void)groupKey;
-                    if (geometry.dirty || geometry.lastSeen != frame)
-                        continue;
-                    for (const auto& surface : geometry.surfaces)
-                    {
-                        if (surface.gpuRegion != 0)
-                            visibleRegions.insert(surface.gpuRegion);
-                    }
-                }
+                visibleRegions.insert(
+                    _activeLargeSceneryRegions.begin(),
+                    _activeLargeSceneryRegions.end());
             }
 
             scene.staticRegions.reserve(visibleRegions.size());
@@ -2729,8 +2974,6 @@ namespace OpenRCT2::Paint
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
                 view.nearClip, view.farClip);
-            UpdateLargeSceneryReconstructions(scene, frame);
-
             for (const auto tile : scene.visibleTiles)
             {
                 const int32_t tx = tile.x / kCoordsXYStep;
@@ -2858,6 +3101,8 @@ namespace OpenRCT2::Paint
                     }
                 }
             }
+
+            UpdateLargeSceneryReconstructions(scene, frame);
 
             struct PaintWorkItem
             {
@@ -3052,7 +3297,8 @@ namespace OpenRCT2::Paint
                             emittedPathDecks.insert(root->Element).second;
                         AppendRoot(
                             scene, *root, anchor, basis, isoAnchor,
-                            opt.viewFlags, opt.hiddenEntity, rotation, emitPathDeck);
+                            opt.viewFlags, opt.hiddenEntity, opt.hiddenSeatIndex,
+                            rotation, emitPathDeck);
                         if (const auto semantic = LargeScenerySemanticBounds(*root); semantic.has_value())
                         {
                             for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
@@ -3301,6 +3547,8 @@ namespace OpenRCT2::Paint
         _trackTrajectoryCache.clear();
         _largeSceneryAssetModels.clear();
         _largeSceneryGeometryCache.clear();
+        _largeSceneryGroupsByRegion.clear();
+        _activeLargeSceneryRegions.clear();
         _largeSceneryGeometryEnabled = false;
         _staticRegionPackets.clear();
     }

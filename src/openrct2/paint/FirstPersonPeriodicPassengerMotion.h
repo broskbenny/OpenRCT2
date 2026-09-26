@@ -60,7 +60,12 @@ namespace OpenRCT2::Paint
         float seatSeparationUncertainty{};
         float eyeHeightUncertainty{};
         float trainingRmse{};
+        // Coefficient-only cross-view check retained as a diagnostic.
+        float coefficientValidationRmse{};
+        // Final constrained-orbit residuals against the actual held-out frames.
         float validationRmse{};
+        float allViewRmse{};
+        float maximumObservationResidual{};
     };
 
     struct FirstPersonPeriodicOrbitPoint
@@ -90,6 +95,17 @@ namespace OpenRCT2::Paint
         return FirstPersonWrapPeriodicFrame(
             primaryFrame + float(pairSeat) * 4.0f,
             float(kFirstPersonFerrisWheelFrameCount));
+    }
+
+    [[nodiscard]] constexpr uint32_t FirstPersonFerrisWheelRiderImageIndex(
+        uint32_t baseImageId, uint8_t direction,
+        uint8_t primaryFrame, uint8_t seatIndex)
+    {
+        const uint8_t pairSeat = seatIndex & 0xFEu;
+        const uint32_t frame =
+            (uint32_t(primaryFrame) + uint32_t(pairSeat) * 4u)
+            % kFirstPersonFerrisWheelFrameCount;
+        return baseImageId + 32u + uint32_t(direction & 3u) * 128u + frame;
     }
 
     [[nodiscard]] inline FirstPersonPeriodicOrbitPoint
@@ -460,7 +476,7 @@ namespace OpenRCT2::Paint
                 ++validationTerms;
             }
         }
-        result.validationRmse = validationTerms != 0
+        result.coefficientValidationRmse = validationTerms != 0
             ? std::sqrt(validationError2 / float(validationTerms))
             : std::numeric_limits<float>::infinity();
 
@@ -498,9 +514,9 @@ namespace OpenRCT2::Paint
             + std::abs(dot) / std::max(radius, 1.0f);
         const float offPlane = std::hypot(cosCoeff.y, sinCoeff.y);
         if (!std::isfinite(result.trainingRmse)
-            || !std::isfinite(result.validationRmse)
+            || !std::isfinite(result.coefficientValidationRmse)
             || result.trainingRmse > 5.0f
-            || result.validationRmse > 6.0f
+            || result.coefficientValidationRmse > 6.0f
             || result.centerUncertainty > 10.0f
             || circleError > std::max(8.0f, radius * 0.25f)
             || offPlane > std::max(6.0f, radius * 0.18f))
@@ -523,6 +539,53 @@ namespace OpenRCT2::Paint
         const float handedness = determinant >= 0.0f ? 1.0f : -1.0f;
         result.orbitSinX = handedness * -uz * radius;
         result.orbitSinZ = handedness * ux * radius;
+
+        // Validate the FINAL constrained circle against every actual observation.
+        // A second harmonic or other systematic contradiction is invisible to a
+        // first-harmonic coefficient comparison, so do not let it disappear from
+        // either the acceptance gate or reported uncertainty.
+        float allError2 = 0.0f;
+        float heldOutError2 = 0.0f;
+        size_t allTerms = 0;
+        size_t heldOutTerms = 0;
+        float maximumResidual = 0.0f;
+        for (uint8_t direction = 0; direction < 4; ++direction)
+        for (size_t sample = 0; sample < kFirstPersonFerrisWheelSampleCount; ++sample)
+        {
+            const auto& observation = observations[direction][sample];
+            if (!observation.valid)
+                return result;
+            const float phase =
+                float(sample * kFirstPersonFerrisWheelSampleStride);
+            const auto point =
+                SampleFirstPersonPeriodicOrbit(result, phase);
+            const auto projected = Detail::ProjectFerrisLocal(
+                direction, point.x, point.y, point.z);
+            const float dx = projected[0] - observation.x;
+            const float dy = projected[1] - observation.y;
+            const float residual = std::sqrt(dx * dx + dy * dy);
+            maximumResidual = std::max(maximumResidual, residual);
+            allError2 += dx * dx + dy * dy;
+            allTerms += 2;
+            if (direction >= 2)
+            {
+                heldOutError2 += dx * dx + dy * dy;
+                heldOutTerms += 2;
+            }
+        }
+        result.validationRmse = heldOutTerms != 0
+            ? std::sqrt(heldOutError2 / float(heldOutTerms))
+            : std::numeric_limits<float>::infinity();
+        result.allViewRmse = allTerms != 0
+            ? std::sqrt(allError2 / float(allTerms))
+            : std::numeric_limits<float>::infinity();
+        result.maximumObservationResidual = maximumResidual;
+        if (!std::isfinite(result.validationRmse)
+            || !std::isfinite(result.allViewRmse)
+            || result.validationRmse > 6.0f
+            || result.allViewRmse > 5.0f
+            || result.maximumObservationResidual > 12.0f)
+            return result;
 
         std::vector<float> widths;
         std::vector<float> heights;
@@ -547,10 +610,14 @@ namespace OpenRCT2::Paint
             std::clamp(medianWidth * 0.18f, 2.0f, 6.0f);
         result.eyeHeight =
             std::clamp(medianHeight * 0.55f, 6.0f, 18.0f);
-        result.centerUncertainty = std::max(
+        result.centerUncertainty = std::max({
             result.centerUncertainty,
-            std::max(result.trainingRmse, result.validationRmse));
-        result.radiusUncertainty = circleError + result.validationRmse;
+            result.trainingRmse,
+            result.validationRmse,
+            result.allViewRmse,
+        });
+        result.radiusUncertainty =
+            circleError + result.validationRmse + 0.25f * result.allViewRmse;
         result.seatSeparationUncertainty =
             std::max(0.5f, widthMad * 0.18f + medianWidth * 0.08f);
         result.eyeHeightUncertainty =

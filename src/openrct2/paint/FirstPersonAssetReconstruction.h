@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../interface/ScreenCoords.hpp"
+#include "../world/Location.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,10 +13,22 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace OpenRCT2::Paint
 {
+    [[nodiscard]] constexpr CoordsXY FirstPersonLargeSceneryPlacedPoint(
+        CoordsXY tileOffset, CoordsXY assetPoint, uint8_t objectDirection)
+    {
+        const auto placedTile = tileOffset.rotate(objectDirection);
+        const auto withinTile = assetPoint - tileOffset;
+        const auto centred = withinTile - CoordsXY{ kCoordsXYHalfTile, kCoordsXYHalfTile };
+        const auto rotatedWithin = centred.rotate(objectDirection)
+            + CoordsXY{ kCoordsXYHalfTile, kCoordsXYHalfTile };
+        return placedTile + rotatedWithin;
+    }
+
     // Large-scenery body images are indexed by
     // (objectDirection + viewportRotation) & 3. Recover the viewport rotation
     // that makes a chosen native image the correct projective source.
@@ -64,6 +77,88 @@ namespace OpenRCT2::Paint
             return pixels.size();
         }
     };
+
+    [[nodiscard]] constexpr float FirstPersonIsoDepth(
+        uint8_t rotation, const CoordsXYZ& point)
+    {
+        const auto rotated = CoordsXY{ point.x, point.y }.rotate(rotation);
+        return float(rotated.x + rotated.y + point.z);
+    }
+
+    struct FirstPersonDepthOwnerPixel
+    {
+        float depth = -std::numeric_limits<float>::infinity();
+        uint32_t owner = std::numeric_limits<uint32_t>::max();
+    };
+
+    using FirstPersonDepthOwnerMap =
+        std::unordered_map<uint64_t, FirstPersonDepthOwnerPixel>;
+
+    inline void AddFirstPersonDepthTriangle(
+        FirstPersonDepthOwnerMap& map, uint32_t owner,
+        const std::array<ScreenCoordsXY, 3>& screen,
+        const std::array<float, 3>& depth)
+    {
+        const int32_t minX = std::min({ screen[0].x, screen[1].x, screen[2].x });
+        const int32_t minY = std::min({ screen[0].y, screen[1].y, screen[2].y });
+        const int32_t maxX = std::max({ screen[0].x, screen[1].x, screen[2].x });
+        const int32_t maxY = std::max({ screen[0].y, screen[1].y, screen[2].y });
+        const int64_t spanX = int64_t(maxX) - int64_t(minX);
+        const int64_t spanY = int64_t(maxY) - int64_t(minY);
+        constexpr int64_t kMaxRasterPixels = 262144;
+        if (spanX <= 0 || spanY <= 0 || spanX * spanY > kMaxRasterPixels)
+            return;
+
+        const auto edge = [](const ScreenCoordsXY& a, const ScreenCoordsXY& b, float x, float y) {
+            return (x - float(a.x)) * float(b.y - a.y)
+                - (y - float(a.y)) * float(b.x - a.x);
+        };
+        const float area = edge(screen[0], screen[1], float(screen[2].x), float(screen[2].y));
+        if (std::abs(area) < 1e-6f)
+            return;
+
+        for (int32_t y = minY; y < maxY; ++y)
+        for (int32_t x = minX; x < maxX; ++x)
+        {
+            const float px = float(x) + 0.5f;
+            const float py = float(y) + 0.5f;
+            const float w0 = edge(screen[1], screen[2], px, py) / area;
+            const float w1 = edge(screen[2], screen[0], px, py) / area;
+            const float w2 = 1.0f - w0 - w1;
+            constexpr float kInsideEpsilon = -1e-5f;
+            if (w0 < kInsideEpsilon || w1 < kInsideEpsilon || w2 < kInsideEpsilon)
+                continue;
+
+            const float z = w0 * depth[0] + w1 * depth[1] + w2 * depth[2];
+            auto& pixel = map[FirstPersonSilhouettePixelKey(x, y)];
+            if (z > pixel.depth + 1e-4f)
+            {
+                pixel.depth = z;
+                pixel.owner = owner;
+            }
+            else if (std::abs(z - pixel.depth) <= 1e-4f && pixel.owner != owner)
+            {
+                pixel.owner = std::numeric_limits<uint32_t>::max();
+            }
+        }
+    }
+
+    [[nodiscard]] inline float FirstPersonDepthOwnerCoverage(
+        const FirstPersonDepthOwnerMap& map, uint32_t owner,
+        const FirstPersonSilhouette& silhouette)
+    {
+        if (silhouette.empty())
+            return 0.0f;
+        size_t owned = 0;
+        for (const auto pixel : silhouette.pixels)
+        {
+            const auto found = map.find(pixel);
+            if (found != map.end() && found->second.owner == owner)
+                ++owned;
+        }
+        return float(owned) / float(silhouette.size());
+    }
+
 
     inline void AddFirstPersonSilhouetteTriangle(
         FirstPersonSilhouette& silhouette,

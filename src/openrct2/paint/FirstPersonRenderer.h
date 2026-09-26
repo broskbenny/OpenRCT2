@@ -24,6 +24,10 @@ namespace OpenRCT2::Paint
     {
         FirstPersonCamera camera{};
         EntityId hiddenEntity = EntityId::GetNull();
+        // A tile painter can use hiddenEntity only as an interaction owner
+        // (Ferris wheel structure is the canonical example). Hide the attached
+        // passenger component by seat identity without discarding that mechanism.
+        uint8_t hiddenSeatIndex = 0xFF;
         uint32_t viewFlags{};
         // Retained for compatibility with the MVP caller; this is no longer a
         // maximum scene radius. Visibility covers the entire actual map.

@@ -141,6 +141,78 @@ TEST(FirstPersonAssetReconstructionTest, OversizedProjectedFaceForcesFallback)
     EXPECT_FALSE(fit.valid);
 }
 
+
+TEST(FirstPersonAssetReconstructionTest, RotatedFullTileKeepsNativePlacementPivot)
+{
+    constexpr std::array<CoordsXY, 4> corners{ {
+        { 0, 0 }, { 32, 0 }, { 32, 32 }, { 0, 32 },
+    } };
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        int32_t minX = 1000, minY = 1000, maxX = -1000, maxY = -1000;
+        for (const auto corner : corners)
+        {
+            const auto placed = FirstPersonLargeSceneryPlacedPoint(
+                { 0, 0 }, corner, direction);
+            minX = std::min(minX, placed.x);
+            minY = std::min(minY, placed.y);
+            maxX = std::max(maxX, placed.x);
+            maxY = std::max(maxY, placed.y);
+        }
+        EXPECT_EQ(minX, 0);
+        EXPECT_EQ(minY, 0);
+        EXPECT_EQ(maxX, 32);
+        EXPECT_EQ(maxY, 32);
+    }
+
+    // A second source tile rotates as a tile offset, while its internal
+    // coordinates still rotate about that destination tile's centre.
+    const auto p0 = FirstPersonLargeSceneryPlacedPoint(
+        { 32, 0 }, { 32, 0 }, 1);
+    const auto p1 = FirstPersonLargeSceneryPlacedPoint(
+        { 32, 0 }, { 64, 32 }, 1);
+    EXPECT_EQ(p0.x, 0);
+    EXPECT_EQ(p0.y, 0);
+    EXPECT_EQ(p1.x, 32);
+    EXPECT_EQ(p1.y, -32);
+}
+
+TEST(FirstPersonAssetReconstructionTest, DepthOwnerRejectsOccludedTextureSource)
+{
+    const std::array<ScreenCoordsXY, 3> triangle{ {
+        { 0, 0 }, { 16, 0 }, { 0, 16 },
+    } };
+    FirstPersonSilhouette silhouette{};
+    AddFirstPersonSilhouetteTriangle(
+        silhouette, triangle[0], triangle[1], triangle[2]);
+
+    FirstPersonDepthOwnerMap owners{};
+    AddFirstPersonDepthTriangle(
+        owners, 1, triangle, { 1.0f, 1.0f, 1.0f });
+    AddFirstPersonDepthTriangle(
+        owners, 2, triangle, { 2.0f, 2.0f, 2.0f });
+
+    EXPECT_LT(FirstPersonDepthOwnerCoverage(owners, 1, silhouette), 0.01f);
+    EXPECT_GT(FirstPersonDepthOwnerCoverage(owners, 2, silhouette), 0.99f);
+}
+
+TEST(FirstPersonTrackTrajectoryTest, MotionTemplateIsCachedButDoesNotClaimRailProfile)
+{
+    const auto* a = GetFirstPersonTrackTrajectoryTemplate(
+        OpenRCT2::TrackElemType::flat, 0);
+    const auto* b = GetFirstPersonTrackTrajectoryTemplate(
+        OpenRCT2::TrackElemType::flat, 0);
+    ASSERT_NE(a, nullptr);
+    EXPECT_EQ(a, b);
+    ASSERT_FALSE(a->points.empty());
+
+    const FirstPersonTrackRailProfile profile{};
+    EXPECT_FALSE(profile.verified);
+    EXPECT_FLOAT_EQ(profile.halfGauge, 0.0f);
+    EXPECT_FLOAT_EQ(profile.halfWidth, 0.0f);
+    EXPECT_FLOAT_EQ(profile.halfHeight, 0.0f);
+}
+
 TEST(FirstPersonTrackTrajectoryTest, StandardSamplesMatchVehicleMotionSource)
 {
     constexpr FirstPersonVec3 origin{ 320.0f, 640.0f, 80.0f };
@@ -563,6 +635,57 @@ TEST(FirstPersonVehiclePoseTest, UninvertingRollStatesPreservePhysicalBank)
 }
 
 
+TEST(FirstPersonVehiclePoseTest, LocalSpinUsesCarriageUpAxisOnIncline)
+{
+    FirstPersonCamera track{};
+    track.pitch = kPi / 6.0f;
+    const auto basis = GetFirstPersonBasis(track);
+    const auto spun = FirstPersonRotateLocalYaw(basis, kPi / 2.0f);
+
+    EXPECT_NEAR(spun.forward.x, 0.0f, 0.000001f);
+    EXPECT_NEAR(spun.forward.y, 1.0f, 0.000001f);
+    EXPECT_NEAR(spun.forward.z, 0.0f, 0.000001f);
+    EXPECT_NEAR(spun.up.x, basis.up.x, 0.000001f);
+    EXPECT_NEAR(spun.up.y, basis.up.y, 0.000001f);
+    EXPECT_NEAR(spun.up.z, basis.up.z, 0.000001f);
+}
+
+TEST(FirstPersonVehiclePoseTest, ReversalIsLocalHalfTurnNotWorldEulerHack)
+{
+    FirstPersonCamera track{};
+    track.yaw = 0.4f;
+    track.pitch = 0.3f;
+    track.roll = -0.2f;
+    const auto basis = GetFirstPersonBasis(track);
+    const auto reversed = FirstPersonRotateLocalYaw(basis, kPi);
+
+    EXPECT_NEAR(reversed.forward.x, -basis.forward.x, 0.000001f);
+    EXPECT_NEAR(reversed.forward.y, -basis.forward.y, 0.000001f);
+    EXPECT_NEAR(reversed.forward.z, -basis.forward.z, 0.000001f);
+    EXPECT_NEAR(reversed.up.x, basis.up.x, 0.000001f);
+    EXPECT_NEAR(reversed.up.y, basis.up.y, 0.000001f);
+    EXPECT_NEAR(reversed.up.z, basis.up.z, 0.000001f);
+}
+
+TEST(FirstPersonVehiclePoseTest, SwingPositionInterpolatesCalibratedArtworkAngles)
+{
+    FirstPersonSwingCalibration calibration{};
+    calibration.valid = true;
+    calibration.positiveAngles = { 0.0f, 0.1f, 0.3f, 0.6f };
+    calibration.pivotLength = 20.0f;
+
+    EXPECT_NEAR(
+        FirstPersonSwingAngleForPosition(calibration, 1820.0f),
+        0.1f, 0.000001f);
+    EXPECT_NEAR(
+        FirstPersonSwingAngleForPosition(calibration, -5460.0f),
+        -0.3f, 0.000001f);
+    EXPECT_GT(
+        FirstPersonSwingAngleForPosition(calibration, 8000.0f),
+        0.3f);
+}
+
+
 TEST(FirstPersonVehiclePoseTest, CyclicPassengerFrameInterpolationTakesShortestWrap)
 {
     EXPECT_NEAR(FirstPersonLerpCyclicFrame(47.0f, 0.0f, 0.5f, 48.0f), 47.5f, 0.0001f);
@@ -577,6 +700,12 @@ TEST(FirstPersonPeriodicPassengerMotionTest, FerrisRiderPhaseMatchesNativePairSt
     EXPECT_FLOAT_EQ(FirstPersonFerrisWheelRiderPhase(7.0f, 1), 7.0f);
     EXPECT_FLOAT_EQ(FirstPersonFerrisWheelRiderPhase(7.0f, 2), 15.0f);
     EXPECT_FLOAT_EQ(FirstPersonFerrisWheelRiderPhase(127.0f, 2), 7.0f);
+    EXPECT_EQ(
+        FirstPersonFerrisWheelRiderImageIndex(1000, 2, 127, 2),
+        1000u + 32u + 2u * 128u + 7u);
+    EXPECT_EQ(
+        FirstPersonFerrisWheelRiderImageIndex(1000, 2, 127, 3),
+        FirstPersonFerrisWheelRiderImageIndex(1000, 2, 127, 2));
     EXPECT_NEAR(
         FirstPersonLerpCyclicFrame(127.0f, 0.0f, 0.5f, 128.0f),
         127.5f, 0.0001f);
@@ -697,5 +826,38 @@ TEST(FirstPersonPeriodicPassengerMotionTest, ContradictoryHeldOutViewRejectsOrbi
 
     const auto calibration = FitFirstPersonFerrisWheelOrbit(observations);
     EXPECT_FALSE(calibration.valid);
+}
+
+
+TEST(FirstPersonPeriodicPassengerMotionTest, HeldOutSecondHarmonicCannotHideInCoefficientFit)
+{
+    FirstPersonFerrisWheelObservationSet observations{};
+    constexpr float radius = 40.0f;
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    for (size_t sample = 0; sample < kFirstPersonFerrisWheelSampleCount; ++sample)
+    {
+        const float phase = float(sample * kFirstPersonFerrisWheelSampleStride)
+            * (2.0f * kPi / float(kFirstPersonFerrisWheelFrameCount));
+        const float x = radius * std::cos(phase);
+        const float y = 0.0f;
+        const float z = 64.0f + radius * std::sin(phase);
+
+        float sx = 0.0f;
+        float sy = 0.0f;
+        switch (direction)
+        {
+            case 0: sx = y - x; sy = 0.5f * (x + y) - z; break;
+            case 1: sx = -x - y; sy = 0.5f * (y - x) - z; break;
+            case 2: sx = x - y; sy = -0.5f * (x + y) - z; break;
+            case 3: sx = x + y; sy = 0.5f * (x - y) - z; break;
+        }
+        if (direction >= 2)
+            sx += 40.0f * std::cos(2.0f * phase);
+        observations[direction][sample] = { true, sx, sy, 12.0f, 16.0f };
+    }
+
+    const auto calibration = FitFirstPersonFerrisWheelOrbit(observations);
+    EXPECT_FALSE(calibration.valid);
+    EXPECT_GT(calibration.validationRmse, 10.0f);
 }
 
