@@ -220,7 +220,7 @@ namespace OpenRCT2::Paint
             surface.immutableWidth = snapshot->width;
             surface.immutableHeight = snapshot->height;
             uint64_t fingerprint = 1469598103934665603ULL;
-            const auto extend = [&](uint64_t value) mutable {
+            auto extend = [&](uint64_t value) {
                 fingerprint ^= value;
                 fingerprint *= 1099511628211ULL;
             };
