@@ -158,6 +158,26 @@ BasicTextureInfo TextureCache::GetOrLoadBitmapTexture(ImageIndex image, const vo
     return info;
 }
 
+BasicTextureInfo TextureCache::LoadFirstPersonTransientBitmap(
+    const void* pixels, size_t width, size_t height)
+{
+    auto info = AllocateImage(int32_t(width), int32_t(height));
+    glCall(glBindTexture, GL_TEXTURE_2D_ARRAY, _atlasesTexture);
+    glCall(
+        glTexSubImage3D, GL_TEXTURE_2D_ARRAY, 0, info.bounds.x, info.bounds.y, info.index,
+        GLsizei(width), GLsizei(height), 1, GL_RED_INTEGER, GL_UNSIGNED_BYTE,
+        reinterpret_cast<const GLvoid*>(pixels));
+    _firstPersonTransientBitmaps.push_back(info);
+    return info;
+}
+
+void TextureCache::ClearFirstPersonTransientBitmaps()
+{
+    for (const auto& info : _firstPersonTransientBitmaps)
+        _atlases[info.index].Free(info);
+    _firstPersonTransientBitmaps.clear();
+}
+
 void TextureCache::CreateTextures()
 {
     if (!_initialized)
