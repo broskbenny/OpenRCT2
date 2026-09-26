@@ -791,10 +791,8 @@ namespace OpenRCT2::Paint
             bool animated = false;
             bool hasSelectedRotation = false;
             uint8_t selectedRotation = 0;
+            bool hasUngroupedResident = false;
             std::vector<ReconstructionGroupInfo> reconstructionGroups;
-            // Last group rotation represented in this tile's persistent region.
-            // This catches groups that changed while another region was visible.
-            std::unordered_map<uint64_t, uint8_t> assembledGroupRotations;
             // Keep all four native quarter-turn variants. Crossing a viewpoint
             // boundary can paint a variant once without destroying the previous
             // one, so moving back and forth does not thrash the whole park.
@@ -1478,7 +1476,7 @@ namespace OpenRCT2::Paint
                     cached.valid = true;
                     cached.dirty = false;
                     cached.reconstructionGroups.clear();
-                    cached.assembledGroupRotations.clear();
+                    cached.hasUngroupedResident = false;
 
                     auto* element = MapGetFirstElementAt(tile);
                     if (element != nullptr)
@@ -1512,7 +1510,8 @@ namespace OpenRCT2::Paint
                     ? std::optional<uint8_t>{ cached.selectedRotation }
                     : std::nullopt;
                 const auto tileRotation = PaintRotationForTile(opt.camera, tile, previousRotation);
-                if (!cached.hasSelectedRotation || cached.selectedRotation != tileRotation)
+                if ((!cached.hasSelectedRotation || cached.selectedRotation != tileRotation)
+                    && cached.hasUngroupedResident)
                     MarkStaticRegionDirtyForTile(tx, ty);
                 cached.selectedRotation = tileRotation;
                 cached.hasSelectedRotation = true;
@@ -1522,7 +1521,8 @@ namespace OpenRCT2::Paint
                 for (const auto& group : cached.reconstructionGroups)
                 {
                     auto& state = _reconstructionRotations[group.key];
-                    state.regions.insert(FirstPersonGpuRegionKey(tx, ty));
+                    if (!cached.animated)
+                        state.regions.insert(FirstPersonGpuRegionKey(tx, ty));
                     const auto previous = state.hasSelectedRotation
                         ? std::optional<uint8_t>{ state.selectedRotation }
                         : std::nullopt;
@@ -1540,12 +1540,6 @@ namespace OpenRCT2::Paint
                     }
                     rotationMask |= uint8_t(1u << selected);
 
-                    const auto assembled = cached.assembledGroupRotations.find(group.key);
-                    if (assembled == cached.assembledGroupRotations.end() || assembled->second != selected)
-                    {
-                        cached.assembledGroupRotations[group.key] = selected;
-                        MarkStaticRegionDirtyForTile(tx, ty);
-                    }
                 }
 
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
@@ -1748,9 +1742,15 @@ namespace OpenRCT2::Paint
                                 {
                                     auto& surface = scene.surfaces[i];
                                     if (IsResidentStaticSurface(surface))
+                                    {
                                         variant.residentSurfaces.push_back(surface);
+                                        if (surface.reconstructionGroup == 0)
+                                            cacheIt->second.hasUngroupedResident = true;
+                                    }
                                     else
+                                    {
                                         variant.streamedSurfaces.push_back(surface);
+                                    }
                                 }
                             }
                             scene.surfaces.erase(
