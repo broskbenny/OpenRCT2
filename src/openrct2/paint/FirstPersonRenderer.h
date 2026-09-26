@@ -27,9 +27,6 @@ namespace OpenRCT2::Paint
         // Retained for compatibility with the MVP caller; this is no longer a
         // maximum scene radius. Visibility covers the entire actual map.
         int32_t radiusTiles = 64;
-        float targetFrameMs = 16.6667f;
-        // Nonzero explicitly fixes the pixel-error tolerance (diagnostics/tests).
-        float fixedPixelTolerance = 0.0f;
         float fieldOfViewDegrees = 70.0f;
         float nearClip = 2.0f;
         // Minimum requested range; the collector extends it to contain the
@@ -112,15 +109,14 @@ namespace OpenRCT2::Paint
         // individual static surfaces are exposed only when that region rebuilds.
         std::vector<FirstPersonStaticRegion> staticRegions;
         std::vector<CoordsXY> visibleTiles;
-        float activePixelTolerance = 3.0f;
         // Diagnostics count native tile-paint work, not merely submitted quads.
         uint32_t staticTilePaints = 0;
         uint32_t staticTileCacheHits = 0;
         uint32_t dynamicTileQueries = 0; // O(1) occupancy probes on admitted tiles.
         uint32_t dynamicTilesPainted = 0; // Nonempty native entity tile paints.
         // Component timings from the application process, never synthetic FPS.
-        // Includes native region traversal, terrain projection, and source-art
-        // collection separately so the budget controller can be calibrated in game.
+        // Retained as diagnostics for native traversal, terrain projection and
+        // source-art collection; they do not drive a hidden quality approximation.
         float visibilityCpuMs = 0.0f;
         float terrainCpuMs = 0.0f;
         float paintCpuMs = 0.0f;
