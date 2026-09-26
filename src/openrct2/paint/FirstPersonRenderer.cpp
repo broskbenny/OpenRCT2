@@ -882,7 +882,7 @@ namespace OpenRCT2::Paint
                 cached.visibilityMaxZ = snapshot.maxZ;
                 cached.visibilityBoundValid = true;
                 cached.visibilityDirty = false;
-                cached.lastVisibilityScan = frame;
+                cached.lastVisibilityGeneration = sourceGeneration;
             }
 
             if (!cached.visibilityBoundValid)
