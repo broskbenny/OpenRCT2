@@ -108,6 +108,18 @@ namespace OpenRCT2::Audio
         return _firstPersonListener;
     }
 
+    static int32_t ApplyWorldSoundEnvironment(const CoordsXYZ& location, int32_t listenerAttenuation)
+    {
+        int32_t volumeDown = 0;
+        const auto* element = MapGetSurfaceElementAt(location);
+        if (element != nullptr && element->getBaseZ() - 5 > location.z)
+            volumeDown = 10;
+
+        // Preserve the existing native underground rule independently of how
+        // listener-space distance/pan is obtained.
+        return ((listenerAttenuation - 1) * (1 << volumeDown)) + 1;
+    }
+
     static void StopFirstPersonEffects()
     {
         for (auto& effect : _firstPersonActiveEffects)
@@ -129,7 +141,11 @@ namespace OpenRCT2::Audio
             // Temporarily mute distant sources. Do not stop them: the player
             // can walk/ride back into range while the original sample is playing.
             const int32_t volume = spatial.inRange
-                ? std::clamp(spatial.volume + effect.sampleModifier, -10000, 0) : -10000;
+                ? std::clamp(
+                      ApplyWorldSoundEnvironment(effect.emitter, spatial.volume)
+                          + effect.sampleModifier,
+                      -10000, 0)
+                : -10000;
             effect.channel->SetVolume(DStoMixerVolume(volume));
             effect.channel->SetPan(DStoMixerPan(spatial.inRange ? spatial.pan : 0));
             return false;
@@ -192,6 +208,11 @@ namespace OpenRCT2::Audio
     bool HasFirstPersonAudioListener()
     {
         return _firstPersonListener.has_value() || _firstPersonRideListener.has_value();
+    }
+
+    std::optional<FirstPersonAudioListener> GetFirstPersonAudioListener()
+    {
+        return ResolveFirstPersonAudioListener();
     }
 
     FirstPersonSpatialParams GetFirstPersonSpatialParams(const CoordsXYZ& source)
@@ -291,25 +312,25 @@ namespace OpenRCT2::Audio
      */
     static AudioParams GetParametersFromLocation(AudioObject* obj, uint32_t sampleIndex, const CoordsXYZ& location)
     {
-        int32_t volumeDown = 0;
         AudioParams params;
         params.in_range = true;
         params.volume = 0;
         params.pan = 0;
 
+        const auto sampleModifier = obj->GetSampleModifier(sampleIndex);
         if (HasFirstPersonAudioListener())
         {
             const auto spatial = GetFirstPersonSpatialParams(location);
             params.in_range = spatial.inRange;
-            params.volume = std::clamp(spatial.volume + obj->GetSampleModifier(sampleIndex), -10000, 0);
+            params.volume = spatial.inRange
+                ? std::clamp(
+                      ApplyWorldSoundEnvironment(location, spatial.volume) + sampleModifier,
+                      -10000, 0)
+                : -10000;
             params.pan = spatial.pan;
+            if (params.volume <= -10000)
+                params.in_range = false;
             return params;
-        }
-
-        auto element = MapGetSurfaceElementAt(location);
-        if (element != nullptr && (element->getBaseZ()) - 5 > location.z)
-        {
-            volumeDown = 10;
         }
 
         uint8_t rotation = GetCurrentRotation();
@@ -323,8 +344,8 @@ namespace OpenRCT2::Audio
                 int16_t vx = pos2.x - viewport.viewPos.x;
                 params.pan = viewport.pos.x + viewport.zoom.ApplyInversedTo(vx);
 
-                auto sampleModifier = obj->GetSampleModifier(sampleIndex);
-                auto viewModifier = ((viewport.zoom.ApplyTo(-1024) - 1) * (1 << volumeDown)) + 1;
+                const auto viewModifier = ApplyWorldSoundEnvironment(
+                    location, viewport.zoom.ApplyTo(-1024));
                 params.volume = sampleModifier + viewModifier;
 
                 if (!viewport.Contains(pos2) || params.volume < -10000)
