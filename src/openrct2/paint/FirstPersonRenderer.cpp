@@ -961,6 +961,124 @@ namespace OpenRCT2::Paint
             VisitFirstPersonRegions(frustum,0,0,map.x,map.y,visit,bounds);
         }
 
+        bool SelectDistantFlatTerrainPatch(
+            FirstPersonScene& scene, CoordsXY origin, int32_t factor,
+            const std::unordered_set<uint64_t>& visible, std::unordered_set<uint64_t>& consumed,
+            const FirstPersonFrustum& frustum, uint64_t frame)
+        {
+            const int32_t tx = origin.x / kCoordsXYStep;
+            const int32_t ty = origin.y / kCoordsXYStep;
+            if (factor < 2 || tx % factor != 0 || ty % factor != 0)
+                return false;
+
+            const float extent = float(factor * kCoordsXYStep);
+            const FirstPersonVec3 center{
+                float(origin.x) + extent * 0.5f,
+                float(origin.y) + extent * 0.5f,
+                0.0f
+            };
+            const FirstPersonVec3 delta = Sub(center, frustum.eye);
+            const float depth = Dot(delta, frustum.basis.forward);
+            if (depth <= extent)
+                return false;
+
+            const float focal = float(scene.dimensions.width) * 0.5f / frustum.tanHalfHorizontal;
+            const uint64_t lodKey = TerrainKey(tx, ty) ^ (uint64_t(factor) << 60);
+            const auto previous = _coarseLastUsed.find(lodKey);
+            const bool recentlySelected =
+                previous != _coarseLastUsed.end() && previous->second + 1 >= frame;
+            const float allowed = scene.activePixelTolerance
+                * (recentlySelected ? 1.20f : 0.80f);
+            if (focal * extent / depth > allowed)
+                return false;
+
+            ImageId image{};
+            int32_t height = 0;
+            const G1Element* sprite = nullptr;
+            for (int32_t y = 0; y < factor; ++y)
+            for (int32_t x = 0; x < factor; ++x)
+            {
+                const CoordsXY pos{
+                    origin.x + x * kCoordsXYStep,
+                    origin.y + y * kCoordsXYStep
+                };
+                const auto key = TerrainKey(tx + x, ty + y);
+                if (visible.count(key) == 0 || consumed.count(key) != 0)
+                    return false;
+
+                auto* surface = MapGetSurfaceElementAt(pos);
+                if (surface == nullptr || surface->getSlope() != kTileSlopeFlat
+                    || surface->getWaterHeight() > 0)
+                    return false;
+                const auto selected = GetFirstPersonTerrainImage(*surface, pos);
+                if (!selected.HasValue())
+                    return false;
+
+                if (x == 0 && y == 0)
+                {
+                    image = selected;
+                    height = surface->getBaseZ();
+                    sprite = GfxGetG1Element(image);
+                    if (sprite == nullptr)
+                        return false;
+                }
+                else if (selected != image || surface->getBaseZ() != height)
+                {
+                    return false;
+                }
+            }
+
+            FirstPersonSurface surface{};
+            surface.image = image;
+            surface.edgeCoverage = true;
+            surface.gpuRegion = FirstPersonGpuRegionKey(tx, ty);
+            const std::array<CoordsXYZ, 4> native{ {
+                { origin.x, origin.y, height },
+                { origin.x + kCoordsXYStep, origin.y, height },
+                { origin.x + kCoordsXYStep, origin.y + kCoordsXYStep, height },
+                { origin.x, origin.y + kCoordsXYStep, height },
+            } };
+            const auto isoOrigin = Translate3DTo2DWithZ(0, native[0]);
+            std::array<FirstPersonVertex, 4> quad{};
+            for (size_t i = 0; i < quad.size(); ++i)
+            {
+                const auto projected = Translate3DTo2DWithZ(0, native[i]);
+                quad[i] = {
+                    {
+                        float(origin.x + (i == 1 || i == 2 ? factor * kCoordsXYStep : 0)),
+                        float(origin.y + (i >= 2 ? factor * kCoordsXYStep : 0)),
+                        float(height),
+                    },
+                    float(projected.x - isoOrigin.x - sprite->xOffset),
+                    float(projected.y - isoOrigin.y - sprite->yOffset)
+                };
+            }
+            EmitQuad(surface, quad);
+
+            auto& patch = _terrainLodPatches[lodKey];
+            const bool changed = !patch.active || patch.source != image
+                || patch.height != height || patch.factor != factor;
+            patch.regionKey = surface.gpuRegion;
+            patch.lastSeen = frame;
+            patch.active = true;
+            patch.source = image;
+            patch.height = height;
+            patch.factor = factor;
+            patch.surface = std::move(surface);
+            _coarseLastUsed[lodKey] = frame;
+            if (changed)
+                _staticRegionPackets[patch.regionKey].dirty = true;
+
+            for (int32_t y = 0; y < factor; ++y)
+            for (int32_t x = 0; x < factor; ++x)
+            {
+                const auto tileKey = TerrainKey(tx + x, ty + y);
+                consumed.emplace(tileKey);
+                _terrainCache.entries[tileKey].suppressedFrame = frame;
+            }
+            return true;
+        }
+
         void CollectTerrain(FirstPersonScene& scene)
         {
             PROFILED_FUNCTION();
@@ -970,13 +1088,26 @@ namespace OpenRCT2::Paint
             const auto frustum = FirstPersonFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
                 view.nearClip, view.farClip);
-            // Full-resolution opaque terrain is now retained inside persistent
-            // static region packets. Region-level reuse removes the CPU reason
-            // for rebuilding camera-dependent coarse patches every frame.
+            std::unordered_set<uint64_t> visible;
+            visible.reserve(scene.visibleTiles.size());
+            for (const auto tile : scene.visibleTiles)
+                visible.emplace(TerrainKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+            std::unordered_set<uint64_t> consumed;
+            consumed.reserve(visible.size());
+
             for (const CoordsXY origin : scene.visibleTiles)
             {
                 const int32_t tx = origin.x / kCoordsXYStep;
                 const int32_t ty = origin.y / kCoordsXYStep;
+                const uint64_t terrainKey = TerrainKey(tx, ty);
+                if (consumed.count(terrainKey) != 0)
+                    continue;
+                if (SelectDistantFlatTerrainPatch(
+                        scene, origin, 4, visible, consumed, frustum, frame)
+                    || SelectDistantFlatTerrainPatch(
+                        scene, origin, 2, visible, consumed, frustum, frame))
+                    continue;
                 const int32_t x = origin.x;
                 const int32_t y = origin.y;
                 auto* tile = MapGetSurfaceElementAt(origin);
@@ -1095,6 +1226,15 @@ namespace OpenRCT2::Paint
                     if (cache.waterOverlay.has_value() && !IsResidentStaticSurface(*cache.waterOverlay))
                         scene.surfaces.emplace_back(*cache.waterOverlay);
             }
+            for (auto& [key, patch] : _terrainLodPatches)
+            {
+                if (patch.active && patch.lastSeen != frame)
+                {
+                    patch.active = false;
+                    _staticRegionPackets[patch.regionKey].dirty = true;
+                }
+            }
+
             // Bound memory after travelling across multiple distant park regions.
             // Never retain a permanently growing copy of an explored park.
             if ((frame % 120) == 0)
@@ -1105,6 +1245,12 @@ namespace OpenRCT2::Paint
                         MarkStaticRegionDirtyForTile(
                             int32_t(kv.first >> 32), int32_t(kv.first & 0xffffffffu));
                     return expired;
+                });
+                std::erase_if(_terrainLodPatches, [frame](const auto& kv) {
+                    return !kv.second.active && frame - kv.second.lastSeen > 240;
+                });
+                std::erase_if(_coarseLastUsed, [frame](const auto& kv) {
+                    return frame - kv.second > 240;
                 });
             }
         }
