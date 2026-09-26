@@ -51,13 +51,15 @@ Native path surface-image selection is now shared through `GetPathSurfaceImageOf
 
 ### Static scenery representation
 
-The fallback sprite representation is now selective.
+Only artwork backed by meaningful world geometry is reconstructed as a fixed plane.
 
-* Guests/entities and trees remain upright passenger-facing impostors.
-* Other static tile-element artwork uses a shared world-fixed quarter-turn axis.
-* This prevents separately painted components of architecture, rides and supports from independently rotating toward the passenger.
+* semantic walls and path decks are built from authoritative world geometry and derive UVs by projecting those world points back into the selected native image;
+* genuinely narrow/tall physical paint bounds may still become fixed planes when they represent a real wall-like surface;
+* arbitrary track, large-scenery, small-scenery and support artwork is not assigned a false world-fixed horizontal axis;
+* connected large-scenery/track fragments instead share one canonical group anchor and one native source rotation, forming a coherent passenger-facing group impostor;
+* entities and ordinary isolated props are passenger-facing impostors.
 
-This remains sprite-based reconstruction, not a claim that arbitrary RCT2 artwork contains recoverable volumetric depth.
+This intentionally prefers a truthful 2-D impostor over fabricated 3-D orientation when the source asset contains no recoverable physical surface.
 
 ### Native sprite-side selection and cache
 
@@ -180,11 +182,11 @@ The four native quarter-turn tile variants remain the source-image cache, but a 
 * multi-tile large scenery has a stable group key derived from its canonical placement origin, direction and object entry;
 * each connected track piece has a stable group key derived from `GetTrackSegmentOrigin()`, ride identity and track type;
 * native source rotation for those groups is selected from the passenger position relative to that canonical group origin;
-* each reconstructed surface retains its group provenance;
-* region assembly selects the matching cached native rotation independently for each group, so unrelated groups on one tile may legally come from different native variants;
-* a group records every persistent GPU region containing its resident geometry, so a viewpoint-sector change dirties all affected regions, including another region crossed by the same object.
+* every fragment of one connected group is reconstructed around that same canonical anchor;
+* unrelated groups on one tile may legally select different cached native variants;
+* grouped arbitrary sprite artwork is streamed as one coherent group impostor rather than being stored as resident fixed geometry.
 
-Physical reconstruction frames and native artwork-side selection therefore share one canonical origin instead of merely sharing a plane orientation.
+Reconstruction-group state contains only the selected source rotation and `lastSeen`; it carries no historical GPU-region membership and expires with the ordinary cache lifetime.
 
 ### Persistent static regions are the render unit
 
@@ -203,7 +205,7 @@ Native tile caches also separate `residentSurfaces` from `streamedSurfaces`, so 
 
 Visibility discovery, live terrain admission and entity occupancy still perform tile-level work; this change specifically removes the previous O(visible static geometry) CPU reconstruction/hash path rather than claiming that the whole scene collector is O(regions).
 
-The existing flat/dry identical-terrain 2x/4x LOD is retained. Its selected patches are persistent region content and only dirty a region when the hysteretic LOD patch set or its source layout actually changes.
+The former 2x/4x flat-terrain substitution has been removed. Full-resolution per-tile terrain remains resident in static regions at every distance, preserving the exact world-to-texel scale instead of stretching one tile image over a larger physical area.
 
 ### Walking follows swept floor topology
 
@@ -219,13 +221,11 @@ The movement segment is sampled across the actual terrain/path floor field:
 
 The final camera Z comes from the same accepted swept floor traversal used to validate the move. The native-step limit is exposed in the math layer and has regression coverage.
 
-### Small scenery uses object semantics
+### Arbitrary scenery no longer receives a fabricated fixed plane
 
-Non-tree small scenery is no longer automatically forced onto a permanent world-fixed plane.
+The interim semantic classifier for small scenery has been superseded by the stricter projection invariant above.
 
-A fixed frame is selected for scenery whose object semantics are materially directional/structural, including explicit user rotation, diagonal/partial occupancy and support-related flags. Compact automatic-rotation props are retained as upright impostors instead of becoming a thin plane that can disappear edge-on.
-
-Trees remain impostors as before.
+Unless an artwork root can be reconstructed from meaningful world geometry, it remains an impostor. This applies to compact props, rotatable signs/decorations, large scenery, track artwork and supports. Connected large-scenery/track pieces still share a canonical group anchor/source view, so this does not reintroduce per-tile independent rotation.
 
 ### Renderer and tweener share one resolved view
 
@@ -245,6 +245,55 @@ Region invalidation immediately dirties affected packets. Dirty tile-level terra
 
 Expensive packed-tile signatures and reconstruction-group discovery are no longer performed every frame. They run on authoritative invalidation and on staggered fallback semantic probes, preserving protection against direct game-side mutations that bypass normal invalidation hooks.
 
+## Fourth independent audit corrections
+
+A further audit at `f60ae08ef22928c6d6c91a13fa02082f92b10653` identified five remaining renderer invariants. They are corrected on the current development branch.
+
+### Generic sprite reconstruction no longer invents a fixed world axis
+
+The previous fallback mapped native sprite X directly onto a horizontal world vector even though the native isometric projection couples X/Y/Z. That mapping could not reproduce its own source view.
+
+The fallback is now a passenger-facing impostor. Connected large-scenery and track fragments still use one canonical group anchor and source rotation, so their native image-space offsets remain mutually coherent. World-fixed geometry is reserved for semantic walls/path decks and genuine physical planes whose UVs are derived from projecting their actual world vertices.
+
+### Moving entities own their native source rotation
+
+`Paint.Entity` now exposes a targeted one-entity native paint entry point.
+
+The first-person collector:
+
+* computes source rotation from the current presentation position of each entity, not its tile centre;
+* retains five-degree hysteresis independently by `EntityId`;
+* queues each entity into the matching native rotation paint session;
+* continues to use the native 32-direction orientation lookup inside the ordinary entity painter.
+
+Two entities in the same tile may therefore legitimately use different native source quadrants. Entity rotation state is also lifetime-bounded.
+
+### Terrain texel scale is invariant
+
+The 2x/4x terrain patch substitution has been removed. It stretched one 32x32 tile image across 64x64 or 128x128 world areas and estimated screen error from an artificial z=0 patch centre.
+
+Static-region residency already removes the principal CPU/VBO cost of exact terrain, so every admitted terrain tile now retains its native world dimensions and UV mapping at all distances.
+
+### Palette-filter transparency is peeled per screen-space tile
+
+Transparent palette filters remain order-dependent and are not converted to ordinary alpha blending.
+
+Instead of using the total number of transparent quads in the entire view as the peel depth:
+
+* transparent surfaces are conservatively projected into 256x256 viewport tiles;
+* each screen tile contains only surfaces whose projected quad can touch its pixels;
+* the exact peel count is bounded by that tile's local candidate count, up to the existing six-pass exact limit;
+* overflow approximation is also tile-local;
+* a near-plane-crossing surface is conservatively assigned to the whole viewport rather than risk missing fragments.
+
+Screen tiles are disjoint in pixel space, so a surface listed in multiple tiles is scissor-restricted and cannot be composed twice at one pixel.
+
+### Reconstruction-group state is lifetime-bounded
+
+Reconstruction groups no longer retain historical GPU-region sets.
+
+A group now stores only source rotation and `lastSeen`; stale entries expire with the ordinary 240-frame cache policy. Because arbitrary grouped sprite artwork is streamed rather than resident fixed geometry, group-sector changes do not recreate or dirty historical static-region packets.
+
 ## Required manual verification before creating a new stable tag
 
 Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HANDOFF.md`, then verify:
@@ -257,7 +306,7 @@ Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HA
 * guests on flat and sloped paths are reassessed for foot contact before any peep offset is considered;
 * ordinary terrain tile boundaries are seam-free at near and far viewing distances;
 * trees retain the desirable upright impostor appearance;
-* buildings, multi-tile large scenery, ride parts and supports retain a common physical reconstruction frame across tile boundaries while trees remain upright impostors;
+* buildings, multi-tile large scenery, ride parts and supports retain coherent shared group-impostor placement/source views across tile boundaries without strange fixed-card orientation;
 * guests, staff and non-attached vehicles remain smoothly interpolated when visible only to the first-person camera, including after entering from a zoomed-out overhead view;
 * parks with more than 256 distinct simultaneously collected scrolling-text variants do not show text from later signs on earlier signs;
 * head turns in place do not swap native sprite sides or trigger park-wide static repaints;
@@ -267,11 +316,17 @@ Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HA
 * walking collision meets adjacent full wall edges and remains consistent on sloped walls.
 * a multi-tile large-scenery object and a multi-sequence track piece keep one coherent native source view across tile and 32x32 GPU-region boundaries, including near 45-degree source-view thresholds;
 * a tile containing unrelated connected groups can select different native variants without mixing variants inside either group;
-* in a dense static park, steady camera frames reuse resident region packets/VBOs without static-surface copy, cull, grouping, vertex hashing or repacking; region rebuilds occur only for dirtiness, dependency changes or source-view/LOD transitions;
+* in a dense static park, steady camera frames reuse resident region packets/VBOs without static-surface copy, cull, grouping, vertex hashing or repacking; exact terrain texel scale remains unchanged with distance;
 * walking into a vertical terrain cliff stops instead of snapping upward, and stepping off a large ledge stops instead of snapping downward;
 * legal terrain/path slopes and an 8-world-unit step remain traversable;
 * exposed water blocks walking while valid path surfaces over water remain usable;
-* compact non-directional small scenery remains visible from arbitrary azimuths, while genuinely rotatable/diagonal/structural scenery retains its fixed orientation;
+* compact, directional and connected arbitrary scenery remains visible from arbitrary azimuths without being forced onto a mathematically false fixed plane;
 * on a very large park, guests/staff/vehicles visible beyond 32,768 world units are admitted to the same presentation interpolation range as rendered scenery;
+* two guests/vehicles within one tile but on opposite sides of a 45-degree camera-relative source boundary can show different native sprite quadrants without waiting for a tile crossing;
+* a moving entity crossing a native source-view boundary changes side with its own hysteresis and does not pop merely because its spatial-index tile changes;
+* flat terrain keeps identical apparent texel scale before and after distances that previously selected 2x/4x substitutions, including elevated terrain and pitched cameras;
+* many screen-disjoint glass/water surfaces do not trigger six global redraw passes; transparency cost scales with local screen-tile overlap instead;
+* a genuinely layered stack of more than six palette-filter surfaces still uses six exact local peel passes plus the deterministic overflow surface;
+* long first-person exploration/editing does not monotonically grow reconstruction-group state or recreate expired static-region packets when a group changes source quadrant;
 
 Do not replace the existing stable tag until this manual runtime verification is complete.
