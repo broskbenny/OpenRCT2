@@ -466,9 +466,7 @@ void main() {
                     maskG1?int32_t(maskTex.index):-1});
         };
         std::vector<GPUVertex> opaqueVertices;
-        std::vector<GPUVertex> transparentVertices;
         for(const auto* surface:streamedOpaque) appendVertices(opaqueVertices,*surface);
-        for(const auto* surface:streamedTransparent) appendVertices(transparentVertices,*surface);
         std::vector<uint64_t> regionDraws;
         regionDraws.reserve(scene.staticRegions.size());
         for (const auto& packet : scene.staticRegions)
@@ -569,8 +567,78 @@ void main() {
         if(!opaqueVertices.empty())
             glCall(glDrawArrays,GL_TRIANGLES,0,GLsizei(opaqueVertices.size()));
 
-        if (!transparentVertices.empty())
+        if (!streamedTransparent.empty())
         {
+            struct TransparentScreenTile
+            {
+                int32_t x0{}, y0{}, x1{}, y1{};
+                std::vector<const Paint::FirstPersonSurface*> surfaces;
+            };
+
+            constexpr int32_t kTransparencyTileSize = 256;
+            const int32_t tileColumns = (width + kTransparencyTileSize - 1) / kTransparencyTileSize;
+            const int32_t tileRows = (height + kTransparencyTileSize - 1) / kTransparencyTileSize;
+            std::vector<TransparentScreenTile> transparencyTiles(
+                size_t(tileColumns) * size_t(tileRows));
+            for (int32_t ty = 0; ty < tileRows; ++ty)
+            for (int32_t tx = 0; tx < tileColumns; ++tx)
+            {
+                auto& tile = transparencyTiles[size_t(ty) * size_t(tileColumns) + size_t(tx)];
+                tile.x0 = tx * kTransparencyTileSize;
+                tile.y0 = ty * kTransparencyTileSize;
+                tile.x1 = std::min(width, tile.x0 + kTransparencyTileSize);
+                tile.y1 = std::min(height, tile.y0 + kTransparencyTileSize);
+            }
+
+            // Assign each transparent quad only to the screen tiles it can
+            // touch. A near-plane crossing is conservatively full-viewport:
+            // missing one palette-filter fragment would be a correctness bug.
+            for (const auto* surface : streamedTransparent)
+            {
+                bool fullViewport = false;
+                bool haveProjection = false;
+                float minX = float(width), minY = float(height);
+                float maxX = 0.0f, maxY = 0.0f;
+                for (const auto& vertex : surface->triangles)
+                {
+                    const auto projected = Paint::ProjectFirstPersonPoint(
+                        view.camera, vertex.world, scene.dimensions,
+                        view.fieldOfViewDegrees, view.nearClip);
+                    if (!projected.has_value())
+                    {
+                        fullViewport = true;
+                        break;
+                    }
+                    haveProjection = true;
+                    minX = std::min(minX, projected->x);
+                    minY = std::min(minY, projected->y);
+                    maxX = std::max(maxX, projected->x);
+                    maxY = std::max(maxY, projected->y);
+                }
+
+                int32_t x0 = 0, y0 = 0, x1 = width, y1 = height;
+                if (!fullViewport && haveProjection)
+                {
+                    if (maxX < 0.0f || maxY < 0.0f || minX >= float(width) || minY >= float(height))
+                        continue;
+                    x0 = std::clamp(int32_t(std::floor(minX)) - 1, 0, width);
+                    y0 = std::clamp(int32_t(std::floor(minY)) - 1, 0, height);
+                    x1 = std::clamp(int32_t(std::ceil(maxX)) + 1, 0, width);
+                    y1 = std::clamp(int32_t(std::ceil(maxY)) + 1, 0, height);
+                    if (x1 <= x0 || y1 <= y0)
+                        continue;
+                }
+
+                const int32_t firstColumn = std::clamp(x0 / kTransparencyTileSize, 0, tileColumns - 1);
+                const int32_t lastColumn = std::clamp((std::max(x1, 1) - 1) / kTransparencyTileSize, 0, tileColumns - 1);
+                const int32_t firstRow = std::clamp(y0 / kTransparencyTileSize, 0, tileRows - 1);
+                const int32_t lastRow = std::clamp((std::max(y1, 1) - 1) / kTransparencyTileSize, 0, tileRows - 1);
+                for (int32_t ty = firstRow; ty <= lastRow; ++ty)
+                for (int32_t tx = firstColumn; tx <= lastColumn; ++tx)
+                    transparencyTiles[size_t(ty) * size_t(tileColumns) + size_t(tx)]
+                        .surfaces.push_back(surface);
+            }
+
             auto& front = output.GetFinalFramebuffer();
             if (!_background || _background->GetWidth()!=GLuint(screenWidth) || _background->GetHeight()!=GLuint(screenHeight))
             {
@@ -579,27 +647,28 @@ void main() {
                 for(auto& layer:_peelLayers)
                     layer = std::make_unique<OpenGLFramebuffer>(screenWidth,screenHeight,true,true,true);
             }
-            // Keep immutable original opaque colour and depth; palette effects
-            // read the PREVIOUS composed layer, never the unmodified image.
+
+            // Keep one immutable opaque colour/depth snapshot for all screen
+            // tiles. Transparent tiles are disjoint in pixel space, so their
+            // palette compositions may be committed independently.
             _opaqueSnapshot->BindDraw();
             front.BindRead();
             glCall(glBlitFramebuffer,0,0,screenWidth,screenHeight,
                    0,0,screenWidth,screenHeight,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,GL_NEAREST);
-            glCall(glBindVertexArray,_vao);
-            glCall(glBindBuffer,GL_ARRAY_BUFFER,_vbo);
-            glCall(glBufferData,GL_ARRAY_BUFFER,GLsizeiptr(transparentVertices.size()*sizeof(GPUVertex)),
-                   transparentVertices.data(),GL_STREAM_DRAW);
-            // Palette-filter transparency is order dependent, so peel a bounded
-            // number of exact far-to-near layers. Never make scene complexity
-            // the loop bound and never synchronously wait for an occlusion query.
-            // If a pixel is deeper than the exact budget, preserve its nearest
-            // remaining transparent surface as a deterministic fallback.
+
             constexpr size_t kMaxExactPeelPasses = 6;
-            const size_t maximumPossibleDepth = transparentVertices.size() / 6;
-            const size_t exactPasses = std::min(kMaxExactPeelPasses, maximumPossibleDepth);
-            auto composeLayer = [&](OpenGLFramebuffer& layer) {
+            const int32_t viewportBottom = screenHeight - top - height;
+            auto setTileScissor = [&](const TransparentScreenTile& tile) {
+                glCall(glScissor,
+                    left + tile.x0,
+                    screenHeight - top - tile.y1,
+                    tile.x1 - tile.x0,
+                    tile.y1 - tile.y0);
+            };
+            auto composeLayer = [&](OpenGLFramebuffer& layer, const TransparentScreenTile& tile) {
                 _background->Bind();
                 glCall(glViewport,0,0,screenWidth,screenHeight);
+                setTileScissor(tile);
                 glCall(glDisable,GL_DEPTH_TEST);
                 glCall(glUseProgram,_composeProgram);
                 OpenGLAPI::SetTexture(0,GL_TEXTURE_2D,front.GetTexture());
@@ -609,63 +678,94 @@ void main() {
                 glCall(glUniform1i,Uniform(_composeProgram,"uLayer"),1);
                 glCall(glUniform1i,Uniform(_composeProgram,"uPalettes"),2);
                 glCall(glDrawArrays,GL_TRIANGLES,0,3);
+
                 front.BindDraw();
                 _background->BindRead();
-                const int32_t y=screenHeight-top-height;
-                glCall(glBlitFramebuffer,left,y,left+width,y+height,
-                       left,y,left+width,y+height,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+                const int32_t x0 = left + tile.x0;
+                const int32_t x1 = left + tile.x1;
+                const int32_t y0 = screenHeight - top - tile.y1;
+                const int32_t y1 = screenHeight - top - tile.y0;
+                glCall(glBlitFramebuffer,x0,y0,x1,y1,x0,y0,x1,y1,GL_COLOR_BUFFER_BIT,GL_NEAREST);
             };
-            for(size_t pass=0;pass<exactPasses;++pass)
+
+            glCall(glBindVertexArray,_vao);
+            glCall(glBindBuffer,GL_ARRAY_BUFFER,_vbo);
+            for (const auto& tile : transparencyTiles)
             {
-                auto& layer = *_peelLayers[size_t(pass&1)];
-                layer.Bind();
-                glCall(glViewport,left,screenHeight-top-height,width,height);
-                glCall(glDepthMask,GL_TRUE);
-                const GLuint empty[4]={0,0,0,0};
-                const GLfloat farthest[1]={0.0f};
-                glCall(glClearBufferuiv,GL_COLOR,0,empty);
-                glCall(glClearBufferfv,GL_DEPTH,0,farthest);
-                glCall(glEnable,GL_DEPTH_TEST);
-                glCall(glDepthFunc,GL_GREATER);
-                glCall(glUseProgram,_program);
-                glCall(glUniform1i,Uniform(_program,"uPeeling"),pass!=0);
-                OpenGLAPI::SetTexture(0,GL_TEXTURE_2D_ARRAY,textures.GetAtlasesTexture());
-                OpenGLAPI::SetTexture(1,GL_TEXTURE_2D,textures.GetPaletteTexture());
-                OpenGLAPI::SetTexture(2,GL_TEXTURE_2D,_opaqueSnapshot->GetDepthTexture());
-                OpenGLAPI::SetTexture(3,GL_TEXTURE_2D,
-                    pass==0?_opaqueSnapshot->GetDepthTexture():_peelLayers[size_t((pass+1)&1)]->GetDepthTexture());
-                glCall(glDrawArrays,GL_TRIANGLES,0,GLsizei(transparentVertices.size()));
-                composeLayer(layer);
+                if (tile.surfaces.empty())
+                    continue;
+
+                std::vector<GPUVertex> tileVertices;
+                tileVertices.reserve(tile.surfaces.size() * 6);
+                for (const auto* surface : tile.surfaces)
+                    appendVertices(tileVertices, *surface);
+                if (tileVertices.empty())
+                    continue;
+
+                glCall(glBindVertexArray,_vao);
+                glCall(glBindBuffer,GL_ARRAY_BUFFER,_vbo);
+                glCall(glBufferData,GL_ARRAY_BUFFER,
+                    GLsizeiptr(tileVertices.size()*sizeof(GPUVertex)),
+                    tileVertices.data(),GL_STREAM_DRAW);
+
+                // Every FirstPersonSurface is one quad, so the number of quads
+                // touching this tile is a conservative upper bound on per-pixel
+                // transparent depth complexity inside the tile.
+                const size_t maximumPossibleDepth = tile.surfaces.size();
+                const size_t exactPasses = std::min(kMaxExactPeelPasses, maximumPossibleDepth);
+                for(size_t pass=0;pass<exactPasses;++pass)
+                {
+                    auto& layer = *_peelLayers[size_t(pass&1)];
+                    layer.Bind();
+                    glCall(glViewport,left,viewportBottom,width,height);
+                    setTileScissor(tile);
+                    glCall(glDepthMask,GL_TRUE);
+                    const GLuint empty[4]={0,0,0,0};
+                    const GLfloat farthest[1]={0.0f};
+                    glCall(glClearBufferuiv,GL_COLOR,0,empty);
+                    glCall(glClearBufferfv,GL_DEPTH,0,farthest);
+                    glCall(glEnable,GL_DEPTH_TEST);
+                    glCall(glDepthFunc,GL_GREATER);
+                    glCall(glUseProgram,_program);
+                    glCall(glUniform1i,Uniform(_program,"uPeeling"),pass!=0);
+                    OpenGLAPI::SetTexture(0,GL_TEXTURE_2D_ARRAY,textures.GetAtlasesTexture());
+                    OpenGLAPI::SetTexture(1,GL_TEXTURE_2D,textures.GetPaletteTexture());
+                    OpenGLAPI::SetTexture(2,GL_TEXTURE_2D,_opaqueSnapshot->GetDepthTexture());
+                    OpenGLAPI::SetTexture(3,GL_TEXTURE_2D,
+                        pass==0?_opaqueSnapshot->GetDepthTexture():_peelLayers[size_t((pass+1)&1)]->GetDepthTexture());
+                    glCall(glDrawArrays,GL_TRIANGLES,0,GLsizei(tileVertices.size()));
+                    composeLayer(layer,tile);
+                }
+
+                if(maximumPossibleDepth>kMaxExactPeelPasses)
+                {
+                    const size_t pass = exactPasses;
+                    auto& layer = *_peelLayers[size_t(pass&1)];
+                    layer.Bind();
+                    glCall(glViewport,left,viewportBottom,width,height);
+                    setTileScissor(tile);
+                    glCall(glDepthMask,GL_TRUE);
+                    const GLuint empty[4]={0,0,0,0};
+                    const GLfloat nearest[1]={1.0f};
+                    glCall(glClearBufferuiv,GL_COLOR,0,empty);
+                    glCall(glClearBufferfv,GL_DEPTH,0,nearest);
+                    glCall(glEnable,GL_DEPTH_TEST);
+                    glCall(glDepthFunc,GL_LESS);
+                    glCall(glUseProgram,_program);
+                    glCall(glUniform1i,Uniform(_program,"uPeeling"),GL_TRUE);
+                    OpenGLAPI::SetTexture(0,GL_TEXTURE_2D_ARRAY,textures.GetAtlasesTexture());
+                    OpenGLAPI::SetTexture(1,GL_TEXTURE_2D,textures.GetPaletteTexture());
+                    OpenGLAPI::SetTexture(2,GL_TEXTURE_2D,_opaqueSnapshot->GetDepthTexture());
+                    OpenGLAPI::SetTexture(3,GL_TEXTURE_2D,_peelLayers[size_t((pass+1)&1)]->GetDepthTexture());
+                    glCall(glDrawArrays,GL_TRIANGLES,0,GLsizei(tileVertices.size()));
+                    composeLayer(layer,tile);
+                }
             }
-            if(maximumPossibleDepth>kMaxExactPeelPasses)
-            {
-                // Approximate only the overflow: select the NEAREST fragment
-                // still in front of the last exact peel. This retains the glass
-                // or water surface closest to the passenger instead of silently
-                // discarding all layers beyond the budget.
-                const size_t pass = exactPasses;
-                auto& layer = *_peelLayers[size_t(pass&1)];
-                layer.Bind();
-                glCall(glViewport,left,screenHeight-top-height,width,height);
-                glCall(glDepthMask,GL_TRUE);
-                const GLuint empty[4]={0,0,0,0};
-                const GLfloat nearest[1]={1.0f};
-                glCall(glClearBufferuiv,GL_COLOR,0,empty);
-                glCall(glClearBufferfv,GL_DEPTH,0,nearest);
-                glCall(glEnable,GL_DEPTH_TEST);
-                glCall(glDepthFunc,GL_LESS);
-                glCall(glUseProgram,_program);
-                glCall(glUniform1i,Uniform(_program,"uPeeling"),GL_TRUE);
-                OpenGLAPI::SetTexture(0,GL_TEXTURE_2D_ARRAY,textures.GetAtlasesTexture());
-                OpenGLAPI::SetTexture(1,GL_TEXTURE_2D,textures.GetPaletteTexture());
-                OpenGLAPI::SetTexture(2,GL_TEXTURE_2D,_opaqueSnapshot->GetDepthTexture());
-                OpenGLAPI::SetTexture(3,GL_TEXTURE_2D,_peelLayers[size_t((pass+1)&1)]->GetDepthTexture());
-                glCall(glDrawArrays,GL_TRIANGLES,0,GLsizei(transparentVertices.size()));
-                composeLayer(layer);
-            }
-            // Restore the physical viewport depth attachment before clearing.
+
+            // Restore the physical viewport/scissor for the final depth clear.
             front.Bind();
-            glCall(glViewport,left,screenHeight-top-height,width,height);
+            glCall(glViewport,left,viewportBottom,width,height);
+            glCall(glScissor,left,viewportBottom,width,height);
         }
         // Separate physical depth from the game's draw-order depth, without
         // destroying depth belonging to ALREADY drawn windows outside this
