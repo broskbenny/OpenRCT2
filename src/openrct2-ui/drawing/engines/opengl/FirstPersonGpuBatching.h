@@ -9,9 +9,9 @@
 
 namespace OpenRCT2::Ui
 {
-    // Fingerprint ONLY the actual vertex, material and mask data. Never hash
-    // struct padding or pointers into temporary native paint sessions.
-    // Camera-facing geometry has no stable GPU-region provenance, by design.
+    // Stable material identity is used only for streamed-texture deduplication.
+    // Persistent static-region reuse is generation/dependency based; it no longer
+    // fingerprints resident geometry every frame.
     [[nodiscard]] inline uint64_t FirstPersonMaterialFingerprint(const ImageId& id)
     {
         uint64_t h = uint64_t(id.GetIndex());
