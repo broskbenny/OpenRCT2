@@ -642,18 +642,14 @@ namespace OpenRCT2::Ui::FirstPerson
                 float flatSecondaryFrame = float(car->flatRideSecondaryAnimationFrame);
                 if (interpolated.has_value())
                 {
-                    flatPrimaryFrame =
-                        float(interpolated->flatPrimaryBefore)
-                        + (float(interpolated->flatPrimaryAfter)
-                           - float(interpolated->flatPrimaryBefore)) * interpolated->alpha;
-                    const float beforeAngle =
-                        float(interpolated->flatSecondaryBefore & 0x0F)
-                        * (kTwoPi / 16.0f);
-                    const float afterAngle =
-                        float(interpolated->flatSecondaryAfter & 0x0F)
-                        * (kTwoPi / 16.0f);
-                    flatSecondaryFrame = Paint::FirstPersonLerpAngle(
-                        beforeAngle, afterAngle, interpolated->alpha) / (kTwoPi / 16.0f);
+                    flatPrimaryFrame = Paint::FirstPersonLerpCyclicFrame(
+                        float(interpolated->flatPrimaryBefore),
+                        float(interpolated->flatPrimaryAfter),
+                        interpolated->alpha, 48.0f);
+                    flatSecondaryFrame = Paint::FirstPersonLerpCyclicFrame(
+                        float(interpolated->flatSecondaryBefore & 0x0F),
+                        float(interpolated->flatSecondaryAfter & 0x0F),
+                        interpolated->alpha, 16.0f);
                 }
 
                 const auto loc = car->getLocation();
