@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <openrct2/paint/FirstPersonRenderer.h>
+#include <openrct2/paint/FirstPersonAssetReconstruction.h>
 #include <openrct2/paint/FirstPersonTrackTrajectory.h>
 #include <openrct2/paint/Paint.h>
 #include <openrct2/entity/EntityBase.h>
@@ -29,6 +30,16 @@ namespace
 {
     constexpr ScreenSize kScreen{ 1000, 600 };
     constexpr float kPi = 3.14159265358979323846f;
+
+    FirstPersonSilhouette MakeSilhouetteRect(
+        int32_t x0, int32_t y0, int32_t x1, int32_t y1)
+    {
+        FirstPersonSilhouette result{};
+        for (int32_t y = y0; y < y1; ++y)
+        for (int32_t x = x0; x < x1; ++x)
+            result.add(x, y);
+        return result;
+    }
 }
 
 TEST(FirstPersonSourceRotationTest, CameraRelativePointOwnsNativeQuadrant)
@@ -51,6 +62,66 @@ TEST(FirstPersonSourceRotationTest, HysteresisBelongsToTheTrackedPoint)
         FirstPersonSourceRotationForPoint(
             camera, { 100.0f, 123.0f, 0.0f }, uint8_t{ 0 }),
         1);
+}
+
+TEST(FirstPersonAssetReconstructionTest, NativeViewRotationInvertsPainterDirection)
+{
+    for (uint8_t objectDirection = 0; objectDirection < 4; ++objectDirection)
+    for (uint8_t nativeDirection = 0; nativeDirection < 4; ++nativeDirection)
+    {
+        const auto viewportRotation = FirstPersonViewportRotationForNativeView(
+            objectDirection, nativeDirection);
+        EXPECT_EQ(
+            uint8_t((objectDirection + viewportRotation) & 3u),
+            nativeDirection);
+    }
+}
+
+TEST(FirstPersonAssetReconstructionTest, FourMatchingViewsPassReliabilityGate)
+{
+    std::array<FirstPersonSilhouette, 4> observed{};
+    std::array<FirstPersonSilhouette, 4> candidate{};
+    for (size_t i = 0; i < observed.size(); ++i)
+    {
+        observed[i] = MakeSilhouetteRect(-20, -40, 21, 1);
+        candidate[i] = observed[i];
+    }
+
+    const auto fit = CompareFirstPersonMultiViewSilhouettes(observed, candidate);
+    ASSERT_TRUE(fit.valid);
+    EXPECT_FLOAT_EQ(fit.minimumIntersectionOverUnion, 1.0f);
+    EXPECT_EQ(fit.maximumEdgeError, 0);
+    EXPECT_TRUE(IsFirstPersonMultiViewFitReliable(fit));
+}
+
+TEST(FirstPersonAssetReconstructionTest, OneContradictoryViewForcesFallback)
+{
+    std::array<FirstPersonSilhouette, 4> observed{};
+    std::array<FirstPersonSilhouette, 4> candidate{};
+    for (size_t i = 0; i < observed.size(); ++i)
+    {
+        observed[i] = MakeSilhouetteRect(-20, -40, 21, 1);
+        candidate[i] = observed[i];
+    }
+    candidate[2] = MakeSilhouetteRect(-8, -40, 33, 1);
+
+    const auto fit = CompareFirstPersonMultiViewSilhouettes(observed, candidate);
+    ASSERT_TRUE(fit.valid);
+    EXPECT_GT(fit.maximumEdgeError, 8);
+    EXPECT_FALSE(IsFirstPersonMultiViewFitReliable(fit));
+}
+
+TEST(FirstPersonAssetReconstructionTest, ProjectedQuadRasterizesAreaNotJustEdges)
+{
+    FirstPersonSilhouette silhouette{};
+    AddFirstPersonSilhouetteQuad(
+        silhouette,
+        { {
+            { 0, 0 }, { 16, 8 }, { 0, 16 }, { -16, 8 },
+        } });
+    EXPECT_GT(silhouette.size(), 100u);
+    EXPECT_TRUE(silhouette.contains(0, 8));
+    EXPECT_FALSE(silhouette.contains(20, 8));
 }
 
 TEST(FirstPersonTrackTrajectoryTest, StandardSamplesMatchVehicleMotionSource)

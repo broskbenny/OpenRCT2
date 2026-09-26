@@ -3,6 +3,7 @@
  * OpenRCT2 is licensed under the GNU General Public License version 3.
  *****************************************************************************/
 #include "FirstPersonRenderer.h"
+#include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonTrackTrajectory.h"
 #include "Paint.h"
 #include "tile_element/Paint.Surface.h"
@@ -574,6 +575,463 @@ namespace OpenRCT2::Paint
             const float hx=0.5f*(high.x-low.x),hy=0.5f*(high.y-low.y),hz=0.5f*(high.z-low.z);
             return FirstPersonSemanticSphere{center,std::sqrt(hx*hx+hy*hy+hz*hz)+2.0f};
         }
+        enum class LargeSceneryAssetFaceKind : uint8_t
+        {
+            minX,
+            maxX,
+            minY,
+            maxY,
+            top,
+        };
+
+        struct LargeSceneryAssetCell
+        {
+            int32_t qx{};
+            int32_t qy{};
+            int32_t lowZ{};
+            int32_t highZ{};
+            uint16_t sequence{};
+        };
+
+        struct LargeSceneryAssetFace
+        {
+            std::array<CoordsXYZ, 4> corners{};
+            uint16_t sequence{};
+            LargeSceneryAssetFaceKind kind{};
+            // Native large-scenery image direction, not world viewport rotation.
+            uint8_t sourceDirection{};
+        };
+
+        struct LargeSceneryAssetModel
+        {
+            bool attempted = false;
+            bool reliable = false;
+            int32_t heightTrim = 0;
+            uint32_t bodyImageFirst = 0;
+            uint32_t bodyImageLast = 0;
+            FirstPersonMultiViewFit fit{};
+            float minimumFaceSourceCoverage = 0.0f;
+            FirstPersonVec3 low{};
+            FirstPersonVec3 high{};
+            std::vector<LargeSceneryAssetFace> faces;
+        };
+        static std::unordered_map<const LargeSceneryEntry*, LargeSceneryAssetModel> _largeSceneryAssetModels;
+
+        [[nodiscard]] uint64_t LargeSceneryQuarterCellKey(int32_t qx, int32_t qy)
+        {
+            return (uint64_t(uint32_t(qx)) << 32) | uint32_t(qy);
+        }
+
+        [[nodiscard]] bool LargeSceneryAssetEligible(const LargeSceneryEntry& entry)
+        {
+            return !entry.flags.hasAny(
+                       LargeSceneryFlag::isTree,
+                       LargeSceneryFlag::isAnimated,
+                       LargeSceneryFlag::is3DText)
+                && entry.scrolling_mode == kScrollingModeNone
+                && !entry.tiles.empty() && entry.tiles.size() <= 64;
+        }
+
+        template<typename TCallback>
+        bool ForEachLargeSceneryOpaquePixel(const G1Element& g1, TCallback&& callback)
+        {
+            if (g1.offset == nullptr || g1.width <= 0 || g1.height <= 0
+                || g1.flags.has(G1Flag::isPalette))
+                return false;
+
+            bool any = false;
+            if (g1.flags.has(G1Flag::hasRLECompression))
+            {
+                for (int32_t y = 0; y < g1.height; ++y)
+                {
+                    const uint16_t lineOffset =
+                        uint16_t(g1.offset[y * 2]) | (uint16_t(g1.offset[y * 2 + 1]) << 8);
+                    const uint8_t* run = g1.offset + lineOffset;
+                    bool endOfLine = false;
+                    size_t runGuard = 0;
+                    while (!endOfLine && runGuard++ < 256)
+                    {
+                        uint8_t length = *run++;
+                        const int32_t x = *run++;
+                        endOfLine = (length & 0x80u) != 0;
+                        length &= 0x7Fu;
+                        for (uint8_t n = 0; n < length; ++n)
+                        {
+                            // RLE drawing always treats palette index zero as
+                            // transparent, even inside a stored run.
+                            if (run[n] == 0)
+                                continue;
+                            callback(x + n, y);
+                            any = true;
+                        }
+                        run += length;
+                    }
+                }
+                return any;
+            }
+
+            const bool hasTransparency = g1.flags.has(G1Flag::hasTransparency);
+            for (int32_t y = 0; y < g1.height; ++y)
+            for (int32_t x = 0; x < g1.width; ++x)
+            {
+                const uint8_t pixel = g1.offset[size_t(y) * size_t(g1.width) + size_t(x)];
+                if (hasTransparency && pixel == 0)
+                    continue;
+                callback(x, y);
+                any = true;
+            }
+            return any;
+        }
+
+        struct LargeSceneryObservedViews
+        {
+            bool valid = false;
+            std::array<FirstPersonSilhouette, 4> combined;
+            std::vector<std::array<FirstPersonSilhouette, 4>> bySequence;
+        };
+
+        [[nodiscard]] LargeSceneryObservedViews CollectLargeSceneryObservedViews(
+            const LargeSceneryEntry& entry)
+        {
+            LargeSceneryObservedViews result{};
+            result.bySequence.resize(entry.tiles.size());
+            // Custom objects can legally contain very large sprites. A fit is
+            // optional evidence, so cap one asset's first-use work rather than
+            // allowing reconstruction to become a new frame hitch.
+            constexpr size_t kMaxSilhouetteSourcePixels = 262144;
+            size_t sourcePixels = 0;
+
+            for (size_t sequence = 0; sequence < entry.tiles.size(); ++sequence)
+            {
+                const auto& tile = entry.tiles[sequence];
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                {
+                    const ImageIndex imageIndex =
+                        entry.image + 4 + (ImageIndex(sequence) << 2) + rotation;
+                    const auto* g1 = GfxGetG1Element(imageIndex);
+                    if (g1 == nullptr || g1->width <= 0 || g1->height <= 0)
+                        return result;
+                    sourcePixels += size_t(g1->width) * size_t(g1->height);
+                    if (sourcePixels > kMaxSilhouetteSourcePixels)
+                        return result;
+
+                    const auto spriteOrigin = GetTileElementPaintSpritePosition(
+                        { tile.offset.x, tile.offset.y }, rotation);
+                    const auto spritePos = Translate3DTo2DWithZ(
+                        rotation, { spriteOrigin, tile.offset.z });
+                    auto& sequenceSilhouette = result.bySequence[sequence][rotation];
+                    auto& combined = result.combined[rotation];
+                    const bool any = ForEachLargeSceneryOpaquePixel(
+                        *g1, [&](int32_t x, int32_t y) {
+                            const int32_t sx = spritePos.x + g1->xOffset + x;
+                            const int32_t sy = spritePos.y + g1->yOffset + y;
+                            sequenceSilhouette.add(sx, sy);
+                            combined.add(sx, sy);
+                        });
+                    if (!any)
+                        return result;
+                }
+            }
+
+            result.valid = std::all_of(
+                result.combined.begin(), result.combined.end(),
+                [](const FirstPersonSilhouette& silhouette) { return !silhouette.empty(); });
+            return result;
+        }
+
+        [[nodiscard]] std::optional<std::vector<LargeSceneryAssetCell>> BuildLargeSceneryAssetCells(
+            const LargeSceneryEntry& entry)
+        {
+            static constexpr std::array<CoordsXY, 4> kQuarterCellOffsets{ {
+                { 1, 1 }, // SW
+                { 1, 0 }, // NW
+                { 0, 0 }, // NE
+                { 0, 1 }, // SE
+            } };
+
+            std::vector<LargeSceneryAssetCell> cells;
+            std::unordered_set<uint64_t> occupied;
+            std::optional<int32_t> commonLowZ;
+            for (size_t sequence = 0; sequence < entry.tiles.size(); ++sequence)
+            {
+                const auto& tile = entry.tiles[sequence];
+                if ((tile.offset.x % 16) != 0 || (tile.offset.y % 16) != 0
+                    || tile.zClearance <= 0 || (tile.corners & 0x0F) == 0)
+                    return std::nullopt;
+
+                if (!commonLowZ.has_value())
+                    commonLowZ = tile.offset.z;
+                else if (*commonLowZ != tile.offset.z)
+                    return std::nullopt;
+
+                const int32_t tileQx = tile.offset.x / 16;
+                const int32_t tileQy = tile.offset.y / 16;
+                for (uint8_t quarter = 0; quarter < 4; ++quarter)
+                {
+                    if ((tile.corners & (1u << quarter)) == 0)
+                        continue;
+                    const int32_t qx = tileQx + kQuarterCellOffsets[quarter].x;
+                    const int32_t qy = tileQy + kQuarterCellOffsets[quarter].y;
+                    if (!occupied.insert(LargeSceneryQuarterCellKey(qx, qy)).second)
+                        return std::nullopt;
+                    cells.push_back({
+                        qx, qy, tile.offset.z,
+                        tile.offset.z + tile.zClearance,
+                        uint16_t(sequence),
+                    });
+                }
+            }
+            if (cells.empty())
+                return std::nullopt;
+            return cells;
+        }
+
+        [[nodiscard]] std::vector<LargeSceneryAssetFace> BuildLargeSceneryAssetFaces(
+            const std::vector<LargeSceneryAssetCell>& cells, int32_t heightTrim)
+        {
+            std::unordered_map<uint64_t, const LargeSceneryAssetCell*> lookup;
+            lookup.reserve(cells.size());
+            for (const auto& cell : cells)
+                lookup.emplace(LargeSceneryQuarterCellKey(cell.qx, cell.qy), &cell);
+
+            const auto effectiveHigh = [heightTrim](const LargeSceneryAssetCell& cell) {
+                return std::max(cell.lowZ + 1, cell.highZ - heightTrim);
+            };
+            std::vector<LargeSceneryAssetFace> faces;
+            faces.reserve(cells.size() * 3);
+
+            const auto appendSide = [&](const LargeSceneryAssetCell& cell,
+                                        int32_t dx, int32_t dy,
+                                        LargeSceneryAssetFaceKind kind) {
+                const int32_t highZ = effectiveHigh(cell);
+                int32_t lowZ = cell.lowZ;
+                const auto neighbour = lookup.find(
+                    LargeSceneryQuarterCellKey(cell.qx + dx, cell.qy + dy));
+                if (neighbour != lookup.end())
+                    lowZ = std::max(lowZ, effectiveHigh(*neighbour->second));
+                if (lowZ >= highZ)
+                    return;
+
+                const int32_t x0 = cell.qx * 16;
+                const int32_t y0 = cell.qy * 16;
+                const int32_t x1 = x0 + 16;
+                const int32_t y1 = y0 + 16;
+                LargeSceneryAssetFace face{};
+                face.sequence = cell.sequence;
+                face.kind = kind;
+                switch (kind)
+                {
+                    case LargeSceneryAssetFaceKind::minX:
+                        face.corners = { {
+                            { x0, y0, lowZ }, { x0, y1, lowZ },
+                            { x0, y1, highZ }, { x0, y0, highZ },
+                        } };
+                        break;
+                    case LargeSceneryAssetFaceKind::maxX:
+                        face.corners = { {
+                            { x1, y1, lowZ }, { x1, y0, lowZ },
+                            { x1, y0, highZ }, { x1, y1, highZ },
+                        } };
+                        break;
+                    case LargeSceneryAssetFaceKind::minY:
+                        face.corners = { {
+                            { x1, y0, lowZ }, { x0, y0, lowZ },
+                            { x0, y0, highZ }, { x1, y0, highZ },
+                        } };
+                        break;
+                    case LargeSceneryAssetFaceKind::maxY:
+                        face.corners = { {
+                            { x0, y1, lowZ }, { x1, y1, lowZ },
+                            { x1, y1, highZ }, { x0, y1, highZ },
+                        } };
+                        break;
+                    case LargeSceneryAssetFaceKind::top:
+                        break;
+                }
+                faces.push_back(std::move(face));
+            };
+
+            for (const auto& cell : cells)
+            {
+                const int32_t x0 = cell.qx * 16;
+                const int32_t y0 = cell.qy * 16;
+                const int32_t x1 = x0 + 16;
+                const int32_t y1 = y0 + 16;
+                const int32_t highZ = effectiveHigh(cell);
+                LargeSceneryAssetFace roof{};
+                roof.sequence = cell.sequence;
+                roof.kind = LargeSceneryAssetFaceKind::top;
+                roof.corners = { {
+                    { x0, y0, highZ }, { x1, y0, highZ },
+                    { x1, y1, highZ }, { x0, y1, highZ },
+                } };
+                faces.push_back(std::move(roof));
+
+                appendSide(cell, -1, 0, LargeSceneryAssetFaceKind::minX);
+                appendSide(cell, 1, 0, LargeSceneryAssetFaceKind::maxX);
+                appendSide(cell, 0, -1, LargeSceneryAssetFaceKind::minY);
+                appendSide(cell, 0, 1, LargeSceneryAssetFaceKind::maxY);
+            }
+            return faces;
+        }
+
+        [[nodiscard]] bool LargeSceneryFaceVisibleFromDirection(
+            LargeSceneryAssetFaceKind kind, uint8_t direction)
+        {
+            if (kind == LargeSceneryAssetFaceKind::top)
+                return true;
+            static constexpr std::array<CoordsXY, 4> kViewDirection{ {
+                { 1, 1 }, { -1, 1 }, { -1, -1 }, { 1, -1 },
+            } };
+            CoordsXY normal{};
+            switch (kind)
+            {
+                case LargeSceneryAssetFaceKind::minX: normal = { -1, 0 }; break;
+                case LargeSceneryAssetFaceKind::maxX: normal = { 1, 0 }; break;
+                case LargeSceneryAssetFaceKind::minY: normal = { 0, -1 }; break;
+                case LargeSceneryAssetFaceKind::maxY: normal = { 0, 1 }; break;
+                case LargeSceneryAssetFaceKind::top: return true;
+            }
+            const auto view = kViewDirection[direction & 3];
+            return normal.x * view.x + normal.y * view.y < 0;
+        }
+
+        [[nodiscard]] FirstPersonSilhouette RasterizeLargeSceneryAssetFace(
+            const LargeSceneryAssetFace& face, uint8_t rotation)
+        {
+            std::array<ScreenCoordsXY, 4> projected{};
+            for (size_t i = 0; i < face.corners.size(); ++i)
+                projected[i] = Translate3DTo2DWithZ(rotation, face.corners[i]);
+            FirstPersonSilhouette result{};
+            AddFirstPersonSilhouetteQuad(result, projected);
+            return result;
+        }
+
+        [[nodiscard]] std::array<FirstPersonSilhouette, 4> RasterizeLargeSceneryAssetViews(
+            const std::vector<LargeSceneryAssetFace>& faces)
+        {
+            std::array<FirstPersonSilhouette, 4> result{};
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
+            {
+                for (const auto& face : faces)
+                {
+                    if (!LargeSceneryFaceVisibleFromDirection(face.kind, rotation))
+                        continue;
+                    std::array<ScreenCoordsXY, 4> projected{};
+                    for (size_t i = 0; i < face.corners.size(); ++i)
+                        projected[i] = Translate3DTo2DWithZ(rotation, face.corners[i]);
+                    AddFirstPersonSilhouetteQuad(result[rotation], projected);
+                }
+            }
+            return result;
+        }
+
+        [[nodiscard]] LargeSceneryAssetModel BuildLargeSceneryAssetModel(
+            const LargeSceneryEntry& entry)
+        {
+            LargeSceneryAssetModel model{};
+            model.attempted = true;
+            model.bodyImageFirst = entry.image + 4;
+            model.bodyImageLast = model.bodyImageFirst + uint32_t(entry.tiles.size() * 4);
+            if (!LargeSceneryAssetEligible(entry))
+                return model;
+
+            const auto cells = BuildLargeSceneryAssetCells(entry);
+            if (!cells.has_value())
+                return model;
+            const auto observed = CollectLargeSceneryObservedViews(entry);
+            if (!observed.valid)
+                return model;
+
+            static constexpr std::array<int32_t, 7> kHeightTrims{ { 0, 2, 4, 6, 8, 12, 16 } };
+            float bestScore = -std::numeric_limits<float>::infinity();
+            std::vector<LargeSceneryAssetFace> bestFaces;
+            for (const int32_t trim : kHeightTrims)
+            {
+                const auto faces = BuildLargeSceneryAssetFaces(*cells, trim);
+                if (faces.empty())
+                    continue;
+                const auto candidate = RasterizeLargeSceneryAssetViews(faces);
+                const auto fit = CompareFirstPersonMultiViewSilhouettes(
+                    observed.combined, candidate);
+                if (!fit.valid)
+                    continue;
+                const float score = fit.averageIntersectionOverUnion
+                    - 0.0025f * float(fit.maximumEdgeError);
+                if (score <= bestScore)
+                    continue;
+                bestScore = score;
+                model.heightTrim = trim;
+                model.fit = fit;
+                bestFaces = faces;
+            }
+            if (bestFaces.empty() || !IsFirstPersonMultiViewFitReliable(model.fit))
+                return model;
+
+            float minimumFaceCoverage = 1.0f;
+            for (auto& face : bestFaces)
+            {
+                float bestCoverage = -1.0f;
+                uint8_t bestDirection = 0;
+                for (uint8_t direction = 0; direction < 4; ++direction)
+                {
+                    if (!LargeSceneryFaceVisibleFromDirection(face.kind, direction))
+                        continue;
+                    const auto projectedFace = RasterizeLargeSceneryAssetFace(face, direction);
+                    if (projectedFace.empty())
+                        continue;
+                    const auto& source = observed.bySequence[face.sequence][direction];
+                    const auto fit = CompareFirstPersonSilhouettes(source, projectedFace);
+                    if (!fit.valid || fit.candidateCoverage <= bestCoverage)
+                        continue;
+                    bestCoverage = fit.candidateCoverage;
+                    bestDirection = direction;
+                }
+                if (bestCoverage < 0.0f)
+                    return model;
+                face.sourceDirection = bestDirection;
+                minimumFaceCoverage = std::min(minimumFaceCoverage, bestCoverage);
+            }
+            model.minimumFaceSourceCoverage = minimumFaceCoverage;
+            if (minimumFaceCoverage < 0.55f)
+                return model;
+
+            model.low = {
+                float((*cells)[0].qx * 16),
+                float((*cells)[0].qy * 16),
+                float((*cells)[0].lowZ),
+            };
+            model.high = model.low;
+            for (const auto& face : bestFaces)
+            for (const auto& corner : face.corners)
+            {
+                model.low.x = std::min(model.low.x, float(corner.x));
+                model.low.y = std::min(model.low.y, float(corner.y));
+                model.low.z = std::min(model.low.z, float(corner.z));
+                model.high.x = std::max(model.high.x, float(corner.x));
+                model.high.y = std::max(model.high.y, float(corner.y));
+                model.high.z = std::max(model.high.z, float(corner.z));
+            }
+            model.faces = std::move(bestFaces);
+            model.reliable = true;
+            return model;
+        }
+
+        [[nodiscard]] const LargeSceneryAssetModel* GetLargeSceneryAssetModel(
+            const LargeSceneryEntry& entry, bool allowBuild)
+        {
+            auto [it, inserted] = _largeSceneryAssetModels.try_emplace(&entry);
+            if (inserted)
+                it->second = {};
+            if (!it->second.attempted)
+            {
+                if (!allowBuild)
+                    return nullptr;
+                it->second = BuildLargeSceneryAssetModel(entry);
+            }
+            return &it->second;
+        }
+
         int32_t SemanticClearanceZ(const TileElement& element)
         {
             int32_t result=element.getClearanceZ();
@@ -958,6 +1416,341 @@ namespace OpenRCT2::Paint
             std::vector<FirstPersonSurface> surfaces;
         };
         static std::unordered_map<uint64_t, TrackTrajectoryCacheEntry> _trackTrajectoryCache;
+
+        uint64_t TerrainKey(int32_t tx, int32_t ty);
+
+        struct LargeSceneryGeometryCacheEntry
+        {
+            uint64_t signature{};
+            uint64_t lastSeen{};
+            bool dirty = false;
+            uint32_t bodyImageFirst{};
+            uint32_t bodyImageLast{};
+            bool hasBounds = false;
+            int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
+            std::vector<FirstPersonSurface> surfaces;
+        };
+        static std::unordered_map<uint64_t, LargeSceneryGeometryCacheEntry> _largeSceneryGeometryCache;
+        static bool _largeSceneryGeometryEnabled = false;
+
+        [[nodiscard]] bool LargeSceneryGeometryAllowedForView(uint32_t viewFlags)
+        {
+            constexpr uint32_t kIncompatible =
+                VIEWPORT_FLAG_CLIP_VIEW
+                | VIEWPORT_FLAG_CLIP_VIEW_SEE_THROUGH
+                | VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES
+                | VIEWPORT_FLAG_HIDE_SCENERY
+                | VIEWPORT_FLAG_INVISIBLE_SCENERY;
+            return (viewFlags & kIncompatible) == 0;
+        }
+
+        void MarkLargeSceneryGeometryRegionsDirty(const LargeSceneryGeometryCacheEntry& cached)
+        {
+            for (const auto& surface : cached.surfaces)
+            {
+                if (surface.gpuRegion != 0)
+                    _staticRegionPackets[surface.gpuRegion].dirty = true;
+            }
+        }
+
+        [[nodiscard]] bool LargeSceneryInstanceMetadataMatches(
+            const LargeSceneryElement& large, const LargeSceneryEntry& entry)
+        {
+            const size_t sequence = large.getSequenceIndex();
+            if (sequence >= entry.tiles.size())
+                return false;
+            const uint8_t expected =
+                RotateQuarterMask(entry.tiles[sequence].corners, large.getDirection());
+            const uint8_t actual = large.getOccupiedQuadrants() & 0x0F;
+            return actual == 0 || actual == expected;
+        }
+
+        [[nodiscard]] ImageId LargeSceneryImageTemplate(
+            const LargeSceneryElement& large, const LargeSceneryEntry& entry)
+        {
+            ImageId result{};
+            if (entry.flags.has(LargeSceneryFlag::hasPrimaryColour))
+                result = result.WithPrimary(large.getPrimaryColour());
+            if (entry.flags.has(LargeSceneryFlag::hasSecondaryColour))
+                result = result.WithSecondary(large.getSecondaryColour());
+            if (entry.flags.has(LargeSceneryFlag::hasTertiaryColour))
+                result = result.WithTertiary(large.getTertiaryColour());
+            return result;
+        }
+
+        LargeSceneryGeometryCacheEntry BuildLargeSceneryInstanceGeometry(
+            const LargeSceneryElement& large, const LargeSceneryEntry& entry,
+            const LargeSceneryAssetModel& model, const ReconstructionGroupInfo& group,
+            uint64_t signature, uint64_t frame)
+        {
+            LargeSceneryGeometryCacheEntry result{};
+            result.signature = signature;
+            result.lastSeen = frame;
+            result.bodyImageFirst = model.bodyImageFirst;
+            result.bodyImageLast = model.bodyImageLast;
+            const uint8_t objectDirection = static_cast<uint8_t>(large.getDirection()) & 3;
+            const auto imageTemplate = LargeSceneryImageTemplate(large, entry);
+
+            bool haveBounds = false;
+            FirstPersonVec3 low{}, high{};
+            for (const auto& face : model.faces)
+            {
+                if (face.sequence >= entry.tiles.size())
+                    continue;
+                const auto& tile = entry.tiles[face.sequence];
+                const uint8_t sourceRotation =
+                    FirstPersonViewportRotationForNativeView(
+                        objectDirection, face.sourceDirection);
+                const ImageIndex imageIndex =
+                    entry.image + 4 + (ImageIndex(face.sequence) << 2) + face.sourceDirection;
+                const auto image = imageTemplate.WithIndex(imageIndex);
+                const auto* g1 = GfxGetG1Element(image);
+                if (g1 == nullptr || g1->width <= 0 || g1->height <= 0)
+                    continue;
+
+                const CoordsXY tileOffset =
+                    CoordsXY{ tile.offset.x, tile.offset.y }.rotate(objectDirection);
+                const CoordsXY tileWorld{
+                    int32_t(std::lround(group.anchor.x)) + tileOffset.x,
+                    int32_t(std::lround(group.anchor.y)) + tileOffset.y,
+                };
+                const int32_t tileBaseZ =
+                    int32_t(std::lround(group.anchor.z)) + tile.offset.z;
+                const auto spriteOrigin =
+                    GetTileElementPaintSpritePosition(tileWorld, sourceRotation);
+                const auto spritePos = Translate3DTo2DWithZ(
+                    sourceRotation, { spriteOrigin, tileBaseZ });
+
+                FirstPersonSurface surface{};
+                surface.image = image;
+                surface.reconstructionGroup = group.key;
+                std::array<FirstPersonVertex, 4> vertices{};
+                FirstPersonVec3 faceCenter{};
+                for (size_t i = 0; i < face.corners.size(); ++i)
+                {
+                    const auto localXY =
+                        CoordsXY{ face.corners[i].x, face.corners[i].y }.rotate(objectDirection);
+                    const FirstPersonVec3 world{
+                        group.anchor.x + float(localXY.x),
+                        group.anchor.y + float(localXY.y),
+                        group.anchor.z + float(face.corners[i].z),
+                    };
+                    const auto source = Translate3DTo2DWithZ(
+                        sourceRotation,
+                        {
+                            int32_t(std::lround(world.x)),
+                            int32_t(std::lround(world.y)),
+                            int32_t(std::lround(world.z)),
+                        });
+                    vertices[i] = {
+                        world,
+                        float(source.x - spritePos.x - g1->xOffset),
+                        float(source.y - spritePos.y - g1->yOffset),
+                    };
+                    faceCenter = Add(faceCenter, world);
+
+                    if (!haveBounds)
+                    {
+                        low = high = world;
+                        haveBounds = true;
+                    }
+                    else
+                    {
+                        low.x = std::min(low.x, world.x);
+                        low.y = std::min(low.y, world.y);
+                        low.z = std::min(low.z, world.z);
+                        high.x = std::max(high.x, world.x);
+                        high.y = std::max(high.y, world.y);
+                        high.z = std::max(high.z, world.z);
+                    }
+                }
+                faceCenter = Mul(faceCenter, 0.25f);
+                surface.gpuRegion = FirstPersonGpuRegionKey(
+                    int32_t(std::floor(faceCenter.x / float(kCoordsXYStep))),
+                    int32_t(std::floor(faceCenter.y / float(kCoordsXYStep))));
+                EmitQuad(surface, vertices);
+                result.surfaces.emplace_back(std::move(surface));
+            }
+
+            if (haveBounds && !result.surfaces.empty())
+            {
+                result.hasBounds = true;
+                result.minTileX = int32_t(std::floor(low.x / float(kCoordsXYStep)));
+                result.minTileY = int32_t(std::floor(low.y / float(kCoordsXYStep)));
+                result.maxTileX = int32_t(std::floor(high.x / float(kCoordsXYStep)));
+                result.maxTileY = int32_t(std::floor(high.y / float(kCoordsXYStep)));
+                const FirstPersonVec3 center{
+                    0.5f * (low.x + high.x),
+                    0.5f * (low.y + high.y),
+                    0.5f * (low.z + high.z),
+                };
+                const float hx = 0.5f * (high.x - low.x);
+                const float hy = 0.5f * (high.y - low.y);
+                const float hz = 0.5f * (high.z - low.z);
+                const float radius = std::sqrt(hx * hx + hy * hy + hz * hz) + 2.0f;
+                for (auto& surface : result.surfaces)
+                {
+                    surface.hasSemanticBounds = true;
+                    surface.semanticCenter = center;
+                    surface.semanticRadius = radius;
+                }
+            }
+            return result;
+        }
+
+        [[nodiscard]] bool VisibleTilesTouchLargeSceneryGeometry(
+            const LargeSceneryGeometryCacheEntry& cached,
+            const std::unordered_set<uint64_t>& visibleTileKeys)
+        {
+            if (!cached.hasBounds)
+                return false;
+            for (int32_t y = cached.minTileY; y <= cached.maxTileY; ++y)
+            for (int32_t x = cached.minTileX; x <= cached.maxTileX; ++x)
+            {
+                if (visibleTileKeys.contains(TerrainKey(x, y)))
+                    return true;
+            }
+            return false;
+        }
+
+        void UpdateLargeSceneryReconstructions(FirstPersonScene& scene, uint64_t frame)
+        {
+            const bool enabled = LargeSceneryGeometryAllowedForView(scene.options.viewFlags);
+            if (_largeSceneryGeometryEnabled != enabled)
+            {
+                for (const auto& [groupKey, cached] : _largeSceneryGeometryCache)
+                {
+                    (void)groupKey;
+                    MarkLargeSceneryGeometryRegionsDirty(cached);
+                }
+                _largeSceneryGeometryEnabled = enabled;
+            }
+            if (!enabled)
+                return;
+
+            // Fitting all four silhouettes is deliberately staggered. Until an
+            // asset has been accepted, its native group impostor remains intact.
+            size_t assetFitBudget = 1;
+            std::unordered_set<uint64_t> seenGroups;
+            std::unordered_set<uint64_t> visibleTileKeys;
+            seenGroups.reserve(scene.visibleTiles.size() / 2 + 1);
+            visibleTileKeys.reserve(scene.visibleTiles.size() * 2 + 1);
+            for (const auto tile : scene.visibleTiles)
+                visibleTileKeys.insert(TerrainKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+
+            for (const auto tile : scene.visibleTiles)
+            {
+                auto* element = MapGetFirstElementAt(tile);
+                if (element == nullptr)
+                    continue;
+                do
+                {
+                    if (element->getType() != TileElementType::largeScenery
+                        || element->isGhost() || element->isInvisible())
+                        continue;
+                    auto* large = element->asLargeScenery();
+                    const auto* entry = large != nullptr ? large->getEntry() : nullptr;
+                    const auto group = GetReconstructionGroup(tile, element);
+                    if (large == nullptr || entry == nullptr || !group.has_value()
+                        || !seenGroups.insert(group->key).second)
+                        continue;
+
+                    if (!LargeSceneryAssetEligible(*entry)
+                        || !LargeSceneryInstanceMetadataMatches(*large, *entry))
+                    {
+                        if (auto old = _largeSceneryGeometryCache.find(group->key);
+                            old != _largeSceneryGeometryCache.end())
+                        {
+                            MarkLargeSceneryGeometryRegionsDirty(old->second);
+                            _largeSceneryGeometryCache.erase(old);
+                        }
+                        continue;
+                    }
+
+                    const auto existingModel = _largeSceneryAssetModels.find(entry);
+                    const bool alreadyAttempted =
+                        existingModel != _largeSceneryAssetModels.end()
+                        && existingModel->second.attempted;
+                    const auto* model = GetLargeSceneryAssetModel(
+                        *entry, alreadyAttempted || assetFitBudget > 0);
+                    if (!alreadyAttempted && model != nullptr)
+                        --assetFitBudget;
+                    if (model == nullptr || !model->reliable)
+                        continue;
+
+                    uint64_t signature = group->key;
+                    ExtendStableKey(signature, static_cast<uint8_t>(large->getPrimaryColour()));
+                    ExtendStableKey(signature, static_cast<uint8_t>(large->getSecondaryColour()));
+                    ExtendStableKey(signature, static_cast<uint8_t>(large->getTertiaryColour()));
+                    ExtendStableKey(signature, uint32_t(model->heightTrim));
+                    ExtendStableKey(signature, model->faces.size());
+
+                    auto cached = _largeSceneryGeometryCache.find(group->key);
+                    if (cached == _largeSceneryGeometryCache.end()
+                        || cached->second.signature != signature || cached->second.dirty)
+                    {
+                        if (cached != _largeSceneryGeometryCache.end())
+                            MarkLargeSceneryGeometryRegionsDirty(cached->second);
+                        auto rebuilt = BuildLargeSceneryInstanceGeometry(
+                            *large, *entry, *model, *group, signature, frame);
+                        if (rebuilt.surfaces.empty())
+                        {
+                            if (cached != _largeSceneryGeometryCache.end())
+                                _largeSceneryGeometryCache.erase(cached);
+                            continue;
+                        }
+                        MarkLargeSceneryGeometryRegionsDirty(rebuilt);
+                        _largeSceneryGeometryCache[group->key] = std::move(rebuilt);
+                    }
+                    else
+                    {
+                        cached->second.lastSeen = frame;
+                    }
+                } while (!(element++)->isLastForTile());
+            }
+
+            for (auto it = _largeSceneryGeometryCache.begin();
+                 it != _largeSceneryGeometryCache.end();)
+            {
+                if (it->second.lastSeen != frame
+                    && VisibleTilesTouchLargeSceneryGeometry(
+                        it->second, visibleTileKeys))
+                {
+                    MarkLargeSceneryGeometryRegionsDirty(it->second);
+                    it = _largeSceneryGeometryCache.erase(it);
+                }
+                else
+                {
+                    ++it;
+                }
+            }
+
+            if (frame % 120 == 0)
+            {
+                std::erase_if(_largeSceneryGeometryCache, [frame](const auto& kv) {
+                    const bool expired = frame - kv.second.lastSeen > 240;
+                    if (expired)
+                        MarkLargeSceneryGeometryRegionsDirty(kv.second);
+                    return expired;
+                });
+            }
+        }
+
+        [[nodiscard]] bool IsReconstructedLargeSceneryBody(
+            const FirstPersonSurface& surface, uint64_t frame)
+        {
+            if (!_largeSceneryGeometryEnabled || surface.reconstructionGroup == 0
+                || !surface.image.HasValue())
+                return false;
+            const auto found = _largeSceneryGeometryCache.find(surface.reconstructionGroup);
+            if (found == _largeSceneryGeometryCache.end() || found->second.dirty
+                || found->second.lastSeen != frame)
+                return false;
+            const auto image = surface.image.GetIndex();
+            return image >= found->second.bodyImageFirst
+                && image < found->second.bodyImageLast;
+        }
 
         [[nodiscard]] bool IsResidentStaticSurface(const FirstPersonSurface& surface)
         {
@@ -1762,6 +2555,17 @@ namespace OpenRCT2::Paint
                 for (const auto& surface : trajectory.surfaces)
                     addSurface(surface);
             }
+            if (_largeSceneryGeometryEnabled)
+            {
+                for (const auto& [groupKey, geometry] : _largeSceneryGeometryCache)
+                {
+                    (void)groupKey;
+                    if (geometry.dirty)
+                        continue;
+                    for (const auto& surface : geometry.surfaces)
+                        addSurface(surface);
+                }
+            }
 
             packet.textureDependencies.assign(dependencies.begin(), dependencies.end());
             std::sort(packet.textureDependencies.begin(), packet.textureDependencies.end());
@@ -1813,6 +2617,20 @@ namespace OpenRCT2::Paint
                         visibleRegions.insert(surface.gpuRegion);
                 }
             }
+            if (_largeSceneryGeometryEnabled)
+            {
+                for (const auto& [groupKey, geometry] : _largeSceneryGeometryCache)
+                {
+                    (void)groupKey;
+                    if (geometry.dirty || geometry.lastSeen != frame)
+                        continue;
+                    for (const auto& surface : geometry.surfaces)
+                    {
+                        if (surface.gpuRegion != 0)
+                            visibleRegions.insert(surface.gpuRegion);
+                    }
+                }
+            }
 
             scene.staticRegions.reserve(visibleRegions.size());
             for (const auto key : visibleRegions)
@@ -1850,6 +2668,7 @@ namespace OpenRCT2::Paint
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
                 view.nearClip, view.farClip);
+            UpdateLargeSceneryReconstructions(scene, frame);
 
             for (const auto tile : scene.visibleTiles)
             {
@@ -2270,6 +3089,8 @@ namespace OpenRCT2::Paint
                     const auto appendSelected = [&](const std::vector<FirstPersonSurface>& surfaces) {
                         for (const auto& staticSurface : surfaces)
                         {
+                            if (IsReconstructedLargeSceneryBody(staticSurface, frame))
+                                continue;
                             uint8_t selected = cached.selectedRotation;
                             if (staticSurface.reconstructionGroup != 0)
                             {
@@ -2417,13 +3238,16 @@ namespace OpenRCT2::Paint
         _entityRotations.clear();
         _dynamicEntitySpatialCache = {};
         _trackTrajectoryCache.clear();
+        _largeSceneryAssetModels.clear();
+        _largeSceneryGeometryCache.clear();
+        _largeSceneryGeometryEnabled = false;
         _staticRegionPackets.clear();
     }
     void InvalidateFirstPersonSceneRegion(CoordsXY low, CoordsXY high)
     {
         if (_regionBounds.empty() && _terrainCache.entries.empty()
             && _staticPaintCache.empty() && _trackTrajectoryCache.empty()
-            && _staticRegionPackets.empty()) return;
+            && _largeSceneryGeometryCache.empty() && _staticRegionPackets.empty()) return;
         const auto floorTile = [](int32_t x) {return int32_t(std::floor(float(x)/kCoordsXYStep));};
         const auto x0 = floorTile(std::min(low.x,high.x));
         const auto y0 = floorTile(std::min(low.y,high.y));
@@ -2467,6 +3291,18 @@ namespace OpenRCT2::Paint
             {
                 MarkTrackTrajectoryRegionsDirty(trajectory);
                 trajectory.dirty = true;
+            }
+        }
+        for (auto& [groupKey, geometry] : _largeSceneryGeometryCache)
+        {
+            (void)groupKey;
+            if (!geometry.hasBounds)
+                continue;
+            if (x0 <= geometry.maxTileX && x1 >= geometry.minTileX
+                && y0 <= geometry.maxTileY && y1 >= geometry.minTileY)
+            {
+                MarkLargeSceneryGeometryRegionsDirty(geometry);
+                geometry.dirty = true;
             }
         }
         // Generic native invalidation also covers shadows and moving objects,
