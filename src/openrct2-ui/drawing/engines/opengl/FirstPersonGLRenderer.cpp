@@ -37,6 +37,7 @@ layout(location=6) in int aFlags;
 layout(location=7) in vec4 aMaskAtlas;
 layout(location=8) in vec2 aMaskSize;
 layout(location=9) in int aMaskLayer;
+layout(location=10) in uint aPaintOrdinal;
 uniform vec3 uEye;
 uniform vec3 uForward;
 uniform vec3 uRight;
@@ -53,6 +54,7 @@ flat out int fFlags;
 flat out vec4 fMaskAtlas;
 flat out vec2 fMaskSize;
 flat out int fMaskLayer;
+flat out uint fPaintOrdinal;
 void main() {
     vec3 delta = aWorld - uEye;
     float x = dot(delta, uRight);
@@ -72,6 +74,7 @@ void main() {
     fMaskAtlas = aMaskAtlas;
     fMaskSize = aMaskSize;
     fMaskLayer = aMaskLayer;
+    fPaintOrdinal = aPaintOrdinal;
 }
 )GLSL";
         constexpr char kFragmentShader[] = R"GLSL(#version 330 core
@@ -79,7 +82,10 @@ uniform usampler2DArray uSprites;
 uniform usampler2D uPalettes;
 uniform sampler2D uOpaqueDepth;
 uniform sampler2D uPreviousDepth;
+uniform usampler2D uPreviousLayer;
+uniform sampler2D uSelectedPhysicalDepth;
 uniform bool uPeeling;
+uniform int uPeelStage;
 uniform vec3 uEye;
 uniform vec3 uForward;
 uniform vec2 uNearFar;
@@ -93,6 +99,7 @@ flat in int fFlags;
 flat in vec4 fMaskAtlas;
 flat in vec2 fMaskSize;
 flat in int fMaskLayer;
+flat in uint fPaintOrdinal;
 layout(location=0) out uint oIndex;
 void main() {
     // A texture sample outside the original sprite is EMPTY, not a stretched
@@ -128,19 +135,48 @@ void main() {
     float logarithmic = log2(1.0 + depth)/log2(1.0 + uNearFar.y);
     gl_FragDepth = logarithmic;
     if ((fFlags & 1) != 0) {
-        // A separate R16UI peel target stores the original palette FILTER,
-        // not an already-composited colour. Zero denotes an empty fragment.
+        const float eps = 0.00000002;
         float opaqueDepth = texelFetch(uOpaqueDepth,ivec2(gl_FragCoord.xy),0).r;
-        if (logarithmic >= opaqueDepth - 0.00000002) discard;
-        if (uPeeling) {
-            float previous = texelFetch(uPreviousDepth,ivec2(gl_FragCoord.xy),0).r;
-            if (logarithmic >= previous - 0.00000002) discard;
-        }
+        if (logarithmic >= opaqueDepth - eps) discard;
+
         uint row = uint(fPalettes.y);
         // Native water mask changes its palette row with the mask texel.
         if ((fFlags & 2) != 0) row += col - 1u;
         if (row > 254u) discard;
-        oIndex = (row+1u) << 8u;
+
+        uint ordinal = min(fPaintOrdinal, 0x00ffffffu);
+        if (uPeeling) {
+            float previousDepth = texelFetch(uPreviousDepth,ivec2(gl_FragCoord.xy),0).r;
+            uint previousToken = texelFetch(uPreviousLayer,ivec2(gl_FragCoord.xy),0).r;
+            uint previousOrdinal = previousToken >> 8u;
+            // Far-to-near lexicographic remainder:
+            // lower physical depth remains after the previous layer; at exactly
+            // equal physical depth only a later native paint ordinal remains.
+            if (logarithmic > previousDepth + eps) discard;
+            if (abs(logarithmic - previousDepth) <= eps && ordinal <= previousOrdinal) discard;
+        }
+
+        if (uPeelStage == 1) {
+            // Stage one chooses the farthest REMAINING physical layer only.
+            gl_FragDepth = logarithmic;
+            oIndex = 1u;
+            return;
+        }
+
+        if (uPeelStage == 2) {
+            // Stage two chooses native paint order only among fragments that
+            // occupy the selected physical layer. Geometry/depth is unchanged.
+            float selectedDepth = texelFetch(
+                uSelectedPhysicalDepth,ivec2(gl_FragCoord.xy),0).r;
+            if (abs(logarithmic - selectedDepth) > eps) discard;
+            gl_FragDepth = float(ordinal) / 16777215.0;
+            // Low byte stores filter row+1, high 24 bits store paint ordinal.
+            oIndex = (ordinal << 8u) | (row + 1u);
+            return;
+        }
+
+        // Defensive fallback; transparent rendering normally uses the two-stage path.
+        oIndex = row + 1u;
         return;
     }
     int count = fPalettes.x;
@@ -171,8 +207,9 @@ void main() {
     ivec2 xy=ivec2(gl_FragCoord.xy);
     uint background=texelFetch(uAccumulated,xy,0).r;
     uint encoded=texelFetch(uLayer,xy,0).r;
-    if(encoded==0u){oIndex=background;return;}
-    uint row=(encoded>>8u)-1u;
+    uint encodedRow=encoded & 0xffu;
+    if(encodedRow==0u){oIndex=background;return;}
+    uint row=encodedRow-1u;
     oIndex=texelFetch(uPalettes,ivec2(int(background),int(row)),0).r;
 }
 )GLSL";
@@ -188,6 +225,7 @@ void main() {
             float maskAtlas[4];
             float maskSize[2];
             int32_t maskLayer;
+            uint32_t paintOrdinal;
         };
         void ConfigureVertexInput(GLuint vao, GLuint vbo)
         {
@@ -213,6 +251,8 @@ void main() {
         glCall(glVertexAttribPointer, 8, 2, GL_FLOAT, GL_FALSE, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, maskSize)));
         glCall(glEnableVertexAttribArray, 9);
         glCall(glVertexAttribIPointer, 9, 1, GL_INT, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, maskLayer)));
+        glCall(glEnableVertexAttribArray, 10);
+        glCall(glVertexAttribIPointer, 10, 1, GL_UNSIGNED_INT, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, paintOrdinal)));
         }
         GLuint Compile(GLenum type, const char* source)
         {
@@ -356,7 +396,10 @@ void main() {
         glCall(glUniform1i, Uniform(_program, "uPalettes"), 1);
         glCall(glUniform1i, Uniform(_program, "uOpaqueDepth"), 2);
         glCall(glUniform1i, Uniform(_program, "uPreviousDepth"), 3);
+        glCall(glUniform1i, Uniform(_program, "uPreviousLayer"), 4);
+        glCall(glUniform1i, Uniform(_program, "uSelectedPhysicalDepth"), 5);
         glCall(glUniform1i, Uniform(_program, "uPeeling"), 0);
+        glCall(glUniform1i, Uniform(_program, "uPeelStage"), 0);
 
         // Stable fixed world geometry belongs to resident GPU regions. Camera-
         // facing impostors, guests, cars and transparency remain streamed.
@@ -463,7 +506,8 @@ void main() {
                         | (surface.edgeCoverage ? 8 : 0),
                     {maskTex.coords.x,maskTex.coords.y,maskTex.coords.z,maskTex.coords.w},
                     {maskG1?float(maskG1->width):0.0f,maskG1?float(maskG1->height):0.0f},
-                    maskG1?int32_t(maskTex.index):-1});
+                    maskG1?int32_t(maskTex.index):-1,
+                    std::min<uint32_t>(surface.nativePaintOrdinal,0x00ffffffu)});
         };
         std::vector<GPUVertex> opaqueVertices;
         for(const auto* surface:streamedOpaque) appendVertices(opaqueVertices,*surface);
