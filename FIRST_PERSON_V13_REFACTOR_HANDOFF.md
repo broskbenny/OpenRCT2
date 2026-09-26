@@ -34,6 +34,7 @@ The refactor addresses the independently audited first-person defects:
 * Walls occupy the complete 32-unit tile edge rather than 28/29-unit paint sorting bounds.
 * Native wall slope values are respected.
 * Slope endpoint elevation is 16 world units, matching native wall placement semantics.
+* Walking collision interpolates the wall base at the actual XY contact point instead of expanding a sloped wall into a rectangular prism.
 * Wall visual height uses the object height rather than the painter's `-2` sorting-box reduction.
 * Doors remain excluded from the solid semantic plane because their animated/open-panel geometry is not yet reconstructed.
 
@@ -105,6 +106,7 @@ The path's false `+1` elevation was removed first because it was a confirmed sou
 
 * walls use exact complete tile edges and adjacent edges share their corner;
 * native wall slope raises the correct endpoint while preserving wall height;
+* sloped walking collision uses the wall height at the actual contact point;
 * shared native path surface-image selection rotates consistently for flat and sloped paths.
 
 ## Validation status
