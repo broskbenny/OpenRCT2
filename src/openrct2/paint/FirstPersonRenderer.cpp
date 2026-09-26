@@ -781,6 +781,38 @@ namespace OpenRCT2::Paint
         };
         static std::unordered_map<uint64_t, StaticPaintCacheEntry> _staticPaintCache;
 
+        struct ReconstructionRotationState
+        {
+            uint64_t lastSeen{};
+            bool hasSelectedRotation = false;
+            uint8_t selectedRotation = 0;
+        };
+        static std::unordered_map<uint64_t, ReconstructionRotationState> _reconstructionRotations;
+
+        struct StaticRegionPacketCache
+        {
+            uint64_t generation{};
+            uint64_t lastSeen{};
+            bool dirty = true;
+            FirstPersonVec3 center{};
+            float radius{};
+            std::vector<FirstPersonSurface> surfaces;
+            std::vector<ImageIndex> textureDependencies;
+        };
+        static std::unordered_map<uint64_t, StaticRegionPacketCache> _staticRegionPackets;
+
+        [[nodiscard]] bool IsResidentStaticSurface(const FirstPersonSurface& surface)
+        {
+            return surface.gpuRegion != 0 && !surface.viewFacing
+                && surface.image.HasValue() && !surface.image.IsBlended()
+                && surface.immutablePixels.empty();
+        }
+
+        void MarkStaticRegionDirtyForTile(int32_t tileX, int32_t tileY)
+        {
+            _staticRegionPackets[FirstPersonGpuRegionKey(tileX, tileY)].dirty = true;
+        }
+
         // Hash the actual packed native tile elements, not only terrain height.
         // This detects direct map mutations even if they bypass the ordinary
         // viewport invalidation path. Ride-wide changes are covered by the
