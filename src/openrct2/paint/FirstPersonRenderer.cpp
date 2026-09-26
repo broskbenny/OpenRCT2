@@ -422,14 +422,17 @@ namespace OpenRCT2::Paint
             return view.visible(center,std::sqrt(x*x+y*y+z*z)+2.0f);
         }
         void AppendSemanticPathDeck(
-            FirstPersonScene& scene, const PaintStruct& ps, ImageId image,
-            const ScreenCoordsXY& spritePos, uint8_t rotation)
+            FirstPersonScene& scene, const PaintStruct& ps, ImageId image, uint8_t rotation)
         {
             const auto* g1 = image.HasValue() ? GfxGetG1Element(image) : nullptr;
             const auto* path = ps.Element != nullptr ? ps.Element->asPath() : nullptr;
             if (g1 == nullptr || path == nullptr) return;
             const auto origin = ps.MapPos;
             const int32_t baseZ = path->getBaseZ();
+            // The semantic deck may be synthesized from a bridge/support root.
+            // Its UV origin must still match the native {0,0,baseZ} surface
+            // sprite placement, not whichever root happened to expose PathElement.
+            const auto spritePos = Translate3DTo2DWithZ(rotation, { origin, baseZ });
             const auto slope = path->isSloped() ? kPathSlopeToLandSlope[path->getSlopeDirection()] : kTileSlopeFlat;
             const auto heights = GetSlopeCornerHeights(baseZ, slope);
             // Geometry is the REAL walking plane. Do not raise it to solve
@@ -484,7 +487,7 @@ namespace OpenRCT2::Paint
             {
                 auto deckImage = ps.image_id.WithIndex(
                     pathSurface->image + GetPathSurfaceImageOffset(*path, rotation));
-                AppendSemanticPathDeck(scene, ps, colourify(deckImage), ps.ScreenPos, rotation);
+                AppendSemanticPathDeck(scene, ps, colourify(deckImage), rotation);
             }
 
             // Native path surface sprites are represented by the semantic deck
@@ -1221,12 +1224,14 @@ namespace OpenRCT2::Paint
             a.z += 2 * kCoordsZStep;
 
         const float wallHeight = float(std::max(0, height));
-        return { { {
+        FirstPersonWallPlane plane{};
+        plane.corners = {
             a,
             b,
-            { b.x, b.y, b.z + wallHeight },
-            { a.x, a.y, a.z + wallHeight },
-        } } };
+            FirstPersonVec3{ b.x, b.y, b.z + wallHeight },
+            FirstPersonVec3{ a.x, a.y, a.z + wallHeight },
+        };
+        return plane;
     }
 
     std::optional<FirstPersonProjection> ProjectFirstPersonPoint(
