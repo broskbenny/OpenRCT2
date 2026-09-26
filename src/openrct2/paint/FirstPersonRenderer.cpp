@@ -762,7 +762,8 @@ namespace OpenRCT2::Paint
         {
             uint64_t lastPainted{};
             bool valid = false;
-            std::vector<FirstPersonSurface> surfaces;
+            std::vector<FirstPersonSurface> residentSurfaces;
+            std::vector<FirstPersonSurface> streamedSurfaces;
         };
         struct StaticPaintCacheEntry
         {
@@ -1177,7 +1178,7 @@ namespace OpenRCT2::Paint
                     const auto& variant = cached.rotations[rotation];
                     if (!variant.valid)
                         continue;
-                    for (const auto& surface : variant.surfaces)
+                    for (const auto& surface : variant.residentSurfaces)
                     {
                         uint8_t selected = cached.selectedRotation;
                         if (surface.reconstructionGroup != 0)
@@ -1324,7 +1325,8 @@ namespace OpenRCT2::Paint
                     {
                         variant.valid = false;
                         variant.lastPainted = 0;
-                        variant.surfaces.clear();
+                        variant.residentSurfaces.clear();
+                        variant.streamedSurfaces.clear();
                     }
                     MarkStaticRegionDirtyForTile(tx, ty);
                 }
@@ -1374,7 +1376,8 @@ namespace OpenRCT2::Paint
                     {
                         variant.valid = true;
                         variant.lastPainted = frame;
-                        variant.surfaces.clear();
+                        variant.residentSurfaces.clear();
+                        variant.streamedSurfaces.clear();
                         missesByRotation[rotation].insert(key);
                         MarkStaticRegionDirtyForTile(tx, ty);
                         ++scene.staticTilePaints;
@@ -1553,9 +1556,15 @@ namespace OpenRCT2::Paint
 
                             if (cacheIt != _staticPaintCache.end())
                             {
-                                auto& surfaces = cacheIt->second.rotations[rotation].surfaces;
-                                surfaces.insert(
-                                    surfaces.end(), scene.surfaces.begin() + startSurface, scene.surfaces.end());
+                                auto& variant = cacheIt->second.rotations[rotation];
+                                for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
+                                {
+                                    auto& surface = scene.surfaces[i];
+                                    if (IsResidentStaticSurface(surface))
+                                        variant.residentSurfaces.push_back(surface);
+                                    else
+                                        variant.streamedSurfaces.push_back(surface);
+                                }
                             }
                             scene.surfaces.erase(
                                 scene.surfaces.begin() + startSurface, scene.surfaces.end());
@@ -1590,26 +1599,29 @@ namespace OpenRCT2::Paint
                     const auto& variant = cached.rotations[rotation];
                     if (!variant.valid)
                         continue;
-                    for (const auto& staticSurface : variant.surfaces)
-                    {
-                        uint8_t selected = cached.selectedRotation;
-                        if (staticSurface.reconstructionGroup != 0)
+                    const auto appendSelected = [&](const std::vector<FirstPersonSurface>& surfaces) {
+                        for (const auto& staticSurface : surfaces)
                         {
-                            const auto group = _reconstructionRotations.find(staticSurface.reconstructionGroup);
-                            if (group == _reconstructionRotations.end() || !group->second.hasSelectedRotation)
+                            uint8_t selected = cached.selectedRotation;
+                            if (staticSurface.reconstructionGroup != 0)
+                            {
+                                const auto group = _reconstructionRotations.find(staticSurface.reconstructionGroup);
+                                if (group == _reconstructionRotations.end() || !group->second.hasSelectedRotation)
+                                    continue;
+                                selected = group->second.selectedRotation;
+                            }
+                            if (selected != rotation)
                                 continue;
-                            selected = group->second.selectedRotation;
-                        }
-                        if (selected != rotation)
-                            continue;
-                        if (!cached.animated && IsResidentStaticSurface(staticSurface))
-                            continue;
 
-                        auto surface = staticSurface;
-                        ReorientBillboard(surface, opt.camera.position, basis.right);
-                        if (SurfaceMayBeVisible(surface, worldFrustum))
-                            scene.surfaces.emplace_back(std::move(surface));
-                    }
+                            auto surface = staticSurface;
+                            ReorientBillboard(surface, opt.camera.position, basis.right);
+                            if (SurfaceMayBeVisible(surface, worldFrustum))
+                                scene.surfaces.emplace_back(std::move(surface));
+                        }
+                    };
+                    appendSelected(variant.streamedSurfaces);
+                    if (cached.animated)
+                        appendSelected(variant.residentSurfaces);
                 }
             }
 
