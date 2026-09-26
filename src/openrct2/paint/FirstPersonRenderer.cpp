@@ -101,32 +101,7 @@ namespace OpenRCT2::Paint
         [[nodiscard]] uint8_t PaintRotationForPoint(
             const FirstPersonCamera& camera, FirstPersonVec3 anchor, std::optional<uint8_t> previous)
         {
-            // Native sprite direction is a property of viewpoint relative to the
-            // reconstructed object, never head gaze. Connected objects call this
-            // with one canonical origin so every constituent tile chooses the
-            // same native orthographic source view.
-            float dx = anchor.x - camera.position.x;
-            float dy = anchor.y - camera.position.y;
-            if (std::hypot(dx, dy) <= 0.1f)
-            {
-                if (previous.has_value())
-                    return *previous;
-                const auto forward = GetFirstPersonBasis(camera).forward;
-                dx = forward.x;
-                dy = forward.y;
-            }
-
-            float yaw = std::atan2(dy, dx);
-            if (yaw < 0.0f) yaw += 2.0f * kPi;
-            if (previous.has_value())
-            {
-                constexpr float kRotationHysteresis = 5.0f * kDegToRad;
-                const float centre = float(*previous & 3) * 0.5f * kPi;
-                const float delta = std::abs(std::remainder(yaw - centre, 2.0f * kPi));
-                if (delta <= 0.25f * kPi + kRotationHysteresis)
-                    return *previous & 3;
-            }
-            return static_cast<uint8_t>(std::lround(yaw / (0.5f * kPi))) & 3;
+            return FirstPersonSourceRotationForPoint(camera, anchor, previous);
         }
 
         [[nodiscard]] uint8_t PaintRotationForTile(
