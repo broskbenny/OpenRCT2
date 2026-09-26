@@ -11,6 +11,7 @@
 #include <openrct2/paint/FirstPersonRenderer.h>
 #include <openrct2/paint/FirstPersonVehiclePose.h>
 #include <openrct2/paint/tile_element/Paint.Path.h>
+#include <openrct2/paint/tile_element/Paint.TileElement.h>
 #include <openrct2/world/Wall.h>
 #include <openrct2/world/tile_element/PathElement.h>
 
@@ -209,6 +210,27 @@ TEST(FirstPersonWallGeometryTest, SlopedCollisionUsesHeightAtActualContactPoint)
     EXPECT_TRUE(FirstPersonSlopedWallIntersectsWalkStep(
         { 8.0f, -4.0f, 85.0f }, { 8.0f, 4.0f, 85.0f },
         wallA, wallB, 48.0f, 20.0f, 2.0f));
+}
+
+TEST(FirstPersonPathArtworkTest, SemanticDeckUsesNativeRotationAdjustedSpriteOrigin)
+{
+    const CoordsXY origin{ 320, 640 };
+    constexpr int32_t z = 80;
+    const std::array<ScreenCoordsXY, 4> expectedWrongMinusNative{ {
+        { 0, 0 },
+        { -32, -16 },
+        { 0, -32 },
+        { 32, -16 },
+    } };
+
+    for (uint8_t rotation = 0; rotation < 4; ++rotation)
+    {
+        const auto adjusted = GetTileElementPaintSpritePosition(origin, rotation);
+        const auto wrong = Translate3DTo2DWithZ(rotation, { origin, z });
+        const auto native = Translate3DTo2DWithZ(rotation, { adjusted, z });
+        EXPECT_EQ(wrong.x - native.x, expectedWrongMinusNative[rotation].x);
+        EXPECT_EQ(wrong.y - native.y, expectedWrongMinusNative[rotation].y);
+    }
 }
 
 TEST(FirstPersonPathArtworkTest, SharedNativeSurfaceSelectionRotatesConsistently)
