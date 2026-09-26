@@ -91,6 +91,20 @@ namespace OpenRCT2::Paint
         }
     }
 
+    [[nodiscard]] inline float FirstPersonLerpCyclicFrame(
+        float before, float after, float alpha, float frameCount)
+    {
+        if (!(frameCount > 0.0f))
+            return 0.0f;
+        constexpr float kTwoPi = 6.28318530717958647692f;
+        const float step = kTwoPi / frameCount;
+        float frame = FirstPersonLerpAngle(before * step, after * step, alpha) / step;
+        frame = std::fmod(frame, frameCount);
+        if (frame < 0.0f)
+            frame += frameCount;
+        return frame;
+    }
+
     struct FirstPersonPassengerPose
     {
         FirstPersonVec3 position{};
@@ -193,12 +207,13 @@ namespace OpenRCT2::Paint
                 0,4,9,13,17,21,24,27,29,31,33,34,34,34,33,31,29,27,24,21,17,13,9,4,
                 0,-3,-8,-12,-16,-20,-23,-26,-28,-30,-32,-33,-33,-33,-32,-30,-28,-26,-23,-20,-16,-12,-8,-3
             };
-            const float armFrame = std::clamp(
-                flatPrimaryFrame >= 0.0f ? flatPrimaryFrame
-                                         : float(car.flatRideAnimationFrame),
-                0.0f, 47.0f);
+            float armFrame = flatPrimaryFrame >= 0.0f
+                ? flatPrimaryFrame : float(car.flatRideAnimationFrame);
+            armFrame = std::fmod(armFrame, 48.0f);
+            if (armFrame < 0.0f)
+                armFrame += 48.0f;
             const int32_t arm0 = int32_t(std::floor(armFrame));
-            const int32_t arm1 = std::min(arm0 + 1, 47);
+            const int32_t arm1 = (arm0 + 1) % 48;
             const float armAlpha = armFrame - float(arm0);
             const float seatPosition =
                 float(kSeatPosition[arm0])
@@ -207,9 +222,12 @@ namespace OpenRCT2::Paint
                 float(kSeatHeight[arm0])
                 + (float(kSeatHeight[arm1]) - float(kSeatHeight[arm0])) * armAlpha;
 
-            const float seatFrame = flatSecondaryFrame >= 0.0f
+            float seatFrame = flatSecondaryFrame >= 0.0f
                 ? flatSecondaryFrame
                 : float(car.flatRideSecondaryAnimationFrame & 0x0F);
+            seatFrame = std::fmod(seatFrame, 16.0f);
+            if (seatFrame < 0.0f)
+                seatFrame += 16.0f;
             const float seatAngle = seatFrame
                 * (6.28318530717958647692f / 16.0f);
             pose.basis = FirstPersonRotatePassengerPitch(vehicleBasis, seatAngle);
