@@ -1201,9 +1201,21 @@ namespace OpenRCT2
                 const int32_t minTileY = std::max(0, centreTileY - radiusTiles);
                 const int32_t maxTileY = std::min(mapSize.y - 1, centreTileY + radiusTiles);
 
+                const float cutoff2 = kFirstPersonAudioMaxDistance * kFirstPersonAudioMaxDistance;
                 for (int32_t ty = minTileY; ty <= maxTileY; ++ty)
                 for (int32_t tx = minTileX; tx <= maxTileX; ++tx)
                 {
+                    const float tileMinX = float(tx * kCoordsXYStep);
+                    const float tileMinY = float(ty * kCoordsXYStep);
+                    const float nearestX = std::clamp(
+                        listener->position.x, tileMinX, tileMinX + float(kCoordsXYStep));
+                    const float nearestY = std::clamp(
+                        listener->position.y, tileMinY, tileMinY + float(kCoordsXYStep));
+                    const float tileDx = nearestX - listener->position.x;
+                    const float tileDy = nearestY - listener->position.y;
+                    if (tileDx * tileDx + tileDy * tileDy >= cutoff2)
+                        continue;
+
                     const CoordsXY tilePos{ tx * kCoordsXYStep, ty * kCoordsXYStep };
                     for (auto* peep : EntityTileList<Guest>(tilePos))
                     {
