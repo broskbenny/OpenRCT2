@@ -1329,7 +1329,8 @@ namespace OpenRCT2::Paint
             {
                 const auto tileKey = TerrainKey(tx, ty);
                 if (const auto terrainIt = _terrainCache.entries.find(tileKey);
-                    terrainIt != _terrainCache.entries.end() && !terrainIt->second.dirty)
+                    terrainIt != _terrainCache.entries.end() && !terrainIt->second.dirty
+                    && terrainIt->second.suppressedFrame != frame)
                 {
                     const auto& terrain = terrainIt->second;
                     addSurface(terrain.ground);
@@ -1361,6 +1362,12 @@ namespace OpenRCT2::Paint
                             addSurface(surface);
                     }
                 }
+            }
+
+            for (const auto& [key, patch] : _terrainLodPatches)
+            {
+                if (patch.active && patch.lastSeen == frame && patch.regionKey == regionKey)
+                    addSurface(patch.surface);
             }
 
             packet.textureDependencies.assign(dependencies.begin(), dependencies.end());
@@ -1880,6 +1887,8 @@ namespace OpenRCT2::Paint
     {
         _terrainCache.entries.clear();
         _terrainCache.frame = 0;
+        _terrainLodPatches.clear();
+        _coarseLastUsed.clear();
         _regionBounds.clear();
         _staticPaintCache.clear();
         _reconstructionRotations.clear();
