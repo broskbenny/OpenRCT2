@@ -12,6 +12,7 @@
 #include "../core/StringTypes.h"
 
 #include <cstdint>
+#include <vector>
 
 struct ImageId;
 struct PaintSession;
@@ -32,7 +33,24 @@ namespace OpenRCT2::Drawing::ScrollingText
     constexpr auto kParkBannerColourPrefix = "{WHITE}";
     constexpr auto kRideBannerColourPrefix = "{YELLOW}";
 
+    struct FirstPersonBitmapSnapshot
+    {
+        int16_t width{};
+        int16_t height{};
+        int16_t xOffset{};
+        int16_t yOffset{};
+        std::vector<uint8_t> pixels;
+    };
+
     void initialiseBitmaps();
     void invalidate();
     ImageId setup(PaintSession& session, u8string_view string, uint16_t scrollingMode, PaletteIndex colour);
+
+    // First-person native paint sessions can outlive the 256 mutable scrolling
+    // text slots they reference. Capture the bitmap when each PaintStruct is
+    // created so later slot reuse cannot change its meaning.
+    void BeginFirstPersonSnapshotCapture();
+    void EndFirstPersonSnapshotCapture();
+    uint32_t CaptureFirstPersonSnapshot(ImageId image);
+    const FirstPersonBitmapSnapshot* GetFirstPersonSnapshot(uint32_t handle);
 } // namespace OpenRCT2::Drawing::ScrollingText
