@@ -169,7 +169,7 @@ void main() {
             float selectedDepth = texelFetch(
                 uSelectedPhysicalDepth,ivec2(gl_FragCoord.xy),0).r;
             if (abs(logarithmic - selectedDepth) > eps) discard;
-            gl_FragDepth = float(ordinal) / 16777215.0;
+            gl_FragDepth = (float(ordinal) + 0.5) / 16777216.0;
             // Low byte stores filter row+1, high 24 bits store paint ordinal.
             oIndex = (ordinal << 8u) | (row + 1u);
             return;
@@ -789,7 +789,9 @@ void main() {
                     OpenGLAPI::SetTexture(4,GL_TEXTURE_2D,
                         peeling?_peelLayers[size_t((pass+1)&1)]->GetTexture()
                                :_peelLayers[size_t(pass&1)]->GetTexture());
-                    OpenGLAPI::SetTexture(5,GL_TEXTURE_2D,physicalLayer.GetDepthTexture());
+                    // Unit 5 is unused in stage one; bind a non-attached depth
+                    // texture anyway to avoid framebuffer/texture feedback.
+                    OpenGLAPI::SetTexture(5,GL_TEXTURE_2D,_opaqueSnapshot->GetDepthTexture());
                     glCall(glDrawArrays,GL_TRIANGLES,0,GLsizei(tileVertices.size()));
 
                     // Stage 2: at that exact physical depth, select the earliest
@@ -813,7 +815,7 @@ void main() {
                                :_opaqueSnapshot->GetDepthTexture());
                     OpenGLAPI::SetTexture(4,GL_TEXTURE_2D,
                         peeling?_peelLayers[size_t((pass+1)&1)]->GetTexture()
-                               :logicalLayer.GetTexture());
+                               :_opaqueSnapshot->GetTexture());
                     OpenGLAPI::SetTexture(5,GL_TEXTURE_2D,physicalLayer.GetDepthTexture());
                     glCall(glDrawArrays,GL_TRIANGLES,0,GLsizei(tileVertices.size()));
                     composeLayer(logicalLayer,tile);
