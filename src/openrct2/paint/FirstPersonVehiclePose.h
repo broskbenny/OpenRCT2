@@ -20,12 +20,15 @@ namespace OpenRCT2::Paint
 {
     [[nodiscard]] inline float FirstPersonVehicleYawRadians(uint8_t orientation)
     {
-        // Vehicle orientation is not a conventional +X-zero angle. Derive the
-        // camera heading from the same native XY movement table used by
-        // free-roaming vehicles, which encodes orientation 0 as -X, 8 as +Y,
-        // 16 as +X and 24 as -Y.
-        const auto movement = RideVehicle::Geometry::getFreeroamVehicleMovementData(orientation & 0x1F);
-        return std::atan2(static_cast<float>(movement.y), static_cast<float>(movement.x));
+        // Native vehicle orientation is a 32-step turn whose X component is
+        // reflected relative to the conventional camera angle used here:
+        // native forward = { -cos(theta), +sin(theta) }. Preserve all 32
+        // headings (rather than quantising through the 8-way free-roam table)
+        // while matching native movement: 0=-X, 8=+Y, 16=+X, 24=-Y.
+        constexpr float kPi = 3.14159265358979323846f;
+        constexpr float kTwoPi = 2.0f * kPi;
+        const float theta = float(orientation & 0x1F) * (kTwoPi / 32.0f);
+        return std::remainder(kPi - theta, kTwoPi);
     }
 
     [[nodiscard]] inline float FirstPersonVehiclePitchRadians(VehiclePitch pitch)
