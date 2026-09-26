@@ -1671,8 +1671,6 @@ namespace OpenRCT2::Paint
                 }
             }
 
-            SubmitVisibleStaticRegions(scene, worldFrustum, frame);
-
             if (frame % 120 == 0)
             {
                 std::erase_if(_staticPaintCache, [frame](const auto& kv) {
@@ -1689,6 +1687,8 @@ namespace OpenRCT2::Paint
                     return frame - kv.second.lastSeen > 240;
                 });
             }
+
+            SubmitVisibleStaticRegions(scene, worldFrustum, frame);
         }
 
     } // namespace
