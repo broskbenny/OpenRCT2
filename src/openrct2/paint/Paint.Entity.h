@@ -11,5 +11,7 @@
 
 struct PaintSession;
 struct CoordsXY;
+namespace OpenRCT2 { struct EntityBase; }
 
 void EntityPaintSetup(PaintSession& session, const CoordsXY& pos);
+void EntityPaintSetupEntity(PaintSession& session, OpenRCT2::EntityBase& entity);
