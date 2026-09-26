@@ -682,6 +682,7 @@ namespace OpenRCT2::Paint
         struct StaticPaintRotationCache
         {
             uint64_t lastPainted{};
+            uint32_t lastAnimationGeneration{};
             bool valid = false;
             std::vector<FirstPersonSurface> residentSurfaces;
             std::vector<FirstPersonSurface> streamedSurfaces;
@@ -698,6 +699,11 @@ namespace OpenRCT2::Paint
             bool hasSelectedRotation = false;
             uint8_t selectedRotation = 0;
             bool hasUngroupedResident = false;
+            bool visibilityBoundValid = false;
+            bool visibilityDirty = true;
+            int32_t visibilityMinZ = 0;
+            int32_t visibilityMaxZ = 0;
+            uint64_t lastVisibilityScan = 0;
             std::vector<ReconstructionGroupInfo> reconstructionGroups;
             // Keep all four native quarter-turn variants. Crossing a viewpoint
             // boundary can paint a variant once without destroying the previous
@@ -1254,6 +1260,7 @@ namespace OpenRCT2::Paint
                     {
                         variant.valid = false;
                         variant.lastPainted = 0;
+                        variant.lastAnimationGeneration = 0;
                         variant.residentSurfaces.clear();
                         variant.streamedSurfaces.clear();
                     }
@@ -1293,13 +1300,15 @@ namespace OpenRCT2::Paint
                         continue;
                     auto& variant = cached.rotations[rotation];
                     const uint64_t refreshKey = key ^ (uint64_t(rotation + 1) << 60);
+                    const uint32_t animationGeneration = getGameState().currentTicks;
                     const bool stale = !variant.valid ||
-                        (cached.animated && variant.lastPainted != frame) ||
+                        (cached.animated && variant.lastAnimationGeneration != animationGeneration) ||
                         FirstPersonRefreshDue(refreshKey, frame, variant.lastPainted, kMaxStaticAge);
                     if (stale)
                     {
                         variant.valid = true;
                         variant.lastPainted = frame;
+                        variant.lastAnimationGeneration = animationGeneration;
                         variant.residentSurfaces.clear();
                         variant.streamedSurfaces.clear();
                         missesByRotation[rotation].insert(key);
