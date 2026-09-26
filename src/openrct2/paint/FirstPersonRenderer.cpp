@@ -467,7 +467,8 @@ namespace OpenRCT2::Paint
             // The semantic deck may be synthesized from a bridge/support root.
             // Its UV origin must still match the native {0,0,baseZ} surface
             // sprite placement, not whichever root happened to expose PathElement.
-            const auto spritePos = Translate3DTo2DWithZ(rotation, { origin, baseZ });
+            const auto spriteOrigin = GetTileElementPaintSpritePosition(origin, rotation);
+            const auto spritePos = Translate3DTo2DWithZ(rotation, { spriteOrigin, baseZ });
             const auto slope = path->isSloped() ? kPathSlopeToLandSlope[path->getSlopeDirection()] : kTileSlopeFlat;
             const auto heights = GetSlopeCornerHeights(baseZ, slope);
             // Geometry is the REAL walking plane. Do not raise it to solve
