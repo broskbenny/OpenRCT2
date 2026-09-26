@@ -773,34 +773,6 @@ namespace OpenRCT2::Paint
             _staticRegionPackets[FirstPersonGpuRegionKey(tileX, tileY)].dirty = true;
         }
 
-        void DirtyExistingRegionsForReconstructionGroup(uint64_t groupKey)
-        {
-            std::unordered_set<uint64_t> dirtyRegions;
-            for (const auto& [tileKey, cached] : _staticPaintCache)
-            {
-                if (!cached.valid)
-                    continue;
-                const bool containsGroup = std::any_of(
-                    cached.reconstructionGroups.begin(), cached.reconstructionGroups.end(),
-                    [&](const ReconstructionGroupInfo& group) {
-                        return group.key == groupKey;
-                    });
-                if (!containsGroup)
-                    continue;
-
-                const int32_t tx = int32_t(tileKey >> 32);
-                const int32_t ty = int32_t(tileKey & 0xffffffffu);
-                dirtyRegions.insert(FirstPersonGpuRegionKey(tx, ty));
-            }
-
-            for (const auto regionKey : dirtyRegions)
-            {
-                const auto packet = _staticRegionPackets.find(regionKey);
-                if (packet != _staticRegionPackets.end())
-                    packet->second.dirty = true;
-            }
-        }
-
         // Hash the actual packed native tile elements, not only terrain height.
         // This detects direct map mutations even if they bypass the ordinary
         // viewport invalidation path. Ride-wide changes are covered by the
@@ -1332,13 +1304,9 @@ namespace OpenRCT2::Paint
                         : std::nullopt;
                     const auto selected = PaintRotationForPoint(
                         opt.camera, group.anchor, previous);
-                    const bool rotationChanged =
-                        !state.hasSelectedRotation || state.selectedRotation != selected;
                     state.selectedRotation = selected;
                     state.hasSelectedRotation = true;
                     state.lastSeen = frame;
-                    if (rotationChanged)
-                        DirtyExistingRegionsForReconstructionGroup(group.key);
                     rotationMask |= uint8_t(1u << selected);
 
                 }
