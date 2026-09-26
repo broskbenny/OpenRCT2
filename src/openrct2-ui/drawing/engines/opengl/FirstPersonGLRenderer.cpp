@@ -338,17 +338,18 @@ void main() {
         glCall(glDisable, GL_BLEND);
         glCall(glDisable, GL_CULL_FACE); // terrain triangles and near-camera sprites are double-sided
         glCall(glUseProgram, _program);
-        const auto b = Paint::GetFirstPersonBasis(scene.options.camera);
-        const auto& eye = scene.options.camera.position;
+        const auto& view = scene.resolvedView;
+        const auto b = Paint::GetFirstPersonBasis(view.camera);
+        const auto& eye = view.camera.position;
         glCall(glUniform3f, Uniform(_program, "uEye"), eye.x, eye.y, eye.z);
         glCall(glUniform3f, Uniform(_program, "uForward"), b.forward.x, b.forward.y, b.forward.z);
         glCall(glUniform3f, Uniform(_program, "uRight"), b.right.x, b.right.y, b.right.z);
         glCall(glUniform3f, Uniform(_program, "uUp"), b.up.x, b.up.y, b.up.z);
-        const float halfFov = std::clamp(scene.options.fieldOfViewDegrees, 30.0f, 120.0f)
+        const float halfFov = std::clamp(view.fieldOfViewDegrees, 30.0f, 120.0f)
             * 3.14159265358979323846f / 360.0f;
         const float foc = 1.0f / std::tan(halfFov);
         glCall(glUniform2f, Uniform(_program, "uFocal"), foc, foc * float(width) / float(height));
-        glCall(glUniform2f, Uniform(_program, "uNearFar"), scene.options.nearClip, scene.options.farClip);
+        glCall(glUniform2f, Uniform(_program, "uNearFar"), view.nearClip, view.farClip);
         OpenGLAPI::SetTexture(0, GL_TEXTURE_2D_ARRAY, textures.GetAtlasesTexture());
         OpenGLAPI::SetTexture(1, GL_TEXTURE_2D, textures.GetPaletteTexture());
         glCall(glUniform1i, Uniform(_program, "uSprites"), 0);
