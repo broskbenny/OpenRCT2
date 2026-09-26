@@ -51,7 +51,6 @@ namespace OpenRCT2::Paint
 {
     namespace
     {
-        static FirstPersonQualityController _quality;
 
         float Dot(FirstPersonVec3 a, FirstPersonVec3 b)
         {
@@ -1718,7 +1717,6 @@ namespace OpenRCT2::Paint
             opt.fieldOfViewDegrees, opt.nearClip, opt.farClip);
         scene.options.farClip = scene.resolvedView.farClip;
         // Independent of the overhead paint collector: geometry is derived from live map state.
-        scene.activePixelTolerance = opt.fixedPixelTolerance > 0.0f ? opt.fixedPixelTolerance : _quality.pixelTolerance;
         const auto visibilityStart=std::chrono::steady_clock::now();
         DiscoverVisibleTiles(scene);
         const auto terrainStart=std::chrono::steady_clock::now();
@@ -1738,7 +1736,6 @@ namespace OpenRCT2::Paint
         _reconstructionRotations.clear();
         _entityRotations.clear();
         _staticRegionPackets.clear();
-        _quality = {};
     }
     void InvalidateFirstPersonSceneRegion(CoordsXY low, CoordsXY high)
     {
@@ -1803,10 +1800,6 @@ namespace OpenRCT2::Paint
         if (context != nullptr)
         {
             context->DrawFirstPersonScene(rt, scene);
-            const float cpuMs = std::chrono::duration<float, std::milli>(
-                std::chrono::steady_clock::now() - start).count();
-            if (opt.fixedPixelTolerance <= 0.0f)
-                _quality.observe(cpuMs, context->GetFirstPersonGpuTimeMs(), opt.targetFrameMs);
         }
     }
 } // namespace OpenRCT2::Paint
