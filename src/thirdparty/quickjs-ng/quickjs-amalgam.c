@@ -32,7 +32,10 @@
 #  endif
 #endif
 
-#ifdef GCC_BUILTIN_ATOMICS
+#if defined(_MSC_VER) && _MSC_VER < 1935
+#define __STDC_NO_ATOMICS__ 1
+#define _Atomic
+#elif defined(GCC_BUILTIN_ATOMICS)
 #define atomic_fetch_add(obj, arg) \
     __atomic_fetch_add(obj, arg, __ATOMIC_SEQ_CST)
 #define atomic_compare_exchange_strong(obj, expected, desired) \
@@ -690,7 +693,7 @@ static inline int js_exepath(char* buffer, size_t* size);
 
 /* Cross-platform threading APIs. */
 
-#if defined(EMSCRIPTEN) || defined(__wasi__) || defined(__DJGPP)
+#if defined(EMSCRIPTEN) || defined(__wasi__) || defined(__DJGPP) || (defined(_MSC_VER) && _MSC_VER < 1935)
 
 #define JS_HAVE_THREADS 0
 
