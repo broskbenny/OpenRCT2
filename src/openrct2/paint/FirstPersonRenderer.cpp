@@ -774,6 +774,9 @@ namespace OpenRCT2::Paint
             bool animated = false;
             bool hasSelectedRotation = false;
             uint8_t selectedRotation = 0;
+            // Last group rotation represented in this tile's persistent region.
+            // This catches groups that changed while another region was visible.
+            std::unordered_map<uint64_t, uint8_t> assembledGroupRotations;
             // Keep all four native quarter-turn variants. Crossing a viewpoint
             // boundary can paint a variant once without destroying the previous
             // one, so moving back and forth does not thrash the whole park.
@@ -1171,6 +1174,160 @@ namespace OpenRCT2::Paint
                 });
             }
         }
+        void RebuildStaticRegionPacket(uint64_t regionKey, uint64_t frame)
+        {
+            auto& packet = _staticRegionPackets[regionKey];
+            packet.surfaces.clear();
+            packet.textureDependencies.clear();
+
+            const int32_t regionX = int32_t(uint32_t(regionKey >> 32)) - 1;
+            const int32_t regionY = int32_t(uint32_t(regionKey & 0xffffffffu)) - 1;
+            const int32_t x0 = regionX * 32;
+            const int32_t y0 = regionY * 32;
+            const int32_t x1 = x0 + 32;
+            const int32_t y1 = y0 + 32;
+
+            bool haveBounds = false;
+            FirstPersonVec3 low{}, high{};
+            std::unordered_set<uint32_t> dependencies;
+            auto addSurface = [&](const FirstPersonSurface& surface) {
+                if (!IsResidentStaticSurface(surface) || surface.gpuRegion != regionKey)
+                    return;
+                packet.surfaces.push_back(surface);
+                dependencies.insert(surface.image.GetIndex());
+                if (surface.mask.HasValue())
+                    dependencies.insert(surface.mask.GetIndex());
+
+                FirstPersonVec3 surfaceLow{}, surfaceHigh{};
+                if (surface.hasSemanticBounds)
+                {
+                    const auto& center = surface.semanticCenter;
+                    const float r = surface.semanticRadius;
+                    surfaceLow = { center.x - r, center.y - r, center.z - r };
+                    surfaceHigh = { center.x + r, center.y + r, center.z + r };
+                }
+                else
+                {
+                    surfaceLow = surfaceHigh = surface.triangles[0].world;
+                    for (const auto& vertex : surface.triangles)
+                    {
+                        const auto& p = vertex.world;
+                        surfaceLow.x = std::min(surfaceLow.x, p.x);
+                        surfaceLow.y = std::min(surfaceLow.y, p.y);
+                        surfaceLow.z = std::min(surfaceLow.z, p.z);
+                        surfaceHigh.x = std::max(surfaceHigh.x, p.x);
+                        surfaceHigh.y = std::max(surfaceHigh.y, p.y);
+                        surfaceHigh.z = std::max(surfaceHigh.z, p.z);
+                    }
+                }
+                if (!haveBounds)
+                {
+                    low = surfaceLow;
+                    high = surfaceHigh;
+                    haveBounds = true;
+                }
+                else
+                {
+                    low.x = std::min(low.x, surfaceLow.x);
+                    low.y = std::min(low.y, surfaceLow.y);
+                    low.z = std::min(low.z, surfaceLow.z);
+                    high.x = std::max(high.x, surfaceHigh.x);
+                    high.y = std::max(high.y, surfaceHigh.y);
+                    high.z = std::max(high.z, surfaceHigh.z);
+                }
+            };
+
+            for (int32_t ty = y0; ty < y1; ++ty)
+            for (int32_t tx = x0; tx < x1; ++tx)
+            {
+                const auto tileKey = TerrainKey(tx, ty);
+                if (const auto terrainIt = _terrainCache.entries.find(tileKey);
+                    terrainIt != _terrainCache.entries.end())
+                {
+                    const auto& terrain = terrainIt->second;
+                    addSurface(terrain.ground);
+                    if (terrain.water.has_value()) addSurface(*terrain.water);
+                    if (terrain.waterOverlay.has_value()) addSurface(*terrain.waterOverlay);
+                }
+
+                const auto cacheIt = _staticPaintCache.find(tileKey);
+                if (cacheIt == _staticPaintCache.end() || !cacheIt->second.valid || cacheIt->second.animated)
+                    continue;
+                const auto& cached = cacheIt->second;
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                {
+                    const auto& variant = cached.rotations[rotation];
+                    if (!variant.valid)
+                        continue;
+                    for (const auto& surface : variant.surfaces)
+                    {
+                        uint8_t selected = cached.selectedRotation;
+                        if (surface.reconstructionGroup != 0)
+                        {
+                            const auto group = _reconstructionRotations.find(surface.reconstructionGroup);
+                            if (group == _reconstructionRotations.end() || !group->second.hasSelectedRotation)
+                                continue;
+                            selected = group->second.selectedRotation;
+                        }
+                        if (selected == rotation)
+                            addSurface(surface);
+                    }
+                }
+            }
+
+            packet.textureDependencies.assign(dependencies.begin(), dependencies.end());
+            std::sort(packet.textureDependencies.begin(), packet.textureDependencies.end());
+            if (haveBounds)
+            {
+                packet.center = {
+                    0.5f * (low.x + high.x),
+                    0.5f * (low.y + high.y),
+                    0.5f * (low.z + high.z),
+                };
+                const float dx = 0.5f * (high.x - low.x);
+                const float dy = 0.5f * (high.y - low.y);
+                const float dz = 0.5f * (high.z - low.z);
+                packet.radius = std::sqrt(dx * dx + dy * dy + dz * dz) + 2.0f;
+            }
+            else
+            {
+                packet.center = {
+                    float((x0 + x1) * kCoordsXYStep) * 0.5f,
+                    float((y0 + y1) * kCoordsXYStep) * 0.5f,
+                    0.0f,
+                };
+                packet.radius = 0.0f;
+            }
+            ++packet.generation;
+            packet.lastSeen = frame;
+            packet.dirty = false;
+        }
+
+        void SubmitVisibleStaticRegions(
+            FirstPersonScene& scene, const FirstPersonFrustum& frustum, uint64_t frame)
+        {
+            std::unordered_set<uint64_t> visibleRegions;
+            visibleRegions.reserve(scene.visibleTiles.size() / 64 + 1);
+            for (const auto tile : scene.visibleTiles)
+                visibleRegions.insert(FirstPersonGpuRegionKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+
+            scene.staticRegions.reserve(visibleRegions.size());
+            for (const auto key : visibleRegions)
+            {
+                auto& packet = _staticRegionPackets[key];
+                if (packet.dirty)
+                    RebuildStaticRegionPacket(key, frame);
+                packet.lastSeen = frame;
+                if (packet.surfaces.empty() || !frustum.visible(packet.center, packet.radius))
+                    continue;
+                scene.staticRegions.push_back({
+                    key, packet.generation, packet.center, packet.radius,
+                    &packet.surfaces, &packet.textureDependencies
+                });
+            }
+        }
+
         // Reconstructing original scenery sprites is relatively expensive: the
         // native painter handles track, supports, multi-tile scenery, animation
         // frames, glass and object remapping. Run it ONLY for tiles whose
