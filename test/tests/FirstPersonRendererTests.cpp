@@ -10,6 +10,9 @@
 #include <gtest/gtest.h>
 #include <openrct2/paint/FirstPersonRenderer.h>
 #include <openrct2/paint/FirstPersonVehiclePose.h>
+#include <openrct2/paint/tile_element/Paint.Path.h>
+#include <openrct2/world/Wall.h>
+#include <openrct2/world/tile_element/PathElement.h>
 
 #include <cmath>
 
@@ -152,6 +155,64 @@ TEST(FirstPersonVisibilityTest, ObjectsJustCrossingNearPlaneRemainEligible)
                                           12.0f, 70.0f, 1.5f, 2.0f, 8192.0f));
     EXPECT_FALSE(FirstPersonSphereVisible(camera, { -30.0f, 0.0f, 0.0f },
                                            4.0f, 70.0f, 1.5f, 2.0f, 8192.0f));
+}
+
+TEST(FirstPersonWallGeometryTest, UsesCompleteTileEdgesWithoutPainterInsets)
+{
+    const CoordsXY origin{ 64, 96 };
+    const auto westEdge = BuildFirstPersonWallPlane(origin, 80, 0, 0, 40);
+    EXPECT_FLOAT_EQ(westEdge.corners[0].x, 64.0f);
+    EXPECT_FLOAT_EQ(westEdge.corners[0].y, 96.0f);
+    EXPECT_FLOAT_EQ(westEdge.corners[1].x, 64.0f);
+    EXPECT_FLOAT_EQ(westEdge.corners[1].y, 128.0f);
+    EXPECT_FLOAT_EQ(westEdge.corners[0].z, 80.0f);
+    EXPECT_FLOAT_EQ(westEdge.corners[2].z, 120.0f);
+
+    const auto northEdge = BuildFirstPersonWallPlane(origin, 80, 1, 0, 40);
+    EXPECT_FLOAT_EQ(northEdge.corners[0].x, 64.0f);
+    EXPECT_FLOAT_EQ(northEdge.corners[0].y, 128.0f);
+    EXPECT_FLOAT_EQ(northEdge.corners[1].x, 96.0f);
+    EXPECT_FLOAT_EQ(northEdge.corners[1].y, 128.0f);
+    // The adjacent edges meet at the exact tile corner.
+    EXPECT_FLOAT_EQ(westEdge.corners[1].x, northEdge.corners[0].x);
+    EXPECT_FLOAT_EQ(westEdge.corners[1].y, northEdge.corners[0].y);
+}
+
+TEST(FirstPersonWallGeometryTest, NativeSlopeRaisesTheCorrectEndpoint)
+{
+    const CoordsXY origin{ 32, 64 };
+    const auto upwards = BuildFirstPersonWallPlane(origin, 100, 1, EDGE_SLOPE_UPWARDS, 48);
+    EXPECT_FLOAT_EQ(upwards.corners[0].z, 100.0f);
+    EXPECT_FLOAT_EQ(upwards.corners[1].z, 116.0f);
+    EXPECT_FLOAT_EQ(upwards.corners[3].z, 148.0f);
+    EXPECT_FLOAT_EQ(upwards.corners[2].z, 164.0f);
+
+    const auto downwards = BuildFirstPersonWallPlane(origin, 100, 1, EDGE_SLOPE_DOWNWARDS, 48);
+    EXPECT_FLOAT_EQ(downwards.corners[0].z, 116.0f);
+    EXPECT_FLOAT_EQ(downwards.corners[1].z, 100.0f);
+    EXPECT_FLOAT_EQ(downwards.corners[3].z, 164.0f);
+    EXPECT_FLOAT_EQ(downwards.corners[2].z, 148.0f);
+}
+
+TEST(FirstPersonPathArtworkTest, SharedNativeSurfaceSelectionRotatesConsistently)
+{
+    PathElement path{};
+    path.setEdges(0b0001);
+    path.setCorners(0);
+    path.setIsQueue(false);
+    path.setSloped(false);
+
+    EXPECT_EQ(GetPathSurfaceImageOffset(path, 0), 1);
+    EXPECT_EQ(GetPathSurfaceImageOffset(path, 1), 2);
+    EXPECT_EQ(GetPathSurfaceImageOffset(path, 2), 4);
+    EXPECT_EQ(GetPathSurfaceImageOffset(path, 3), 8);
+
+    path.setSloped(true);
+    path.setSlopeDirection(2);
+    EXPECT_EQ(GetPathSurfaceImageOffset(path, 0), 18);
+    EXPECT_EQ(GetPathSurfaceImageOffset(path, 1), 19);
+    EXPECT_EQ(GetPathSurfaceImageOffset(path, 2), 16);
+    EXPECT_EQ(GetPathSurfaceImageOffset(path, 3), 17);
 }
 
 TEST(FirstPersonVehiclePoseTest, SpecialPitchStatesUseAuthoritativeGeometry)
