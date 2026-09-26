@@ -48,7 +48,6 @@ namespace OpenRCT2::Ui::FirstPerson
         constexpr float kPi = 3.14159265358979323846f;
         constexpr float kTwoPi = 2.0f * kPi;
         constexpr float kEyeHeight = 20.0f;
-        constexpr float kRideEyeOffset = 8.0f;
         constexpr float kWalkSpeed = 160.0f;
         constexpr float kFastWalkSpeed = 320.0f;
         constexpr float kMouseSensitivity = 0.0035f;
@@ -327,7 +326,7 @@ namespace OpenRCT2::Ui::FirstPerson
         void PublishRideAudioAttachment()
         {
             Audio::SetFirstPersonRideAudioListener(
-                _state.attachedVehicle, _state.attachedRide, _state.headYaw, _state.headPitch, kRideEyeOffset);
+                _state.attachedVehicle, _state.attachedRide, _state.headYaw, _state.headPitch);
         }
 
         // Relative mouse deltas are presentation input. Consume them from the
@@ -510,15 +509,14 @@ namespace OpenRCT2::Ui::FirstPerson
         EntityTweener::get().setTrackedVehicle(vehicleId);
         _state.attachedVehicle = vehicleId;
         _state.attachedRide = vehicle->ride;
-        _state.camera.position = {
-            static_cast<float>(vehicle->x),
-            static_cast<float>(vehicle->y),
-            static_cast<float>(vehicle->z) + kRideEyeOffset,
-        };
         const auto initialOrientation = Paint::FirstPersonVehicleSimulationOrientation(*vehicle);
+        const auto initialPassenger = Paint::FirstPersonVehicleSimulationPassengerPose(*vehicle);
+        _state.camera.position = initialPassenger.position;
         _state.camera.yaw = initialOrientation.yaw;
         _state.camera.pitch = initialOrientation.pitch;
         _state.camera.roll = initialOrientation.roll;
+        _state.camera.hasExplicitBasis = true;
+        _state.camera.explicitBasis = initialPassenger.basis;
         _state.previousEscapeDown = false;
         PublishTweenView();
         PublishRideAudioAttachment();
@@ -636,15 +634,39 @@ namespace OpenRCT2::Ui::FirstPerson
                     carOrientation.yaw += spin;
                 }
                 const auto cb = Paint::GetFirstPersonBasis(carOrientation);
-                // Keep the fallback yaw coherent with the attached car when
-                // looking almost straight up/down (head basis horizontal length 0).
-                _state.camera.yaw = carOrientation.yaw + _state.headYaw;
+                float flatPrimaryFrame = float(car->flatRideAnimationFrame);
+                float flatSecondaryFrame = float(car->flatRideSecondaryAnimationFrame);
+                if (interpolated.has_value())
+                {
+                    flatPrimaryFrame =
+                        float(interpolated->flatPrimaryBefore)
+                        + (float(interpolated->flatPrimaryAfter)
+                           - float(interpolated->flatPrimaryBefore)) * interpolated->alpha;
+                    const float beforeAngle =
+                        float(interpolated->flatSecondaryBefore & 0x0F)
+                        * (kTwoPi / 16.0f);
+                    const float afterAngle =
+                        float(interpolated->flatSecondaryAfter & 0x0F)
+                        * (kTwoPi / 16.0f);
+                    flatSecondaryFrame = Paint::FirstPersonLerpAngle(
+                        beforeAngle, afterAngle, interpolated->alpha) / (kTwoPi / 16.0f);
+                }
+
                 const auto loc = car->getLocation();
-                _state.camera.position = Paint::FirstPersonPassengerEye(
-                    {float(loc.x), float(loc.y), float(loc.z)}, cb,
-                    {0.0f, 0.0f, kRideEyeOffset});
+                const auto passenger = Paint::BuildFirstPersonPassengerPose(
+                    *car, { float(loc.x), float(loc.y), float(loc.z) }, cb,
+                    flatPrimaryFrame, flatSecondaryFrame);
+                const auto headBasis = Paint::GetPassengerHeadBasis(
+                    passenger.basis, _state.headYaw, _state.headPitch);
+
+                // Keep scalar yaw as a fallback for consumers that cannot use
+                // the explicit basis; the actual camera orientation is the
+                // passenger/cabin basis plus independent head look.
+                _state.camera.yaw = std::atan2(
+                    passenger.basis.forward.y, passenger.basis.forward.x) + _state.headYaw;
+                _state.camera.position = passenger.position;
                 _state.camera.hasExplicitBasis = true;
-                _state.camera.explicitBasis = Paint::GetPassengerHeadBasis(cb, _state.headYaw, _state.headPitch);
+                _state.camera.explicitBasis = headBasis;
             }
         }
         // Publish the presentation-rate first-person frustum for interpolation
