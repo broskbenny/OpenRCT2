@@ -106,14 +106,17 @@ namespace OpenRCT2::Audio
 
     static int32_t ApplyWorldSoundEnvironment(const CoordsXYZ& location, int32_t listenerAttenuation)
     {
-        int32_t volumeDown = 0;
         const auto* element = MapGetSurfaceElementAt(location);
-        if (element != nullptr && element->getBaseZ() - 5 > location.z)
-            volumeDown = 10;
+        const bool underground = element != nullptr && element->getBaseZ() - 5 > location.z;
+        if (!underground)
+            return listenerAttenuation;
 
-        // Preserve the existing native underground rule independently of how
-        // listener-space distance/pan is obtained.
-        return ((listenerAttenuation - 1) * (1 << volumeDown)) + 1;
+        // Native positional audio applies a 10-bit attenuation expansion to an
+        // already-negative viewport term (at zoom 0 that term is -1024). A
+        // first-person source can otherwise have attenuation 0 at the listener,
+        // so retain the native minimum baseline before applying the SAME rule.
+        const int32_t environmentalBase = std::min(listenerAttenuation, -1024);
+        return ((environmentalBase - 1) * (1 << 10)) + 1;
     }
 
     static void StopFirstPersonEffects()
@@ -325,8 +328,6 @@ namespace OpenRCT2::Audio
                       -10000, 0)
                 : -10000;
             params.pan = spatial.pan;
-            if (params.volume <= -10000)
-                params.in_range = false;
             return params;
         }
 
