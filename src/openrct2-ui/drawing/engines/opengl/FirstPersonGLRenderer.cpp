@@ -619,7 +619,7 @@ void main() {
                 std::vector<const Paint::FirstPersonSurface*> surfaces;
             };
 
-            constexpr int32_t kTransparencyTileSize = 256;
+            constexpr int32_t kTransparencyTileSize = 128;
             const int32_t tileColumns = (width + kTransparencyTileSize - 1) / kTransparencyTileSize;
             const int32_t tileRows = (height + kTransparencyTileSize - 1) / kTransparencyTileSize;
             std::vector<TransparentScreenTile> transparencyTiles(
@@ -689,7 +689,11 @@ void main() {
                 _background = std::make_unique<OpenGLFramebuffer>(screenWidth,screenHeight,false,true,false);
                 _opaqueSnapshot = std::make_unique<OpenGLFramebuffer>(screenWidth,screenHeight,true,true,false);
                 for(auto& layer:_peelLayers)
-                    layer = std::make_unique<OpenGLFramebuffer>(screenWidth,screenHeight,true,true,true);
+                    layer = std::make_unique<OpenGLFramebuffer>(
+                        screenWidth,screenHeight,true,true,false,true);
+                for(auto& layer:_peelDepthLayers)
+                    layer = std::make_unique<OpenGLFramebuffer>(
+                        screenWidth,screenHeight,true,true,false);
             }
 
             // Keep one immutable opaque colour/depth snapshot for all screen
@@ -752,15 +756,18 @@ void main() {
                     GLsizeiptr(tileVertices.size()*sizeof(GPUVertex)),
                     tileVertices.data(),GL_STREAM_DRAW);
 
-                // Every FirstPersonSurface is one quad, so the number of quads
-                // touching this tile is a conservative upper bound on per-pixel
-                // transparent depth complexity inside the tile.
-                const size_t maximumPossibleDepth = tile.surfaces.size();
-                const size_t exactPasses = std::min(kMaxExactPeelPasses, maximumPossibleDepth);
-                for(size_t pass=0;pass<exactPasses;++pass)
+                // Screen-space tiling bounds candidate count without changing
+                // semantics. Every local candidate is peeled exactly; there is
+                // no global six-layer approximation.
+                const size_t logicalPasses = tile.surfaces.size();
+                for(size_t pass=0; pass<logicalPasses; ++pass)
                 {
-                    auto& layer = *_peelLayers[size_t(pass&1)];
-                    layer.Bind();
+                    auto& physicalLayer = *_peelDepthLayers[size_t(pass&1)];
+                    auto& logicalLayer = *_peelLayers[size_t(pass&1)];
+                    const bool peeling = pass != 0;
+
+                    // Stage 1: select the farthest remaining PHYSICAL depth.
+                    physicalLayer.Bind();
                     glCall(glViewport,left,viewportBottom,width,height);
                     setTileScissor(tile);
                     glCall(glDepthMask,GL_TRUE);
@@ -771,38 +778,45 @@ void main() {
                     glCall(glEnable,GL_DEPTH_TEST);
                     glCall(glDepthFunc,GL_GREATER);
                     glCall(glUseProgram,_program);
-                    glCall(glUniform1i,Uniform(_program,"uPeeling"),pass!=0);
+                    glCall(glUniform1i,Uniform(_program,"uPeeling"),peeling);
+                    glCall(glUniform1i,Uniform(_program,"uPeelStage"),1);
                     OpenGLAPI::SetTexture(0,GL_TEXTURE_2D_ARRAY,textures.GetAtlasesTexture());
                     OpenGLAPI::SetTexture(1,GL_TEXTURE_2D,textures.GetPaletteTexture());
                     OpenGLAPI::SetTexture(2,GL_TEXTURE_2D,_opaqueSnapshot->GetDepthTexture());
                     OpenGLAPI::SetTexture(3,GL_TEXTURE_2D,
-                        pass==0?_opaqueSnapshot->GetDepthTexture():_peelLayers[size_t((pass+1)&1)]->GetDepthTexture());
+                        peeling?_peelDepthLayers[size_t((pass+1)&1)]->GetDepthTexture()
+                               :_opaqueSnapshot->GetDepthTexture());
+                    OpenGLAPI::SetTexture(4,GL_TEXTURE_2D,
+                        peeling?_peelLayers[size_t((pass+1)&1)]->GetTexture()
+                               :_peelLayers[size_t(pass&1)]->GetTexture());
+                    OpenGLAPI::SetTexture(5,GL_TEXTURE_2D,physicalLayer.GetDepthTexture());
                     glCall(glDrawArrays,GL_TRIANGLES,0,GLsizei(tileVertices.size()));
-                    composeLayer(layer,tile);
-                }
 
-                if(maximumPossibleDepth>kMaxExactPeelPasses)
-                {
-                    const size_t pass = exactPasses;
-                    auto& layer = *_peelLayers[size_t(pass&1)];
-                    layer.Bind();
+                    // Stage 2: at that exact physical depth, select the earliest
+                    // remaining native paint ordinal. gl_FragDepth is an ordinal
+                    // selector here only; world geometry and physical depth are
+                    // unchanged.
+                    logicalLayer.Bind();
                     glCall(glViewport,left,viewportBottom,width,height);
                     setTileScissor(tile);
-                    glCall(glDepthMask,GL_TRUE);
-                    const GLuint empty[4]={0,0,0,0};
-                    const GLfloat nearest[1]={1.0f};
+                    const GLfloat latestOrdinal[1]={1.0f};
                     glCall(glClearBufferuiv,GL_COLOR,0,empty);
-                    glCall(glClearBufferfv,GL_DEPTH,0,nearest);
+                    glCall(glClearBufferfv,GL_DEPTH,0,latestOrdinal);
                     glCall(glEnable,GL_DEPTH_TEST);
                     glCall(glDepthFunc,GL_LESS);
                     glCall(glUseProgram,_program);
-                    glCall(glUniform1i,Uniform(_program,"uPeeling"),GL_TRUE);
-                    OpenGLAPI::SetTexture(0,GL_TEXTURE_2D_ARRAY,textures.GetAtlasesTexture());
-                    OpenGLAPI::SetTexture(1,GL_TEXTURE_2D,textures.GetPaletteTexture());
+                    glCall(glUniform1i,Uniform(_program,"uPeeling"),peeling);
+                    glCall(glUniform1i,Uniform(_program,"uPeelStage"),2);
                     OpenGLAPI::SetTexture(2,GL_TEXTURE_2D,_opaqueSnapshot->GetDepthTexture());
-                    OpenGLAPI::SetTexture(3,GL_TEXTURE_2D,_peelLayers[size_t((pass+1)&1)]->GetDepthTexture());
+                    OpenGLAPI::SetTexture(3,GL_TEXTURE_2D,
+                        peeling?_peelDepthLayers[size_t((pass+1)&1)]->GetDepthTexture()
+                               :_opaqueSnapshot->GetDepthTexture());
+                    OpenGLAPI::SetTexture(4,GL_TEXTURE_2D,
+                        peeling?_peelLayers[size_t((pass+1)&1)]->GetTexture()
+                               :logicalLayer.GetTexture());
+                    OpenGLAPI::SetTexture(5,GL_TEXTURE_2D,physicalLayer.GetDepthTexture());
                     glCall(glDrawArrays,GL_TRIANGLES,0,GLsizei(tileVertices.size()));
-                    composeLayer(layer,tile);
+                    composeLayer(logicalLayer,tile);
                 }
             }
 
@@ -810,6 +824,9 @@ void main() {
             front.Bind();
             glCall(glViewport,left,viewportBottom,width,height);
             glCall(glScissor,left,viewportBottom,width,height);
+            glCall(glUseProgram,_program);
+            glCall(glUniform1i,Uniform(_program,"uPeelStage"),0);
+            glCall(glUniform1i,Uniform(_program,"uPeeling"),0);
         }
         // Separate physical depth from the game's draw-order depth, without
         // destroying depth belonging to ALREADY drawn windows outside this
