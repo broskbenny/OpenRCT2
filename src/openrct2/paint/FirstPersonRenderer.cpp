@@ -1034,21 +1034,14 @@ namespace OpenRCT2::Paint
             const auto frustum = FirstPersonFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
                 view.nearClip, view.farClip);
-            std::unordered_set<uint64_t> visible;
-            visible.reserve(scene.visibleTiles.size());
-            for (const auto tile : scene.visibleTiles)
-                visible.emplace(TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
-            std::unordered_set<uint64_t> consumed;
-            consumed.reserve(visible.size());
+            // Full-resolution opaque terrain is now retained inside persistent
+            // static region packets. Region-level reuse removes the CPU reason
+            // for rebuilding camera-dependent coarse patches every frame.
             for (const CoordsXY origin : scene.visibleTiles)
             {
                 const int32_t tx = origin.x / kCoordsXYStep;
                 const int32_t ty = origin.y / kCoordsXYStep;
                 const uint64_t key = TerrainKey(tx, ty);
-                if (consumed.count(key) != 0) continue;
-                if (AppendDistantFlatPatch(scene, origin, 4, visible, consumed, frustum) ||
-                    AppendDistantFlatPatch(scene, origin, 2, visible, consumed, frustum))
-                    continue;
                 const int32_t x = origin.x;
                 const int32_t y = origin.y;
                 auto* tile = MapGetSurfaceElementAt(origin);
@@ -1070,12 +1063,15 @@ namespace OpenRCT2::Paint
                     const ImageId waterOverlay = waterZ > baseZ
                         ? GetFirstPersonWaterOverlayImage(*tile, opt.viewFlags) : ImageId{};
                     auto& cache = _terrainCache.entries[TerrainKey(tx,ty)];
-                    if (cache.source != image || cache.waterMaskImage != waterMask ||
+                    const bool terrainChanged =
+                        cache.source != image || cache.waterMaskImage != waterMask ||
                         cache.waterOverlayImage != waterOverlay || cache.baseZ != baseZ || cache.slope != slope ||
                         cache.waterZ != waterZ || cache.spriteX != g1->xOffset ||
                         cache.spriteY != g1->yOffset || cache.spriteWidth != g1->width ||
-                        cache.spriteHeight != g1->height)
+                        cache.spriteHeight != g1->height;
+                    if (terrainChanged)
                     {
+                        MarkStaticRegionDirtyForTile(tx, ty);
                         cache.source = image;
                         cache.baseZ = baseZ;
                         cache.slope = slope;
@@ -1156,9 +1152,12 @@ namespace OpenRCT2::Paint
                         }
                     }
                     cache.lastSeen = frame;
-                    scene.surfaces.emplace_back(cache.ground);
-                    if (cache.water.has_value()) scene.surfaces.emplace_back(*cache.water);
-                    if (cache.waterOverlay.has_value()) scene.surfaces.emplace_back(*cache.waterOverlay);
+                    if (!IsResidentStaticSurface(cache.ground))
+                        scene.surfaces.emplace_back(cache.ground);
+                    if (cache.water.has_value() && !IsResidentStaticSurface(*cache.water))
+                        scene.surfaces.emplace_back(*cache.water);
+                    if (cache.waterOverlay.has_value() && !IsResidentStaticSurface(*cache.waterOverlay))
+                        scene.surfaces.emplace_back(*cache.waterOverlay);
             }
             // Bound memory after travelling across multiple distant park regions.
             // Never retain a permanently growing copy of an explored park.
