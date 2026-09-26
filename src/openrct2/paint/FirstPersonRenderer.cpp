@@ -51,8 +51,6 @@ namespace OpenRCT2::Paint
 {
     namespace
     {
-        constexpr float kPi = 3.14159265358979323846f;
-        constexpr float kDegToRad = kPi / 180.0f;
         static FirstPersonQualityController _quality;
 
         float Dot(FirstPersonVec3 a, FirstPersonVec3 b)
