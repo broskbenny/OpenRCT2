@@ -158,7 +158,8 @@ namespace OpenRCT2::Paint
 
     [[nodiscard]] inline FirstPersonPassengerPose BuildFirstPersonPassengerPose(
         const Vehicle& car, FirstPersonVec3 vehiclePosition,
-        const FirstPersonBasis& vehicleBasis)
+        const FirstPersonBasis& vehicleBasis,
+        float flatPrimaryFrame = -1.0f, float flatSecondaryFrame = -1.0f)
     {
         const uint8_t seatIndex = FirstPersonPassengerSeatIndex(car);
         const auto* entry = car.Entry();
@@ -187,15 +188,30 @@ namespace OpenRCT2::Paint
                 0,4,9,13,17,21,24,27,29,31,33,34,34,34,33,31,29,27,24,21,17,13,9,4,
                 0,-3,-8,-12,-16,-20,-23,-26,-28,-30,-32,-33,-33,-33,-32,-30,-28,-26,-23,-20,-16,-12,-8,-3
             };
-            const uint8_t arm = std::min<uint8_t>(car.flatRideAnimationFrame, 47);
-            const float seatAngle =
-                float(car.flatRideSecondaryAnimationFrame & 0x0F)
+            const float armFrame = std::clamp(
+                flatPrimaryFrame >= 0.0f ? flatPrimaryFrame
+                                         : float(car.flatRideAnimationFrame),
+                0.0f, 47.0f);
+            const int32_t arm0 = int32_t(std::floor(armFrame));
+            const int32_t arm1 = std::min(arm0 + 1, 47);
+            const float armAlpha = armFrame - float(arm0);
+            const float seatPosition =
+                float(kSeatPosition[arm0])
+                + (float(kSeatPosition[arm1]) - float(kSeatPosition[arm0])) * armAlpha;
+            const float seatHeight =
+                float(kSeatHeight[arm0])
+                + (float(kSeatHeight[arm1]) - float(kSeatHeight[arm0])) * armAlpha;
+
+            const float seatFrame = flatSecondaryFrame >= 0.0f
+                ? flatSecondaryFrame
+                : float(car.flatRideSecondaryAnimationFrame & 0x0F);
+            const float seatAngle = seatFrame
                 * (6.28318530717958647692f / 16.0f);
             pose.basis = FirstPersonRotatePassengerPitch(vehicleBasis, seatAngle);
             vehiclePosition = {
-                vehiclePosition.x + vehicleBasis.forward.x * float(kSeatPosition[arm]),
-                vehiclePosition.y + vehicleBasis.forward.y * float(kSeatPosition[arm]),
-                vehiclePosition.z + 3.0f + float(kSeatHeight[arm]),
+                vehiclePosition.x + vehicleBasis.forward.x * seatPosition,
+                vehiclePosition.y + vehicleBasis.forward.y * seatPosition,
+                vehiclePosition.z + 3.0f + seatHeight,
             };
             pose.rideSpecificTransform = true;
         }
