@@ -101,9 +101,9 @@ namespace OpenRCT2::Ui::FirstPerson
                     height = mainWindow->viewport->ViewHeight();
                 }
             }
-            const float aspect = height > 0 ? float(std::max(width, 1)) / float(height) : 1.0f;
-            EntityTweener::get().setFirstPersonView(
-                _state.camera, 70.0f, aspect, 2.0f, 32768.0f);
+            const auto map = getGameState().mapSize;
+            EntityTweener::get().setFirstPersonView(Paint::ResolveFirstPersonView(
+                _state.camera, width, height, map.x, map.y));
         }
 
         void CaptureMouse()
