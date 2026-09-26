@@ -1340,10 +1340,11 @@ namespace OpenRCT2::Paint
             const auto basis = GetFirstPersonBasis(opt.camera);
             const auto frame = _terrainCache.frame;
             constexpr uint64_t kMaxStaticAge = 240;
-            std::unordered_set<uint64_t> misses;
-            misses.reserve(scene.visibleTiles.size() / 8 + 1);
-            std::unordered_map<uint64_t, uint8_t> tileRotations;
-            tileRotations.reserve(scene.visibleTiles.size());
+            std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
+            for (auto& misses : missesByRotation)
+                misses.reserve(scene.visibleTiles.size() / 16 + 1);
+            std::unordered_map<uint64_t, uint8_t> requestedRotations;
+            requestedRotations.reserve(scene.visibleTiles.size());
             const auto& view = scene.resolvedView;
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
@@ -1351,15 +1352,11 @@ namespace OpenRCT2::Paint
 
             for (const auto tile : scene.visibleTiles)
             {
-                const auto key = TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+                const int32_t tx = tile.x / kCoordsXYStep;
+                const int32_t ty = tile.y / kCoordsXYStep;
+                const auto key = TerrainKey(tx, ty);
                 auto& cached = _staticPaintCache[key];
-                const auto previousRotation = cached.hasSelectedRotation
-                    ? std::optional<uint8_t>{ cached.selectedRotation }
-                    : std::nullopt;
-                const auto rotation = PaintRotationForTile(opt.camera, tile, previousRotation);
-                cached.selectedRotation = rotation;
-                cached.hasSelectedRotation = true;
-                tileRotations.emplace(key, rotation);
+
                 const auto sig = NativeTileSignature(tile);
                 const bool semanticChanged = !cached.valid || cached.dirty ||
                     cached.signature != sig || cached.viewFlags != opt.viewFlags;
@@ -1368,33 +1365,82 @@ namespace OpenRCT2::Paint
                     cached.signature = sig;
                     cached.viewFlags = opt.viewFlags;
                     cached.animated = MapAnimations::IsTileAnimatedForFirstPerson(
-                        TileCoordsXY(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+                        TileCoordsXY(tx, ty));
                     cached.valid = true;
                     cached.dirty = false;
+                    cached.assembledGroupRotations.clear();
                     for (auto& variant : cached.rotations)
                     {
                         variant.valid = false;
                         variant.lastPainted = 0;
                         variant.surfaces.clear();
                     }
+                    MarkStaticRegionDirtyForTile(tx, ty);
                 }
+
+                const auto previousRotation = cached.hasSelectedRotation
+                    ? std::optional<uint8_t>{ cached.selectedRotation }
+                    : std::nullopt;
+                const auto tileRotation = PaintRotationForTile(opt.camera, tile, previousRotation);
+                if (!cached.hasSelectedRotation || cached.selectedRotation != tileRotation)
+                    MarkStaticRegionDirtyForTile(tx, ty);
+                cached.selectedRotation = tileRotation;
+                cached.hasSelectedRotation = true;
                 cached.lastSeen = frame;
-                auto& variant = cached.rotations[rotation];
-                const uint64_t refreshKey = key ^ (uint64_t(rotation + 1) << 60);
-                const bool stale = !variant.valid ||
-                    (cached.animated && variant.lastPainted != frame) ||
-                    FirstPersonRefreshDue(refreshKey, frame, variant.lastPainted, kMaxStaticAge);
-                if (stale)
+
+                uint8_t rotationMask = uint8_t(1u << tileRotation);
+                auto* element = MapGetFirstElementAt(tile);
+                if (element != nullptr)
                 {
-                    variant.valid = true;
-                    variant.lastPainted = frame;
-                    variant.surfaces.clear();
-                    misses.insert(key);
-                    ++scene.staticTilePaints;
+                    do
+                    {
+                        const auto group = GetReconstructionGroup(tile, element);
+                        if (!group.has_value())
+                            continue;
+
+                        auto& state = _reconstructionRotations[group->key];
+                        const auto previous = state.hasSelectedRotation
+                            ? std::optional<uint8_t>{ state.selectedRotation }
+                            : std::nullopt;
+                        const auto selected = PaintRotationForPoint(
+                            opt.camera, group->anchor, previous);
+                        state.selectedRotation = selected;
+                        state.hasSelectedRotation = true;
+                        state.lastSeen = frame;
+                        rotationMask |= uint8_t(1u << selected);
+
+                        const auto assembled = cached.assembledGroupRotations.find(group->key);
+                        if (assembled == cached.assembledGroupRotations.end() || assembled->second != selected)
+                        {
+                            cached.assembledGroupRotations[group->key] = selected;
+                            MarkStaticRegionDirtyForTile(tx, ty);
+                        }
+                    } while (!(element++)->isLastForTile());
                 }
-                else
+                requestedRotations.emplace(key, rotationMask);
+
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
-                    ++scene.staticTileCacheHits;
+                    if ((rotationMask & uint8_t(1u << rotation)) == 0)
+                        continue;
+                    auto& variant = cached.rotations[rotation];
+                    const uint64_t refreshKey = key ^ (uint64_t(rotation + 1) << 60);
+                    const bool stale = !variant.valid ||
+                        (cached.animated && variant.lastPainted != frame) ||
+                        FirstPersonRefreshDue(refreshKey, frame, variant.lastPainted, kMaxStaticAge);
+                    if (stale)
+                    {
+                        variant.valid = true;
+                        variant.lastPainted = frame;
+                        variant.surfaces.clear();
+                        missesByRotation[rotation].insert(key);
+                        MarkStaticRegionDirtyForTile(tx, ty);
+                        ++scene.staticTilePaints;
+                    }
+                    else
+                    {
+                        ++scene.staticTileCacheHits;
+                    }
                 }
             }
 
@@ -1409,11 +1455,18 @@ namespace OpenRCT2::Paint
             for (const auto tile : scene.visibleTiles)
             {
                 const auto key = TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+                const auto cacheIt = _staticPaintCache.find(key);
+                if (cacheIt == _staticPaintCache.end())
+                    continue;
                 const bool hasEntities = !getGameState().entities.getEntityTileList(tile).empty();
                 ++scene.dynamicTileQueries;
-                const bool staticMiss = misses.contains(key);
-                if (staticMiss || hasEntities)
-                    workByRotation[tileRotations.at(key)].push_back({ tile, key, staticMiss, hasEntities });
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                {
+                    const bool staticMiss = missesByRotation[rotation].contains(key);
+                    const bool entityPaint = hasEntities && rotation == cacheIt->second.selectedRotation;
+                    if (staticMiss || entityPaint)
+                        workByRotation[rotation].push_back({ tile, key, staticMiss, entityPaint });
+                }
             }
 
             const auto map = getGameState().mapSize;
@@ -1460,12 +1513,8 @@ namespace OpenRCT2::Paint
                     auto* session = PaintSessionAlloc(collection, opt.viewFlags, rotation);
                     if (session == nullptr)
                     {
-                        for (const auto key : misses)
-                        {
-                            const auto rotationIt = tileRotations.find(key);
-                            if (rotationIt != tileRotations.end())
-                                _staticPaintCache[key].rotations[rotationIt->second].valid = false;
-                        }
+                        for (const auto key : missesByRotation[rotation])
+                            _staticPaintCache[key].rotations[rotation].valid = false;
                         return;
                     }
                     Drawing::ScrollingText::BeginFirstPersonSnapshotCapture();
@@ -1495,13 +1544,9 @@ namespace OpenRCT2::Paint
                         const bool dynamic = root->Entity != nullptr;
                         const uint64_t key = TerrainKey(
                             root->MapPos.x / kCoordsXYStep, root->MapPos.y / kCoordsXYStep);
-                        if (!dynamic)
-                        {
-                            const auto expectedRotation = tileRotations.find(key);
-                            if (!misses.contains(key) || expectedRotation == tileRotations.end() ||
-                                expectedRotation->second != rotation)
-                                continue;
-                        }
+                        if (!dynamic && !missesByRotation[rotation].contains(key))
+                            continue;
+
                         if (root->Element != nullptr && root->Element->getType() == TileElementType::surface)
                         {
                             const auto sx = std::abs(root->Bounds.x_end - root->Bounds.x);
@@ -1521,7 +1566,7 @@ namespace OpenRCT2::Paint
                             int32_t(std::lround(anchor.z))
                         };
                         const auto isoAnchor = Translate3DTo2DWithZ(rotation, point);
-                        const auto start = scene.surfaces.size();
+                        const auto startSurface = scene.surfaces.size();
                         const bool emitPathDeck = root->Element != nullptr &&
                             root->Element->getType() == TileElementType::path &&
                             IsPathDeckCarrier(*root) &&
@@ -1532,7 +1577,7 @@ namespace OpenRCT2::Paint
 
                         if (const auto semantic = LargeScenerySemanticBounds(*root); semantic.has_value())
                         {
-                            for (size_t i = start; i < scene.surfaces.size(); ++i)
+                            for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
                             {
                                 scene.surfaces[i].hasSemanticBounds = true;
                                 scene.surfaces[i].semanticCenter = semantic->center;
@@ -1542,16 +1587,21 @@ namespace OpenRCT2::Paint
 
                         if (!dynamic)
                         {
-                            const auto region = FirstPersonGpuRegionKey(
-                                root->MapPos.x / kCoordsXYStep, root->MapPos.y / kCoordsXYStep);
+                            const int32_t tx = root->MapPos.x / kCoordsXYStep;
+                            const int32_t ty = root->MapPos.y / kCoordsXYStep;
+                            const auto region = FirstPersonGpuRegionKey(tx, ty);
                             auto cacheIt = _staticPaintCache.find(key);
-                            for (size_t i = start; i < scene.surfaces.size(); ++i)
+                            for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
                             {
+                                scene.surfaces[i].reconstructionGroup = reconstruction.groupKey;
                                 if (!scene.surfaces[i].immutablePixels.empty())
                                 {
                                     scene.surfaces[i].gpuRegion = 0;
-                                    if (cacheIt != _staticPaintCache.end())
+                                    if (cacheIt != _staticPaintCache.end() && !cacheIt->second.animated)
+                                    {
                                         cacheIt->second.animated = true;
+                                        MarkStaticRegionDirtyForTile(tx, ty);
+                                    }
                                 }
                                 else if (!scene.surfaces[i].viewFacing)
                                 {
@@ -1563,15 +1613,14 @@ namespace OpenRCT2::Paint
                             {
                                 auto& surfaces = cacheIt->second.rotations[rotation].surfaces;
                                 surfaces.insert(
-                                    surfaces.end(), scene.surfaces.begin() + start, scene.surfaces.end());
+                                    surfaces.end(), scene.surfaces.begin() + startSurface, scene.surfaces.end());
                             }
-                            // Static display assembly happens once, in stable
-                            // visible-tile order after all misses are captured.
-                            scene.surfaces.erase(scene.surfaces.begin() + start, scene.surfaces.end());
+                            scene.surfaces.erase(
+                                scene.surfaces.begin() + startSurface, scene.surfaces.end());
                         }
                         else
                         {
-                            const auto first = scene.surfaces.begin() + start;
+                            const auto first = scene.surfaces.begin() + startSurface;
                             scene.surfaces.erase(
                                 std::remove_if(first, scene.surfaces.end(),
                                     [&](const FirstPersonSurface& surface) {
@@ -1585,33 +1634,54 @@ namespace OpenRCT2::Paint
                 }
             }
 
-            // Cache hits and freshly painted misses take the SAME deterministic
-            // path. This prevents [A,B] -> [B,A] reorder churn from invalidating
-            // otherwise identical resident GPU-region fingerprints.
+            // Only geometry that cannot live in a persistent opaque region is
+            // reconstructed at surface granularity on an ordinary frame.
             for (const auto tile : scene.visibleTiles)
             {
                 const auto key = TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
                 const auto cacheIt = _staticPaintCache.find(key);
                 if (cacheIt == _staticPaintCache.end())
                     continue;
-                const auto rotationIt = tileRotations.find(key);
-                if (rotationIt == tileRotations.end())
-                    continue;
-                const auto& variant = cacheIt->second.rotations[rotationIt->second];
-                if (!variant.valid)
-                    continue;
-                for (const auto& staticSurface : variant.surfaces)
+                const auto& cached = cacheIt->second;
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
-                    auto surface = staticSurface;
-                    ReorientBillboard(surface, opt.camera.position, basis.right);
-                    if (SurfaceMayBeVisible(surface, worldFrustum))
-                        scene.surfaces.emplace_back(std::move(surface));
+                    const auto& variant = cached.rotations[rotation];
+                    if (!variant.valid)
+                        continue;
+                    for (const auto& staticSurface : variant.surfaces)
+                    {
+                        uint8_t selected = cached.selectedRotation;
+                        if (staticSurface.reconstructionGroup != 0)
+                        {
+                            const auto group = _reconstructionRotations.find(staticSurface.reconstructionGroup);
+                            if (group == _reconstructionRotations.end() || !group->second.hasSelectedRotation)
+                                continue;
+                            selected = group->second.selectedRotation;
+                        }
+                        if (selected != rotation)
+                            continue;
+                        if (!cached.animated && IsResidentStaticSurface(staticSurface))
+                            continue;
+
+                        auto surface = staticSurface;
+                        ReorientBillboard(surface, opt.camera.position, basis.right);
+                        if (SurfaceMayBeVisible(surface, worldFrustum))
+                            scene.surfaces.emplace_back(std::move(surface));
+                    }
                 }
             }
+
+            SubmitVisibleStaticRegions(scene, worldFrustum, frame);
 
             if (frame % 120 == 0)
             {
                 std::erase_if(_staticPaintCache, [frame](const auto& kv) {
+                    return frame - kv.second.lastSeen > 240;
+                });
+                std::erase_if(_reconstructionRotations, [frame](const auto& kv) {
+                    return frame - kv.second.lastSeen > 240;
+                });
+                std::erase_if(_staticRegionPackets, [frame](const auto& kv) {
                     return frame - kv.second.lastSeen > 240;
                 });
             }
