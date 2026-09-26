@@ -19,6 +19,8 @@ namespace OpenRCT2::Audio
         float x{}, y{}, z{};
     };
 
+    constexpr float kFirstPersonAudioMaxDistance = 1536.0f; // 48 map tiles
+
     struct FirstPersonAudioListener
     {
         FirstPersonAudioVec3 position{};
@@ -37,7 +39,6 @@ namespace OpenRCT2::Audio
         const FirstPersonAudioListener& listener, FirstPersonAudioVec3 emitter)
     {
         // Deliberate, testable tuning constants, not invented building acoustics.
-        constexpr float kMaxDistance = 1536.0f; // 48 map tiles
         constexpr float kRolloffDistance = 256.0f;
         const float dx = emitter.x - listener.position.x;
         const float dy = emitter.y - listener.position.y;
@@ -46,11 +47,11 @@ namespace OpenRCT2::Audio
         const float rightLength2 = listener.right.x * listener.right.x
             + listener.right.y * listener.right.y + listener.right.z * listener.right.z;
         if (!std::isfinite(distance2) || !std::isfinite(rightLength2)
-            || rightLength2 < 1e-8f || distance2 >= kMaxDistance * kMaxDistance)
+            || rightLength2 < 1e-8f || distance2 >= kFirstPersonAudioMaxDistance * kFirstPersonAudioMaxDistance)
             return {};
 
         const float distance = std::sqrt(distance2);
-        const float fade = 1.0f - distance / kMaxDistance;
+        const float fade = 1.0f - distance / kFirstPersonAudioMaxDistance;
         const float gain = fade * fade / (1.0f + distance2 / (kRolloffDistance * kRolloffDistance));
         if (gain <= 0.0f)
             return {};
