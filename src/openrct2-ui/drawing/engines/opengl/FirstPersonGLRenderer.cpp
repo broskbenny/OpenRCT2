@@ -98,8 +98,21 @@ void main() {
     // border pixel. This matters when an isometric sprite is mapped to a
     // physical wall: the artwork often covers less than the entire wall plane.
     if (any(lessThan(fUV,vec2(0.0))) || any(greaterThanEqual(fUV,fSize))) discard;
-    vec2 uv = (fAtlas.xy + floor(fUV) + vec2(0.5)) / fAtlas.zw;
+    vec2 pixel = floor(fUV);
+    vec2 uv = (fAtlas.xy + pixel + vec2(0.5)) / fAtlas.zw;
     uint col = texture(uSprites, vec3(uv, float(fAtlasLayer))).r;
+    if (col == 0u && (fFlags & 8) != 0) {
+        const ivec2 neighbours[4] = ivec2[4](
+            ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
+        ivec2 p = ivec2(pixel);
+        ivec2 limit = ivec2(fSize);
+        for (int i = 0; i < 4 && col == 0u; ++i) {
+            ivec2 q = p + neighbours[i];
+            if (q.x < 0 || q.y < 0 || q.x >= limit.x || q.y >= limit.y) continue;
+            vec2 neighbourUv = (fAtlas.xy + vec2(q) + vec2(0.5)) / fAtlas.zw;
+            col = texture(uSprites, vec3(neighbourUv, float(fAtlasLayer))).r;
+        }
+    }
     if (col == 0u) discard;
     if (fMaskLayer >= 0) {
         if (any(lessThan(fUV,vec2(0.0))) || any(greaterThanEqual(fUV,fMaskSize))) discard;
@@ -109,6 +122,8 @@ void main() {
     // Logarithmic physical depth leaves usable precision at the far end of
     // a complete RCT2 park while allowing the passenger near geometry.
     float depth = max(0.0, dot(fWorld - uEye, uForward));
+    if ((fFlags & 4) != 0)
+        depth = max(0.0, depth - 0.125);
     float logarithmic = log2(1.0 + depth)/log2(1.0 + uNearFar.y);
     gl_FragDepth = logarithmic;
     if ((fFlags & 1) != 0) {
@@ -404,7 +419,11 @@ void main() {
                     {tex.coords.x,tex.coords.y,tex.coords.z,tex.coords.w},
                     {float(g1->width),float(g1->height)},int32_t(tex.index),
                     {count,palettes[0],palettes[1],palettes[2]},
-                    image.IsBlended() ? (image.GetRemap()==static_cast<uint8_t>(Drawing::FilterPaletteID::paletteWater)?3:1):0,
+                    (image.IsBlended()
+                        ? (image.GetRemap()==static_cast<uint8_t>(Drawing::FilterPaletteID::paletteWater)?3:1)
+                        : 0)
+                        | (surface.depthBias ? 4 : 0)
+                        | (surface.edgeCoverage ? 8 : 0),
                     {maskTex.coords.x,maskTex.coords.y,maskTex.coords.z,maskTex.coords.w},
                     {maskG1?float(maskG1->width):0.0f,maskG1?float(maskG1->height):0.0f},
                     maskG1?int32_t(maskTex.index):-1});
