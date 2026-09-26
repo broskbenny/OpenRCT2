@@ -15,6 +15,7 @@
 #include "FirstPersonSpatialAudio.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -160,6 +161,7 @@ namespace OpenRCT2::Audio
     void RefreshFirstPersonSpatialAudio();
     void ClearFirstPersonAudioListener();
     [[nodiscard]] bool HasFirstPersonAudioListener();
+    [[nodiscard]] std::optional<FirstPersonAudioListener> GetFirstPersonAudioListener();
     [[nodiscard]] FirstPersonSpatialParams GetFirstPersonSpatialParams(const CoordsXYZ& source);
 
     extern VehicleSound gVehicleSoundList[kMaxVehicleSounds];
