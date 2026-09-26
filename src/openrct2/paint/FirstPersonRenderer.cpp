@@ -764,6 +764,7 @@ namespace OpenRCT2::Paint
             ImageId source{};
             int32_t height{};
             int32_t factor{};
+            int32_t spriteX{}, spriteY{}, spriteWidth{}, spriteHeight{};
             FirstPersonSurface surface{};
         };
         static std::unordered_map<uint64_t, TerrainLodPatchCache> _terrainLodPatches;
@@ -1057,13 +1058,19 @@ namespace OpenRCT2::Paint
 
             auto& patch = _terrainLodPatches[lodKey];
             const bool changed = !patch.active || patch.source != image
-                || patch.height != height || patch.factor != factor;
+                || patch.height != height || patch.factor != factor
+                || patch.spriteX != sprite->xOffset || patch.spriteY != sprite->yOffset
+                || patch.spriteWidth != sprite->width || patch.spriteHeight != sprite->height;
             patch.regionKey = surface.gpuRegion;
             patch.lastSeen = frame;
             patch.active = true;
             patch.source = image;
             patch.height = height;
             patch.factor = factor;
+            patch.spriteX = sprite->xOffset;
+            patch.spriteY = sprite->yOffset;
+            patch.spriteWidth = sprite->width;
+            patch.spriteHeight = sprite->height;
             patch.surface = std::move(surface);
             _coarseLastUsed[lodKey] = frame;
             if (changed)
