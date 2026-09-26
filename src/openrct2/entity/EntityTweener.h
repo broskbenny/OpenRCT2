@@ -29,6 +29,8 @@ namespace OpenRCT2
     {
         uint8_t yawBefore{}, yawAfter{}, spinBefore{}, spinAfter{};
         uint8_t pitchBefore{}, pitchAfter{}, rollBefore{}, rollAfter{};
+        uint8_t flatPrimaryBefore{}, flatPrimaryAfter{};
+        uint8_t flatSecondaryBefore{}, flatSecondaryAfter{};
         float alpha = 1.0f;
     };
 
