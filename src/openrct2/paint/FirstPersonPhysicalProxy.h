@@ -525,47 +525,60 @@ namespace OpenRCT2::Paint
         const uint64_t sourceKey =
             (uint64_t(ride.id.ToUnderlying()) << 32)
             | uint32_t(track.getStationIndex().ToUnderlying());
+        const auto add = [&](int32_t x, int32_t y,
+                             int32_t sizeX, int32_t sizeY) {
+            AppendFirstPersonPhysicalBoxProxy(
+                result, tile, x, y, baseZ,
+                sizeX, sizeY, 7,
+                FirstPersonPhysicalProxyProvenance::
+                    nativeStationGeometry,
+                sourceKey);
+        };
+
         const uint8_t direction = track.getDirection() & 3u;
         if ((direction & 1u) == 0)
         {
+            // Direction 0/2 station painters place the two long platform
+            // fences on the NW/SE sides. At viewport rotation zero those are
+            // y=0 and y=31 in world-tile coordinates.
             if (hasFence(0, -1))
+                add(0, 0, 32, 1);
+
+            const bool farFence = hasFence(0, 1);
+            if (farFence)
             {
-                AppendFirstPersonPhysicalBoxProxy(
-                    result, tile, 0, 0, baseZ,
-                    32, 1, 7,
-                    FirstPersonPhysicalProxyProvenance::
-                        nativeStationGeometry,
-                    sourceKey);
+                add(0, 31, 32, 1);
             }
-            if (hasFence(0, 1))
+            else if ((track.getTrackType() == TrackElemType::beginStation
+                         && direction == 0)
+                || (track.getTrackType() == TrackElemType::endStation
+                    && direction == 2))
             {
-                AppendFirstPersonPhysicalBoxProxy(
-                    result, tile, 0, 31, baseZ,
-                    32, 1, 7,
-                    FirstPersonPhysicalProxyProvenance::
-                        nativeStationGeometry,
-                    sourceKey);
+                // TrackPaintUtilDrawStationImpl deliberately leaves the SE
+                // platform edge open at an entrance/exit, but retains two
+                // 1x8 end-cap fence fragments.
+                add(31, 23, 1, 8);
+                add(31, 0, 1, 8);
             }
         }
         else
         {
+            // Direction 1/3 mirrors the same geometry onto the NE/SW sides.
             if (hasFence(-1, 0))
+                add(0, 0, 1, 32);
+
+            const bool farFence = hasFence(1, 0);
+            if (farFence)
             {
-                AppendFirstPersonPhysicalBoxProxy(
-                    result, tile, 0, 0, baseZ,
-                    1, 32, 7,
-                    FirstPersonPhysicalProxyProvenance::
-                        nativeStationGeometry,
-                    sourceKey);
+                add(31, 0, 1, 32);
             }
-            if (hasFence(1, 0))
+            else if ((track.getTrackType() == TrackElemType::beginStation
+                         && direction == 3)
+                || (track.getTrackType() == TrackElemType::endStation
+                    && direction == 1))
             {
-                AppendFirstPersonPhysicalBoxProxy(
-                    result, tile, 31, 0, baseZ,
-                    1, 32, 7,
-                    FirstPersonPhysicalProxyProvenance::
-                        nativeStationGeometry,
-                    sourceKey);
+                add(23, 31, 8, 1);
+                add(0, 31, 8, 1);
             }
         }
     }
@@ -806,6 +819,21 @@ namespace OpenRCT2::Paint
             std::max(0.25f, rail.halfWidth) + radius;
         const float threshold2 = threshold * threshold;
 
+        const float fromDistance =
+            FirstPersonPointSegmentDistance2(
+                from.x, from.y,
+                rail.a.x, rail.a.y, rail.b.x, rail.b.y);
+        const float toDistance =
+            FirstPersonPointSegmentDistance2(
+                to.x, to.y,
+                rail.a.x, rail.a.y, rail.b.x, rail.b.y);
+
+        // Preserve the established "do not trap an already-overlapping
+        // walker" rule before any exact segment-crossing early return.
+        if (fromDistance <= threshold2
+            && toDistance > fromDistance)
+            return false;
+
         const float railX = rail.b.x - rail.a.x;
         const float railY = rail.b.y - rail.a.y;
         const float stepX = to.x - from.x;
@@ -826,14 +854,6 @@ namespace OpenRCT2::Paint
                 return true;
         }
 
-        const float fromDistance =
-            FirstPersonPointSegmentDistance2(
-                from.x, from.y,
-                rail.a.x, rail.a.y, rail.b.x, rail.b.y);
-        const float toDistance =
-            FirstPersonPointSegmentDistance2(
-                to.x, to.y,
-                rail.a.x, rail.a.y, rail.b.x, rail.b.y);
         const float railADistance =
             FirstPersonPointSegmentDistance2(
                 rail.a.x, rail.a.y,
@@ -842,12 +862,6 @@ namespace OpenRCT2::Paint
             FirstPersonPointSegmentDistance2(
                 rail.b.x, rail.b.y,
                 from.x, from.y, to.x, to.y);
-
-        // Preserve the established "do not trap an already-overlapping
-        // walker" rule used by wall and box collision.
-        if (fromDistance <= threshold2
-            && toDistance > fromDistance)
-            return false;
 
         return toDistance <= threshold2
             || railADistance <= threshold2

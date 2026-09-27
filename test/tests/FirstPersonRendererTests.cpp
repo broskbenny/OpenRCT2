@@ -448,6 +448,13 @@ TEST(FirstPersonPhysicalProxyTest, VerifiedRailGeometryFeedsWalkingCollision)
         { 6.0f, -5.0f, -30.0f },
         { 6.0f, 0.0f, -30.0f },
         10.0f));
+
+    // Starting inside the collision radius must not trap the walker.
+    EXPECT_FALSE(FirstPersonRailProxyIntersectsWalkStep(
+        rails[0],
+        { 6.0f, -2.0f, 0.0f },
+        { 6.0f, -7.0f, 0.0f },
+        20.0f));
 }
 
 

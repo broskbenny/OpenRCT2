@@ -489,7 +489,11 @@ namespace OpenRCT2::Paint
             const bool stationSlab =
                 stationTrack && sz <= 2.0f
                 && sx >= 6.0f && sy >= 6.0f
-                && z0 <= float(track->getBaseZ() + 12);
+                // Native station base/floor slabs are authored at track
+                // height. Platform strips several units above that can carry
+                // an integrated fence in the same sprite; flattening those
+                // would turn a visible fence into floor texture.
+                && z0 <= float(track->getBaseZ() + 4);
             const bool stationFence =
                 stationTrack && (alongX || alongY)
                 && z0 >= float(track->getBaseZ() + 1)
@@ -1842,6 +1846,17 @@ namespace OpenRCT2::Paint
                 : nullptr;
             if (small == nullptr || !image.HasValue()
                 || mask.HasValue())
+                return false;
+            const auto* entry = small->getEntry();
+            if (entry == nullptr)
+                return false;
+            const uint8_t direction =
+                small->getDirectionWithOffset(rotation) & 3u;
+            const ImageIndex expectedBodyImage =
+                entry->image + direction
+                + uint32_t(FirstPersonSmallSceneryWitherStage(
+                    *entry, *small)) * 4u;
+            if (image.GetIndex() != expectedBodyImage)
                 return false;
 
             const auto layout =
