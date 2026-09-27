@@ -12,6 +12,7 @@
 #include <openrct2/paint/FirstPersonRenderer.h>
 #include <openrct2/paint/FirstPersonAssetReconstruction.h>
 #include <openrct2/paint/FirstPersonPeriodicPassengerMotion.h>
+#include <openrct2/paint/FirstPersonPhysicalProxy.h>
 #include <openrct2/paint/FirstPersonTrackTrajectory.h>
 #include <openrct2/paint/FirstPersonSmallSceneryCollision.h>
 #include <openrct2/paint/FirstPersonVehicleBodyHull.h>
@@ -103,10 +104,19 @@ TEST(FirstPersonSmallSceneryCollisionTest, QuarterMappingMatchesNativeConstructi
     EXPECT_EQ(FirstPersonSmallSceneryQuarterForPoint(8, 24), 3);
 
     FirstPersonSmallSceneryWalkingMask mask{};
-    mask.add(2, 3);
+    mask.layerCount = 2;
+    mask.layerLowZ[0] = 0;
+    mask.layerHighZ[0] = 8;
+    mask.layerLowZ[1] = 8;
+    mask.layerHighZ[1] = 20;
+    mask.add(0, 2, 3);
+    mask.add(1, 3, 2);
+
     EXPECT_TRUE(mask.valid);
-    EXPECT_TRUE(mask.contains(2, 3));
-    EXPECT_FALSE(mask.contains(3, 2));
+    EXPECT_TRUE(mask.contains(0, 2, 3));
+    EXPECT_FALSE(mask.contains(0, 3, 2));
+    EXPECT_TRUE(mask.contains(1, 3, 2));
+    EXPECT_FALSE(mask.contains(1, 2, 3));
 }
 
 TEST(FirstPersonVehicleBodyHullTest, NativeYawProjectionUsesCarLocalForwardAndRight)
@@ -402,6 +412,44 @@ TEST(FirstPersonTrackTrajectoryTest, EndpointGapMeasuresPhysicalDiscontinuity)
     EXPECT_TRUE(FirstPersonTrackTrajectorySamplesContinuous(next, 4.0f));
     EXPECT_FALSE(FirstPersonTrackTrajectorySamplesContinuous(next, 2.0f));
 }
+
+TEST(FirstPersonPhysicalProxyTest, VerifiedRailGeometryFeedsWalkingCollision)
+{
+    FirstPersonTrackTrajectory trajectory{};
+    const FirstPersonBasis basis{
+        { 1.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f },
+    };
+    trajectory.points = {
+        { { 0.0f, 0.0f, 10.0f }, basis, 0 },
+        { { 12.0f, 0.0f, 10.0f }, basis, 1 },
+    };
+
+    FirstPersonTrackRailProfile profile{};
+    profile.verified = true;
+    profile.halfGauge = 2.0f;
+    profile.halfWidth = 0.5f;
+    profile.halfHeight = 0.5f;
+
+    const auto rails =
+        BuildFirstPersonRailProxySegments(trajectory, profile);
+    ASSERT_EQ(rails.size(), 2u);
+    EXPECT_FLOAT_EQ(rails[0].a.y, -2.0f);
+    EXPECT_FLOAT_EQ(rails[1].a.y, 2.0f);
+
+    EXPECT_TRUE(FirstPersonRailProxyIntersectsWalkStep(
+        rails[0],
+        { 6.0f, -5.0f, 0.0f },
+        { 6.0f, 0.0f, 0.0f },
+        20.0f));
+    EXPECT_FALSE(FirstPersonRailProxyIntersectsWalkStep(
+        rails[0],
+        { 6.0f, -5.0f, -30.0f },
+        { 6.0f, 0.0f, -30.0f },
+        10.0f));
+}
+
 
 TEST(FirstPersonPaintProvenanceTest, InteractionOwnerDoesNotMakeTileArtworkDynamic)
 {

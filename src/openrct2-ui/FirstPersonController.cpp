@@ -16,6 +16,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <unordered_set>
 #include <chrono>
 #include <openrct2/drawing/IDrawingEngine.h>
 #include <openrct2/audio/Audio.h>
@@ -29,6 +30,7 @@
 #include <openrct2/entity/EntityTweener.h>
 #include <openrct2/interface/Viewport.h>
 #include <openrct2/paint/FirstPersonRenderer.h>
+#include <openrct2/paint/FirstPersonPhysicalProxy.h>
 #include <openrct2/paint/FirstPersonSmallSceneryCollision.h>
 #include <openrct2/paint/FirstPersonVehiclePose.h>
 #include <openrct2/paint/FirstPersonWalkingSemantics.h>
@@ -38,6 +40,7 @@
 #include <openrct2/world/tile_element/PathElement.h>
 #include <openrct2/world/tile_element/LargeSceneryElement.h>
 #include <openrct2/world/tile_element/SmallSceneryElement.h>
+#include <openrct2/world/tile_element/TrackElement.h>
 #include <openrct2/world/tile_element/Slope.h>
 #include <openrct2/world/Footpath.h>
 #include <openrct2/world/tile_element/WallElement.h>
@@ -453,15 +456,14 @@ namespace OpenRCT2::Ui::FirstPerson
             const int32_t maxY = int32_t(std::floor(
                 std::max(from.y, to.y) / kCoordsXYStep)) + 1;
 
-            constexpr int32_t cellSize =
-                Paint::FirstPersonSmallSceneryWalkingMask::kCellSize;
-            constexpr int32_t cells =
-                Paint::FirstPersonSmallSceneryWalkingMask::kCellsPerAxis;
+            std::vector<Paint::FirstPersonPhysicalBoxProxy> proxies;
+            proxies.reserve(32);
             for (int32_t ty = minY; ty <= maxY; ++ty)
             for (int32_t tx = minX; tx <= maxX; ++tx)
             {
                 const CoordsXY tilePos{
-                    tx * kCoordsXYStep, ty * kCoordsXYStep
+                    tx * kCoordsXYStep,
+                    ty * kCoordsXYStep
                 };
                 if (!MapIsLocationValid(tilePos))
                     continue;
@@ -472,38 +474,208 @@ namespace OpenRCT2::Ui::FirstPerson
                     if (small == nullptr || small->isGhost()
                         || small->isInvisible())
                         continue;
-                    const auto* entry = small->getEntry();
-                    if (entry == nullptr)
+                    proxies.clear();
+                    if (!Paint::AppendFirstPersonSmallSceneryProxies(
+                            proxies, tilePos, *small))
                         continue;
-                    const auto* mask =
-                        Paint::GetFirstPersonSmallSceneryWalkingMask(
-                            *entry, *small);
-                    if (mask == nullptr)
-                        continue;
-
-                    const float lowZ = float(small->getBaseZ());
-                    const float highZ = float(std::min(
-                        small->getClearanceZ(),
-                        small->getBaseZ() + mask->collisionHeight));
-                    if (highZ <= lowZ)
-                        continue;
-
-                    for (int32_t yCell = 0; yCell < cells; ++yCell)
-                    for (int32_t xCell = 0; xCell < cells; ++xCell)
+                    for (const auto& proxy : proxies)
                     {
-                        if (!mask->contains(xCell, yCell))
-                            continue;
-                        const float x0 =
-                            float(tilePos.x + xCell * cellSize);
-                        const float y0 =
-                            float(tilePos.y + yCell * cellSize);
                         if (Paint::FirstPersonBoxIntersectsWalkStep(
-                                from, to,
-                                { x0, y0, lowZ },
-                                { x0 + float(cellSize),
-                                  y0 + float(cellSize),
-                                  highZ },
+                                from, to, proxy.low, proxy.high,
                                 kEyeHeight))
+                            return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        bool WalkBlockedByPathFixtures(
+            const Paint::FirstPersonVec3& from,
+            const Paint::FirstPersonVec3& to)
+        {
+            const int32_t minX = std::max(
+                0, int32_t(std::floor(
+                    std::min(from.x, to.x) / kCoordsXYStep)) - 1);
+            const int32_t minY = std::max(
+                0, int32_t(std::floor(
+                    std::min(from.y, to.y) / kCoordsXYStep)) - 1);
+            const int32_t maxX = int32_t(std::floor(
+                std::max(from.x, to.x) / kCoordsXYStep)) + 1;
+            const int32_t maxY = int32_t(std::floor(
+                std::max(from.y, to.y) / kCoordsXYStep)) + 1;
+
+            std::vector<Paint::FirstPersonPhysicalBoxProxy> proxies;
+            proxies.reserve(16);
+            for (int32_t ty = minY; ty <= maxY; ++ty)
+            for (int32_t tx = minX; tx <= maxX; ++tx)
+            {
+                const CoordsXY tilePos{
+                    tx * kCoordsXYStep, ty * kCoordsXYStep
+                };
+                if (!MapIsLocationValid(tilePos))
+                    continue;
+                for (const auto* path :
+                    TileElementsView<PathElement>(tilePos))
+                {
+                    if (path == nullptr || path->isGhost()
+                        || path->isInvisible())
+                        continue;
+                    proxies.clear();
+                    Paint::AppendFirstPersonPathRailingProxies(
+                        proxies, tilePos, *path);
+                    Paint::AppendFirstPersonPathFixtureProxies(
+                        proxies, tilePos, *path);
+                    for (const auto& proxy : proxies)
+                    {
+                        if (Paint::FirstPersonBoxIntersectsWalkStep(
+                                from, to, proxy.low, proxy.high,
+                                kEyeHeight))
+                            return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        bool WalkBlockedByStationFences(
+            const Paint::FirstPersonVec3& from,
+            const Paint::FirstPersonVec3& to)
+        {
+            const int32_t minX = std::max(
+                0, int32_t(std::floor(
+                    std::min(from.x, to.x) / kCoordsXYStep)) - 1);
+            const int32_t minY = std::max(
+                0, int32_t(std::floor(
+                    std::min(from.y, to.y) / kCoordsXYStep)) - 1);
+            const int32_t maxX = int32_t(std::floor(
+                std::max(from.x, to.x) / kCoordsXYStep)) + 1;
+            const int32_t maxY = int32_t(std::floor(
+                std::max(from.y, to.y) / kCoordsXYStep)) + 1;
+
+            std::vector<Paint::FirstPersonPhysicalBoxProxy> proxies;
+            proxies.reserve(8);
+            for (int32_t ty = minY; ty <= maxY; ++ty)
+            for (int32_t tx = minX; tx <= maxX; ++tx)
+            {
+                const CoordsXY tilePos{
+                    tx * kCoordsXYStep, ty * kCoordsXYStep
+                };
+                if (!MapIsLocationValid(tilePos))
+                    continue;
+                for (const auto* track :
+                    TileElementsView<TrackElement>(tilePos))
+                {
+                    if (track == nullptr || track->isGhost()
+                        || track->isInvisible()
+                        || !trackTypeIsStation(track->getTrackType()))
+                        continue;
+                    const auto* ride =
+                        GetRide(track->getRideIndex());
+                    if (ride == nullptr)
+                        continue;
+                    proxies.clear();
+                    Paint::AppendFirstPersonStationFenceProxies(
+                        proxies, tilePos, *track, *ride);
+                    for (const auto& proxy : proxies)
+                    {
+                        if (Paint::FirstPersonBoxIntersectsWalkStep(
+                                from, to, proxy.low, proxy.high,
+                                kEyeHeight))
+                            return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        bool WalkBlockedByVerifiedTrackRails(
+            const Paint::FirstPersonVec3& from,
+            const Paint::FirstPersonVec3& to)
+        {
+            if (!Paint::FirstPersonHasVerifiedTrackProfiles())
+                return false;
+
+            const int32_t minX = std::max(
+                0, int32_t(std::floor(
+                    std::min(from.x, to.x) / kCoordsXYStep)) - 2);
+            const int32_t minY = std::max(
+                0, int32_t(std::floor(
+                    std::min(from.y, to.y) / kCoordsXYStep)) - 2);
+            const int32_t maxX = int32_t(std::floor(
+                std::max(from.x, to.x) / kCoordsXYStep)) + 2;
+            const int32_t maxY = int32_t(std::floor(
+                std::max(from.y, to.y) / kCoordsXYStep)) + 2;
+            std::unordered_set<uint64_t> seenPieces;
+
+            for (int32_t ty = minY; ty <= maxY; ++ty)
+            for (int32_t tx = minX; tx <= maxX; ++tx)
+            {
+                const CoordsXY tilePos{
+                    tx * kCoordsXYStep, ty * kCoordsXYStep
+                };
+                if (!MapIsLocationValid(tilePos))
+                    continue;
+
+                for (auto* track :
+                    TileElementsView<TrackElement>(tilePos))
+                {
+                    if (track == nullptr || track->isGhost()
+                        || track->isInvisible())
+                        continue;
+                    const auto* ride =
+                        GetRide(track->getRideIndex());
+                    if (ride == nullptr
+                        || !Paint::RideUsesStandardFirstPersonTrajectory(
+                            *ride))
+                        continue;
+                    const auto profile =
+                        Paint::FirstPersonVerifiedTrackRailProfile(
+                            *ride, *track);
+                    if (!profile.has_value()
+                        || !profile->verified)
+                        continue;
+
+                    const auto sampleOrigin =
+                        Paint::FirstPersonTrackSampleOrigin(
+                            tilePos, track);
+                    if (!sampleOrigin.has_value())
+                        continue;
+
+                    uint64_t pieceKey =
+                        uint64_t(track->getRideIndex().ToUnderlying());
+                    pieceKey = pieceKey * 1099511628211ull
+                        ^ uint64_t(uint16_t(track->getTrackType()));
+                    pieceKey = pieceKey * 1099511628211ull
+                        ^ uint64_t(uint32_t(sampleOrigin->x));
+                    pieceKey = pieceKey * 1099511628211ull
+                        ^ uint64_t(uint32_t(sampleOrigin->y));
+                    pieceKey = pieceKey * 1099511628211ull
+                        ^ uint64_t(uint32_t(sampleOrigin->z));
+                    if (!seenPieces.insert(pieceKey).second)
+                        continue;
+
+                    const auto trajectory =
+                        Paint::BuildFirstPersonTrackTrajectory(
+                            track->getTrackType(),
+                            track->getDirection(),
+                            {
+                                float(sampleOrigin->x),
+                                float(sampleOrigin->y),
+                                float(sampleOrigin->z),
+                            });
+                    if (!trajectory.has_value()
+                        || !Paint::FirstPersonTrackTrajectorySamplesContinuous(
+                            *trajectory))
+                        continue;
+
+                    const auto rails =
+                        Paint::BuildFirstPersonRailProxySegments(
+                            *trajectory, *profile);
+                    for (const auto& rail : rails)
+                    {
+                        if (Paint::FirstPersonRailProxyIntersectsWalkStep(
+                                rail, from, to, kEyeHeight))
                             return true;
                     }
                 }
@@ -619,7 +791,11 @@ namespace OpenRCT2::Ui::FirstPerson
                 };
                 if (WalkBlockedByWall(from, destination)
                     || WalkBlockedByLargeScenery(from, destination)
-                    || WalkBlockedBySmallScenery(from, destination))
+                    || WalkBlockedBySmallScenery(from, destination)
+                    || WalkBlockedByPathFixtures(from, destination)
+                    || WalkBlockedByStationFences(from, destination)
+                    || WalkBlockedByVerifiedTrackRails(
+                        from, destination))
                     return false;
                 _state.camera.position.x=x;
                 _state.camera.position.y=y;

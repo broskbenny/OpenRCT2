@@ -49,6 +49,12 @@ namespace OpenRCT2::Paint
         // behaved like the fitted rails in native artwork. Kept as an integer
         // here so trajectory evidence remains independent of the calibrator.
         uint8_t sourceChannelMask = 0;
+        // Material evidence is optional and cannot make geometry verified.
+        // For a remap channel these are native shade indices [0,11]; for the
+        // dedicated track-rail palette they are raw PaletteIndex values.
+        bool materialVerified = false;
+        uint8_t topMaterialValue = 0;
+        uint8_t sideMaterialValue = 0;
     };
 
     [[nodiscard]] inline const VehicleInfoList* GetFirstPersonStandardTrackVehicleInfo(

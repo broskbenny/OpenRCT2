@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 namespace OpenRCT2::Paint
 {
@@ -60,10 +61,19 @@ namespace OpenRCT2::Paint
         }
     }
 
+    struct FirstPersonTrackArtworkSample
+    {
+        int32_t x{};
+        int32_t y{};
+        uint8_t pixel{};
+    };
+
     struct FirstPersonTrackArtworkObservation
     {
         std::array<std::array<FirstPersonSilhouette, 4>,
             kFirstPersonTrackPixelChannelCount> channelViews{};
+        std::array<std::array<std::vector<FirstPersonTrackArtworkSample>, 4>,
+            kFirstPersonTrackPixelChannelCount> channelSamples{};
     };
 
     struct FirstPersonTrackProfileFit
@@ -322,6 +332,285 @@ namespace OpenRCT2::Paint
         return result;
     }
 
+    struct FirstPersonTrackRailFaceSilhouettes
+    {
+        std::array<FirstPersonSilhouette, 4> top{};
+        std::array<FirstPersonSilhouette, 4> side{};
+    };
+
+    inline void AddFirstPersonTrackProfileSegmentMaterialSilhouettes(
+        FirstPersonSilhouette& top,
+        FirstPersonSilhouette& side,
+        uint8_t rotation, const FirstPersonVec3& anchor,
+        const FirstPersonTrackTrajectoryPoint& a,
+        const FirstPersonTrackTrajectoryPoint& b,
+        const FirstPersonTrackRailProfile& profile,
+        float gaugeSide)
+    {
+        const auto centreFor =
+            [&](const FirstPersonTrackTrajectoryPoint& point) {
+                return AddFirstPersonTrackVector(
+                    AddFirstPersonTrackVector(
+                        point.position,
+                        ScaleFirstPersonTrackVector(
+                            point.basis.right, gaugeSide)),
+                    ScaleFirstPersonTrackVector(
+                        point.basis.up,
+                        profile.verticalOffset));
+            };
+        const auto centreA = centreFor(a);
+        const auto centreB = centreFor(b);
+        const auto acrossA =
+            ScaleFirstPersonTrackVector(
+                a.basis.right, profile.halfWidth);
+        const auto acrossB =
+            ScaleFirstPersonTrackVector(
+                b.basis.right, profile.halfWidth);
+        const auto upA =
+            ScaleFirstPersonTrackVector(
+                a.basis.up, profile.halfHeight);
+        const auto upB =
+            ScaleFirstPersonTrackVector(
+                b.basis.up, profile.halfHeight);
+
+        const auto addQuad =
+            [&](FirstPersonSilhouette& target,
+                const std::array<FirstPersonVec3, 4>& world) {
+                std::array<ScreenCoordsXY, 4> screen{};
+                for (size_t i = 0; i < screen.size(); ++i)
+                {
+                    screen[i] =
+                        ProjectFirstPersonTrackArtworkPoint(
+                            rotation, anchor, world[i]);
+                }
+                AddFirstPersonSilhouetteQuad(target, screen);
+            };
+
+        addQuad(top, { {
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(centreA, upA),
+                ScaleFirstPersonTrackVector(acrossA, -1.0f)),
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(centreA, upA),
+                acrossA),
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(centreB, upB),
+                acrossB),
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(centreB, upB),
+                ScaleFirstPersonTrackVector(acrossB, -1.0f)),
+        } });
+        addQuad(side, { {
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(
+                    centreA,
+                    ScaleFirstPersonTrackVector(upA, -1.0f)),
+                ScaleFirstPersonTrackVector(acrossA, -1.0f)),
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(
+                    centreB,
+                    ScaleFirstPersonTrackVector(upB, -1.0f)),
+                ScaleFirstPersonTrackVector(acrossB, -1.0f)),
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(
+                    centreB,
+                    ScaleFirstPersonTrackVector(upB, -1.0f)),
+                acrossB),
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(
+                    centreA,
+                    ScaleFirstPersonTrackVector(upA, -1.0f)),
+                acrossA),
+        } });
+        addQuad(side, { {
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(centreA, acrossA),
+                ScaleFirstPersonTrackVector(upA, -1.0f)),
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(centreB, acrossB),
+                ScaleFirstPersonTrackVector(upB, -1.0f)),
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(centreB, acrossB),
+                upB),
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(centreA, acrossA),
+                upA),
+        } });
+        addQuad(side, { {
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(
+                    centreA,
+                    ScaleFirstPersonTrackVector(acrossA, -1.0f)),
+                ScaleFirstPersonTrackVector(upA, -1.0f)),
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(
+                    centreA,
+                    ScaleFirstPersonTrackVector(acrossA, -1.0f)),
+                upA),
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(
+                    centreB,
+                    ScaleFirstPersonTrackVector(acrossB, -1.0f)),
+                upB),
+            AddFirstPersonTrackVector(
+                AddFirstPersonTrackVector(
+                    centreB,
+                    ScaleFirstPersonTrackVector(acrossB, -1.0f)),
+                ScaleFirstPersonTrackVector(upB, -1.0f)),
+        } });
+    }
+
+    [[nodiscard]] inline FirstPersonTrackRailFaceSilhouettes
+        BuildFirstPersonTrackRailFaceSilhouettes(
+            const FirstPersonTrackTrajectory& trajectory,
+            const FirstPersonVec3& anchor,
+            const FirstPersonTrackRailProfile& profile)
+    {
+        FirstPersonTrackRailFaceSilhouettes result{};
+        if (trajectory.points.size() < 2)
+            return result;
+
+        size_t previous = 0;
+        for (size_t i = 1; i < trajectory.points.size(); ++i)
+        {
+            const auto& a = trajectory.points[previous];
+            const auto& b = trajectory.points[i];
+            const float distance =
+                FirstPersonTrackTrajectoryPointDistance(a, b);
+            const bool turns =
+                DotFirstPersonTrackVector(
+                    a.basis.forward, b.basis.forward)
+                    < 0.9914449f
+                || DotFirstPersonTrackVector(
+                    a.basis.up, b.basis.up)
+                    < 0.9914449f;
+            const bool last =
+                i + 1 == trajectory.points.size();
+            if (!last && distance < 3.0f && !turns)
+                continue;
+            if (distance > 0.05f)
+            {
+                for (uint8_t rotation = 0;
+                     rotation < 4; ++rotation)
+                {
+                    AddFirstPersonTrackProfileSegmentMaterialSilhouettes(
+                        result.top[rotation],
+                        result.side[rotation],
+                        rotation, anchor, a, b, profile,
+                        -profile.halfGauge);
+                    AddFirstPersonTrackProfileSegmentMaterialSilhouettes(
+                        result.top[rotation],
+                        result.side[rotation],
+                        rotation, anchor, a, b, profile,
+                        profile.halfGauge);
+                }
+            }
+            previous = i;
+        }
+        return result;
+    }
+
+    [[nodiscard]] constexpr uint8_t
+        FirstPersonTrackMaterialValue(
+            uint8_t pixel, FirstPersonTrackPixelChannel channel)
+    {
+        using Drawing::PaletteIndex;
+        switch (channel)
+        {
+            case FirstPersonTrackPixelChannel::primaryRemap:
+                return uint8_t(pixel
+                    - static_cast<uint8_t>(
+                        PaletteIndex::primaryRemap0));
+            case FirstPersonTrackPixelChannel::secondaryRemap:
+                return uint8_t(pixel
+                    - static_cast<uint8_t>(
+                        PaletteIndex::secondaryRemap0));
+            case FirstPersonTrackPixelChannel::tertiaryRemap:
+                return uint8_t(pixel
+                    - static_cast<uint8_t>(
+                        PaletteIndex::tertiaryRemap0));
+            case FirstPersonTrackPixelChannel::trackRailPalette:
+            default:
+                return pixel;
+        }
+    }
+
+    inline void DeriveFirstPersonTrackRailMaterial(
+        FirstPersonTrackRailProfile& profile,
+        const FirstPersonTrackArtworkObservation& observation,
+        const FirstPersonTrackTrajectory& trajectory,
+        const FirstPersonVec3& anchor,
+        FirstPersonTrackPixelChannel channel)
+    {
+        profile.materialVerified = false;
+        const auto faces =
+            BuildFirstPersonTrackRailFaceSilhouettes(
+                trajectory, anchor, profile);
+        std::vector<uint8_t> topValues;
+        std::vector<uint8_t> sideValues;
+        const auto containsNear = [](
+            const FirstPersonSilhouette& silhouette,
+            int32_t x, int32_t y) {
+            for (int32_t dy = -1; dy <= 1; ++dy)
+            for (int32_t dx = -1; dx <= 1; ++dx)
+            {
+                if (silhouette.contains(x + dx, y + dy))
+                    return true;
+            }
+            return false;
+        };
+        for (uint8_t rotation = 0; rotation < 4; ++rotation)
+        {
+            const auto& samples =
+                observation.channelSamples[
+                    static_cast<size_t>(channel)][rotation];
+            for (const auto& sample : samples)
+            {
+                bool inTop =
+                    faces.top[rotation].contains(
+                        sample.x, sample.y);
+                bool inSide =
+                    faces.side[rotation].contains(
+                        sample.x, sample.y);
+                if (!inTop && !inSide)
+                {
+                    inTop = containsNear(
+                        faces.top[rotation],
+                        sample.x, sample.y);
+                    inSide = containsNear(
+                        faces.side[rotation],
+                        sample.x, sample.y);
+                }
+                // Pixels that can be explained by both faces are exactly the
+                // ambiguous silhouette boundary. Do not let them determine
+                // a face material.
+                if (inTop == inSide)
+                    continue;
+                const uint8_t value =
+                    FirstPersonTrackMaterialValue(
+                        sample.pixel, channel);
+                (inTop ? topValues : sideValues)
+                    .push_back(value);
+            }
+        }
+        constexpr size_t kMinimumFaceSamples = 8;
+        if (topValues.size() < kMinimumFaceSamples
+            || sideValues.size() < kMinimumFaceSamples)
+            return;
+
+        const auto median = [](std::vector<uint8_t>& values) {
+            const size_t middle = values.size() / 2;
+            std::nth_element(
+                values.begin(),
+                values.begin() + middle,
+                values.end());
+            return values[middle];
+        };
+        profile.topMaterialValue = median(topValues);
+        profile.sideMaterialValue = median(sideValues);
+        profile.materialVerified = true;
+    }
+
     [[nodiscard]] inline bool FirstPersonTrackSilhouetteContainsNear(
         const FirstPersonSilhouette& silhouette, int32_t x, int32_t y,
         int32_t tolerance = 1)
@@ -559,6 +848,9 @@ namespace OpenRCT2::Paint
 
         refined.profile.sourceChannelMask =
             FirstPersonTrackPixelChannelBit(refined.fit.channel);
+        DeriveFirstPersonTrackRailMaterial(
+            refined.profile, observation, trajectory,
+            anchor, refined.fit.channel);
         result.valid = true;
         result.profile = refined.profile;
         result.fit = refined.fit;

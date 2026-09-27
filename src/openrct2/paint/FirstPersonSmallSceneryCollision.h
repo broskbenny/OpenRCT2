@@ -26,26 +26,37 @@ namespace OpenRCT2::Paint
         static constexpr int32_t kCellSize = 2;
         static constexpr int32_t kCellsPerAxis =
             kCoordsXYStep / kCellSize;
-        std::array<uint64_t, 4> cells{};
-        int32_t collisionHeight = 0;
+        static constexpr size_t kMaxZLayers = 5;
+        static constexpr size_t kWordsPerLayer =
+            size_t(kCellsPerAxis * kCellsPerAxis) / 64;
+        std::array<std::array<uint64_t, kWordsPerLayer>, kMaxZLayers>
+            layers{};
+        std::array<int16_t, kMaxZLayers> layerLowZ{};
+        std::array<int16_t, kMaxZLayers> layerHighZ{};
+        uint8_t layerCount = 0;
 
-        [[nodiscard]] bool contains(int32_t xCell, int32_t yCell) const
+        [[nodiscard]] bool contains(
+            size_t zLayer, int32_t xCell, int32_t yCell) const
         {
-            if (xCell < 0 || yCell < 0
+            if (zLayer >= layerCount || xCell < 0 || yCell < 0
                 || xCell >= kCellsPerAxis
                 || yCell >= kCellsPerAxis)
                 return false;
             const size_t index =
                 size_t(yCell * kCellsPerAxis + xCell);
-            return (cells[index / 64] & (uint64_t{ 1 } << (index % 64)))
+            return (layers[zLayer][index / 64]
+                    & (uint64_t{ 1 } << (index % 64)))
                 != 0;
         }
 
-        void add(int32_t xCell, int32_t yCell)
+        void add(size_t zLayer, int32_t xCell, int32_t yCell)
         {
+            if (zLayer >= kMaxZLayers)
+                return;
             const size_t index =
                 size_t(yCell * kCellsPerAxis + xCell);
-            cells[index / 64] |= uint64_t{ 1 } << (index % 64);
+            layers[zLayer][index / 64]
+                |= uint64_t{ 1 } << (index % 64);
             valid = true;
         }
     };
@@ -212,6 +223,26 @@ namespace OpenRCT2::Paint
                 return {};
         }
 
+        result.layerCount = uint8_t(std::min<size_t>(
+            heights.size(),
+            FirstPersonSmallSceneryWalkingMask::kMaxZLayers));
+        const int32_t collisionTop =
+            std::min<int32_t>(entry.height, 20);
+        for (size_t layer = 0; layer < result.layerCount; ++layer)
+        {
+            const int32_t low = layer == 0
+                ? 0
+                : (heights[layer - 1] + heights[layer]) / 2;
+            const int32_t high = layer + 1 == result.layerCount
+                ? collisionTop
+                : (heights[layer] + heights[layer + 1] + 1) / 2;
+            result.layerLowZ[layer] =
+                int16_t(std::clamp(low, 0, collisionTop));
+            result.layerHighZ[layer] =
+                int16_t(std::clamp(
+                    std::max(low + 1, high), 0, collisionTop));
+        }
+
         constexpr int32_t cellSize =
             FirstPersonSmallSceneryWalkingMask::kCellSize;
         constexpr int32_t cells =
@@ -226,9 +257,9 @@ namespace OpenRCT2::Paint
             if ((occupied & (1u << quarter)) == 0)
                 continue;
 
-            size_t supportedHeights = 0;
-            for (const int32_t z : heights)
+            for (size_t layer = 0; layer < result.layerCount; ++layer)
             {
+                const int32_t z = heights[layer];
                 bool supported = true;
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
@@ -245,17 +276,10 @@ namespace OpenRCT2::Paint
                     }
                 }
                 if (supported)
-                    ++supportedHeights;
+                    result.add(layer, xCell, yCell);
             }
-
-            const size_t required =
-                std::max<size_t>(1, (heights.size() + 1) / 2);
-            if (supportedHeights >= required)
-                result.add(xCell, yCell);
         }
 
-        result.collisionHeight =
-            std::min<int32_t>(entry.height, 20);
         return result;
     }
 

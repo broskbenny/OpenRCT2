@@ -4,6 +4,7 @@
  *****************************************************************************/
 #include "FirstPersonRenderer.h"
 #include "FirstPersonAssetReconstruction.h"
+#include "FirstPersonPhysicalProxy.h"
 #include "FirstPersonTrackTrajectory.h"
 #include "FirstPersonTrackProfileCalibration.h"
 #include "FirstPersonVehicleBodyHull.h"
@@ -439,50 +440,121 @@ namespace OpenRCT2::Paint
             scene.surfaces.emplace_back(std::move(surface));
         }
 
-        // OpenRCT2 paints walls and exposed land edges using narrow, tall world-space
-        // bounding boxes. Those are actual geometric constraints, unlike the bounds of
-        // a tree or house. Project the original sprite onto that plane rather than
-        // rotating the whole image to face the passenger. Doors with tiny split
-        // bounds intentionally retain billboards: their two parts are not a full wall.
+        // Some native paint helpers expose more than sorting bounds: their boxes
+        // are the authored physical geometry itself. This is deliberately
+        // restricted to element families whose painters use exact slabs/strips:
+        // walls/surfaces, station floors/fences, and path railings/fixtures.
+        // Generic track/scenery paint bounds remain sorting evidence only.
         bool AppendPhysicalPlane(
             FirstPersonScene& scene, const PaintStruct& ps, ImageId image,
             const ScreenCoordsXY& spritePos, uint8_t rotation, ImageId mask = {})
         {
+            if (ps.Element == nullptr)
+                return false;
+
+            const auto type = ps.Element->getType();
+            const auto* track = ps.Element->asTrack();
+            const auto* path = ps.Element->asPath();
+            const bool stationTrack =
+                track != nullptr
+                && trackTypeIsStation(track->getTrackType());
+            const bool pathGeometry =
+                path != nullptr && image.HasValue()
+                && FirstPersonPathArtworkIsPhysical(
+                    *path, image.GetIndex());
+            const bool legacyPlanar =
+                type == TileElementType::wall
+                || type == TileElementType::surface;
+            if (!legacyPlanar && !stationTrack && !pathGeometry)
+                return false;
+
             const auto layout = GetSpriteCompositeLayout(image, mask);
-            if (!layout.has_value()) return false;
+            if (!layout.has_value())
+                return false;
+
             const float x0 = float(std::min(ps.Bounds.x, ps.Bounds.x_end));
             const float x1 = float(std::max(ps.Bounds.x, ps.Bounds.x_end));
             const float y0 = float(std::min(ps.Bounds.y, ps.Bounds.y_end));
             const float y1 = float(std::max(ps.Bounds.y, ps.Bounds.y_end));
             const float z0 = float(std::min(ps.Bounds.z, ps.Bounds.z_end));
             const float z1 = float(std::max(ps.Bounds.z, ps.Bounds.z_end));
-            const float sx = x1 - x0, sy = y1 - y0;
-            // Never infer a solid slab from a general paint/occlusion box.
-            if (!(z1 - z0 >= 8.0f &&
-                  ((sx >= 16.0f && sy <= 4.0f) || (sy >= 16.0f && sx <= 4.0f))))
+            const float sx = x1 - x0;
+            const float sy = y1 - y0;
+            const float sz = z1 - z0;
+
+            const bool alongX =
+                sx >= 6.0f && sy <= 4.0f && sz >= 5.0f;
+            const bool alongY =
+                sy >= 6.0f && sx <= 4.0f && sz >= 5.0f;
+            const bool stationSlab =
+                stationTrack && sz <= 2.0f
+                && sx >= 6.0f && sy >= 6.0f
+                && z0 <= float(track->getBaseZ() + 12);
+            const bool stationFence =
+                stationTrack && (alongX || alongY)
+                && z0 >= float(track->getBaseZ() + 1)
+                && z1 <= float(track->getBaseZ() + 24);
+            const bool verticalPlane =
+                (alongX || alongY)
+                && (legacyPlanar || pathGeometry || stationFence);
+            if (!verticalPlane && !stationSlab)
                 return false;
-            const bool alongX = sx >= sy;
-            const float fixed = alongX ? 0.5f*(y0+y1) : 0.5f*(x0+x1);
-            const std::array<FirstPersonVec3, 4> world = alongX
-                ? std::array<FirstPersonVec3,4>{{ {x0,fixed,z0},{x1,fixed,z0},
-                                                 {x1,fixed,z1},{x0,fixed,z1} }}
-                : std::array<FirstPersonVec3,4>{{ {fixed,y0,z0},{fixed,y1,z0},
-                                                 {fixed,y1,z1},{fixed,y0,z1} }};
+
+            std::array<FirstPersonVec3, 4> world{};
+            if (stationSlab)
+            {
+                const float fixedZ = 0.5f * (z0 + z1);
+                world = { {
+                    { x0, y0, fixedZ },
+                    { x1, y0, fixedZ },
+                    { x1, y1, fixedZ },
+                    { x0, y1, fixedZ },
+                } };
+            }
+            else if (alongX)
+            {
+                const float fixedY = 0.5f * (y0 + y1);
+                world = { {
+                    { x0, fixedY, z0 },
+                    { x1, fixedY, z0 },
+                    { x1, fixedY, z1 },
+                    { x0, fixedY, z1 },
+                } };
+            }
+            else
+            {
+                const float fixedX = 0.5f * (x0 + x1);
+                world = { {
+                    { fixedX, y0, z0 },
+                    { fixedX, y1, z0 },
+                    { fixedX, y1, z1 },
+                    { fixedX, y0, z1 },
+                } };
+            }
+
             FirstPersonSurface surface{};
             surface.image = image;
             surface.mask = mask;
-            std::array<FirstPersonVertex,4> v{};
-            for (size_t i = 0; i < v.size(); ++i)
+            if (stationSlab)
+                surface.depthBias = true;
+            std::array<FirstPersonVertex, 4> vertices{};
+            for (size_t i = 0; i < vertices.size(); ++i)
             {
                 const auto& p = world[i];
-                const CoordsXYZ loc{ int32_t(std::lround(p.x)),
-                                     int32_t(std::lround(p.y)),
-                                     int32_t(std::lround(p.z)) };
-                const auto iso = Translate3DTo2DWithZ(rotation, loc);
-                v[i] = { p, float(iso.x - spritePos.x - layout->xOffset),
-                            float(iso.y - spritePos.y - layout->yOffset) };
+                const CoordsXYZ loc{
+                    int32_t(std::lround(p.x)),
+                    int32_t(std::lround(p.y)),
+                    int32_t(std::lround(p.z)),
+                };
+                const auto iso =
+                    Translate3DTo2DWithZ(rotation, loc);
+                vertices[i] = {
+                    p,
+                    float(iso.x - spritePos.x - layout->xOffset),
+                    float(iso.y - spritePos.y - layout->yOffset),
+                };
             }
-            EmitQuad(surface,v);
+            EmitQuad(surface, vertices);
             scene.surfaces.emplace_back(std::move(surface));
             return true;
         }
@@ -1389,7 +1461,8 @@ namespace OpenRCT2::Paint
 
         void AppendAttachedVehicleHull(
             FirstPersonScene& scene, const Vehicle& vehicle,
-            const FirstPersonVehicleBodyHull& hull)
+            const FirstPersonVehicleBodyHull& hull,
+            ImageId bodyImageTemplate)
         {
             const auto carriage =
                 FirstPersonVehicleSimulationCarriageTransform(vehicle);
@@ -1414,26 +1487,173 @@ namespace OpenRCT2::Paint
                 topColour = static_cast<uint8_t>(
                     Drawing::PaletteIndex::trackRails2);
 
+            struct VehicleFaceSource
+            {
+                ImageId image{};
+                const G1Element* g1 = nullptr;
+                uint8_t direction = 0;
+            };
+
+            const auto sourceForFace =
+                [&](const std::array<FirstPersonVec3, 4>& local,
+                    FirstPersonVec3 normal)
+                    -> std::optional<VehicleFaceSource> {
+                    // Native vehicle art is always viewed from above. There is
+                    // no honest source for the underside, so keep the solid
+                    // fallback there rather than reflecting a top texture.
+                    if (normal.z < -0.5f
+                        || hull.textureViews.empty())
+                        return std::nullopt;
+
+                    const FirstPersonVec3 centre{
+                        0.25f * (local[0].x + local[1].x
+                            + local[2].x + local[3].x),
+                        0.25f * (local[0].y + local[1].y
+                            + local[2].y + local[3].y),
+                        0.25f * (local[0].z + local[1].z
+                            + local[2].z + local[3].z),
+                    };
+                    float bestScore =
+                        -std::numeric_limits<float>::infinity();
+                    std::optional<VehicleFaceSource> best;
+                    constexpr float kTwoPi =
+                        6.28318530717958647692f;
+
+                    for (const auto& view : hull.textureViews)
+                    {
+                        const auto image =
+                            bodyImageTemplate.WithIndex(view.image);
+                        const auto* g1 = GfxGetG1Element(image);
+                        if (g1 == nullptr || g1->width <= 0
+                            || g1->height <= 0)
+                            continue;
+
+                        const float theta =
+                            float(view.imageDirection & 31u)
+                            * (kTwoPi / 32.0f);
+                        const float cosine = std::cos(theta);
+                        const float sine = std::sin(theta);
+                        // FirstPersonVehicleLocalPoint's native depth
+                        // increases toward this horizontal direction.
+                        const float towardForward =
+                            -cosine + sine;
+                        const float towardRight =
+                            -sine - cosine;
+                        const float horizontalFacing =
+                            normal.x * towardForward
+                            + normal.y * towardRight;
+                        const float facing =
+                            normal.z > 0.5f
+                            ? 1.0f
+                            : horizontalFacing;
+                        if (facing <= 0.05f)
+                            continue;
+
+                        const auto projectedCentre =
+                            ProjectFirstPersonVehicleLocalPoint(
+                                view.imageDirection, centre);
+                        const int32_t centreX =
+                            int32_t(std::lround(
+                                projectedCentre[0]))
+                            - g1->xOffset;
+                        const int32_t centreY =
+                            int32_t(std::lround(
+                                projectedCentre[1]))
+                            - g1->yOffset;
+                        bool supported = false;
+                        for (int32_t dy = -1; dy <= 1
+                             && !supported; ++dy)
+                        for (int32_t dx = -1; dx <= 1; ++dx)
+                        {
+                            if (FirstPersonVehicleBodyPixelOpaque(
+                                    *g1, centreX + dx,
+                                    centreY + dy))
+                            {
+                                supported = true;
+                                break;
+                            }
+                        }
+                        if (!supported)
+                            continue;
+
+                        std::array<std::array<float, 2>, 4>
+                            projected{};
+                        for (size_t i = 0;
+                             i < projected.size(); ++i)
+                        {
+                            projected[i] =
+                                ProjectFirstPersonVehicleLocalPoint(
+                                    view.imageDirection, local[i]);
+                        }
+                        float twiceArea = 0.0f;
+                        for (size_t i = 0; i < 4; ++i)
+                        {
+                            const size_t j = (i + 1) & 3u;
+                            twiceArea +=
+                                projected[i][0] * projected[j][1]
+                                - projected[j][0]
+                                    * projected[i][1];
+                        }
+                        const float area =
+                            0.5f * std::abs(twiceArea);
+                        const float score =
+                            facing * std::max(0.25f, area);
+                        if (!best.has_value()
+                            || score > bestScore)
+                        {
+                            bestScore = score;
+                            best = VehicleFaceSource{
+                                image, g1,
+                                view.imageDirection
+                            };
+                        }
+                    }
+                    return best;
+                };
+
             const float half = hull.step * 0.5f;
             const auto appendFace =
                 [&](const std::array<FirstPersonVec3, 4>& local,
-                    uint8_t colour) {
+                    FirstPersonVec3 normal, uint8_t fallbackColour) {
                     FirstPersonSurface surface{};
-                    surface.solidColour = colour;
+                    const auto source =
+                        sourceForFace(local, normal);
                     std::array<FirstPersonVertex, 4> vertices{};
                     for (size_t i = 0; i < vertices.size(); ++i)
                     {
                         vertices[i].world =
                             TransformVehicleLocalPoint(
                                 origin, basis, local[i]);
+                        if (source.has_value())
+                        {
+                            const auto projected =
+                                ProjectFirstPersonVehicleLocalPoint(
+                                    source->direction, local[i]);
+                            vertices[i].u =
+                                projected[0]
+                                - float(source->g1->xOffset);
+                            vertices[i].v =
+                                projected[1]
+                                - float(source->g1->yOffset);
+                        }
+                    }
+                    if (source.has_value())
+                    {
+                        surface.image = source->image;
+                    }
+                    else
+                    {
+                        surface.solidColour = fallbackColour;
                     }
                     EmitQuad(surface, vertices);
-                    scene.surfaces.emplace_back(std::move(surface));
+                    scene.surfaces.emplace_back(
+                        std::move(surface));
                 };
 
             for (int32_t up = 0; up < hull.sizeUp; ++up)
             for (int32_t right = 0; right < hull.sizeRight; ++right)
-            for (int32_t forward = 0; forward < hull.sizeForward; ++forward)
+            for (int32_t forward = 0;
+                 forward < hull.sizeForward; ++forward)
             {
                 if (!hull.contains(forward, right, up))
                     continue;
@@ -1450,32 +1670,32 @@ namespace OpenRCT2::Paint
                     appendFace({ {
                         { f0, r1, u0 }, { f0, r0, u0 },
                         { f0, r0, u1 }, { f0, r1, u1 },
-                    } }, sideColour);
+                    } }, { -1.0f, 0.0f, 0.0f }, sideColour);
                 if (!hull.contains(forward + 1, right, up))
                     appendFace({ {
                         { f1, r0, u0 }, { f1, r1, u0 },
                         { f1, r1, u1 }, { f1, r0, u1 },
-                    } }, sideColour);
+                    } }, { 1.0f, 0.0f, 0.0f }, sideColour);
                 if (!hull.contains(forward, right - 1, up))
                     appendFace({ {
                         { f0, r0, u0 }, { f1, r0, u0 },
                         { f1, r0, u1 }, { f0, r0, u1 },
-                    } }, sideColour);
+                    } }, { 0.0f, -1.0f, 0.0f }, sideColour);
                 if (!hull.contains(forward, right + 1, up))
                     appendFace({ {
                         { f1, r1, u0 }, { f0, r1, u0 },
                         { f0, r1, u1 }, { f1, r1, u1 },
-                    } }, sideColour);
+                    } }, { 0.0f, 1.0f, 0.0f }, sideColour);
                 if (!hull.contains(forward, right, up - 1))
                     appendFace({ {
                         { f0, r0, u0 }, { f0, r1, u0 },
                         { f1, r1, u0 }, { f1, r0, u0 },
-                    } }, sideColour);
+                    } }, { 0.0f, 0.0f, -1.0f }, sideColour);
                 if (!hull.contains(forward, right, up + 1))
                     appendFace({ {
                         { f0, r1, u1 }, { f0, r0, u1 },
                         { f1, r0, u1 }, { f1, r1, u1 },
-                    } }, topColour);
+                    } }, { 0.0f, 0.0f, 1.0f }, topColour);
             }
         }
 
@@ -1611,6 +1831,102 @@ namespace OpenRCT2::Paint
             return true;
         }
 
+        bool AppendCalibratedSmallSceneryGeometry(
+            FirstPersonScene& scene, const PaintStruct& ps,
+            ImageId image, const ScreenCoordsXY& spritePos,
+            uint8_t rotation, ImageId mask = {})
+        {
+            const auto* small =
+                ps.Element != nullptr
+                ? ps.Element->asSmallScenery()
+                : nullptr;
+            if (small == nullptr || !image.HasValue()
+                || mask.HasValue())
+                return false;
+
+            const auto layout =
+                GetSpriteCompositeLayout(image, mask);
+            if (!layout.has_value())
+                return false;
+
+            std::vector<FirstPersonPhysicalBoxProxy> proxies;
+            proxies.reserve(32);
+            if (!AppendFirstPersonSmallSceneryProxies(
+                    proxies, ps.MapPos, *small))
+                return false;
+
+            const auto emitFace =
+                [&](const std::array<FirstPersonVec3, 4>& world) {
+                    FirstPersonSurface surface{};
+                    surface.image = image;
+                    std::array<FirstPersonVertex, 4> vertices{};
+                    for (size_t i = 0; i < vertices.size(); ++i)
+                    {
+                        const auto& p = world[i];
+                        const CoordsXYZ loc{
+                            int32_t(std::lround(p.x)),
+                            int32_t(std::lround(p.y)),
+                            int32_t(std::lround(p.z)),
+                        };
+                        const auto iso =
+                            Translate3DTo2DWithZ(rotation, loc);
+                        vertices[i] = {
+                            p,
+                            float(
+                                iso.x - spritePos.x
+                                - layout->xOffset),
+                            float(
+                                iso.y - spritePos.y
+                                - layout->yOffset),
+                        };
+                    }
+                    EmitQuad(surface, vertices);
+                    scene.surfaces.emplace_back(
+                        std::move(surface));
+                };
+
+            for (const auto& proxy : proxies)
+            {
+                const auto& low = proxy.low;
+                const auto& high = proxy.high;
+                // Top and four exposed vertical candidates. Internal faces
+                // between adjacent run-length boxes are harmlessly occluded;
+                // omitting bottoms avoids inventing artwork that native
+                // isometric sprites never observe.
+                emitFace({ {
+                    { low.x, low.y, high.z },
+                    { high.x, low.y, high.z },
+                    { high.x, high.y, high.z },
+                    { low.x, high.y, high.z },
+                } });
+                emitFace({ {
+                    { low.x, low.y, low.z },
+                    { high.x, low.y, low.z },
+                    { high.x, low.y, high.z },
+                    { low.x, low.y, high.z },
+                } });
+                emitFace({ {
+                    { high.x, low.y, low.z },
+                    { high.x, high.y, low.z },
+                    { high.x, high.y, high.z },
+                    { high.x, low.y, high.z },
+                } });
+                emitFace({ {
+                    { high.x, high.y, low.z },
+                    { low.x, high.y, low.z },
+                    { low.x, high.y, high.z },
+                    { high.x, high.y, high.z },
+                } });
+                emitFace({ {
+                    { low.x, high.y, low.z },
+                    { low.x, low.y, low.z },
+                    { low.x, low.y, high.z },
+                    { low.x, high.y, high.z },
+                } });
+            }
+            return true;
+        }
+
         [[nodiscard]] bool IsHiddenPassengerTileComponent(
             const PaintStruct& ps, EntityId hiddenEntity, uint8_t hiddenSeatIndex)
         {
@@ -1685,9 +2001,16 @@ namespace OpenRCT2::Paint
                     ? id.WithTransparency(Drawing::FilterPaletteID::paletteDarken1)
                     : id;
             };
-            const bool physicallyPlanar = ps.Element != nullptr &&
-                (ps.Element->getType() == TileElementType::wall ||
-                 ps.Element->getType() == TileElementType::surface);
+            const auto* physicalTrack =
+                ps.Element != nullptr ? ps.Element->asTrack() : nullptr;
+            const bool physicallyPlanar =
+                ps.Element != nullptr
+                && (ps.Element->getType() == TileElementType::wall
+                    || ps.Element->getType() == TileElementType::surface
+                    || ps.Element->getType() == TileElementType::path
+                    || (physicalTrack != nullptr
+                        && trackTypeIsStation(
+                            physicalTrack->getTrackType())));
             const auto* path = ps.Element != nullptr ? ps.Element->asPath() : nullptr;
             const auto* pathSurface = path != nullptr ? path->getSurfaceDescriptor() : nullptr;
             const auto spriteIndex = ps.image_id.GetIndex();
@@ -1713,7 +2036,8 @@ namespace OpenRCT2::Paint
                     == AttachedVehicleComponentRole::body)
                 {
                     AppendAttachedVehicleHull(
-                        scene, *attachedVehicle, *attachedHull);
+                        scene, *attachedVehicle, *attachedHull,
+                        colourify(ps.image_id));
                     suppressCurrentImage = true;
                 }
                 else if (component.role
@@ -1762,15 +2086,30 @@ namespace OpenRCT2::Paint
             if (!groundPathArtwork && !suppressCurrentImage)
             {
                 const auto surfaceStart = scene.surfaces.size();
-                if (!AppendSemanticWallPlane(scene, ps, colourify(ps.image_id), ps.ScreenPos, rotation) &&
-                    (!physicallyPlanar ||
-                     !AppendPhysicalPlane(scene, ps, colourify(ps.image_id), ps.ScreenPos, rotation)))
+                const bool smallPhysical =
+                    AppendCalibratedSmallSceneryGeometry(
+                        scene, ps, colourify(ps.image_id),
+                        ps.ScreenPos, rotation);
+                if (!smallPhysical
+                    && !AppendSemanticWallPlane(
+                        scene, ps, colourify(ps.image_id),
+                        ps.ScreenPos, rotation)
+                    && (!physicallyPlanar
+                        || !AppendPhysicalPlane(
+                            scene, ps, colourify(ps.image_id),
+                            ps.ScreenPos, rotation)))
                 {
                     AppendLayer(
-                        scene, anchor, basis, isoAnchor, colourify(ps.image_id), ps.ScreenPos);
+                        scene, anchor, basis, isoAnchor,
+                        colourify(ps.image_id), ps.ScreenPos);
                 }
-                if (scene.surfaces.size() > surfaceStart)
-                    ApplyImmutablePaintSnapshot(scene.surfaces.back(), ps.FirstPersonSnapshot);
+                if (scene.surfaces.size() > surfaceStart
+                    && !smallPhysical)
+                {
+                    ApplyImmutablePaintSnapshot(
+                        scene.surfaces.back(),
+                        ps.FirstPersonSnapshot);
+                }
             }
             if (ps.Children != nullptr)
             {
@@ -2563,56 +2902,17 @@ namespace OpenRCT2::Paint
         {
             bool hasCandidate = false;
             bool rejected = false;
-            uint8_t sourceAttempts = 0;
             uint8_t holdoutKinds = 0;
             uint8_t passedHoldouts = 0;
+            uint64_t candidateSourceFingerprint = 0;
             FirstPersonTrackRailProfile profile{};
             std::unordered_set<uint64_t> testedSourceGroups;
+            std::unordered_set<uint64_t> unusableSourceFingerprints;
+            std::unordered_set<uint64_t> contradictorySourceFingerprints;
             std::unordered_set<uint64_t> testedHoldoutGroups;
         };
         static std::unordered_map<uint8_t, FirstPersonTrackProfileCalibrationState>
             _trackProfileCalibrations;
-
-        [[nodiscard]] std::optional<TrackStyle> FirstPersonTrackStyleFor(
-            const Ride& ride, const TrackElement& track)
-        {
-            const auto& rtd = ride.getRideTypeDescriptor();
-            const auto& painters = track.isInverted()
-                ? rtd.InvertedTrackPaintFunctions
-                : rtd.TrackPaintFunctions;
-            const auto& painter = trackTypeIsCovered(track.getTrackType())
-                ? painters.Covered : painters.Regular;
-            if (painter.trackStyle == TrackStyle::null)
-                return std::nullopt;
-            return painter.trackStyle;
-        }
-
-        [[nodiscard]] bool FirstPersonHasVerifiedTrackProfiles()
-        {
-            return std::any_of(
-                _trackProfileCalibrations.begin(),
-                _trackProfileCalibrations.end(),
-                [](const auto& item) {
-                    return item.second.hasCandidate
-                        && item.second.profile.verified;
-                });
-        }
-
-        [[nodiscard]] std::optional<FirstPersonTrackRailProfile>
-            FirstPersonVerifiedTrackRailProfile(
-                const Ride& ride, const TrackElement& track)
-        {
-            const auto style = FirstPersonTrackStyleFor(ride, track);
-            if (!style.has_value())
-                return std::nullopt;
-            const auto found = _trackProfileCalibrations.find(
-                static_cast<uint8_t>(*style));
-            if (found == _trackProfileCalibrations.end()
-                || !found->second.hasCandidate
-                || !found->second.profile.verified)
-                return std::nullopt;
-            return found->second.profile;
-        }
 
         [[nodiscard]] uint64_t FirstPersonTrackProfileSignature(
             const Ride& ride, const TrackElement& track)
@@ -2633,44 +2933,10 @@ namespace OpenRCT2::Paint
                 result, uint32_t(int32_t(std::lround(
                     profile->verticalOffset * 100.0f))));
             ExtendStableKey(result, profile->sourceChannelMask);
+            ExtendStableKey(result, profile->materialVerified ? 1 : 0);
+            ExtendStableKey(result, profile->topMaterialValue);
+            ExtendStableKey(result, profile->sideMaterialValue);
             return result;
-        }
-
-        [[nodiscard]] bool RideUsesStandardFirstPersonTrajectory(const Ride& ride)
-        {
-            const auto& rtd = ride.getRideTypeDescriptor();
-            if (!rtd.flags.has(RtdFlag::hasTrack) || rtd.flags.has(RtdFlag::isFlatRide)
-                || rtd.flags.has(RtdFlag::layeredVehiclePreview)
-                || rtd.specialType != RtdSpecialType::none)
-                return false;
-
-            const auto* rideEntry = ride.getRideEntry();
-            const auto* car = rideEntry != nullptr ? rideEntry->GetDefaultCar() : nullptr;
-            if (car == nullptr)
-                return true;
-            return !car->flags.hasAny(
-                CarEntryFlag::isChairlift,
-                CarEntryFlag::isGoKart,
-                CarEntryFlag::isMiniGolf,
-                CarEntryFlag::isReverserCoasterBogie,
-                CarEntryFlag::isReverserCoasterPassengerCar);
-        }
-
-        [[nodiscard]] std::optional<CoordsXYZ> FirstPersonTrackSampleOrigin(
-            CoordsXY tile, TileElement* element)
-        {
-            const auto* track = element != nullptr ? element->asTrack() : nullptr;
-            const auto origin = GetTrackSegmentOrigin(CoordsXYE{ tile, element });
-            if (track == nullptr || !origin.has_value())
-                return std::nullopt;
-
-            const auto& ted = TrackMetadata::GetTrackElementDescriptor(track->getTrackType());
-            if (ted.sequenceData.numSequences == 0)
-                return std::nullopt;
-            const auto& block0 = ted.sequenceData.sequences[0].clearance;
-            CoordsXY sequence0{ origin->x, origin->y };
-            sequence0 += CoordsXY{ block0.x, block0.y }.rotate(track->getDirection());
-            return CoordsXYZ{ sequence0, origin->z + block0.z };
         }
 
         [[nodiscard]] TileElement* FindFirstPersonTrackOriginElement(
@@ -2923,6 +3189,8 @@ namespace OpenRCT2::Paint
                         continue;
                     observation.channelViews[channelIndex][rotation].add(
                         left + x, top + y);
+                    observation.channelSamples[channelIndex][rotation]
+                        .push_back({ left + x, top + y, pixel });
                 }
             }
         }
@@ -2955,6 +3223,62 @@ namespace OpenRCT2::Paint
                     collect(variant.streamedSurfaces);
                 }
             }
+            return result;
+        }
+
+        [[nodiscard]] uint64_t FirstPersonTrackArtworkFingerprint(
+            uint64_t groupKey)
+        {
+            std::vector<uint64_t> tokens;
+            for (const auto& [tileKey, cached] : _staticPaintCache)
+            {
+                (void)tileKey;
+                if (!cached.valid || cached.dirty)
+                    continue;
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                {
+                    const auto& variant = cached.rotations[rotation];
+                    if (!variant.valid)
+                        continue;
+                    const auto collect =
+                        [&](const std::vector<FirstPersonSurface>& surfaces) {
+                            for (const auto& surface : surfaces)
+                            {
+                                if (surface.reconstructionGroup != groupKey
+                                    || !surface.viewFacing
+                                    || !surface.image.HasValue())
+                                    continue;
+                                uint64_t token = 14695981039346656037ull;
+                                const auto extend = [&](uint64_t value) {
+                                    token ^= value;
+                                    token *= 1099511628211ull;
+                                };
+                                extend(rotation);
+                                extend(surface.image.GetIndex());
+                                extend(surface.image.HasPrimary() ? 1 : 0);
+                                extend(surface.image.HasSecondary() ? 1 : 0);
+                                extend(surface.image.HasTertiary() ? 1 : 0);
+                                extend(uint32_t(int32_t(std::lround(
+                                    surface.billboardLeft))));
+                                extend(uint32_t(int32_t(std::lround(
+                                    surface.billboardTop))));
+                                extend(uint32_t(std::lround(
+                                    surface.billboardWidth)));
+                                extend(uint32_t(std::lround(
+                                    surface.billboardHeight)));
+                                tokens.push_back(token);
+                            }
+                        };
+                    collect(variant.residentSurfaces);
+                    collect(variant.streamedSurfaces);
+                }
+            }
+            if (tokens.empty())
+                return 0;
+            std::sort(tokens.begin(), tokens.end());
+            uint64_t result = 14695981039346656037ull;
+            for (const auto token : tokens)
+                ExtendStableKey(result, token);
             return result;
         }
 
@@ -3018,9 +3342,12 @@ namespace OpenRCT2::Paint
                 uncoverTrackType(instance->track->getTrackType());
             if (!state.hasCandidate)
             {
+                // Source suitability is an asset property, not an observation
+                // order property. Keep trying unseen flat instances; the
+                // complete four-view fingerprint is negative-cached only after
+                // the observation has actually been inspected.
                 return baseType == TrackElemType::flat
-                    && !state.testedSourceGroups.contains(group.key)
-                    && state.sourceAttempts < 2;
+                    && !state.testedSourceGroups.contains(group.key);
             }
 
             const uint8_t kinds =
@@ -3053,6 +3380,8 @@ namespace OpenRCT2::Paint
 
             const auto observation =
                 CollectFirstPersonTrackArtworkObservation(group.key);
+            const uint64_t sourceFingerprint =
+                FirstPersonTrackArtworkFingerprint(group.key);
             const auto baseType =
                 uncoverTrackType(instance->track->getTrackType());
             if (!state.hasCandidate)
@@ -3062,11 +3391,19 @@ namespace OpenRCT2::Paint
                     return;
 
                 state.testedSourceGroups.insert(group.key);
+                if (sourceFingerprint == 0
+                    || state.unusableSourceFingerprints.contains(
+                        sourceFingerprint))
+                    return;
+
                 if (!FirstPersonTrackObservationHasCompleteChannel(
                         observation))
                 {
-                    if (++state.sourceAttempts >= 2)
-                        state.rejected = true;
+                    // No complete rail-colour/remap channel in this artwork is
+                    // absence of usable evidence, not evidence against the
+                    // TrackStyle. Cache only this artwork identity.
+                    state.unusableSourceFingerprints.insert(
+                        sourceFingerprint);
                     return;
                 }
 
@@ -3076,19 +3413,32 @@ namespace OpenRCT2::Paint
                         instance->groupAnchor);
                 if (!calibrated.valid)
                 {
-                    if (++state.sourceAttempts >= 2)
+                    state.unusableSourceFingerprints.insert(
+                        sourceFingerprint);
+                    state.contradictorySourceFingerprints.insert(
+                        sourceFingerprint);
+                    // A style-level negative result requires several genuinely
+                    // distinct complete source artworks to disagree with the
+                    // two-rail model. Repeated instances of one bad sprite do
+                    // not accumulate contradictory weight.
+                    if (state.contradictorySourceFingerprints.size() >= 4)
                         state.rejected = true;
                     return;
                 }
 
                 state.hasCandidate = true;
+                state.candidateSourceFingerprint = sourceFingerprint;
                 state.profile = calibrated.profile;
                 state.profile.verified = false;
+                state.holdoutKinds = 0;
+                state.passedHoldouts = 0;
+                state.testedHoldoutGroups.clear();
                 return;
             }
 
             const uint8_t kinds =
-                FirstPersonTrackCanonicalHoldoutKind(instance->track->getTrackType());
+                FirstPersonTrackCanonicalHoldoutKind(
+                    instance->track->getTrackType());
             if (kinds == 0
                 || state.testedHoldoutGroups.contains(group.key))
                 return;
@@ -3102,9 +3452,25 @@ namespace OpenRCT2::Paint
                     instance->groupAnchor, state.profile);
             if (!IsFirstPersonTrackHoldoutFitReliable(fit))
             {
-                state.rejected = true;
+                // This disproves the candidate profile, not the entire style.
+                // Negative-cache the flat artwork that produced the candidate
+                // so a different complete flat identity can still calibrate.
+                if (state.candidateSourceFingerprint != 0)
+                {
+                    state.unusableSourceFingerprints.insert(
+                        state.candidateSourceFingerprint);
+                    state.contradictorySourceFingerprints.insert(
+                        state.candidateSourceFingerprint);
+                }
+                WithdrawFirstPersonVerifiedTrackProfile(instance->style);
                 state.hasCandidate = false;
                 state.profile = {};
+                state.candidateSourceFingerprint = 0;
+                state.holdoutKinds = 0;
+                state.passedHoldouts = 0;
+                state.testedHoldoutGroups.clear();
+                if (state.contradictorySourceFingerprints.size() >= 4)
+                    state.rejected = true;
                 return;
             }
 
@@ -3119,6 +3485,10 @@ namespace OpenRCT2::Paint
                 && (state.holdoutKinds & kAllKinds) == kAllKinds)
             {
                 state.profile.verified = true;
+                PublishFirstPersonVerifiedTrackProfile(
+                    instance->style, state.profile,
+                    state.candidateSourceFingerprint,
+                    state.holdoutKinds, state.passedHoldouts);
             }
         }
 
@@ -3258,91 +3628,159 @@ namespace OpenRCT2::Paint
             applyCached(inserted->second);
         }
 
+        [[nodiscard]] uint8_t FirstPersonColourShade(
+            const Drawing::ColourShadeMap& shades, uint8_t shade)
+        {
+            switch (std::min<uint8_t>(shade, 11))
+            {
+                case 0: return static_cast<uint8_t>(shades.colour0);
+                case 1: return static_cast<uint8_t>(shades.colour1);
+                case 2: return static_cast<uint8_t>(shades.darkest);
+                case 3: return static_cast<uint8_t>(shades.darker);
+                case 4: return static_cast<uint8_t>(shades.dark);
+                case 5: return static_cast<uint8_t>(shades.midDark);
+                case 6: return static_cast<uint8_t>(shades.midLight);
+                case 7: return static_cast<uint8_t>(shades.light);
+                case 8: return static_cast<uint8_t>(shades.lighter);
+                case 9: return static_cast<uint8_t>(shades.lightest);
+                case 10: return static_cast<uint8_t>(shades.colour10);
+                default: return static_cast<uint8_t>(shades.colour11);
+            }
+        }
+
         [[nodiscard]] uint8_t FirstPersonRailColour(
-            const Ride& ride, const TrackElement& track, bool lighter)
+            const Ride& ride, const TrackElement& track,
+            const FirstPersonTrackRailProfile& profile, bool topFace)
         {
             const auto scheme = std::min<uint8_t>(
-                track.getColourScheme(), uint8_t(kNumRideColourSchemes - 1));
+                track.getColourScheme(),
+                uint8_t(kNumRideColourSchemes - 1));
+            const uint8_t materialValue = topFace
+                ? profile.topMaterialValue
+                : profile.sideMaterialValue;
+
+            if (profile.materialVerified)
+            {
+                const uint8_t railPaletteBit =
+                    FirstPersonTrackPixelChannelBit(
+                        FirstPersonTrackPixelChannel::trackRailPalette);
+                if ((profile.sourceChannelMask & railPaletteBit) != 0
+                    && materialValue >= static_cast<uint8_t>(
+                        Drawing::PaletteIndex::trackRails0)
+                    && materialValue <= static_cast<uint8_t>(
+                        Drawing::PaletteIndex::trackRails2))
+                {
+                    return materialValue;
+                }
+
+                Drawing::Colour colour =
+                    ride.trackColours[scheme].main;
+                if ((profile.sourceChannelMask
+                        & FirstPersonTrackPixelChannelBit(
+                            FirstPersonTrackPixelChannel::secondaryRemap))
+                    != 0)
+                {
+                    colour = ride.trackColours[scheme].additional;
+                }
+                else if ((profile.sourceChannelMask
+                            & FirstPersonTrackPixelChannelBit(
+                                FirstPersonTrackPixelChannel::tertiaryRemap))
+                    != 0)
+                {
+                    colour = ride.trackColours[scheme].supports;
+                }
+
+                if (Drawing::colourIsValid(colour)
+                    && materialValue <= 11)
+                {
+                    const uint8_t sampled =
+                        FirstPersonColourShade(
+                            Drawing::getColourMap(colour),
+                            materialValue);
+                    if (sampled != 0)
+                        return sampled;
+                }
+            }
+
             auto colour = ride.trackColours[scheme].main;
             if (!Drawing::colourIsValid(colour))
                 colour = Drawing::Colour::grey;
             const auto shades = Drawing::getColourMap(colour);
             uint8_t result = static_cast<uint8_t>(
-                lighter ? shades.midLight : shades.midDark);
+                topFace ? shades.midLight : shades.midDark);
             if (result == 0)
             {
                 result = static_cast<uint8_t>(
-                    lighter ? Drawing::PaletteIndex::trackRails2
-                            : Drawing::PaletteIndex::trackRails1);
+                    topFace
+                        ? Drawing::PaletteIndex::trackRails2
+                        : Drawing::PaletteIndex::trackRails1);
             }
             return result;
         }
 
         void AppendTrajectoryRailSegment(
             TrackTrajectoryCacheEntry& cached, uint64_t groupKey,
-            const FirstPersonTrackTrajectoryPoint& a,
-            const FirstPersonTrackTrajectoryPoint& b,
-            const FirstPersonTrackRailProfile& profile,
+            const FirstPersonRailProxySegment& rail,
             uint8_t topColour, uint8_t sideColour)
         {
-            const auto midpoint = Mul(Add(a.position, b.position), 0.5f);
-            const int32_t tileX = int32_t(std::floor(midpoint.x / float(kCoordsXYStep)));
-            const int32_t tileY = int32_t(std::floor(midpoint.y / float(kCoordsXYStep)));
-            const uint64_t gpuRegion = FirstPersonGpuRegionKey(tileX, tileY);
+            const auto midpoint = Mul(Add(rail.a, rail.b), 0.5f);
+            const int32_t tileX = int32_t(std::floor(
+                midpoint.x / float(kCoordsXYStep)));
+            const int32_t tileY = int32_t(std::floor(
+                midpoint.y / float(kCoordsXYStep)));
+            const uint64_t gpuRegion =
+                FirstPersonGpuRegionKey(tileX, tileY);
 
-            const auto emitFace = [&](const std::array<FirstPersonVec3, 4>& points,
-                                      uint8_t colour) {
-                FirstPersonSurface surface{};
-                surface.solidColour = colour;
-                surface.gpuRegion = gpuRegion;
-                surface.reconstructionGroup = groupKey;
-                EmitQuad(surface, { {
-                    { points[0], 0.0f, 0.0f },
-                    { points[1], 0.0f, 0.0f },
-                    { points[2], 0.0f, 0.0f },
-                    { points[3], 0.0f, 0.0f },
-                } });
-                cached.surfaces.emplace_back(std::move(surface));
-            };
+            const auto acrossA =
+                Mul(rail.basisA.right, rail.halfWidth);
+            const auto acrossB =
+                Mul(rail.basisB.right, rail.halfWidth);
+            const auto upA =
+                Mul(rail.basisA.up, rail.halfHeight);
+            const auto upB =
+                Mul(rail.basisB.up, rail.halfHeight);
 
-            for (const float gaugeSide : { -profile.halfGauge, profile.halfGauge })
-            {
-                const auto centreA = Add(
-                    Add(a.position, Mul(a.basis.right, gaugeSide)),
-                    Mul(a.basis.up, profile.verticalOffset));
-                const auto centreB = Add(
-                    Add(b.position, Mul(b.basis.right, gaugeSide)),
-                    Mul(b.basis.up, profile.verticalOffset));
-                const auto acrossA = Mul(a.basis.right, profile.halfWidth);
-                const auto acrossB = Mul(b.basis.right, profile.halfWidth);
-                const auto upA = Mul(a.basis.up, profile.halfHeight);
-                const auto upB = Mul(b.basis.up, profile.halfHeight);
+            const auto emitFace =
+                [&](const std::array<FirstPersonVec3, 4>& points,
+                    uint8_t colour) {
+                    FirstPersonSurface surface{};
+                    surface.solidColour = colour;
+                    surface.gpuRegion = gpuRegion;
+                    surface.reconstructionGroup = groupKey;
+                    EmitQuad(surface, { {
+                        { points[0], 0.0f, 0.0f },
+                        { points[1], 0.0f, 0.0f },
+                        { points[2], 0.0f, 0.0f },
+                        { points[3], 0.0f, 0.0f },
+                    } });
+                    cached.surfaces.emplace_back(
+                        std::move(surface));
+                };
 
-                emitFace({ {
-                    Add(Sub(centreA, acrossA), upA),
-                    Add(Add(centreA, acrossA), upA),
-                    Add(Add(centreB, acrossB), upB),
-                    Add(Sub(centreB, acrossB), upB),
-                } }, topColour);
-                emitFace({ {
-                    Sub(Sub(centreA, acrossA), upA),
-                    Sub(Sub(centreB, acrossB), upB),
-                    Sub(Add(centreB, acrossB), upB),
-                    Sub(Add(centreA, acrossA), upA),
-                } }, sideColour);
-                emitFace({ {
-                    Sub(Add(centreA, acrossA), upA),
-                    Sub(Add(centreB, acrossB), upB),
-                    Add(Add(centreB, acrossB), upB),
-                    Add(Add(centreA, acrossA), upA),
-                } }, sideColour);
-                emitFace({ {
-                    Sub(Sub(centreA, acrossA), upA),
-                    Add(Sub(centreA, acrossA), upA),
-                    Add(Sub(centreB, acrossB), upB),
-                    Sub(Sub(centreB, acrossB), upB),
-                } }, sideColour);
-            }
+            emitFace({ {
+                Add(Sub(rail.a, acrossA), upA),
+                Add(Add(rail.a, acrossA), upA),
+                Add(Add(rail.b, acrossB), upB),
+                Add(Sub(rail.b, acrossB), upB),
+            } }, topColour);
+            emitFace({ {
+                Sub(Sub(rail.a, acrossA), upA),
+                Sub(Sub(rail.b, acrossB), upB),
+                Sub(Add(rail.b, acrossB), upB),
+                Sub(Add(rail.a, acrossA), upA),
+            } }, sideColour);
+            emitFace({ {
+                Sub(Add(rail.a, acrossA), upA),
+                Sub(Add(rail.b, acrossB), upB),
+                Add(Add(rail.b, acrossB), upB),
+                Add(Add(rail.a, acrossA), upA),
+            } }, sideColour);
+            emitFace({ {
+                Sub(Sub(rail.a, acrossA), upA),
+                Add(Sub(rail.a, acrossA), upA),
+                Add(Sub(rail.b, acrossB), upB),
+                Sub(Sub(rail.b, acrossB), upB),
+            } }, sideColour);
         }
 
         void UpdateTrackTrajectoryBounds(TrackTrajectoryCacheEntry& cached)
@@ -3406,24 +3844,19 @@ namespace OpenRCT2::Paint
             result.sourceChannelMask = profile.sourceChannelMask;
             result.railSilhouettes = BuildFirstPersonTrackRailSilhouettes(
                 trajectory, groupAnchor, profile);
-            const uint8_t topColour = FirstPersonRailColour(ride, track, true);
-            const uint8_t sideColour = FirstPersonRailColour(ride, track, false);
+            const uint8_t topColour =
+                FirstPersonRailColour(ride, track, profile, true);
+            const uint8_t sideColour =
+                FirstPersonRailColour(ride, track, profile, false);
 
-            size_t previous = 0;
-            for (size_t i = 1; i < trajectory.points.size(); ++i)
+            const auto railProxies =
+                BuildFirstPersonRailProxySegments(
+                    trajectory, profile);
+            for (const auto& rail : railProxies)
             {
-                const auto& a = trajectory.points[previous];
-                const auto& b = trajectory.points[i];
-                const float distance = FirstPersonTrackTrajectoryPointDistance(a, b);
-                const bool turns = Dot(a.basis.forward, b.basis.forward) < 0.9914449f
-                    || Dot(a.basis.up, b.basis.up) < 0.9914449f;
-                const bool last = i + 1 == trajectory.points.size();
-                if (!last && distance < 3.0f && !turns)
-                    continue;
-                if (distance > 0.05f)
-                    AppendTrajectoryRailSegment(
-                        result, groupKey, a, b, profile, topColour, sideColour);
-                previous = i;
+                AppendTrajectoryRailSegment(
+                    result, groupKey, rail,
+                    topColour, sideColour);
             }
 
             if (const auto next = NextFirstPersonTrackTrajectory(
@@ -3434,9 +3867,29 @@ namespace OpenRCT2::Paint
                 if (gap <= 4.0f)
                 {
                     if (gap > 0.05f)
-                        AppendTrajectoryRailSegment(
-                            result, groupKey, trajectory.points.back(),
-                            next->points.front(), profile, topColour, sideColour);
+                    {
+                        for (const float gaugeSide :
+                            { -profile.halfGauge, profile.halfGauge })
+                        {
+                            const auto& a = trajectory.points.back();
+                            const auto& b = next->points.front();
+                            const FirstPersonRailProxySegment bridge{
+                                FirstPersonRailProxyCentre(
+                                    a, profile, gaugeSide),
+                                FirstPersonRailProxyCentre(
+                                    b, profile, gaugeSide),
+                                a.basis,
+                                b.basis,
+                                profile.halfWidth,
+                                profile.halfHeight,
+                                FirstPersonPhysicalProxyProvenance::
+                                    verifiedTrackArtwork,
+                            };
+                            AppendTrajectoryRailSegment(
+                                result, groupKey, bridge,
+                                topColour, sideColour);
+                        }
+                    }
                 }
                 else
                 {
@@ -4748,6 +5201,7 @@ namespace OpenRCT2::Paint
         _dynamicEntitySpatialCache = {};
         _trackTrajectoryCache.clear();
         _trackProfileCalibrations.clear();
+        ClearFirstPersonVerifiedTrackProfiles();
         _largeSceneryAssetModels.clear();
         _largeSceneryGeometryCache.clear();
         _largeSceneryGroupsByRegion.clear();

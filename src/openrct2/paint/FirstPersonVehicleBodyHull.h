@@ -21,6 +21,12 @@
 
 namespace OpenRCT2::Paint
 {
+    struct FirstPersonVehicleBodyTextureView
+    {
+        uint8_t imageDirection{};
+        ImageIndex image{};
+    };
+
     struct FirstPersonVehicleBodyHull
     {
         bool valid = false;
@@ -32,6 +38,10 @@ namespace OpenRCT2::Paint
         uint8_t sizeRight{};
         uint8_t sizeUp{};
         std::vector<uint8_t> occupied;
+        // Source views that independently supported the visual hull. Retain
+        // their image identities so accepted geometry can keep native livery
+        // rather than collapsing to flat replacement colours.
+        std::vector<FirstPersonVehicleBodyTextureView> textureViews;
         float minimumCandidateCoverage{};
         float minimumObservedCoverage{};
         int32_t maximumEdgeError{};
@@ -247,6 +257,13 @@ namespace OpenRCT2::Paint
         // more angular evidence than a four-view scenery reconstruction.
         if (views.size() < 16)
             return result;
+        result.textureViews.reserve(views.size());
+        for (const auto& view : views)
+        {
+            result.textureViews.push_back({
+                view.imageDirection, ImageIndex(view.image)
+            });
+        }
 
         std::vector<const FirstPersonVehicleBodyView*> construction;
         std::vector<const FirstPersonVehicleBodyView*> validation;

@@ -18,6 +18,7 @@
 #include <limits>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 namespace OpenRCT2::Paint
 {
@@ -126,14 +127,14 @@ namespace OpenRCT2::Paint
 
         const float width = float(maxX - minX + 1);
         const float height = float(maxY - minY + 1);
-        // The remap region is the shirt/upper body. Infer the eye above its top
-        // from that rider-specific extent, not from the complete vehicle sprite.
-        constexpr float kEyeAboveShirtFraction = 0.35f;
+        // This is deliberately only an upper-body landmark. Do not turn the
+        // shirt extent into an eye with a shared anatomical magic constant:
+        // passenger calibration below independently extracts the opaque head.
         observation.valid = true;
         observation.x =
             float(g1.xOffset) + 0.5f * float(minX + maxX + 1);
         observation.y =
-            float(g1.yOffset + minY) - kEyeAboveShirtFraction * height;
+            float(g1.yOffset) + 0.5f * float(minY + maxY + 1);
         observation.width = width;
         observation.height = height;
         return true;
@@ -235,6 +236,231 @@ namespace OpenRCT2::Paint
         observation.y = float(g1.yOffset) + float(sumY / double(count));
         observation.width = float(maxX - minX + 1);
         observation.height = float(maxY - minY + 1);
+        return true;
+    }
+
+    [[nodiscard]] inline bool ExtractFirstPersonRiderHeadObservation(
+        const G1Element& g1, bool secondary,
+        FirstPersonRiderChannelObservation& observation)
+    {
+        observation = {};
+        FirstPersonRiderChannelObservation shirt{};
+        if (!ExtractFirstPersonRiderChannelObservation(
+                g1, secondary, shirt))
+            return false;
+
+        const int32_t shirtMinX = int32_t(std::floor(
+            shirt.x - float(g1.xOffset) - shirt.width * 0.5f));
+        const int32_t shirtMaxX = int32_t(std::ceil(
+            shirt.x - float(g1.xOffset) + shirt.width * 0.5f)) - 1;
+        const int32_t shirtMinY = int32_t(std::floor(
+            shirt.y - float(g1.yOffset) - shirt.height * 0.5f));
+        const int32_t searchPadX =
+            std::max(3, int32_t(std::ceil(shirt.width * 0.75f)));
+        const int32_t searchHeight =
+            std::max(5, int32_t(std::ceil(shirt.height * 1.75f)));
+        const int32_t minX =
+            std::max(0, shirtMinX - searchPadX);
+        const int32_t maxX =
+            std::min(g1.width - 1, shirtMaxX + searchPadX);
+        const int32_t minY =
+            std::max(0, shirtMinY - searchHeight);
+        const int32_t maxY =
+            std::min(g1.height - 1, shirtMinY + 1);
+        if (minX > maxX || minY > maxY)
+            return false;
+
+        const size_t pixelCount =
+            size_t(g1.width) * size_t(g1.height);
+        std::vector<uint8_t> opaque(pixelCount, 0);
+        std::vector<uint8_t> sourcePixels(pixelCount, 0);
+        std::vector<uint8_t> selectedShirt(pixelCount, 0);
+        const auto acceptPixel = [&](uint8_t pixel, int32_t x, int32_t y) {
+            if (x < 0 || y < 0 || x >= g1.width || y >= g1.height
+                || pixel == 0)
+                return;
+            const size_t index =
+                size_t(y) * size_t(g1.width) + size_t(x);
+            opaque[index] = 1;
+            sourcePixels[index] = pixel;
+            const bool selected = secondary
+                ? FirstPersonRiderPixelUsesSecondaryRemap(pixel)
+                : FirstPersonRiderPixelUsesPrimaryRemap(pixel);
+            if (selected)
+                selectedShirt[index] = 1;
+        };
+
+        if (g1.flags.has(G1Flag::hasRLECompression))
+        {
+            for (int32_t y = 0; y < g1.height; ++y)
+            {
+                const uint16_t lineOffset =
+                    uint16_t(g1.offset[y * 2])
+                    | (uint16_t(g1.offset[y * 2 + 1]) << 8);
+                const uint8_t* run = g1.offset + lineOffset;
+                bool endOfLine = false;
+                size_t guard = 0;
+                while (!endOfLine && guard++ < 256)
+                {
+                    uint8_t length = *run++;
+                    const int32_t x = *run++;
+                    endOfLine = (length & 0x80u) != 0;
+                    length &= 0x7Fu;
+                    for (uint8_t n = 0; n < length; ++n)
+                        acceptPixel(run[n], x + n, y);
+                    run += length;
+                }
+                if (!endOfLine)
+                    return false;
+            }
+        }
+        else
+        {
+            const bool transparent =
+                g1.flags.has(G1Flag::hasTransparency);
+            for (int32_t y = 0; y < g1.height; ++y)
+            for (int32_t x = 0; x < g1.width; ++x)
+            {
+                const uint8_t pixel = g1.offset[
+                    size_t(y) * size_t(g1.width) + size_t(x)];
+                if (!transparent || pixel != 0)
+                    acceptPixel(pixel, x, y);
+            }
+        }
+
+        // Remove both riders' shirt/remap pixels from head candidates. The
+        // selected shirt is used only to define where its head must attach.
+        std::vector<uint8_t> candidate(pixelCount, 0);
+        for (int32_t y = minY; y <= maxY; ++y)
+        for (int32_t x = minX; x <= maxX; ++x)
+        {
+            const size_t index =
+                size_t(y) * size_t(g1.width) + size_t(x);
+            if (!opaque[index])
+                continue;
+            const uint8_t pixel = sourcePixels[index];
+            if (FirstPersonRiderPixelUsesPrimaryRemap(pixel)
+                || FirstPersonRiderPixelUsesSecondaryRemap(pixel))
+                continue;
+            candidate[index] = selectedShirt[index] ? 0 : 1;
+        }
+
+        // For RLE we do not retain source palette values above. Remove selected
+        // shirt cells directly and reject components whose vertical extent lies
+        // predominantly below the shirt top; the search window is otherwise
+        // intentionally tight around this rider.
+        std::vector<uint8_t> visited(pixelCount, 0);
+        struct Component
+        {
+            size_t count = 0;
+            double sumX = 0.0;
+            double sumY = 0.0;
+            int32_t minX = 0;
+            int32_t maxX = -1;
+            int32_t minY = 0;
+            int32_t maxY = -1;
+        };
+        std::optional<Component> best;
+        float bestScore = -std::numeric_limits<float>::infinity();
+        const float shirtCentreX =
+            shirt.x - float(g1.xOffset);
+
+        for (int32_t seedY = minY; seedY <= maxY; ++seedY)
+        for (int32_t seedX = minX; seedX <= maxX; ++seedX)
+        {
+            const size_t seedIndex =
+                size_t(seedY) * size_t(g1.width) + size_t(seedX);
+            if (!candidate[seedIndex] || visited[seedIndex])
+                continue;
+
+            Component component{};
+            component.minX = component.maxX = seedX;
+            component.minY = component.maxY = seedY;
+            std::vector<CoordsXY> stack;
+            stack.push_back({ seedX, seedY });
+            visited[seedIndex] = 1;
+            while (!stack.empty())
+            {
+                const auto point = stack.back();
+                stack.pop_back();
+                ++component.count;
+                component.sumX += point.x;
+                component.sumY += point.y;
+                component.minX =
+                    std::min(component.minX, point.x);
+                component.maxX =
+                    std::max(component.maxX, point.x);
+                component.minY =
+                    std::min(component.minY, point.y);
+                component.maxY =
+                    std::max(component.maxY, point.y);
+
+                for (int32_t dy = -1; dy <= 1; ++dy)
+                for (int32_t dx = -1; dx <= 1; ++dx)
+                {
+                    if (dx == 0 && dy == 0)
+                        continue;
+                    const int32_t nx = point.x + dx;
+                    const int32_t ny = point.y + dy;
+                    if (nx < minX || nx > maxX
+                        || ny < minY || ny > maxY)
+                        continue;
+                    const size_t ni =
+                        size_t(ny) * size_t(g1.width)
+                        + size_t(nx);
+                    if (!candidate[ni] || visited[ni])
+                        continue;
+                    visited[ni] = 1;
+                    stack.push_back({ nx, ny });
+                }
+            }
+
+            if (component.count < 2
+                || component.maxY > shirtMinY + 1)
+                continue;
+            const float centreX =
+                float(component.sumX / double(component.count));
+            const float horizontalDistance =
+                std::abs(centreX - shirtCentreX);
+            const float verticalGap =
+                float(std::max(0, shirtMinY - component.maxY - 1));
+            const float overlap =
+                float(std::max(
+                    0,
+                    std::min(component.maxX, shirtMaxX)
+                        - std::max(component.minX, shirtMinX) + 1));
+            const float score =
+                3.0f * overlap
+                - 1.5f * horizontalDistance
+                - 2.0f * verticalGap
+                + 0.2f * float(component.count);
+            if (!best.has_value() || score > bestScore)
+            {
+                best = component;
+                bestScore = score;
+            }
+        }
+
+        if (!best.has_value())
+            return false;
+        const float headWidth =
+            float(best->maxX - best->minX + 1);
+        const float headHeight =
+            float(best->maxY - best->minY + 1);
+        if (headWidth < 1.0f || headHeight < 1.0f
+            || headWidth > shirt.width * 2.0f
+            || headHeight > shirt.height * 2.5f)
+            return false;
+
+        observation.valid = true;
+        observation.x =
+            float(g1.xOffset)
+            + float(best->sumX / double(best->count));
+        observation.y =
+            float(g1.yOffset)
+            + float(best->sumY / double(best->count));
+        observation.width = headWidth;
+        observation.height = headHeight;
         return true;
     }
 
@@ -423,53 +649,97 @@ namespace OpenRCT2::Paint
         if (row >= std::min<uint8_t>(entry.numSeatingRows, 8))
             return std::nullopt;
         const bool secondary = (seatIndex & 1u) != 0;
-        constexpr std::array<int32_t, 4> kImageDirections{ 0, 8, 16, 24 };
+        constexpr std::array<int32_t, 4>
+            kImageDirections{ 0, 8, 16, 24 };
 
-        std::array<FirstPersonRiderChannelObservation, 4> views{};
-        float meanHeight = 0.0f;
+        std::array<FirstPersonRiderChannelObservation, 4>
+            headViews{};
+        std::array<FirstPersonRiderChannelObservation, 4>
+            shirtViews{};
+        float meanHeadExtent = 0.0f;
         for (uint8_t direction = 0; direction < 4; ++direction)
         {
             uint32_t bodyImage = entry.getSpriteOffset(
-                SpriteGroupType::slopeFlat, kImageDirections[direction], 0);
-            if (entry.flags.has(CarEntryFlag::hasVehicleAnimation))
+                SpriteGroupType::slopeFlat,
+                kImageDirections[direction], 0);
+            if (entry.flags.has(
+                    CarEntryFlag::hasVehicleAnimation))
                 bodyImage += animationFrame;
             uint32_t riderImage =
-                bodyImage + entry.numCarImages * uint32_t(row + 1);
+                bodyImage
+                + entry.numCarImages * uint32_t(row + 1);
             if (row == 0
-                && entry.flags.has(CarEntryFlag::hasRiderAnimation))
+                && entry.flags.has(
+                    CarEntryFlag::hasRiderAnimation))
             {
                 riderImage +=
-                    entry.numCarImages * uint32_t(animationFrame);
+                    entry.numCarImages
+                    * uint32_t(animationFrame);
             }
+
             const auto* g1 = GfxGetG1Element(riderImage);
             constexpr size_t kMaxRiderSpritePixels = 65536;
-            if (g1 == nullptr || g1->width <= 0 || g1->height <= 0
+            if (g1 == nullptr || g1->width <= 0
+                || g1->height <= 0
                 || size_t(g1->width) * size_t(g1->height)
                     > kMaxRiderSpritePixels
                 || !ExtractFirstPersonRiderChannelObservation(
-                    *g1, secondary, views[direction]))
+                    *g1, secondary, shirtViews[direction])
+                || !ExtractFirstPersonRiderHeadObservation(
+                    *g1, secondary, headViews[direction]))
                 return std::nullopt;
-            meanHeight += views[direction].height * 0.25f;
+            meanHeadExtent +=
+                0.125f
+                * (headViews[direction].width
+                    + headViews[direction].height);
         }
 
-        float rmse = std::numeric_limits<float>::infinity();
-        const auto recovered =
-            RecoverFirstPersonLocalPointFromFourViews(views, &rmse);
-        if (!recovered.has_value() || rmse > 2.5f
-            || std::abs(recovered->x) > 64.0f
-            || std::abs(recovered->y) > 64.0f
-            || recovered->z < -32.0f || recovered->z > 64.0f)
+        float headRmse = std::numeric_limits<float>::infinity();
+        float shirtRmse =
+            std::numeric_limits<float>::infinity();
+        const auto recoveredHead =
+            RecoverFirstPersonLocalPointFromFourViews(
+                headViews, &headRmse);
+        const auto recoveredShirt =
+            RecoverFirstPersonLocalPointFromFourViews(
+                shirtViews, &shirtRmse);
+        if (!recoveredHead.has_value()
+            || !recoveredShirt.has_value()
+            || headRmse > 2.5f || shirtRmse > 2.5f)
+            return std::nullopt;
+
+        const float dx =
+            recoveredHead->x - recoveredShirt->x;
+        const float dy =
+            recoveredHead->y - recoveredShirt->y;
+        const float dz =
+            recoveredHead->z - recoveredShirt->z;
+        // Independent anatomical check: the connected opaque head recovered
+        // from all four views must sit above and close to the independently
+        // recovered shirt marker. Projection consistency alone cannot satisfy
+        // this if the selected opaque component belongs to the other rider or
+        // to vehicle artwork.
+        if (dz < 0.5f || dz > 20.0f
+            || std::hypot(dx, dy) > 10.0f
+            || std::abs(recoveredHead->x) > 64.0f
+            || std::abs(recoveredHead->y) > 64.0f
+            || recoveredHead->z < -32.0f
+            || recoveredHead->z > 64.0f)
             return std::nullopt;
 
         FirstPersonPassengerAssetSeat result{};
         result.valid = true;
-        // Native yaw 0 has forward=-X and right=-Y.
+        // Native yaw 0 has forward=-X and right=-Y. The camera now follows
+        // the recovered head centroid; no shirt->eye offset is assumed.
         result.localEye = {
-            -recovered->x, -recovered->y, recovered->z
+            -recoveredHead->x,
+            -recoveredHead->y,
+            recoveredHead->z,
         };
-        result.reprojectionRmse = rmse;
+        result.reprojectionRmse = headRmse;
         result.uncertainty =
-            rmse + std::max(1.0f, 0.15f * meanHeight);
+            headRmse + shirtRmse
+            + std::max(0.75f, 0.10f * meanHeadExtent);
         return result;
     }
 
