@@ -126,7 +126,10 @@ namespace OpenRCT2::Paint
                     FirstPersonTrackValidationKind::slope);
             }
 
-            if (std::abs(point.basis.up.z) < 0.985f)
+            // Pitch tilts the up vector too, so it is not bank evidence.
+            // Roll is the component that lifts the local right axis out of the
+            // horizontal plane.
+            if (std::abs(point.basis.right.z) > 0.08f)
             {
                 result |= static_cast<uint8_t>(
                     FirstPersonTrackValidationKind::bank);

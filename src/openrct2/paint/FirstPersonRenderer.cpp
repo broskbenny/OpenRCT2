@@ -2958,6 +2958,48 @@ namespace OpenRCT2::Paint
             return result;
         }
 
+        [[nodiscard]] uint8_t FirstPersonTrackCanonicalHoldoutKind(
+            TrackElemType trackType)
+        {
+            // Use deliberately ordinary held-outs. Special elements can add
+            // decorative geometry or radically different sprite composition,
+            // which is useful game art but poor evidence for a rail section.
+            switch (uncoverTrackType(trackType))
+            {
+                case TrackElemType::leftQuarterTurn5Tiles:
+                case TrackElemType::rightQuarterTurn5Tiles:
+                case TrackElemType::leftQuarterTurn3Tiles:
+                case TrackElemType::rightQuarterTurn3Tiles:
+                case TrackElemType::leftQuarterTurn1Tile:
+                case TrackElemType::rightQuarterTurn1Tile:
+                case TrackElemType::sBendLeft:
+                case TrackElemType::sBendRight:
+                    return static_cast<uint8_t>(
+                        FirstPersonTrackValidationKind::curve);
+
+                case TrackElemType::up25:
+                case TrackElemType::down25:
+                case TrackElemType::flatToUp25:
+                case TrackElemType::up25ToFlat:
+                case TrackElemType::flatToDown25:
+                case TrackElemType::down25ToFlat:
+                    return static_cast<uint8_t>(
+                        FirstPersonTrackValidationKind::slope);
+
+                case TrackElemType::leftBank:
+                case TrackElemType::rightBank:
+                case TrackElemType::flatToLeftBank:
+                case TrackElemType::flatToRightBank:
+                case TrackElemType::leftBankToFlat:
+                case TrackElemType::rightBankToFlat:
+                    return static_cast<uint8_t>(
+                        FirstPersonTrackValidationKind::bank);
+
+                default:
+                    return 0;
+            }
+        }
+
         [[nodiscard]] bool FirstPersonTrackGroupNeedsCalibrationViews(
             const ReconstructionGroupInfo& group)
         {
@@ -2982,7 +3024,7 @@ namespace OpenRCT2::Paint
             }
 
             const uint8_t kinds =
-                FirstPersonTrackValidationKinds(instance->trajectory);
+                FirstPersonTrackCanonicalHoldoutKind(instance->track->getTrackType());
             if (kinds == 0
                 || state.testedHoldoutGroups.contains(group.key))
                 return false;
@@ -3046,7 +3088,7 @@ namespace OpenRCT2::Paint
             }
 
             const uint8_t kinds =
-                FirstPersonTrackValidationKinds(instance->trajectory);
+                FirstPersonTrackCanonicalHoldoutKind(instance->track->getTrackType());
             if (kinds == 0
                 || state.testedHoldoutGroups.contains(group.key))
                 return;
