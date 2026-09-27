@@ -15,9 +15,68 @@
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace OpenRCT2::Paint
 {
+    struct FirstPersonVerticalInterval
+    {
+        int32_t low{};
+        int32_t high{};
+    };
+
+    [[nodiscard]] inline std::vector<FirstPersonVerticalInterval>
+        SubtractFirstPersonVerticalCoverage(
+            FirstPersonVerticalInterval source,
+            std::vector<FirstPersonVerticalInterval> coverage)
+    {
+        std::vector<FirstPersonVerticalInterval> result;
+        if (source.high <= source.low)
+            return result;
+
+        for (auto& interval : coverage)
+        {
+            interval.low = std::max(interval.low, source.low);
+            interval.high = std::min(interval.high, source.high);
+        }
+        coverage.erase(
+            std::remove_if(
+                coverage.begin(), coverage.end(),
+                [](const auto& interval) {
+                    return interval.high <= interval.low;
+                }),
+            coverage.end());
+        std::sort(
+            coverage.begin(), coverage.end(),
+            [](const auto& a, const auto& b) {
+                return a.low < b.low
+                    || (a.low == b.low && a.high < b.high);
+            });
+
+        int32_t cursor = source.low;
+        for (const auto& interval : coverage)
+        {
+            if (interval.low > cursor)
+                result.push_back({ cursor, interval.low });
+            cursor = std::max(cursor, interval.high);
+            if (cursor >= source.high)
+                break;
+        }
+        if (cursor < source.high)
+            result.push_back({ cursor, source.high });
+        return result;
+    }
+
+    [[nodiscard]] inline bool FirstPersonVerticalPointCoveredAbove(
+        int32_t z, const std::vector<FirstPersonVerticalInterval>& coverage)
+    {
+        return std::any_of(
+            coverage.begin(), coverage.end(),
+            [z](const auto& interval) {
+                return interval.low <= z && interval.high > z;
+            });
+    }
+
     [[nodiscard]] constexpr CoordsXY FirstPersonLargeSceneryPlacedPoint(
         CoordsXY tileOffset, CoordsXY assetPoint, uint8_t objectDirection)
     {

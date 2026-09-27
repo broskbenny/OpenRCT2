@@ -7,6 +7,7 @@
 #include "FirstPersonMath.h"
 #include "FirstPersonPassengerAssetCalibration.h"
 #include "FirstPersonPeriodicPassengerMotion.h"
+#include "FirstPersonSwingAssetCalibration.h"
 #include "../entity/Yaw.hpp"
 #include "../ride/Angles.h"
 #include "../ride/CarEntry.h"
@@ -170,223 +171,6 @@ namespace OpenRCT2::Paint
         };
     }
 
-    struct FirstPersonSwingCalibration
-    {
-        bool valid = false;
-        uint8_t pairCount = 0;
-        std::array<float, 7> positiveAngles{};
-        float pivotLength = 0.0f;
-        float angularUncertainty = 0.0f;
-    };
-
-    struct FirstPersonSpriteMarker
-    {
-        bool valid = false;
-        float x{};
-        float y{};
-    };
-
-    [[nodiscard]] inline FirstPersonSpriteMarker FirstPersonSpriteMarkerFromG1(
-        const G1Element* g1)
-    {
-        if (g1 == nullptr || g1->width <= 0 || g1->height <= 0
-            || g1->width > 512 || g1->height > 512)
-            return {};
-        return {
-            true,
-            float(g1->xOffset) + 0.5f * float(g1->width),
-            float(g1->yOffset) + 0.72f * float(g1->height),
-        };
-    }
-
-    [[nodiscard]] inline uint8_t FirstPersonSwingPairCount(
-        const CarEntry& entry)
-    {
-        if (!entry.flags.has(CarEntryFlag::hasSwinging))
-            return 0;
-        if (entry.flags.hasAll(
-                CarEntryFlag::useSuspendedSwing,
-                CarEntryFlag::useSlideSwing))
-            return 6;
-        if (entry.flags.hasAny(
-                CarEntryFlag::useSuspendedSwing,
-                CarEntryFlag::useSlideSwing))
-            return 3;
-        return entry.flags.has(CarEntryFlag::useWoodenWildMouseSwing)
-            ? 1 : 2;
-    }
-
-    [[nodiscard]] inline FirstPersonSwingCalibration
-        BuildFirstPersonSwingCalibration(const CarEntry& entry)
-    {
-        FirstPersonSwingCalibration result{};
-        if (!entry.flags.has(CarEntryFlag::hasSwinging)
-            || !entry.groupEnabled(SpriteGroupType::slopeFlat)
-            || entry.flags.has(CarEntryFlag::hasVehicleAnimation))
-            return result;
-
-        const uint8_t pairCount = FirstPersonSwingPairCount(entry);
-        if (pairCount == 0 || pairCount > 6)
-            return result;
-        const uint8_t frameCount = uint8_t(1 + pairCount * 2);
-
-        std::array<std::array<FirstPersonSpriteMarker, 13>, 2> views{};
-        for (size_t view = 0; view < views.size(); ++view)
-        {
-            const int32_t imageDirection = view == 0 ? 0 : 8;
-            const int32_t base =
-                entry.getSpriteOffset(
-                    SpriteGroupType::slopeFlat, imageDirection, 0);
-            for (uint8_t frame = 0; frame < frameCount; ++frame)
-            {
-                views[view][frame] =
-                    FirstPersonSpriteMarkerFromG1(
-                        GfxGetG1Element(base + frame));
-                if (!views[view][frame].valid)
-                    return result;
-            }
-        }
-
-        std::array<float, 6> pairAngles{};
-        std::array<float, 6> pairPivots{};
-        float uncertainty = 0.0f;
-        for (uint8_t level = 0; level < pairCount; ++level)
-        {
-            const uint8_t negativeFrame = uint8_t(1 + level * 2);
-            const uint8_t positiveFrame = uint8_t(2 + level * 2);
-            std::array<float, 2> viewAngles{};
-            std::array<float, 2> viewPivots{};
-            for (size_t view = 0; view < views.size(); ++view)
-            {
-                const auto& centre = views[view][0];
-                const auto& negative = views[view][negativeFrame];
-                const auto& positive = views[view][positiveFrame];
-                const float midpointX =
-                    0.5f * (negative.x + positive.x);
-                const float lateral =
-                    0.5f * std::abs(positive.x - negative.x);
-                const float rise =
-                    centre.y - 0.5f * (negative.y + positive.y);
-                if (std::abs(midpointX - centre.x) > 4.0f
-                    || lateral < 0.5f || rise < -1.0f)
-                    return result;
-
-                const float angle =
-                    2.0f * std::atan2(
-                        std::max(rise, 0.25f), lateral);
-                if (!(angle > 0.0f) || angle > 1.55f)
-                    return result;
-                const float pivot =
-                    lateral / std::max(std::sin(angle), 0.05f);
-                viewAngles[view] = angle;
-                viewPivots[view] = pivot;
-            }
-            pairAngles[level] =
-                0.5f * (viewAngles[0] + viewAngles[1]);
-            pairPivots[level] =
-                0.5f * (viewPivots[0] + viewPivots[1]);
-            uncertainty = std::max(
-                uncertainty,
-                std::abs(viewAngles[0] - viewAngles[1]));
-            if (level > 0
-                && pairAngles[level] + 0.05f < pairAngles[level - 1])
-                return result;
-        }
-
-        result.pairCount = pairCount;
-        result.positiveAngles[0] = 0.0f;
-        float pivotSum = 0.0f;
-        for (uint8_t level = 0; level < pairCount; ++level)
-        {
-            result.positiveAngles[level + 1] = pairAngles[level];
-            pivotSum += pairPivots[level];
-        }
-        result.pivotLength = pivotSum / float(pairCount);
-
-        float pivotSpread = 0.0f;
-        for (uint8_t level = 0; level < pairCount; ++level)
-        {
-            pivotSpread = std::max(
-                pivotSpread,
-                std::abs(pairPivots[level] - result.pivotLength));
-        }
-        result.angularUncertainty =
-            uncertainty
-            + pivotSpread / std::max(result.pivotLength, 1.0f);
-        result.valid = std::isfinite(result.pivotLength)
-            && result.pivotLength >= 2.0f
-            && result.pivotLength <= 128.0f
-            && result.angularUncertainty <= 0.45f;
-        return result;
-    }
-
-    [[nodiscard]] inline const FirstPersonSwingCalibration*
-        GetFirstPersonSwingCalibration(const CarEntry& entry)
-    {
-        struct CacheEntry
-        {
-            const uint8_t* sourceIdentity = nullptr;
-            FirstPersonSwingCalibration calibration{};
-        };
-        static std::unordered_map<const CarEntry*, CacheEntry> cache;
-
-        if (!entry.groupEnabled(SpriteGroupType::slopeFlat))
-            return nullptr;
-        const int32_t base =
-            entry.getSpriteOffset(SpriteGroupType::slopeFlat, 0, 0);
-        const auto* first = GfxGetG1Element(base);
-        if (first == nullptr || first->offset == nullptr)
-            return nullptr;
-
-        auto& cached = cache[&entry];
-        if (cached.sourceIdentity != first->offset)
-        {
-            cached.sourceIdentity = first->offset;
-            cached.calibration = BuildFirstPersonSwingCalibration(entry);
-        }
-        return cached.calibration.valid ? &cached.calibration : nullptr;
-    }
-
-    [[nodiscard]] inline float FirstPersonSwingAngleForPosition(
-        const FirstPersonSwingCalibration& calibration,
-        float swingPosition)
-    {
-        const float sign = swingPosition < 0.0f ? -1.0f : 1.0f;
-        const float position = std::abs(swingPosition);
-        // Interpolate through centres derived from the SAME thresholds
-        // Vehicle::UpdateSwingingCar() uses to select SwingSprite.
-        if (calibration.pairCount == 0)
-            return 0.0f;
-
-        const uint8_t last =
-            std::min<uint8_t>(calibration.pairCount, 6);
-        const float lastCentre =
-            VehicleSwingPositiveBandCentre(last);
-        if (position >= lastCentre)
-            return sign * calibration.positiveAngles[last];
-
-        uint8_t upper = 1;
-        while (upper < last
-            && position > VehicleSwingPositiveBandCentre(upper))
-            ++upper;
-        const uint8_t lower = upper - 1;
-        const float lowerCentre =
-            VehicleSwingPositiveBandCentre(lower);
-        const float upperCentre =
-            VehicleSwingPositiveBandCentre(upper);
-        const float span = upperCentre - lowerCentre;
-        const float alpha = span > 0.0f
-            ? std::clamp(
-                (position - lowerCentre) / span,
-                0.0f, 1.0f)
-            : 0.0f;
-        const float angle =
-            calibration.positiveAngles[lower]
-            + (calibration.positiveAngles[upper]
-                - calibration.positiveAngles[lower]) * alpha;
-        return sign * angle;
-    }
-
     [[nodiscard]] constexpr int16_t FirstPersonMultiDimensionAnimationFrame(
         int16_t seatRotation, int16_t animationFrames)
     {
@@ -428,9 +212,14 @@ namespace OpenRCT2::Paint
     struct FirstPersonCarriageTransform
     {
         FirstPersonBasis basis{};
+        // When an independently rotating seat has a known orientation but no
+        // calibrated pivot, keep the passenger at the pre-seat-rotation
+        // position while rotating only their orientation.
+        FirstPersonBasis positionBasis{};
         FirstPersonVec3 originOffset{};
         float swingAngle = 0.0f;
         float seatAngle = 0.0f;
+        bool orientationOnlySeatRotation = false;
     };
 
     [[nodiscard]] inline FirstPersonCarriageTransform
@@ -458,30 +247,45 @@ namespace OpenRCT2::Paint
                 result.swingAngle =
                     FirstPersonSwingAngleForPosition(
                         *calibration, swingPosition);
-                const float lateral =
-                    calibration->pivotLength * std::sin(result.swingAngle);
-                const float rise =
-                    calibration->pivotLength
-                    * (1.0f - std::cos(result.swingAngle));
-                result.originOffset = {
-                    trackBasis.right.x * lateral + trackBasis.up.x * rise,
-                    trackBasis.right.y * lateral + trackBasis.up.y * rise,
-                    trackBasis.right.z * lateral + trackBasis.up.z * rise,
-                };
-                trackBasis =
+                const auto chassisBasis = trackBasis;
+                const auto swingBasis =
                     FirstPersonRotateLocalRoll(
-                        trackBasis, result.swingAngle);
+                        chassisBasis, result.swingAngle);
+                const auto& pivot = calibration->pivotLocal;
+                const FirstPersonVec3 before{
+                    chassisBasis.forward.x * pivot.x
+                        + chassisBasis.right.x * pivot.y
+                        + chassisBasis.up.x * pivot.z,
+                    chassisBasis.forward.y * pivot.x
+                        + chassisBasis.right.y * pivot.y
+                        + chassisBasis.up.y * pivot.z,
+                    chassisBasis.forward.z * pivot.x
+                        + chassisBasis.right.z * pivot.y
+                        + chassisBasis.up.z * pivot.z,
+                };
+                const FirstPersonVec3 after{
+                    swingBasis.forward.x * pivot.x
+                        + swingBasis.right.x * pivot.y
+                        + swingBasis.up.x * pivot.z,
+                    swingBasis.forward.y * pivot.x
+                        + swingBasis.right.y * pivot.y
+                        + swingBasis.up.y * pivot.z,
+                    swingBasis.forward.z * pivot.x
+                        + swingBasis.right.z * pivot.y
+                        + swingBasis.up.z * pivot.z,
+                };
+                result.originOffset.x += before.x - after.x;
+                result.originOffset.y += before.y - after.y;
+                result.originOffset.z += before.z - after.z;
+                trackBasis = swingBasis;
             }
         }
 
+        result.positionBasis = trackBasis;
         if (entry != nullptr
             && entry->animation == CarEntryAnimation::multiDimension
             && entry->animationFrames > 0)
         {
-            // Multi-dimension animation frames are the seat's independent
-            // rotation around the car-local right axis. seat_rotation=4 is the
-            // neutral native frame. Rider-overlay motion across the full frame
-            // cycle determines winding and, when reliable, the physical pivot.
             const auto* artwork =
                 GetFirstPersonMultiDimensionArtworkCalibration(*entry);
             const float physicalAngle = artwork != nullptr
@@ -520,6 +324,13 @@ namespace OpenRCT2::Paint
                 result.originOffset.x += before.x - after.x;
                 result.originOffset.y += before.y - after.y;
                 result.originOffset.z += before.z - after.z;
+            }
+            else
+            {
+                // No pivot evidence is not evidence that the pivot is the car
+                // origin. Rotate orientation only; passenger translation uses
+                // positionBasis below and therefore stays at the neutral point.
+                result.orientationOnlySeatRotation = true;
             }
             trackBasis = seatBasis;
         }
@@ -711,6 +522,43 @@ namespace OpenRCT2::Paint
         return pose;
     }
 
+    [[nodiscard]] inline FirstPersonVec3
+        FirstPersonPassengerEyeForCarriage(
+            FirstPersonVec3 transformedOrigin,
+            const FirstPersonCarriageTransform& carriage,
+            FirstPersonVec3 localEyeOffset,
+            bool rideSpecificTransform = false)
+    {
+        const auto& positionBasis =
+            carriage.orientationOnlySeatRotation
+                && !rideSpecificTransform
+            ? carriage.positionBasis : carriage.basis;
+        return FirstPersonPassengerEye(
+            transformedOrigin, positionBasis, localEyeOffset);
+    }
+
+    [[nodiscard]] inline FirstPersonPassengerPose
+        BuildFirstPersonPassengerPoseWithCarriage(
+            const Vehicle& car, FirstPersonVec3 vehicleOrigin,
+            const FirstPersonCarriageTransform& carriage,
+            float flatPrimaryFrame = -1.0f,
+            float flatSecondaryFrame = -1.0f,
+            uint8_t pinnedSeatIndex = 0xFF)
+    {
+        FirstPersonVec3 transformedOrigin{
+            vehicleOrigin.x + carriage.originOffset.x,
+            vehicleOrigin.y + carriage.originOffset.y,
+            vehicleOrigin.z + carriage.originOffset.z,
+        };
+        auto pose = BuildFirstPersonPassengerPose(
+            car, transformedOrigin, carriage.basis,
+            flatPrimaryFrame, flatSecondaryFrame, pinnedSeatIndex);
+        pose.position = FirstPersonPassengerEyeForCarriage(
+            transformedOrigin, carriage,
+            pose.localEyeOffset, pose.rideSpecificTransform);
+        return pose;
+    }
+
     [[nodiscard]] inline FirstPersonBasis FirstPersonVehicleTrackBasis(
         const Vehicle& car, float yaw, float pitch, float roll)
     {
@@ -764,14 +612,10 @@ namespace OpenRCT2::Paint
         const auto carriage =
             FirstPersonVehicleSimulationCarriageTransform(car);
         const auto loc = car.getLocation();
-        FirstPersonVec3 position{
-            float(loc.x) + carriage.originOffset.x,
-            float(loc.y) + carriage.originOffset.y,
-            float(loc.z) + carriage.originOffset.z,
-        };
-        return BuildFirstPersonPassengerPose(
-            car, position, carriage.basis,
-            -1.0f, -1.0f, pinnedSeatIndex);
+        return BuildFirstPersonPassengerPoseWithCarriage(
+            car,
+            { float(loc.x), float(loc.y), float(loc.z) },
+            carriage, -1.0f, -1.0f, pinnedSeatIndex);
     }
 } // namespace OpenRCT2::Paint
 

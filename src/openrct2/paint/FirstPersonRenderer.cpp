@@ -5,6 +5,8 @@
 #include "FirstPersonRenderer.h"
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonTrackTrajectory.h"
+#include "FirstPersonVehicleBodyHull.h"
+#include "FirstPersonVehiclePose.h"
 #include "Paint.h"
 #include "tile_element/Paint.Surface.h"
 #include "tile_element/Paint.Path.h"
@@ -758,18 +760,11 @@ namespace OpenRCT2::Paint
             } };
 
             std::vector<LargeSceneryAssetCell> cells;
-            std::unordered_set<uint64_t> occupied;
-            std::optional<int32_t> commonLowZ;
             for (size_t sequence = 0; sequence < entry.tiles.size(); ++sequence)
             {
                 const auto& tile = entry.tiles[sequence];
                 if ((tile.offset.x % 16) != 0 || (tile.offset.y % 16) != 0
                     || tile.zClearance <= 0 || (tile.corners & 0x0F) == 0)
-                    return std::nullopt;
-
-                if (!commonLowZ.has_value())
-                    commonLowZ = tile.offset.z;
-                else if (*commonLowZ != tile.offset.z)
                     return std::nullopt;
 
                 const int32_t tileQx = tile.offset.x / 16;
@@ -778,10 +773,10 @@ namespace OpenRCT2::Paint
                 {
                     if ((tile.corners & (1u << quarter)) == 0)
                         continue;
-                    const int32_t qx = tileQx + kQuarterCellOffsets[quarter].x;
-                    const int32_t qy = tileQy + kQuarterCellOffsets[quarter].y;
-                    if (!occupied.insert(LargeSceneryQuarterCellKey(qx, qy)).second)
-                        return std::nullopt;
+                    const int32_t qx =
+                        tileQx + kQuarterCellOffsets[quarter].x;
+                    const int32_t qy =
+                        tileQy + kQuarterCellOffsets[quarter].y;
                     cells.push_back({
                         qx, qy, tile.offset.z,
                         tile.offset.z + tile.zClearance,
@@ -797,88 +792,171 @@ namespace OpenRCT2::Paint
         [[nodiscard]] std::vector<LargeSceneryAssetFace> BuildLargeSceneryAssetFaces(
             const std::vector<LargeSceneryAssetCell>& cells, int32_t heightTrim)
         {
-            std::unordered_map<uint64_t, const LargeSceneryAssetCell*> lookup;
+            std::unordered_map<
+                uint64_t, std::vector<const LargeSceneryAssetCell*>> lookup;
             lookup.reserve(cells.size());
             for (const auto& cell : cells)
-                lookup.emplace(LargeSceneryQuarterCellKey(cell.qx, cell.qy), &cell);
+            {
+                lookup[LargeSceneryQuarterCellKey(cell.qx, cell.qy)]
+                    .push_back(&cell);
+            }
 
-            const auto effectiveHigh = [heightTrim](const LargeSceneryAssetCell& cell) {
-                return std::max(cell.lowZ + 1, cell.highZ - heightTrim);
-            };
+            const auto effectiveHigh =
+                [heightTrim](const LargeSceneryAssetCell& cell) {
+                    return std::max(
+                        cell.lowZ + 1, cell.highZ - heightTrim);
+                };
+            const auto coverageAt =
+                [&](int32_t qx, int32_t qy) {
+                    std::vector<FirstPersonVerticalInterval> intervals;
+                    const auto found = lookup.find(
+                        LargeSceneryQuarterCellKey(qx, qy));
+                    if (found == lookup.end())
+                        return intervals;
+                    intervals.reserve(found->second.size());
+                    for (const auto* cell : found->second)
+                    {
+                        const int32_t high = effectiveHigh(*cell);
+                        if (high > cell->lowZ)
+                            intervals.push_back(
+                                { cell->lowZ, high });
+                    }
+                    return intervals;
+                };
+
             std::vector<LargeSceneryAssetFace> faces;
-            faces.reserve(cells.size() * 3);
+            faces.reserve(cells.size() * 5);
+            std::unordered_map<
+                uint64_t, std::vector<FirstPersonVerticalInterval>> claimed;
 
-            const auto appendSide = [&](const LargeSceneryAssetCell& cell,
-                                        int32_t dx, int32_t dy,
-                                        LargeSceneryAssetFaceKind kind) {
-                const int32_t highZ = effectiveHigh(cell);
-                int32_t lowZ = cell.lowZ;
-                const auto neighbour = lookup.find(
-                    LargeSceneryQuarterCellKey(cell.qx + dx, cell.qy + dy));
-                if (neighbour != lookup.end())
-                    lowZ = std::max(lowZ, effectiveHigh(*neighbour->second));
-                if (lowZ >= highZ)
-                    return;
-
-                const int32_t x0 = cell.qx * 16;
-                const int32_t y0 = cell.qy * 16;
-                const int32_t x1 = x0 + 16;
-                const int32_t y1 = y0 + 16;
-                LargeSceneryAssetFace face{};
-                face.sequence = cell.sequence;
-                face.kind = kind;
-                switch (kind)
-                {
-                    case LargeSceneryAssetFaceKind::minX:
-                        face.corners = { {
-                            { x0, y0, lowZ }, { x0, y1, lowZ },
-                            { x0, y1, highZ }, { x0, y0, highZ },
-                        } };
-                        break;
-                    case LargeSceneryAssetFaceKind::maxX:
-                        face.corners = { {
-                            { x1, y1, lowZ }, { x1, y0, lowZ },
-                            { x1, y0, highZ }, { x1, y1, highZ },
-                        } };
-                        break;
-                    case LargeSceneryAssetFaceKind::minY:
-                        face.corners = { {
-                            { x1, y0, lowZ }, { x0, y0, lowZ },
-                            { x0, y0, highZ }, { x1, y0, highZ },
-                        } };
-                        break;
-                    case LargeSceneryAssetFaceKind::maxY:
-                        face.corners = { {
-                            { x0, y1, lowZ }, { x1, y1, lowZ },
-                            { x1, y1, highZ }, { x0, y1, highZ },
-                        } };
-                        break;
-                    case LargeSceneryAssetFaceKind::top:
-                        break;
-                }
-                faces.push_back(std::move(face));
-            };
+            const auto appendSideStrip =
+                [&](const LargeSceneryAssetCell& cell,
+                    FirstPersonVerticalInterval strip,
+                    LargeSceneryAssetFaceKind kind) {
+                    if (strip.high <= strip.low)
+                        return;
+                    const int32_t x0 = cell.qx * 16;
+                    const int32_t y0 = cell.qy * 16;
+                    const int32_t x1 = x0 + 16;
+                    const int32_t y1 = y0 + 16;
+                    LargeSceneryAssetFace face{};
+                    face.sequence = cell.sequence;
+                    face.kind = kind;
+                    switch (kind)
+                    {
+                        case LargeSceneryAssetFaceKind::minX:
+                            face.corners = { {
+                                { x0, y0, strip.low },
+                                { x0, y1, strip.low },
+                                { x0, y1, strip.high },
+                                { x0, y0, strip.high },
+                            } };
+                            break;
+                        case LargeSceneryAssetFaceKind::maxX:
+                            face.corners = { {
+                                { x1, y1, strip.low },
+                                { x1, y0, strip.low },
+                                { x1, y0, strip.high },
+                                { x1, y1, strip.high },
+                            } };
+                            break;
+                        case LargeSceneryAssetFaceKind::minY:
+                            face.corners = { {
+                                { x1, y0, strip.low },
+                                { x0, y0, strip.low },
+                                { x0, y0, strip.high },
+                                { x1, y0, strip.high },
+                            } };
+                            break;
+                        case LargeSceneryAssetFaceKind::maxY:
+                            face.corners = { {
+                                { x0, y1, strip.low },
+                                { x1, y1, strip.low },
+                                { x1, y1, strip.high },
+                                { x0, y1, strip.high },
+                            } };
+                            break;
+                        case LargeSceneryAssetFaceKind::top:
+                            return;
+                    }
+                    faces.push_back(std::move(face));
+                };
 
             for (const auto& cell : cells)
             {
-                const int32_t x0 = cell.qx * 16;
-                const int32_t y0 = cell.qy * 16;
-                const int32_t x1 = x0 + 16;
-                const int32_t y1 = y0 + 16;
                 const int32_t highZ = effectiveHigh(cell);
-                LargeSceneryAssetFace roof{};
-                roof.sequence = cell.sequence;
-                roof.kind = LargeSceneryAssetFaceKind::top;
-                roof.corners = { {
-                    { x0, y0, highZ }, { x1, y0, highZ },
-                    { x1, y1, highZ }, { x0, y1, highZ },
-                } };
-                faces.push_back(std::move(roof));
+                if (highZ <= cell.lowZ)
+                    continue;
 
-                appendSide(cell, -1, 0, LargeSceneryAssetFaceKind::minX);
-                appendSide(cell, 1, 0, LargeSceneryAssetFaceKind::maxX);
-                appendSide(cell, 0, -1, LargeSceneryAssetFaceKind::minY);
-                appendSide(cell, 0, 1, LargeSceneryAssetFaceKind::maxY);
+                const uint64_t key =
+                    LargeSceneryQuarterCellKey(cell.qx, cell.qy);
+                auto& alreadyClaimed = claimed[key];
+                const auto ownedFragments =
+                    SubtractFirstPersonVerticalCoverage(
+                        { cell.lowZ, highZ }, alreadyClaimed);
+                alreadyClaimed.push_back({ cell.lowZ, highZ });
+
+                for (const auto fragment : ownedFragments)
+                {
+                    const auto appendExposedSides =
+                        [&](int32_t dx, int32_t dy,
+                            LargeSceneryAssetFaceKind kind) {
+                            const auto exposed =
+                                SubtractFirstPersonVerticalCoverage(
+                                    fragment,
+                                    coverageAt(
+                                        cell.qx + dx,
+                                        cell.qy + dy));
+                            for (const auto strip : exposed)
+                                appendSideStrip(cell, strip, kind);
+                        };
+
+                    appendExposedSides(
+                        -1, 0,
+                        LargeSceneryAssetFaceKind::minX);
+                    appendExposedSides(
+                        1, 0,
+                        LargeSceneryAssetFaceKind::maxX);
+                    appendExposedSides(
+                        0, -1,
+                        LargeSceneryAssetFaceKind::minY);
+                    appendExposedSides(
+                        0, 1,
+                        LargeSceneryAssetFaceKind::maxY);
+
+                    // Only the actual upper end of this source interval can
+                    // own a roof. Internal fragment boundaries created by
+                    // overlapping cells are solid union boundaries, not roofs.
+                    if (fragment.high != highZ)
+                        continue;
+
+                    auto sameColumn = coverageAt(cell.qx, cell.qy);
+                    bool coveredAbove = false;
+                    for (const auto interval : sameColumn)
+                    {
+                        if (interval.low <= highZ
+                            && interval.high > highZ)
+                        {
+                            coveredAbove = true;
+                            break;
+                        }
+                    }
+                    if (coveredAbove)
+                        continue;
+
+                    const int32_t x0 = cell.qx * 16;
+                    const int32_t y0 = cell.qy * 16;
+                    LargeSceneryAssetFace roof{};
+                    roof.sequence = cell.sequence;
+                    roof.kind = LargeSceneryAssetFaceKind::top;
+                    roof.corners = { {
+                        { x0, y0, highZ },
+                        { x0 + 16, y0, highZ },
+                        { x0 + 16, y0 + 16, highZ },
+                        { x0, y0 + 16, highZ },
+                    } };
+                    faces.push_back(std::move(roof));
+                }
             }
             return faces;
         }
@@ -1224,6 +1302,314 @@ namespace OpenRCT2::Paint
             EmitQuad(surface, v, UsesOppositeTerrainDiagonal(slope));
             scene.surfaces.emplace_back(std::move(surface));
         }
+        enum class AttachedVehicleComponentRole : uint8_t
+        {
+            other,
+            body,
+            rider,
+        };
+
+        struct AttachedVehicleComponent
+        {
+            AttachedVehicleComponentRole role =
+                AttachedVehicleComponentRole::other;
+            uint8_t riderRow = 0xFF;
+        };
+
+        [[nodiscard]] AttachedVehicleComponent
+            GetAttachedVehicleComponent(
+                const Vehicle& vehicle, ImageId image)
+        {
+            AttachedVehicleComponent result{};
+            const auto* entry = vehicle.Entry();
+            if (entry == nullptr || !image.HasValue()
+                || entry->numCarImages == 0)
+                return result;
+
+            const uint32_t index = image.GetIndex();
+            if (index < entry->baseImageId)
+                return result;
+            const uint32_t delta = index - entry->baseImageId;
+            const uint32_t block = delta / entry->numCarImages;
+            if (block == 0)
+            {
+                result.role = AttachedVehicleComponentRole::body;
+                return result;
+            }
+            if (block <= entry->numSeatingRows)
+            {
+                result.role = AttachedVehicleComponentRole::rider;
+                result.riderRow = uint8_t(block - 1);
+            }
+            return result;
+        }
+
+        [[nodiscard]] const FirstPersonVehicleBodyHull*
+            GetUsableAttachedVehicleHull(
+                const Vehicle& vehicle, uint8_t seatIndex)
+        {
+            if (seatIndex == 0xFF
+                || vehicle.flags.hasAny(
+                    VehicleFlag::carIsReversed,
+                    VehicleFlag::carIsInverted))
+                return nullptr;
+            const auto* ride = vehicle.GetRide();
+            const auto* entry = vehicle.Entry();
+            if (ride == nullptr || entry == nullptr
+                || !ride->getRideTypeDescriptor().flags.has(RtdFlag::hasTrack))
+                return nullptr;
+
+            const auto* hull =
+                GetFirstPersonVehicleBodyHull(*entry);
+            const auto* seat =
+                GetFirstPersonPassengerAssetSeat(*entry, seatIndex);
+            if (hull == nullptr || seat == nullptr
+                || hull->containsPoint(seat->localEye))
+                return nullptr;
+            return hull;
+        }
+
+        [[nodiscard]] FirstPersonVec3 TransformVehicleLocalPoint(
+            FirstPersonVec3 origin, const FirstPersonBasis& basis,
+            FirstPersonVec3 local)
+        {
+            return {
+                origin.x + basis.forward.x * local.x
+                    + basis.right.x * local.y
+                    + basis.up.x * local.z,
+                origin.y + basis.forward.y * local.x
+                    + basis.right.y * local.y
+                    + basis.up.y * local.z,
+                origin.z + basis.forward.z * local.x
+                    + basis.right.z * local.y
+                    + basis.up.z * local.z,
+            };
+        }
+
+        void AppendAttachedVehicleHull(
+            FirstPersonScene& scene, const Vehicle& vehicle,
+            const FirstPersonVehicleBodyHull& hull)
+        {
+            const auto carriage =
+                FirstPersonVehicleSimulationCarriageTransform(vehicle);
+            const auto loc = vehicle.getLocation();
+            FirstPersonVec3 origin{
+                float(loc.x) + carriage.originOffset.x,
+                float(loc.y) + carriage.originOffset.y,
+                float(loc.z) + carriage.originOffset.z,
+            };
+            const auto& basis = carriage.basis;
+
+            const auto colourMap =
+                Drawing::getColourMap(vehicle.colours.Body);
+            uint8_t sideColour =
+                static_cast<uint8_t>(colourMap.midDark);
+            uint8_t topColour =
+                static_cast<uint8_t>(colourMap.midLight);
+            if (sideColour == 0)
+                sideColour = static_cast<uint8_t>(
+                    Drawing::PaletteIndex::trackRails1);
+            if (topColour == 0)
+                topColour = static_cast<uint8_t>(
+                    Drawing::PaletteIndex::trackRails2);
+
+            const float half = hull.step * 0.5f;
+            const auto appendFace =
+                [&](const std::array<FirstPersonVec3, 4>& local,
+                    uint8_t colour) {
+                    FirstPersonSurface surface{};
+                    surface.solidColour = colour;
+                    std::array<FirstPersonVertex, 4> vertices{};
+                    for (size_t i = 0; i < vertices.size(); ++i)
+                    {
+                        vertices[i].world =
+                            TransformVehicleLocalPoint(
+                                origin, basis, local[i]);
+                    }
+                    EmitQuad(surface, vertices);
+                    scene.surfaces.emplace_back(std::move(surface));
+                };
+
+            for (int32_t up = 0; up < hull.sizeUp; ++up)
+            for (int32_t right = 0; right < hull.sizeRight; ++right)
+            for (int32_t forward = 0; forward < hull.sizeForward; ++forward)
+            {
+                if (!hull.contains(forward, right, up))
+                    continue;
+                const auto centre =
+                    hull.centre(forward, right, up);
+                const float f0 = centre.x - half;
+                const float f1 = centre.x + half;
+                const float r0 = centre.y - half;
+                const float r1 = centre.y + half;
+                const float u0 = centre.z - half;
+                const float u1 = centre.z + half;
+
+                if (!hull.contains(forward - 1, right, up))
+                    appendFace({ {
+                        { f0, r1, u0 }, { f0, r0, u0 },
+                        { f0, r0, u1 }, { f0, r1, u1 },
+                    } }, sideColour);
+                if (!hull.contains(forward + 1, right, up))
+                    appendFace({ {
+                        { f1, r0, u0 }, { f1, r1, u0 },
+                        { f1, r1, u1 }, { f1, r0, u1 },
+                    } }, sideColour);
+                if (!hull.contains(forward, right - 1, up))
+                    appendFace({ {
+                        { f0, r0, u0 }, { f1, r0, u0 },
+                        { f1, r0, u1 }, { f0, r0, u1 },
+                    } }, sideColour);
+                if (!hull.contains(forward, right + 1, up))
+                    appendFace({ {
+                        { f1, r1, u0 }, { f0, r1, u0 },
+                        { f0, r1, u1 }, { f1, r1, u1 },
+                    } }, sideColour);
+                if (!hull.contains(forward, right, up - 1))
+                    appendFace({ {
+                        { f0, r0, u0 }, { f0, r1, u0 },
+                        { f1, r1, u0 }, { f1, r0, u0 },
+                    } }, sideColour);
+                if (!hull.contains(forward, right, up + 1))
+                    appendFace({ {
+                        { f0, r1, u1 }, { f0, r0, u1 },
+                        { f1, r0, u1 }, { f1, r1, u1 },
+                    } }, topColour);
+            }
+        }
+
+        [[nodiscard]] bool ApplyAdjacentRiderMask(
+            FirstPersonSurface& surface, ImageId image,
+            bool hideSecondary)
+        {
+            const auto* g1 =
+                image.HasValue() ? GfxGetG1Element(image) : nullptr;
+            if (g1 == nullptr || g1->offset == nullptr
+                || g1->width <= 0 || g1->height <= 0
+                || g1->width > 512 || g1->height > 512
+                || g1->flags.has(G1Flag::isPalette))
+                return false;
+
+            const size_t width = size_t(g1->width);
+            const size_t height = size_t(g1->height);
+            std::vector<uint8_t> pixels(width * height, 0);
+            if (g1->flags.has(G1Flag::hasRLECompression))
+            {
+                for (int32_t y = 0; y < g1->height; ++y)
+                {
+                    const uint16_t lineOffset =
+                        uint16_t(g1->offset[y * 2])
+                        | (uint16_t(g1->offset[y * 2 + 1]) << 8);
+                    const uint8_t* run = g1->offset + lineOffset;
+                    bool endOfLine = false;
+                    size_t guard = 0;
+                    while (!endOfLine && guard++ < 256)
+                    {
+                        uint8_t length = *run++;
+                        const int32_t x = *run++;
+                        endOfLine = (length & 0x80u) != 0;
+                        length &= 0x7Fu;
+                        for (uint8_t n = 0; n < length; ++n)
+                        {
+                            if (x + n >= 0 && x + n < g1->width)
+                                pixels[size_t(y) * width
+                                    + size_t(x + n)] = run[n];
+                        }
+                        run += length;
+                    }
+                    if (!endOfLine)
+                        return false;
+                }
+            }
+            else
+            {
+                std::copy_n(g1->offset, pixels.size(), pixels.begin());
+            }
+
+            double primaryX = 0.0;
+            double primaryY = 0.0;
+            double secondaryX = 0.0;
+            double secondaryY = 0.0;
+            size_t primaryCount = 0;
+            size_t secondaryCount = 0;
+            for (int32_t y = 0; y < g1->height; ++y)
+            for (int32_t x = 0; x < g1->width; ++x)
+            {
+                const uint8_t pixel =
+                    pixels[size_t(y) * width + size_t(x)];
+                if (FirstPersonRiderPixelUsesPrimaryRemap(pixel))
+                {
+                    primaryX += x;
+                    primaryY += y;
+                    ++primaryCount;
+                }
+                if (FirstPersonRiderPixelUsesSecondaryRemap(pixel))
+                {
+                    secondaryX += x;
+                    secondaryY += y;
+                    ++secondaryCount;
+                }
+            }
+            if (primaryCount < 3 || secondaryCount < 3)
+                return false;
+            primaryX /= double(primaryCount);
+            primaryY /= double(primaryCount);
+            secondaryX /= double(secondaryCount);
+            secondaryY /= double(secondaryCount);
+
+            const double selectedX =
+                hideSecondary ? secondaryX : primaryX;
+            const double selectedY =
+                hideSecondary ? secondaryY : primaryY;
+            const double otherX =
+                hideSecondary ? primaryX : secondaryX;
+            const double otherY =
+                hideSecondary ? primaryY : secondaryY;
+            size_t kept = 0;
+            for (int32_t y = 0; y < g1->height; ++y)
+            for (int32_t x = 0; x < g1->width; ++x)
+            {
+                auto& pixel =
+                    pixels[size_t(y) * width + size_t(x)];
+                if (pixel == 0)
+                    continue;
+                const double selectedDistance =
+                    (double(x) - selectedX) * (double(x) - selectedX)
+                    + (double(y) - selectedY) * (double(y) - selectedY);
+                const double otherDistance =
+                    (double(x) - otherX) * (double(x) - otherX)
+                    + (double(y) - otherY) * (double(y) - otherY);
+                const bool selectedRemap = hideSecondary
+                    ? FirstPersonRiderPixelUsesSecondaryRemap(pixel)
+                    : FirstPersonRiderPixelUsesPrimaryRemap(pixel);
+                if (selectedRemap
+                    || selectedDistance <= otherDistance)
+                {
+                    pixel = 0;
+                }
+                else
+                {
+                    ++kept;
+                }
+            }
+            if (kept < 3)
+                return false;
+
+            uint64_t fingerprint = 14695981039346656037ull;
+            ExtendStableKey(fingerprint, image.GetIndex());
+            ExtendStableKey(fingerprint, hideSecondary ? 1 : 0);
+            for (const auto pixel : pixels)
+            {
+                fingerprint ^= pixel;
+                fingerprint *= 1099511628211ull;
+            }
+            surface.immutablePixels = std::move(pixels);
+            surface.immutableWidth = g1->width;
+            surface.immutableHeight = g1->height;
+            surface.immutableFingerprint = fingerprint;
+            return true;
+        }
+
         [[nodiscard]] bool IsHiddenPassengerTileComponent(
             const PaintStruct& ps, EntityId hiddenEntity, uint8_t hiddenSeatIndex)
         {
@@ -1255,8 +1641,19 @@ namespace OpenRCT2::Paint
             const bool matchesHiddenEntity =
                 ps.Entity != nullptr && !hidden.IsNull()
                 && ps.Entity->id == hidden;
+            const auto* attachedVehicle =
+                matchesHiddenEntity
+                    && ps.Source == PaintStructSource::entity
+                ? ps.Entity->as<Vehicle>() : nullptr;
+            const auto* attachedHull =
+                attachedVehicle != nullptr
+                ? GetUsableAttachedVehicleHull(
+                    *attachedVehicle, hiddenSeatIndex)
+                : nullptr;
+            const bool reconstructAttachedVehicle =
+                attachedVehicle != nullptr && attachedHull != nullptr;
             const auto hiddenPolicy = FirstPersonHiddenComponentPolicy(
-                matchesHiddenEntity,
+                matchesHiddenEntity && !reconstructAttachedVehicle,
                 ps.Source == PaintStructSource::entity,
                 matchesHiddenEntity
                     && IsHiddenPassengerTileComponent(
@@ -1305,10 +1702,63 @@ namespace OpenRCT2::Paint
                 AppendSemanticPathDeck(scene, ps, colourify(deckImage), rotation);
             }
 
+            bool suppressCurrentImage = false;
+            if (reconstructAttachedVehicle)
+            {
+                const auto component =
+                    GetAttachedVehicleComponent(
+                        *attachedVehicle, ps.image_id);
+                if (component.role
+                    == AttachedVehicleComponentRole::body)
+                {
+                    AppendAttachedVehicleHull(
+                        scene, *attachedVehicle, *attachedHull);
+                    suppressCurrentImage = true;
+                }
+                else if (component.role
+                    == AttachedVehicleComponentRole::rider)
+                {
+                    const uint8_t selectedRow =
+                        hiddenSeatIndex / 2;
+                    if (component.riderRow == selectedRow)
+                    {
+                        const uint8_t rowBase =
+                            uint8_t(selectedRow * 2);
+                        const uint8_t adjacentSeat =
+                            (hiddenSeatIndex & 1u) != 0
+                            ? rowBase : uint8_t(rowBase + 1);
+                        if (attachedVehicle->num_peeps > adjacentSeat)
+                        {
+                            const auto surfaceStart =
+                                scene.surfaces.size();
+                            AppendLayer(
+                                scene, anchor, basis, isoAnchor,
+                                colourify(ps.image_id), ps.ScreenPos);
+                            if (scene.surfaces.size() > surfaceStart
+                                && !ApplyAdjacentRiderMask(
+                                    scene.surfaces.back(),
+                                    ps.image_id,
+                                    (hiddenSeatIndex & 1u) != 0))
+                            {
+                                scene.surfaces.pop_back();
+                            }
+                        }
+                        suppressCurrentImage = true;
+                    }
+                }
+                else
+                {
+                    // Unknown special component of an otherwise reconstructable
+                    // attached car: do not let an uncalibrated close billboard
+                    // reintroduce self-clipping.
+                    suppressCurrentImage = true;
+                }
+            }
+
             // Native path surface sprites are represented by the semantic deck
             // above. Bridge/support sprites remain artwork and are never
             // flattened into the walking plane.
-            if (!groundPathArtwork)
+            if (!groundPathArtwork && !suppressCurrentImage)
             {
                 const auto surfaceStart = scene.surfaces.size();
                 if (!AppendSemanticWallPlane(scene, ps, colourify(ps.image_id), ps.ScreenPos, rotation) &&
@@ -3178,8 +3628,15 @@ namespace OpenRCT2::Paint
                     auto* entity = getGameState().entities.tryGetEntity<EntityBase>(entityId);
                     if (entity == nullptr)
                         continue;
-                    if (!opt.hiddenEntity.IsNull() && entity->id == opt.hiddenEntity)
-                        continue;
+                    if (!opt.hiddenEntity.IsNull()
+                        && entity->id == opt.hiddenEntity)
+                    {
+                        const auto* vehicle = entity->as<Vehicle>();
+                        if (vehicle == nullptr
+                            || GetUsableAttachedVehicleHull(
+                                *vehicle, opt.hiddenSeatIndex) == nullptr)
+                            continue;
+                    }
 
                     const auto location = entity->getLocation();
                     if (location.x == kLocationNull)

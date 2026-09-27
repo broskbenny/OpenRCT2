@@ -29,17 +29,21 @@
 #include <openrct2/entity/EntityTweener.h>
 #include <openrct2/interface/Viewport.h>
 #include <openrct2/paint/FirstPersonRenderer.h>
+#include <openrct2/paint/FirstPersonSmallSceneryCollision.h>
 #include <openrct2/paint/FirstPersonVehiclePose.h>
+#include <openrct2/paint/FirstPersonWalkingSemantics.h>
 #include <openrct2/ride/Vehicle.h>
 #include <openrct2/world/Map.h>
 #include <openrct2/world/TileElementsView.h>
 #include <openrct2/world/tile_element/PathElement.h>
 #include <openrct2/world/tile_element/LargeSceneryElement.h>
+#include <openrct2/world/tile_element/SmallSceneryElement.h>
 #include <openrct2/world/tile_element/Slope.h>
 #include <openrct2/world/Footpath.h>
 #include <openrct2/world/tile_element/WallElement.h>
 #include <openrct2/object/WallSceneryEntry.h>
 #include <openrct2/object/LargeSceneryEntry.h>
+#include <openrct2/object/SmallSceneryEntry.h>
 
 namespace OpenRCT2::Ui::FirstPerson
 {
@@ -193,6 +197,34 @@ namespace OpenRCT2::Ui::FirstPerson
             return false;
         }
 
+        [[nodiscard]] WalkingFloorSample WalkingPathSampleAt(
+            const PathElement& path, const CoordsXY& position)
+        {
+            auto pathZ = static_cast<float>(path.getBaseZ());
+            if (path.isSloped())
+            {
+                const auto slopeCorners = GetSlopeCornerHeights(
+                    path.getBaseZ(),
+                    kPathSlopeToLandSlope[path.getSlopeDirection()]);
+                pathZ = Paint::FirstPersonPathHeight(
+                    float(slopeCorners.south), float(slopeCorners.east),
+                    float(slopeCorners.north), float(slopeCorners.west),
+                    float(position.x & (kCoordsXYStep - 1)),
+                    float(position.y & (kCoordsXYStep - 1)));
+            }
+
+            WalkingFloorSample sample{};
+            sample.z = pathZ;
+            sample.support.path = true;
+            sample.support.tile = position.toTileStart();
+            sample.support.baseZ = path.getBaseZ();
+            sample.support.surface = path.getSurfaceEntryIndex();
+            sample.support.railings = path.getRailingsEntryIndex();
+            sample.edges = path.getEdges();
+            sample.corners = path.getCorners();
+            return sample;
+        }
+
         [[nodiscard]] bool WalkingPathsConnected(
             const WalkingFloorSample& from, const WalkingFloorSample& to)
         {
@@ -237,27 +269,9 @@ namespace OpenRCT2::Ui::FirstPerson
                 if (!PointOnPathDeck(*path, position))
                     continue;
 
-                auto pathZ = static_cast<float>(path->getBaseZ());
-                if (path->isSloped())
-                {
-                    const auto slopeCorners = GetSlopeCornerHeights(
-                        path->getBaseZ(), kPathSlopeToLandSlope[path->getSlopeDirection()]);
-                    pathZ = Paint::FirstPersonPathHeight(
-                        float(slopeCorners.south), float(slopeCorners.east),
-                        float(slopeCorners.north), float(slopeCorners.west),
-                        float(position.x & (kCoordsXYStep - 1)),
-                        float(position.y & (kCoordsXYStep - 1)));
-                }
-
-                WalkingFloorSample candidate{};
-                candidate.z = pathZ;
-                candidate.support.path = true;
-                candidate.support.tile = position.toTileStart();
-                candidate.support.baseZ = path->getBaseZ();
-                candidate.support.surface = path->getSurfaceEntryIndex();
-                candidate.support.railings = path->getRailingsEntryIndex();
-                candidate.edges = path->getEdges();
-                candidate.corners = path->getCorners();
+                const auto candidate =
+                    WalkingPathSampleAt(*path, position);
+                const auto pathZ = candidate.z;
 
                 if (previous.IsPath()
                     && !SameWalkingPath(previous.support, candidate.support)
@@ -326,9 +340,10 @@ namespace OpenRCT2::Ui::FirstPerson
         // Walls have authoritative positions and heights in the native map;
         // arbitrary billboard scenery does not. Collide against real static
         // wall planes without pretending that an artwork sorting box is solid.
-        // Animated doors are excluded until their moving/open panels have
-        // calibrated physical geometry; sealing their full footprint would
-        // incorrectly block an open doorway.
+        // Doors use native semantic state for the two stable endpoints:
+        // closed frame 0 keeps the wall plane and stable-open frame 5 removes
+        // it. Transitional frames remain conservatively blocked until the
+        // moving panel aperture is calibrated from door artwork.
         bool WalkBlockedByWall(
             const Paint::FirstPersonVec3& from, const Paint::FirstPersonVec3& to)
         {
@@ -345,8 +360,11 @@ namespace OpenRCT2::Ui::FirstPerson
                 {
                     if(wall==nullptr || wall->isGhost() || wall->isInvisible()) continue;
                     const auto* entry=wall->getEntry();
-                    if(entry==nullptr || entry->height==0 ||
-                       entry->flags.has(WallSceneryFlag::isDoor)) continue;
+                    if(entry==nullptr || entry->height==0) continue;
+                    if(entry->flags.has(WallSceneryFlag::isDoor)
+                        && !Paint::FirstPersonDoorBlocksWalking(
+                            wall->getAnimationFrame()))
+                        continue;
                     const auto plane = Paint::BuildFirstPersonWallPlane(
                         tile, wall->getBaseZ(), wall->getDirection(), wall->getSlope(),
                         int32_t(entry->height) * kCoordsZStep);
@@ -413,6 +431,79 @@ namespace OpenRCT2::Ui::FirstPerson
                             {float(tilePos.x)+b[0],float(tilePos.y)+b[1],lowZ},
                             {float(tilePos.x)+b[2],float(tilePos.y)+b[3],highZ},
                             kEyeHeight))
+                            return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        bool WalkBlockedBySmallScenery(
+            const Paint::FirstPersonVec3& from,
+            const Paint::FirstPersonVec3& to)
+        {
+            const int32_t minX = std::max(
+                0, int32_t(std::floor(
+                    std::min(from.x, to.x) / kCoordsXYStep)) - 1);
+            const int32_t minY = std::max(
+                0, int32_t(std::floor(
+                    std::min(from.y, to.y) / kCoordsXYStep)) - 1);
+            const int32_t maxX = int32_t(std::floor(
+                std::max(from.x, to.x) / kCoordsXYStep)) + 1;
+            const int32_t maxY = int32_t(std::floor(
+                std::max(from.y, to.y) / kCoordsXYStep)) + 1;
+
+            constexpr int32_t cellSize =
+                Paint::FirstPersonSmallSceneryWalkingMask::kCellSize;
+            constexpr int32_t cells =
+                Paint::FirstPersonSmallSceneryWalkingMask::kCellsPerAxis;
+            for (int32_t ty = minY; ty <= maxY; ++ty)
+            for (int32_t tx = minX; tx <= maxX; ++tx)
+            {
+                const CoordsXY tilePos{
+                    tx * kCoordsXYStep, ty * kCoordsXYStep
+                };
+                if (!MapIsLocationValid(tilePos))
+                    continue;
+
+                for (const auto* small :
+                    TileElementsView<SmallSceneryElement>(tilePos))
+                {
+                    if (small == nullptr || small->isGhost()
+                        || small->isInvisible())
+                        continue;
+                    const auto* entry = small->getEntry();
+                    if (entry == nullptr)
+                        continue;
+                    const auto* mask =
+                        Paint::GetFirstPersonSmallSceneryWalkingMask(
+                            *entry, *small);
+                    if (mask == nullptr)
+                        continue;
+
+                    const float lowZ = float(small->getBaseZ());
+                    const float highZ = float(std::min(
+                        small->getClearanceZ(),
+                        small->getBaseZ() + mask->collisionHeight));
+                    if (highZ <= lowZ)
+                        continue;
+
+                    for (int32_t yCell = 0; yCell < cells; ++yCell)
+                    for (int32_t xCell = 0; xCell < cells; ++xCell)
+                    {
+                        if (!mask->contains(xCell, yCell))
+                            continue;
+                        const float x0 =
+                            float(tilePos.x + xCell * cellSize);
+                        const float y0 =
+                            float(tilePos.y + yCell * cellSize);
+                        if (Paint::FirstPersonBoxIntersectsWalkStep(
+                                from, to,
+                                { x0, y0, lowZ },
+                                { x0 + float(cellSize),
+                                  y0 + float(cellSize),
+                                  highZ },
+                                kEyeHeight))
                             return true;
                     }
                 }
@@ -523,7 +614,13 @@ namespace OpenRCT2::Ui::FirstPerson
                 const auto floor = ResolveWalkingTraversal(
                     from.x, from.y, x, y, _state.previousFloor);
                 if (!floor.has_value()) return false;
-                if(WalkBlockedByWall(from,{x,y,floor->z}) || WalkBlockedByLargeScenery(from,{x,y,floor->z})) return false;
+                const Paint::FirstPersonVec3 destination{
+                    x, y, floor->z
+                };
+                if (WalkBlockedByWall(from, destination)
+                    || WalkBlockedByLargeScenery(from, destination)
+                    || WalkBlockedBySmallScenery(from, destination))
+                    return false;
                 _state.camera.position.x=x;
                 _state.camera.position.y=y;
                 _state.previousFloor=*floor;
@@ -587,27 +684,91 @@ namespace OpenRCT2::Ui::FirstPerson
 
         const auto* viewport = mainWindow->viewport;
         const auto centre = viewport->viewPos
-            + ScreenCoordsXY{ viewport->ViewWidth() / 2, viewport->ViewHeight() / 2 };
-        const auto spawn = ViewportAdjustForMapHeight(centre, viewport->rotation);
+            + ScreenCoordsXY{
+                viewport->ViewWidth() / 2,
+                viewport->ViewHeight() / 2
+            };
+        const auto screenCentre = viewport->pos
+            + ScreenCoordsXY{
+                viewport->width / 2,
+                viewport->height / 2
+            };
+
+        CoordsXYZ spawn =
+            ViewportAdjustForMapHeight(
+                centre, viewport->rotation);
+        WalkingFloorSample initialFloor{};
+        bool pickedWalkableSupport = false;
+        const auto picked = GetMapCoordinatesFromPosWindow(
+            mainWindow, screenCentre,
+            ViewportInteractionItems{
+                ViewportInteractionItem::terrain,
+                ViewportInteractionItem::footpath
+            });
+
+        if (picked.interactionType
+                == ViewportInteractionItem::footpath
+            && picked.Element != nullptr)
+        {
+            const auto* path = picked.Element->asPath();
+            if (path != nullptr && !path->isGhost()
+                && !path->isInvisible())
+            {
+                auto pathPoint = ScreenGetMapXYWithZ(
+                    screenCentre, path->getBaseZ());
+                CoordsXY position = pathPoint.value_or(
+                    picked.Loc.toTileCentre());
+                position.x = std::clamp(
+                    position.x, picked.Loc.x,
+                    picked.Loc.x + kCoordsXYStep - 1);
+                position.y = std::clamp(
+                    position.y, picked.Loc.y,
+                    picked.Loc.y + kCoordsXYStep - 1);
+                if (!PointOnPathDeck(*path, position))
+                    position = picked.Loc.toTileCentre();
+
+                initialFloor =
+                    WalkingPathSampleAt(*path, position);
+                spawn = {
+                    position.x, position.y,
+                    int32_t(std::lround(initialFloor.z))
+                };
+                pickedWalkableSupport = true;
+            }
+        }
+        else if (picked.interactionType
+            == ViewportInteractionItem::terrain)
+        {
+            initialFloor.z = float(spawn.z);
+            initialFloor.support.tile =
+                CoordsXY{ spawn.x, spawn.y }.toTileStart();
+            pickedWalkableSupport = true;
+        }
+
         if (!MapIsLocationValid(spawn))
             return false;
+
+        if (!pickedWalkableSupport)
+        {
+            initialFloor.z = float(spawn.z);
+            initialFloor.support.tile =
+                CoordsXY{ spawn.x, spawn.y }.toTileStart();
+            initialFloor = ResolveWalkingFloorSample(
+                CoordsXY{ spawn.x, spawn.y }, initialFloor);
+        }
 
         Exit();
 
         _state.mode = Mode::walking;
         _state.camera.position = {
-            static_cast<float>(spawn.x),
-            static_cast<float>(spawn.y),
-            static_cast<float>(spawn.z) + kEyeHeight,
+            float(spawn.x),
+            float(spawn.y),
+            initialFloor.z + kEyeHeight,
         };
-        _state.camera.yaw = static_cast<float>(viewport->rotation) * (kPi * 0.5f);
+        _state.camera.yaw =
+            float(viewport->rotation) * (kPi * 0.5f);
         _state.camera.pitch = 0.0f;
-        WalkingFloorSample initialFloor{};
-        initialFloor.z = static_cast<float>(spawn.z);
-        initialFloor.support.tile = CoordsXY{ spawn.x, spawn.y }.toTileStart();
-        _state.previousFloor = ResolveWalkingFloorSample(
-            CoordsXY{ spawn.x, spawn.y }, initialFloor);
-        _state.camera.position.z = _state.previousFloor.z + kEyeHeight;
+        _state.previousFloor = initialFloor;
         _state.previousEscapeDown = false;
         PublishTweenView();
         PublishAudioListener();
@@ -808,15 +969,13 @@ namespace OpenRCT2::Ui::FirstPerson
                 }
 
                 const auto loc = car->getLocation();
-                const auto passenger = Paint::BuildFirstPersonPassengerPose(
-                    *car,
-                    {
-                        float(loc.x) + carriage.originOffset.x,
-                        float(loc.y) + carriage.originOffset.y,
-                        float(loc.z) + carriage.originOffset.z,
-                    },
-                    carriage.basis,
-                    flatPrimaryFrame, flatSecondaryFrame, _state.attachedSeat);
+                const auto passenger =
+                    Paint::BuildFirstPersonPassengerPoseWithCarriage(
+                        *car,
+                        { float(loc.x), float(loc.y), float(loc.z) },
+                        carriage,
+                        flatPrimaryFrame, flatSecondaryFrame,
+                        _state.attachedSeat);
                 const auto headBasis = Paint::GetPassengerHeadBasis(
                     passenger.basis, _state.headYaw, _state.headPitch);
 

@@ -13,6 +13,9 @@
 #include <openrct2/paint/FirstPersonAssetReconstruction.h>
 #include <openrct2/paint/FirstPersonPeriodicPassengerMotion.h>
 #include <openrct2/paint/FirstPersonTrackTrajectory.h>
+#include <openrct2/paint/FirstPersonSmallSceneryCollision.h>
+#include <openrct2/paint/FirstPersonVehicleBodyHull.h>
+#include <openrct2/paint/FirstPersonWalkingSemantics.h>
 #include <openrct2/paint/Paint.h>
 #include <openrct2/entity/EntityBase.h>
 #include <openrct2/world/tile_element/Slope.h>
@@ -63,6 +66,75 @@ TEST(FirstPersonSourceRotationTest, HysteresisBelongsToTheTrackedPoint)
         FirstPersonSourceRotationForPoint(
             camera, { 100.0f, 123.0f, 0.0f }, uint8_t{ 0 }),
         1);
+}
+
+TEST(FirstPersonAssetReconstructionTest, VerticalCoverageCanSplitOneWallIntoSeveralStrips)
+{
+    const auto exposed = SubtractFirstPersonVerticalCoverage(
+        { 0, 20 }, { { 5, 10 }, { 14, 16 } });
+    ASSERT_EQ(exposed.size(), 3u);
+    EXPECT_EQ(exposed[0].low, 0);
+    EXPECT_EQ(exposed[0].high, 5);
+    EXPECT_EQ(exposed[1].low, 10);
+    EXPECT_EQ(exposed[1].high, 14);
+    EXPECT_EQ(exposed[2].low, 16);
+    EXPECT_EQ(exposed[2].high, 20);
+
+    EXPECT_TRUE(FirstPersonVerticalPointCoveredAbove(
+        7, { { 5, 10 }, { 14, 16 } }));
+    EXPECT_FALSE(FirstPersonVerticalPointCoveredAbove(
+        12, { { 5, 10 }, { 14, 16 } }));
+}
+
+TEST(FirstPersonWalkingSemanticsTest, StableDoorStatesHaveAuthoritativeCollision)
+{
+    EXPECT_TRUE(FirstPersonDoorBlocksWalking(0));
+    EXPECT_FALSE(FirstPersonDoorBlocksWalking(5));
+    EXPECT_TRUE(FirstPersonDoorBlocksWalking(1));
+    EXPECT_TRUE(FirstPersonDoorBlocksWalking(6));
+    EXPECT_TRUE(FirstPersonDoorBlocksWalking(15));
+}
+
+TEST(FirstPersonSmallSceneryCollisionTest, QuarterMappingMatchesNativeConstructionQuadrants)
+{
+    EXPECT_EQ(FirstPersonSmallSceneryQuarterForPoint(24, 24), 0);
+    EXPECT_EQ(FirstPersonSmallSceneryQuarterForPoint(24, 8), 1);
+    EXPECT_EQ(FirstPersonSmallSceneryQuarterForPoint(8, 8), 2);
+    EXPECT_EQ(FirstPersonSmallSceneryQuarterForPoint(8, 24), 3);
+
+    FirstPersonSmallSceneryWalkingMask mask{};
+    mask.add(2, 3);
+    EXPECT_TRUE(mask.valid);
+    EXPECT_TRUE(mask.contains(2, 3));
+    EXPECT_FALSE(mask.contains(3, 2));
+}
+
+TEST(FirstPersonVehicleBodyHullTest, NativeYawProjectionUsesCarLocalForwardAndRight)
+{
+    constexpr FirstPersonVec3 local{ 6.0f, 2.0f, 4.0f };
+    const auto yaw0 =
+        ProjectFirstPersonVehicleLocalPoint(0, local);
+    EXPECT_NEAR(yaw0[0], 4.0f, 0.0001f);
+    EXPECT_NEAR(yaw0[1], -8.0f, 0.0001f);
+
+    const auto yaw8 =
+        ProjectFirstPersonVehicleLocalPoint(8, local);
+    EXPECT_NEAR(yaw8[0], 8.0f, 0.0001f);
+    EXPECT_NEAR(yaw8[1], -2.0f, 0.0001f);
+
+    FirstPersonVehicleBodyHull hull{};
+    hull.step = 4.0f;
+    hull.minForward = -4;
+    hull.minRight = -4;
+    hull.minUp = 0;
+    hull.sizeForward = 2;
+    hull.sizeRight = 2;
+    hull.sizeUp = 2;
+    hull.occupied.assign(8, 0);
+    hull.occupied[7] = 1;
+    EXPECT_TRUE(hull.contains(1, 1, 1));
+    EXPECT_TRUE(hull.containsPoint({ 2.0f, 2.0f, 6.0f }));
+    EXPECT_FALSE(hull.containsPoint({ -2.0f, -2.0f, 2.0f }));
 }
 
 TEST(FirstPersonAssetReconstructionTest, NativeViewRotationInvertsPainterDirection)
@@ -770,6 +842,112 @@ TEST(FirstPersonVehiclePoseTest, MultiDimensionSeatUsesNativeFrameMapAndLocalPit
     EXPECT_NEAR(rotated.right.z, basis.right.z, 0.000001f);
 }
 
+TEST(FirstPersonVehiclePoseTest, MissingSeatPivotKeepsPassengerPositionNeutral)
+{
+    FirstPersonCamera camera{};
+    const auto neutral = GetFirstPersonBasis(camera);
+    FirstPersonCarriageTransform carriage{};
+    carriage.positionBasis = neutral;
+    carriage.basis =
+        FirstPersonRotateLocalPitch(neutral, kPi / 2.0f);
+    carriage.orientationOnlySeatRotation = true;
+
+    constexpr FirstPersonVec3 origin{ 10.0f, 20.0f, 30.0f };
+    constexpr FirstPersonVec3 eye{ 5.0f, -2.0f, 9.0f };
+    const auto safe = FirstPersonPassengerEyeForCarriage(
+        origin, carriage, eye, false);
+    const auto expected =
+        FirstPersonPassengerEye(origin, neutral, eye);
+    EXPECT_NEAR(safe.x, expected.x, 0.0001f);
+    EXPECT_NEAR(safe.y, expected.y, 0.0001f);
+    EXPECT_NEAR(safe.z, expected.z, 0.0001f);
+
+    carriage.orientationOnlySeatRotation = false;
+    const auto rotated = FirstPersonPassengerEyeForCarriage(
+        origin, carriage, eye, false);
+    EXPECT_GT(
+        std::hypot(rotated.x - expected.x, rotated.z - expected.z),
+        1.0f);
+}
+
+TEST(FirstPersonVehiclePoseTest, SwingCalibrationFitsOneRigidFourViewOrbit)
+{
+    std::array<FirstPersonVec3, 13> points{};
+    constexpr FirstPersonVec3 pivot{ 3.0f, -2.0f, 21.0f };
+    constexpr float radius = 17.0f;
+    constexpr std::array<float, 3> angles{ 0.12f, 0.29f, 0.51f };
+
+    const auto pointAt = [&](float angle) {
+        return FirstPersonVec3{
+            pivot.x,
+            pivot.y + radius * std::sin(angle),
+            pivot.z - radius * std::cos(angle),
+        };
+    };
+    points[0] = pointAt(0.0f);
+    for (size_t level = 0; level < angles.size(); ++level)
+    {
+        points[1 + level * 2] = pointAt(-angles[level]);
+        points[2 + level * 2] = pointAt(angles[level]);
+    }
+
+    const auto calibration = FitFirstPersonSwingCalibration(
+        points, 3, FirstPersonAssetMarkerEvidence::riderPrimary, 0.2f);
+    ASSERT_TRUE(calibration.valid);
+    EXPECT_EQ(calibration.pairCount, 3);
+    EXPECT_NEAR(calibration.pivotLocal.x, pivot.x, 0.0001f);
+    EXPECT_NEAR(calibration.pivotLocal.y, pivot.y, 0.0001f);
+    EXPECT_NEAR(calibration.pivotLocal.z, pivot.z, 0.0001f);
+    EXPECT_NEAR(calibration.radius, radius, 0.0001f);
+    for (size_t level = 0; level < angles.size(); ++level)
+    {
+        EXPECT_NEAR(
+            calibration.positiveAngles[level + 1],
+            angles[level], 0.0001f);
+    }
+
+    // A moving forward coordinate is not a roll-axis pendulum, even though
+    // individual 2-D sprite pairs could still look symmetric.
+    points[4].x += 8.0f;
+    EXPECT_FALSE(
+        FitFirstPersonSwingCalibration(
+            points, 3,
+            FirstPersonAssetMarkerEvidence::riderPrimary).valid);
+}
+
+TEST(FirstPersonPassengerAssetCalibrationTest, OppositeViewPairsActAsHoldoutValidation)
+{
+    constexpr FirstPersonVec3 nativePoint{ -6.0f, 4.0f, 13.0f };
+    std::array<FirstPersonRiderChannelObservation, 4> views{};
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        const auto projected =
+            ProjectFirstPersonLocalIso(direction, nativePoint);
+        views[direction] = {
+            true, projected[0], projected[1], 4.0f, 6.0f
+        };
+    }
+    const auto pairA =
+        RecoverFirstPersonLocalPointFromOppositeViews(views, 0);
+    const auto pairB =
+        RecoverFirstPersonLocalPointFromOppositeViews(views, 1);
+    ASSERT_TRUE(pairA.has_value());
+    ASSERT_TRUE(pairB.has_value());
+    EXPECT_NEAR(pairA->x, pairB->x, 0.0001f);
+    EXPECT_NEAR(pairA->y, pairB->y, 0.0001f);
+    EXPECT_NEAR(pairA->z, pairB->z, 0.0001f);
+
+    views[3].x += 7.0f;
+    const auto contradicted =
+        RecoverFirstPersonLocalPointFromOppositeViews(views, 1);
+    ASSERT_TRUE(contradicted.has_value());
+    EXPECT_GT(
+        std::hypot(
+            contradicted->x - pairA->x,
+            contradicted->y - pairA->y),
+        3.0f);
+}
+
 TEST(FirstPersonVehiclePoseTest, SwingCalibrationUsesNativeThresholdBands)
 {
     FirstPersonSwingCalibration calibration{};
@@ -778,7 +956,7 @@ TEST(FirstPersonVehiclePoseTest, SwingCalibrationUsesNativeThresholdBands)
     calibration.positiveAngles = {
         0.0f, 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f
     };
-    calibration.pivotLength = 20.0f;
+    calibration.radius = 20.0f;
 
     EXPECT_EQ(OpenRCT2::VehicleSwingLevelForPosition(910), 0);
     EXPECT_EQ(OpenRCT2::VehicleSwingLevelForPosition(911), 1);

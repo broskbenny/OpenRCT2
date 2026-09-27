@@ -139,6 +139,133 @@ namespace OpenRCT2::Paint
         return true;
     }
 
+    enum class FirstPersonAssetMarkerEvidence : uint8_t
+    {
+        riderPrimary,
+        riderSecondary,
+        riderSilhouette,
+        bodySilhouette,
+    };
+
+    struct FirstPersonRecoveredAssetMarker
+    {
+        bool valid = false;
+        FirstPersonVec3 local{};
+        float reprojectionRmse{};
+        float holdoutError{};
+        FirstPersonAssetMarkerEvidence evidence =
+            FirstPersonAssetMarkerEvidence::bodySilhouette;
+    };
+
+    template<typename TAccept>
+    [[nodiscard]] inline bool ExtractFirstPersonPixelCentroidObservation(
+        const G1Element& g1, TAccept&& accept,
+        FirstPersonRiderChannelObservation& observation)
+    {
+        observation = {};
+        if (g1.offset == nullptr || g1.width <= 0 || g1.height <= 0
+            || g1.width > 512 || g1.height > 512
+            || g1.flags.has(G1Flag::isPalette))
+            return false;
+
+        double sumX = 0.0;
+        double sumY = 0.0;
+        size_t count = 0;
+        int32_t minX = g1.width;
+        int32_t minY = g1.height;
+        int32_t maxX = -1;
+        int32_t maxY = -1;
+        const auto visit = [&](uint8_t pixel, int32_t x, int32_t y) {
+            if (!accept(pixel))
+                return;
+            sumX += double(x);
+            sumY += double(y);
+            ++count;
+            minX = std::min(minX, x);
+            minY = std::min(minY, y);
+            maxX = std::max(maxX, x);
+            maxY = std::max(maxY, y);
+        };
+
+        if (g1.flags.has(G1Flag::hasRLECompression))
+        {
+            for (int32_t y = 0; y < g1.height; ++y)
+            {
+                const uint16_t lineOffset =
+                    uint16_t(g1.offset[y * 2])
+                    | (uint16_t(g1.offset[y * 2 + 1]) << 8);
+                const uint8_t* run = g1.offset + lineOffset;
+                bool endOfLine = false;
+                size_t guard = 0;
+                while (!endOfLine && guard++ < 256)
+                {
+                    uint8_t length = *run++;
+                    const int32_t x = *run++;
+                    endOfLine = (length & 0x80u) != 0;
+                    length &= 0x7Fu;
+                    for (uint8_t n = 0; n < length; ++n)
+                    {
+                        if (run[n] != 0)
+                            visit(run[n], x + n, y);
+                    }
+                    run += length;
+                }
+                if (!endOfLine)
+                    return false;
+            }
+        }
+        else
+        {
+            const bool transparent = g1.flags.has(G1Flag::hasTransparency);
+            for (int32_t y = 0; y < g1.height; ++y)
+            for (int32_t x = 0; x < g1.width; ++x)
+            {
+                const uint8_t pixel =
+                    g1.offset[size_t(y) * size_t(g1.width) + size_t(x)];
+                if (transparent && pixel == 0)
+                    continue;
+                visit(pixel, x, y);
+            }
+        }
+
+        if (count < 3 || maxX < minX || maxY < minY)
+            return false;
+        observation.valid = true;
+        observation.x = float(g1.xOffset) + float(sumX / double(count));
+        observation.y = float(g1.yOffset) + float(sumY / double(count));
+        observation.width = float(maxX - minX + 1);
+        observation.height = float(maxY - minY + 1);
+        return true;
+    }
+
+    [[nodiscard]] inline bool ExtractFirstPersonAssetMarkerObservation(
+        const G1Element& g1, FirstPersonAssetMarkerEvidence evidence,
+        FirstPersonRiderChannelObservation& observation)
+    {
+        switch (evidence)
+        {
+            case FirstPersonAssetMarkerEvidence::riderPrimary:
+                return ExtractFirstPersonPixelCentroidObservation(
+                    g1,
+                    [](uint8_t pixel) {
+                        return FirstPersonRiderPixelUsesPrimaryRemap(pixel);
+                    },
+                    observation);
+            case FirstPersonAssetMarkerEvidence::riderSecondary:
+                return ExtractFirstPersonPixelCentroidObservation(
+                    g1,
+                    [](uint8_t pixel) {
+                        return FirstPersonRiderPixelUsesSecondaryRemap(pixel);
+                    },
+                    observation);
+            case FirstPersonAssetMarkerEvidence::riderSilhouette:
+            case FirstPersonAssetMarkerEvidence::bodySilhouette:
+                return ExtractFirstPersonPixelCentroidObservation(
+                    g1, [](uint8_t) { return true; }, observation);
+        }
+        return false;
+    }
+
     [[nodiscard]] inline std::array<float, 2> ProjectFirstPersonLocalIso(
         uint8_t direction, FirstPersonVec3 point)
     {
@@ -183,6 +310,105 @@ namespace OpenRCT2::Paint
         if (outRmse != nullptr)
             *outRmse = rmse;
         return point;
+    }
+
+    [[nodiscard]] inline std::optional<FirstPersonVec3>
+        RecoverFirstPersonLocalPointFromOppositeViews(
+            const std::array<FirstPersonRiderChannelObservation, 4>& views,
+            uint8_t pair)
+    {
+        const uint8_t a = pair == 0 ? 0 : 1;
+        const uint8_t b = pair == 0 ? 2 : 3;
+        if (!views[a].valid || !views[b].valid)
+            return std::nullopt;
+
+        FirstPersonVec3 point{};
+        if (pair == 0)
+        {
+            const float difference = views[0].x; // y - x
+            const float sum = views[0].y - views[2].y; // x + y
+            point.x = 0.5f * (sum - difference);
+            point.y = 0.5f * (sum + difference);
+            point.z = -0.5f * (views[0].y + views[2].y);
+        }
+        else
+        {
+            const float sum = views[3].x; // x + y
+            const float difference = views[1].y - views[3].y; // y - x
+            point.x = 0.5f * (sum - difference);
+            point.y = 0.5f * (sum + difference);
+            point.z = -0.5f * (views[1].y + views[3].y);
+        }
+        return point;
+    }
+
+    [[nodiscard]] inline std::optional<FirstPersonRecoveredAssetMarker>
+        RecoverFirstPersonVehicleFrameMarker(
+            const CarEntry& entry, uint8_t bodyFrameOffset,
+            uint8_t riderAnimationFrame,
+            FirstPersonAssetMarkerEvidence evidence)
+    {
+        if (entry.numCarImages == 0
+            || !entry.groupEnabled(SpriteGroupType::slopeFlat))
+            return std::nullopt;
+        if (evidence != FirstPersonAssetMarkerEvidence::bodySilhouette
+            && entry.numSeatingRows == 0)
+            return std::nullopt;
+
+        constexpr std::array<int32_t, 4> kImageDirections{ 0, 8, 16, 24 };
+        std::array<FirstPersonRiderChannelObservation, 4> views{};
+        for (uint8_t direction = 0; direction < 4; ++direction)
+        {
+            uint32_t image = entry.getSpriteOffset(
+                SpriteGroupType::slopeFlat, kImageDirections[direction], 0)
+                + bodyFrameOffset;
+            if (evidence != FirstPersonAssetMarkerEvidence::bodySilhouette)
+            {
+                image += entry.numCarImages;
+                if (entry.flags.has(CarEntryFlag::hasRiderAnimation))
+                {
+                    image += entry.numCarImages
+                        * uint32_t(riderAnimationFrame);
+                }
+            }
+
+            const auto* g1 = GfxGetG1Element(image);
+            constexpr size_t kMaxMarkerSpritePixels = 65536;
+            if (g1 == nullptr || g1->width <= 0 || g1->height <= 0
+                || size_t(g1->width) * size_t(g1->height)
+                    > kMaxMarkerSpritePixels
+                || !ExtractFirstPersonAssetMarkerObservation(
+                    *g1, evidence, views[direction]))
+                return std::nullopt;
+        }
+
+        float reprojectionRmse = std::numeric_limits<float>::infinity();
+        const auto all =
+            RecoverFirstPersonLocalPointFromFourViews(
+                views, &reprojectionRmse);
+        const auto pairA =
+            RecoverFirstPersonLocalPointFromOppositeViews(views, 0);
+        const auto pairB =
+            RecoverFirstPersonLocalPointFromOppositeViews(views, 1);
+        if (!all.has_value() || !pairA.has_value() || !pairB.has_value()
+            || reprojectionRmse > 2.5f)
+            return std::nullopt;
+
+        const float holdoutError = std::sqrt(
+            (pairA->x - pairB->x) * (pairA->x - pairB->x)
+            + (pairA->y - pairB->y) * (pairA->y - pairB->y)
+            + (pairA->z - pairB->z) * (pairA->z - pairB->z));
+        if (holdoutError > 4.0f)
+            return std::nullopt;
+
+        FirstPersonRecoveredAssetMarker result{};
+        result.valid = true;
+        // Native yaw zero has forward=-X and right=-Y.
+        result.local = { -all->x, -all->y, all->z };
+        result.reprojectionRmse = reprojectionRmse;
+        result.holdoutError = holdoutError;
+        result.evidence = evidence;
+        return result;
     }
 
     [[nodiscard]] inline std::optional<FirstPersonPassengerAssetSeat>
@@ -340,25 +566,48 @@ namespace OpenRCT2::Paint
             const CarEntry& entry)
     {
         if (entry.animation != CarEntryAnimation::multiDimension
-            || entry.animationFrames < 4 || entry.animationFrames > 16
-            || entry.numSeatingRows == 0)
+            || entry.animationFrames < 4 || entry.animationFrames > 16)
             return {};
 
+        static constexpr std::array<FirstPersonAssetMarkerEvidence, 4>
+            kEvidenceOrder{ {
+                FirstPersonAssetMarkerEvidence::riderPrimary,
+                FirstPersonAssetMarkerEvidence::riderSecondary,
+                FirstPersonAssetMarkerEvidence::riderSilhouette,
+                FirstPersonAssetMarkerEvidence::bodySilhouette,
+            } };
+
         const uint8_t frames = entry.animationFrames;
-        std::array<FirstPersonVec3, 16> points{};
-        float sourceUncertainty = 0.0f;
-        for (uint8_t frame = 0; frame < frames; ++frame)
+        for (const auto evidence : kEvidenceOrder)
         {
-            const auto seat =
-                RecoverFirstPersonPassengerAssetSeat(entry, 0, frame);
-            if (!seat.has_value())
-                return {};
-            points[frame] = seat->localEye;
-            sourceUncertainty =
-                std::max(sourceUncertainty, seat->uncertainty);
+            std::array<FirstPersonVec3, 16> points{};
+            float sourceUncertainty = 0.0f;
+            bool complete = true;
+            for (uint8_t frame = 0; frame < frames; ++frame)
+            {
+                const auto marker =
+                    RecoverFirstPersonVehicleFrameMarker(
+                        entry, frame, frame, evidence);
+                if (!marker.has_value())
+                {
+                    complete = false;
+                    break;
+                }
+                points[frame] = marker->local;
+                sourceUncertainty = std::max(
+                    sourceUncertainty,
+                    marker->reprojectionRmse + marker->holdoutError);
+            }
+            if (!complete)
+                continue;
+
+            auto calibration =
+                FitFirstPersonMultiDimensionArtworkCalibration(
+                    points, frames, sourceUncertainty);
+            if (calibration.valid)
+                return calibration;
         }
-        return FitFirstPersonMultiDimensionArtworkCalibration(
-            points, frames, sourceUncertainty);
+        return {};
     }
 
     [[nodiscard]] inline const FirstPersonMultiDimensionArtworkCalibration*
@@ -378,8 +627,7 @@ namespace OpenRCT2::Paint
 
         const uint32_t bodyImage =
             entry.getSpriteOffset(SpriteGroupType::slopeFlat, 0, 0);
-        const uint32_t firstRiderImage = bodyImage + entry.numCarImages;
-        const auto* first = GfxGetG1Element(firstRiderImage);
+        const auto* first = GfxGetG1Element(bodyImage);
         if (first == nullptr || first->offset == nullptr)
             return nullptr;
 
