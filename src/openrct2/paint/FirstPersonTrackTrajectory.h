@@ -44,6 +44,11 @@ namespace OpenRCT2::Paint
         float halfGauge = 0.0f;
         float halfWidth = 0.0f;
         float halfHeight = 0.0f;
+        float verticalOffset = 0.0f;
+        // Bitset of FirstPersonTrackPixelChannel values that independently
+        // behaved like the fitted rails in native artwork. Kept as an integer
+        // here so trajectory evidence remains independent of the calibrator.
+        uint8_t sourceChannelMask = 0;
     };
 
     [[nodiscard]] inline const VehicleInfoList* GetFirstPersonStandardTrackVehicleInfo(

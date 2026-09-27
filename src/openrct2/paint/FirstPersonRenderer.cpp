@@ -5,6 +5,7 @@
 #include "FirstPersonRenderer.h"
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonTrackTrajectory.h"
+#include "FirstPersonTrackProfileCalibration.h"
 #include "FirstPersonVehicleBodyHull.h"
 #include "FirstPersonVehiclePose.h"
 #include "Paint.h"
@@ -2031,12 +2032,30 @@ namespace OpenRCT2::Paint
 
         struct TrackTrajectoryCacheEntry
         {
+            struct MaskedArtwork
+            {
+                ImageIndex image = kImageIndexUndefined;
+                int32_t left = 0;
+                int32_t top = 0;
+                int16_t width = 0;
+                int16_t height = 0;
+                uint8_t rotation = 0;
+                uint8_t channelMask = 0;
+                uint8_t imageChannelFlags = 0;
+                bool changed = false;
+                uint64_t fingerprint = 0;
+                std::vector<uint8_t> pixels;
+            };
+
             uint64_t signature{};
             uint64_t lastSeen{};
             bool dirty = false;
             bool boundaryContinuous = true;
             bool hasBounds = false;
             int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
+            uint8_t sourceChannelMask = 0;
+            std::array<FirstPersonSilhouette, 4> railSilhouettes{};
+            std::unordered_map<uint64_t, MaskedArtwork> maskedArtwork;
             std::vector<FirstPersonSurface> surfaces;
         };
         static std::unordered_map<uint64_t, TrackTrajectoryCacheEntry> _trackTrajectoryCache;
@@ -2540,22 +2559,81 @@ namespace OpenRCT2::Paint
             }
         }
 
-        [[nodiscard]] constexpr bool FirstPersonHasVerifiedTrackProfiles()
+        struct FirstPersonTrackProfileCalibrationState
         {
-            // A sampled vehicle path is not evidence for a universal rail
-            // cross-section. Keep trajectory recovery available, but do not
-            // emit replacement running surfaces until a track-style-specific
-            // profile has been calibrated and independently validated.
-            return false;
+            bool hasCandidate = false;
+            bool rejected = false;
+            uint8_t sourceAttempts = 0;
+            uint8_t holdoutKinds = 0;
+            uint8_t passedHoldouts = 0;
+            FirstPersonTrackRailProfile profile{};
+            std::unordered_set<uint64_t> testedSourceGroups;
+            std::unordered_set<uint64_t> testedHoldoutGroups;
+        };
+        static std::unordered_map<uint8_t, FirstPersonTrackProfileCalibrationState>
+            _trackProfileCalibrations;
+
+        [[nodiscard]] std::optional<TrackStyle> FirstPersonTrackStyleFor(
+            const Ride& ride, const TrackElement& track)
+        {
+            const auto& rtd = ride.getRideTypeDescriptor();
+            const auto& painters = track.isInverted()
+                ? rtd.InvertedTrackPaintFunctions
+                : rtd.TrackPaintFunctions;
+            const auto& painter = trackTypeIsCovered(track.getTrackType())
+                ? painters.Covered : painters.Regular;
+            if (painter.trackStyle == TrackStyle::null)
+                return std::nullopt;
+            return painter.trackStyle;
+        }
+
+        [[nodiscard]] bool FirstPersonHasVerifiedTrackProfiles()
+        {
+            return std::any_of(
+                _trackProfileCalibrations.begin(),
+                _trackProfileCalibrations.end(),
+                [](const auto& item) {
+                    return item.second.hasCandidate
+                        && item.second.profile.verified;
+                });
         }
 
         [[nodiscard]] std::optional<FirstPersonTrackRailProfile>
             FirstPersonVerifiedTrackRailProfile(
                 const Ride& ride, const TrackElement& track)
         {
-            (void)ride;
-            (void)track;
-            return std::nullopt;
+            const auto style = FirstPersonTrackStyleFor(ride, track);
+            if (!style.has_value())
+                return std::nullopt;
+            const auto found = _trackProfileCalibrations.find(
+                static_cast<uint8_t>(*style));
+            if (found == _trackProfileCalibrations.end()
+                || !found->second.hasCandidate
+                || !found->second.profile.verified)
+                return std::nullopt;
+            return found->second.profile;
+        }
+
+        [[nodiscard]] uint64_t FirstPersonTrackProfileSignature(
+            const Ride& ride, const TrackElement& track)
+        {
+            const auto profile =
+                FirstPersonVerifiedTrackRailProfile(ride, track);
+            if (!profile.has_value())
+                return 0;
+            uint64_t result = 14695981039346656037ull;
+            ExtendStableKey(result, 1);
+            ExtendStableKey(
+                result, uint32_t(std::lround(profile->halfGauge * 100.0f)));
+            ExtendStableKey(
+                result, uint32_t(std::lround(profile->halfWidth * 100.0f)));
+            ExtendStableKey(
+                result, uint32_t(std::lround(profile->halfHeight * 100.0f)));
+            ExtendStableKey(
+                result, uint32_t(int32_t(std::lround(
+                    profile->verticalOffset * 100.0f))));
+            ExtendStableKey(result, profile->sourceChannelMask);
+            return result;
         }
 
         [[nodiscard]] bool RideUsesStandardFirstPersonTrajectory(const Ride& ride)
@@ -2617,6 +2695,529 @@ namespace OpenRCT2::Paint
             return nullptr;
         }
 
+        struct FirstPersonTrackCalibrationInstance
+        {
+            TrackElement* track = nullptr;
+            TileElement* element = nullptr;
+            const Ride* ride = nullptr;
+            TrackStyle style = TrackStyle::null;
+            CoordsXYZ sampleOrigin{};
+            FirstPersonVec3 groupAnchor{};
+            FirstPersonTrackTrajectory trajectory{};
+        };
+
+        [[nodiscard]] std::optional<FirstPersonTrackCalibrationInstance>
+            ResolveFirstPersonTrackCalibrationInstance(
+                const ReconstructionGroupInfo& group)
+        {
+            if (group.type != TileElementType::track)
+                return std::nullopt;
+
+            TileElement* sourceElement = nullptr;
+            TrackElement* sourceTrack = nullptr;
+            auto* element = MapGetFirstElementAt(group.sourceTile);
+            if (element != nullptr)
+            {
+                do
+                {
+                    if (element->getType() != TileElementType::track
+                        || element->isGhost() || element->isInvisible())
+                        continue;
+                    const auto candidate =
+                        GetReconstructionGroup(group.sourceTile, element);
+                    if (!candidate.has_value() || candidate->key != group.key)
+                        continue;
+                    sourceElement = element;
+                    sourceTrack = element->asTrack();
+                    break;
+                } while (!(element++)->isLastForTile());
+            }
+            if (sourceElement == nullptr || sourceTrack == nullptr
+                || sourceTrack->hasChain() || sourceTrack->hasCableLift())
+                return std::nullopt;
+
+            const auto* ride = GetRide(sourceTrack->getRideIndex());
+            if (ride == nullptr
+                || !RideUsesStandardFirstPersonTrajectory(*ride))
+                return std::nullopt;
+            const auto style = FirstPersonTrackStyleFor(*ride, *sourceTrack);
+            const auto sampleOrigin =
+                FirstPersonTrackSampleOrigin(group.sourceTile, sourceElement);
+            if (!style.has_value() || !sampleOrigin.has_value())
+                return std::nullopt;
+
+            const auto trajectory = BuildFirstPersonTrackTrajectory(
+                sourceTrack->getTrackType(), sourceTrack->getDirection(),
+                { float(sampleOrigin->x), float(sampleOrigin->y),
+                  float(sampleOrigin->z) });
+            if (!trajectory.has_value()
+                || !FirstPersonTrackTrajectorySamplesContinuous(*trajectory))
+                return std::nullopt;
+
+            return FirstPersonTrackCalibrationInstance{
+                sourceTrack,
+                sourceElement,
+                ride,
+                *style,
+                *sampleOrigin,
+                group.anchor,
+                *trajectory,
+            };
+        }
+
+        [[nodiscard]] bool FirstPersonTrackCalibrationTilesReady(
+            const FirstPersonTrackCalibrationInstance& instance,
+            bool requireAllRotations)
+        {
+            const auto& ted = TrackMetadata::GetTrackElementDescriptor(
+                instance.track->getTrackType());
+            if (ted.sequenceData.numSequences == 0)
+                return false;
+
+            const int32_t originX =
+                int32_t(std::lround(instance.groupAnchor.x));
+            const int32_t originY =
+                int32_t(std::lround(instance.groupAnchor.y));
+            for (uint8_t sequence = 0;
+                 sequence < ted.sequenceData.numSequences; ++sequence)
+            {
+                const auto& clearance =
+                    ted.sequenceData.sequences[sequence].clearance;
+                const auto offset =
+                    CoordsXY{ clearance.x, clearance.y }.rotate(
+                        instance.track->getDirection());
+                const CoordsXY tile{
+                    originX + offset.x,
+                    originY + offset.y,
+                };
+                const auto found = _staticPaintCache.find(TerrainKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+                if (found == _staticPaintCache.end()
+                    || !found->second.valid || found->second.dirty)
+                    return false;
+                if (!requireAllRotations)
+                    continue;
+                for (const auto& rotation : found->second.rotations)
+                {
+                    if (!rotation.valid)
+                        return false;
+                }
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool FirstPersonTrackCalibrationViewsComplete(
+            const FirstPersonTrackCalibrationInstance& instance)
+        {
+            return FirstPersonTrackCalibrationTilesReady(instance, true);
+        }
+
+        [[nodiscard]] bool FirstPersonTrackChannelEnabledForImage(
+            const ImageId& image, FirstPersonTrackPixelChannel channel)
+        {
+            switch (channel)
+            {
+                case FirstPersonTrackPixelChannel::trackRailPalette:
+                    return true;
+                case FirstPersonTrackPixelChannel::primaryRemap:
+                    return image.HasPrimary();
+                case FirstPersonTrackPixelChannel::secondaryRemap:
+                    return image.HasSecondary();
+                case FirstPersonTrackPixelChannel::tertiaryRemap:
+                    return image.HasTertiary();
+                default:
+                    return false;
+            }
+        }
+
+        [[nodiscard]] std::optional<std::vector<uint8_t>>
+            DecodeFirstPersonTrackSprite(const G1Element& g1)
+        {
+            if (g1.offset == nullptr || g1.width <= 0 || g1.height <= 0
+                || g1.width > 512 || g1.height > 512
+                || g1.flags.has(G1Flag::isPalette))
+                return std::nullopt;
+
+            const size_t pixelCount =
+                size_t(g1.width) * size_t(g1.height);
+            if (pixelCount == 0 || pixelCount > 262144)
+                return std::nullopt;
+            std::vector<uint8_t> pixels(pixelCount, 0);
+
+            if (g1.flags.has(G1Flag::hasRLECompression))
+            {
+                for (int32_t y = 0; y < g1.height; ++y)
+                {
+                    const uint16_t lineOffset =
+                        uint16_t(g1.offset[y * 2])
+                        | (uint16_t(g1.offset[y * 2 + 1]) << 8);
+                    const uint8_t* run = g1.offset + lineOffset;
+                    bool endOfLine = false;
+                    size_t guard = 0;
+                    while (!endOfLine && guard++ < 256)
+                    {
+                        uint8_t length = *run++;
+                        const int32_t x = *run++;
+                        endOfLine = (length & 0x80u) != 0;
+                        length &= 0x7Fu;
+                        if (x < 0 || x + int32_t(length) > g1.width)
+                            return std::nullopt;
+                        for (uint8_t n = 0; n < length; ++n)
+                        {
+                            pixels[size_t(y) * size_t(g1.width)
+                                + size_t(x + n)] = run[n];
+                        }
+                        run += length;
+                    }
+                    if (!endOfLine)
+                        return std::nullopt;
+                }
+            }
+            else
+            {
+                std::copy_n(g1.offset, pixelCount, pixels.begin());
+                if (!g1.flags.has(G1Flag::hasTransparency))
+                    return pixels;
+            }
+            return pixels;
+        }
+
+        void AddFirstPersonTrackSurfaceObservation(
+            FirstPersonTrackArtworkObservation& observation,
+            uint8_t rotation, const FirstPersonSurface& surface)
+        {
+            if (rotation >= 4 || surface.reconstructionGroup == 0
+                || !surface.viewFacing || !surface.image.HasValue()
+                || surface.image.IsBlended() || surface.mask.HasValue()
+                || !surface.immutablePixels.empty())
+                return;
+            const auto* g1 = GfxGetG1Element(surface.image);
+            if (g1 == nullptr)
+                return;
+            const auto pixels = DecodeFirstPersonTrackSprite(*g1);
+            if (!pixels.has_value())
+                return;
+
+            const int32_t left =
+                int32_t(std::lround(surface.billboardLeft));
+            const int32_t top =
+                int32_t(std::lround(surface.billboardTop));
+            for (int32_t y = 0; y < g1->height; ++y)
+            for (int32_t x = 0; x < g1->width; ++x)
+            {
+                const uint8_t pixel =
+                    (*pixels)[size_t(y) * size_t(g1->width) + size_t(x)];
+                if (pixel == 0)
+                    continue;
+                for (size_t channelIndex = 0;
+                     channelIndex < kFirstPersonTrackPixelChannelCount;
+                     ++channelIndex)
+                {
+                    const auto channel =
+                        static_cast<FirstPersonTrackPixelChannel>(
+                            channelIndex);
+                    if (!FirstPersonTrackChannelEnabledForImage(
+                            surface.image, channel)
+                        || !FirstPersonTrackPixelMatchesChannel(
+                            pixel, channel))
+                        continue;
+                    observation.channelViews[channelIndex][rotation].add(
+                        left + x, top + y);
+                }
+            }
+        }
+
+        [[nodiscard]] FirstPersonTrackArtworkObservation
+            CollectFirstPersonTrackArtworkObservation(uint64_t groupKey)
+        {
+            FirstPersonTrackArtworkObservation result{};
+            for (const auto& [tileKey, cached] : _staticPaintCache)
+            {
+                (void)tileKey;
+                if (!cached.valid || cached.dirty)
+                    continue;
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                {
+                    const auto& variant = cached.rotations[rotation];
+                    if (!variant.valid)
+                        continue;
+                    const auto collect =
+                        [&](const std::vector<FirstPersonSurface>& surfaces) {
+                            for (const auto& surface : surfaces)
+                            {
+                                if (surface.reconstructionGroup != groupKey)
+                                    continue;
+                                AddFirstPersonTrackSurfaceObservation(
+                                    result, rotation, surface);
+                            }
+                        };
+                    collect(variant.residentSurfaces);
+                    collect(variant.streamedSurfaces);
+                }
+            }
+            return result;
+        }
+
+        [[nodiscard]] bool FirstPersonTrackGroupNeedsCalibrationViews(
+            const ReconstructionGroupInfo& group)
+        {
+            const auto instance =
+                ResolveFirstPersonTrackCalibrationInstance(group);
+            if (!instance.has_value()
+                || !FirstPersonTrackCalibrationTilesReady(*instance, false))
+                return false;
+            auto& state = _trackProfileCalibrations[
+                static_cast<uint8_t>(instance->style)];
+            if (state.rejected
+                || (state.hasCandidate && state.profile.verified))
+                return false;
+
+            const auto baseType =
+                uncoverTrackType(instance->track->getTrackType());
+            if (!state.hasCandidate)
+            {
+                return baseType == TrackElemType::flat
+                    && !state.testedSourceGroups.contains(group.key)
+                    && state.sourceAttempts < 2;
+            }
+
+            const uint8_t kinds =
+                FirstPersonTrackValidationKinds(instance->trajectory);
+            if (kinds == 0
+                || state.testedHoldoutGroups.contains(group.key))
+                return false;
+            constexpr uint8_t kAllKinds =
+                static_cast<uint8_t>(FirstPersonTrackValidationKind::curve)
+                | static_cast<uint8_t>(FirstPersonTrackValidationKind::slope)
+                | static_cast<uint8_t>(FirstPersonTrackValidationKind::bank);
+            return state.passedHoldouts < 3
+                || (state.holdoutKinds & kAllKinds) != kAllKinds;
+        }
+
+        void UpdateFirstPersonTrackProfileCalibration(
+            const ReconstructionGroupInfo& group)
+        {
+            const auto instance =
+                ResolveFirstPersonTrackCalibrationInstance(group);
+            if (!instance.has_value()
+                || !FirstPersonTrackCalibrationViewsComplete(*instance))
+                return;
+
+            auto& state = _trackProfileCalibrations[
+                static_cast<uint8_t>(instance->style)];
+            if (state.rejected
+                || (state.hasCandidate && state.profile.verified))
+                return;
+
+            const auto observation =
+                CollectFirstPersonTrackArtworkObservation(group.key);
+            const auto baseType =
+                uncoverTrackType(instance->track->getTrackType());
+            if (!state.hasCandidate)
+            {
+                if (baseType != TrackElemType::flat
+                    || state.testedSourceGroups.contains(group.key))
+                    return;
+
+                state.testedSourceGroups.insert(group.key);
+                if (!FirstPersonTrackObservationHasCompleteChannel(
+                        observation))
+                {
+                    if (++state.sourceAttempts >= 2)
+                        state.rejected = true;
+                    return;
+                }
+
+                const auto calibrated =
+                    FitFirstPersonTrackRailProfileFromArtwork(
+                        observation, instance->trajectory,
+                        instance->groupAnchor);
+                if (!calibrated.valid)
+                {
+                    if (++state.sourceAttempts >= 2)
+                        state.rejected = true;
+                    return;
+                }
+
+                state.hasCandidate = true;
+                state.profile = calibrated.profile;
+                state.profile.verified = false;
+                return;
+            }
+
+            const uint8_t kinds =
+                FirstPersonTrackValidationKinds(instance->trajectory);
+            if (kinds == 0
+                || state.testedHoldoutGroups.contains(group.key))
+                return;
+            state.testedHoldoutGroups.insert(group.key);
+            if (!FirstPersonTrackObservationHasCompleteChannel(observation))
+                return;
+
+            const auto fit =
+                ValidateFirstPersonTrackRailProfileAgainstArtwork(
+                    observation, instance->trajectory,
+                    instance->groupAnchor, state.profile);
+            if (!IsFirstPersonTrackHoldoutFitReliable(fit))
+            {
+                state.rejected = true;
+                state.hasCandidate = false;
+                state.profile = {};
+                return;
+            }
+
+            state.profile.sourceChannelMask |=
+                FirstPersonTrackPixelChannelBit(fit.channel);
+            state.holdoutKinds |= kinds;
+            ++state.passedHoldouts;
+
+            constexpr uint8_t kAllKinds =
+                static_cast<uint8_t>(FirstPersonTrackValidationKind::curve)
+                | static_cast<uint8_t>(FirstPersonTrackValidationKind::slope)
+                | static_cast<uint8_t>(FirstPersonTrackValidationKind::bank);
+            if (state.passedHoldouts >= 3
+                && (state.holdoutKinds & kAllKinds) == kAllKinds)
+            {
+                state.profile.verified = true;
+            }
+        }
+
+        void ApplyFirstPersonTrackRailArtworkMask(
+            FirstPersonSurface& surface, uint8_t rotation,
+            TrackTrajectoryCacheEntry& trajectory)
+        {
+            if (rotation >= 4 || trajectory.sourceChannelMask == 0
+                || trajectory.railSilhouettes[rotation].empty()
+                || !surface.viewFacing || !surface.image.HasValue()
+                || surface.image.IsBlended() || surface.mask.HasValue()
+                || !surface.immutablePixels.empty())
+                return;
+            const auto* g1 = GfxGetG1Element(surface.image);
+            if (g1 == nullptr)
+                return;
+
+            const int32_t left =
+                int32_t(std::lround(surface.billboardLeft));
+            const int32_t top =
+                int32_t(std::lround(surface.billboardTop));
+            uint8_t imageChannelFlags = 0;
+            if (surface.image.HasPrimary())
+                imageChannelFlags |= 1u << 0;
+            if (surface.image.HasSecondary())
+                imageChannelFlags |= 1u << 1;
+            if (surface.image.HasTertiary())
+                imageChannelFlags |= 1u << 2;
+
+            uint64_t key = 1469598103934665603ull;
+            const auto extendKey = [&](uint64_t value) {
+                key ^= value;
+                key *= 1099511628211ull;
+            };
+            extendKey(surface.image.GetIndex());
+            extendKey(uint32_t(left));
+            extendKey(uint32_t(top));
+            extendKey(rotation);
+            extendKey(trajectory.sourceChannelMask);
+            extendKey(imageChannelFlags);
+
+            const auto applyCached =
+                [&](const TrackTrajectoryCacheEntry::MaskedArtwork& cached) {
+                    if (!cached.changed)
+                        return;
+                    surface.immutablePixels = cached.pixels;
+                    surface.immutableWidth = cached.width;
+                    surface.immutableHeight = cached.height;
+                    surface.immutableFingerprint = cached.fingerprint;
+                };
+
+            if (const auto found = trajectory.maskedArtwork.find(key);
+                found != trajectory.maskedArtwork.end()
+                    && found->second.image == surface.image.GetIndex()
+                    && found->second.left == left
+                    && found->second.top == top
+                    && found->second.rotation == rotation
+                    && found->second.channelMask
+                        == trajectory.sourceChannelMask
+                    && found->second.imageChannelFlags == imageChannelFlags)
+            {
+                applyCached(found->second);
+                return;
+            }
+
+            TrackTrajectoryCacheEntry::MaskedArtwork cached{};
+            cached.image = surface.image.GetIndex();
+            cached.left = left;
+            cached.top = top;
+            cached.width = g1->width;
+            cached.height = g1->height;
+            cached.rotation = rotation;
+            cached.channelMask = trajectory.sourceChannelMask;
+            cached.imageChannelFlags = imageChannelFlags;
+
+            auto pixels = DecodeFirstPersonTrackSprite(*g1);
+            if (!pixels.has_value())
+            {
+                trajectory.maskedArtwork[key] = std::move(cached);
+                return;
+            }
+
+            const auto& railSilhouette =
+                trajectory.railSilhouettes[rotation];
+            for (int32_t y = 0; y < g1->height; ++y)
+            for (int32_t x = 0; x < g1->width; ++x)
+            {
+                auto& pixel =
+                    (*pixels)[size_t(y) * size_t(g1->width) + size_t(x)];
+                if (pixel == 0)
+                    continue;
+
+                uint8_t pixelMask = 0;
+                for (size_t channelIndex = 0;
+                     channelIndex < kFirstPersonTrackPixelChannelCount;
+                     ++channelIndex)
+                {
+                    const auto channel =
+                        static_cast<FirstPersonTrackPixelChannel>(
+                            channelIndex);
+                    if (FirstPersonTrackChannelEnabledForImage(
+                            surface.image, channel)
+                        && FirstPersonTrackPixelMatchesChannel(
+                            pixel, channel))
+                    {
+                        pixelMask |=
+                            FirstPersonTrackPixelChannelBit(channel);
+                    }
+                }
+                if ((pixelMask & trajectory.sourceChannelMask) == 0
+                    || !FirstPersonTrackSilhouetteContainsNear(
+                        railSilhouette, left + x, top + y, 1))
+                    continue;
+                pixel = 0;
+                cached.changed = true;
+            }
+
+            if (cached.changed)
+            {
+                cached.pixels = std::move(*pixels);
+                uint64_t fingerprint = 1469598103934665603ull;
+                const auto extendFingerprint = [&](uint64_t value) {
+                    fingerprint ^= value;
+                    fingerprint *= 1099511628211ull;
+                };
+                extendFingerprint(surface.image.GetIndex());
+                extendFingerprint(rotation);
+                for (const auto pixel : cached.pixels)
+                    extendFingerprint(pixel);
+                cached.fingerprint = fingerprint;
+            }
+
+            auto [inserted, ignored] =
+                trajectory.maskedArtwork.insert_or_assign(
+                    key, std::move(cached));
+            (void)ignored;
+            applyCached(inserted->second);
+        }
+
         [[nodiscard]] uint8_t FirstPersonRailColour(
             const Ride& ride, const TrackElement& track, bool lighter)
         {
@@ -2649,38 +3250,58 @@ namespace OpenRCT2::Paint
             const int32_t tileY = int32_t(std::floor(midpoint.y / float(kCoordsXYStep)));
             const uint64_t gpuRegion = FirstPersonGpuRegionKey(tileX, tileY);
 
+            const auto emitFace = [&](const std::array<FirstPersonVec3, 4>& points,
+                                      uint8_t colour) {
+                FirstPersonSurface surface{};
+                surface.solidColour = colour;
+                surface.gpuRegion = gpuRegion;
+                surface.reconstructionGroup = groupKey;
+                EmitQuad(surface, { {
+                    { points[0], 0.0f, 0.0f },
+                    { points[1], 0.0f, 0.0f },
+                    { points[2], 0.0f, 0.0f },
+                    { points[3], 0.0f, 0.0f },
+                } });
+                cached.surfaces.emplace_back(std::move(surface));
+            };
+
             for (const float gaugeSide : { -profile.halfGauge, profile.halfGauge })
             {
-                const auto centreA = Add(a.position, Mul(a.basis.right, gaugeSide));
-                const auto centreB = Add(b.position, Mul(b.basis.right, gaugeSide));
+                const auto centreA = Add(
+                    Add(a.position, Mul(a.basis.right, gaugeSide)),
+                    Mul(a.basis.up, profile.verticalOffset));
+                const auto centreB = Add(
+                    Add(b.position, Mul(b.basis.right, gaugeSide)),
+                    Mul(b.basis.up, profile.verticalOffset));
                 const auto acrossA = Mul(a.basis.right, profile.halfWidth);
                 const auto acrossB = Mul(b.basis.right, profile.halfWidth);
                 const auto upA = Mul(a.basis.up, profile.halfHeight);
                 const auto upB = Mul(b.basis.up, profile.halfHeight);
 
-                FirstPersonSurface horizontal{};
-                horizontal.solidColour = topColour;
-                horizontal.gpuRegion = gpuRegion;
-                horizontal.reconstructionGroup = groupKey;
-                EmitQuad(horizontal, { {
-                    { Sub(centreA, acrossA), 0.0f, 0.0f },
-                    { Add(centreA, acrossA), 0.0f, 0.0f },
-                    { Add(centreB, acrossB), 0.0f, 0.0f },
-                    { Sub(centreB, acrossB), 0.0f, 0.0f },
-                } });
-                cached.surfaces.emplace_back(std::move(horizontal));
-
-                FirstPersonSurface vertical{};
-                vertical.solidColour = sideColour;
-                vertical.gpuRegion = gpuRegion;
-                vertical.reconstructionGroup = groupKey;
-                EmitQuad(vertical, { {
-                    { Sub(centreA, upA), 0.0f, 0.0f },
-                    { Add(centreA, upA), 0.0f, 0.0f },
-                    { Add(centreB, upB), 0.0f, 0.0f },
-                    { Sub(centreB, upB), 0.0f, 0.0f },
-                } });
-                cached.surfaces.emplace_back(std::move(vertical));
+                emitFace({ {
+                    Add(Sub(centreA, acrossA), upA),
+                    Add(Add(centreA, acrossA), upA),
+                    Add(Add(centreB, acrossB), upB),
+                    Add(Sub(centreB, acrossB), upB),
+                } }, topColour);
+                emitFace({ {
+                    Sub(Sub(centreA, acrossA), upA),
+                    Sub(Sub(centreB, acrossB), upB),
+                    Sub(Add(centreB, acrossB), upB),
+                    Sub(Add(centreA, acrossA), upA),
+                } }, sideColour);
+                emitFace({ {
+                    Sub(Add(centreA, acrossA), upA),
+                    Sub(Add(centreB, acrossB), upB),
+                    Add(Add(centreB, acrossB), upB),
+                    Add(Add(centreA, acrossA), upA),
+                } }, sideColour);
+                emitFace({ {
+                    Sub(Sub(centreA, acrossA), upA),
+                    Add(Sub(centreA, acrossA), upA),
+                    Add(Sub(centreB, acrossB), upB),
+                    Sub(Sub(centreB, acrossB), upB),
+                } }, sideColour);
             }
         }
 
@@ -2730,7 +3351,8 @@ namespace OpenRCT2::Paint
 
         TrackTrajectoryCacheEntry BuildTrackTrajectoryGeometry(
             const Ride& ride, const TrackElement& track, TileElement* originElement,
-            const CoordsXYZ& sampleOrigin, uint64_t groupKey, uint64_t signature,
+            const CoordsXYZ& sampleOrigin, const FirstPersonVec3& groupAnchor,
+            uint64_t groupKey, uint64_t signature,
             const FirstPersonTrackTrajectory& trajectory, uint64_t frame)
         {
             TrackTrajectoryCacheEntry result{};
@@ -2741,6 +3363,9 @@ namespace OpenRCT2::Paint
             if (!verifiedProfile.has_value() || !verifiedProfile->verified)
                 return result;
             const auto& profile = *verifiedProfile;
+            result.sourceChannelMask = profile.sourceChannelMask;
+            result.railSilhouettes = BuildFirstPersonTrackRailSilhouettes(
+                trajectory, groupAnchor, profile);
             const uint8_t topColour = FirstPersonRailColour(ride, track, true);
             const uint8_t sideColour = FirstPersonRailColour(ride, track, false);
 
@@ -2859,6 +3484,9 @@ namespace OpenRCT2::Paint
                     const auto scheme = std::min<uint8_t>(
                         track->getColourScheme(), uint8_t(kNumRideColourSchemes - 1));
                     ExtendStableKey(signature, EnumValue(ride->trackColours[scheme].main));
+                    ExtendStableKey(
+                        signature,
+                        FirstPersonTrackProfileSignature(*ride, *track));
                     ExtendStableKey(signature, trajectory->points.size());
 
                     auto it = _trackTrajectoryCache.find(group->key);
@@ -2867,8 +3495,9 @@ namespace OpenRCT2::Paint
                         if (it != _trackTrajectoryCache.end())
                             MarkTrackTrajectoryRegionsDirty(it->second);
                         auto rebuilt = BuildTrackTrajectoryGeometry(
-                            *ride, *track, originElement, *sampleOrigin, group->key,
-                            signature, *trajectory, frame);
+                            *ride, *track, originElement, *sampleOrigin,
+                            group->anchor, group->key, signature,
+                            *trajectory, frame);
                         MarkTrackTrajectoryRegionsDirty(rebuilt);
                         _trackTrajectoryCache[group->key] = std::move(rebuilt);
                     }
@@ -3462,6 +4091,9 @@ namespace OpenRCT2::Paint
             std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
             for (auto& misses : missesByRotation)
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
+            size_t trackCalibrationPaintBudget = 1;
+            std::unordered_map<uint64_t, ReconstructionGroupInfo>
+                trackCalibrationGroups;
             const auto& view = scene.resolvedView;
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
@@ -3561,6 +4193,18 @@ namespace OpenRCT2::Paint
                     state.lastSeen = frame;
                     rotationMask |= uint8_t(1u << selected);
 
+                    bool calibrationScheduled =
+                        trackCalibrationGroups.contains(group.key);
+                    if (!calibrationScheduled
+                        && trackCalibrationPaintBudget > 0
+                        && FirstPersonTrackGroupNeedsCalibrationViews(group))
+                    {
+                        trackCalibrationGroups.emplace(group.key, group);
+                        --trackCalibrationPaintBudget;
+                        calibrationScheduled = true;
+                    }
+                    if (calibrationScheduled)
+                        rotationMask |= 0x0Fu;
                 }
 
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
@@ -3878,6 +4522,12 @@ namespace OpenRCT2::Paint
                 }
             }
 
+            for (const auto& [groupKey, group] : trackCalibrationGroups)
+            {
+                (void)groupKey;
+                UpdateFirstPersonTrackProfileCalibration(group);
+            }
+
             // Only geometry that cannot live in a persistent opaque region is
             // reconstructed at surface granularity on an ordinary frame.
             for (const auto tile : scene.visibleTiles)
@@ -3909,6 +4559,19 @@ namespace OpenRCT2::Paint
                                 continue;
 
                             auto surface = staticSurface;
+                            if (surface.reconstructionGroup != 0)
+                            {
+                                const auto trajectory =
+                                    _trackTrajectoryCache.find(
+                                        surface.reconstructionGroup);
+                                if (trajectory != _trackTrajectoryCache.end()
+                                    && !trajectory->second.dirty
+                                    && trajectory->second.lastSeen == frame)
+                                {
+                                    ApplyFirstPersonTrackRailArtworkMask(
+                                        surface, rotation, trajectory->second);
+                                }
+                            }
                             ReorientBillboard(surface, opt.camera.position, basis.right);
                             if (SurfaceMayBeVisible(surface, worldFrustum))
                                 scene.surfaces.emplace_back(std::move(surface));
@@ -4044,6 +4707,7 @@ namespace OpenRCT2::Paint
         _entityRotations.clear();
         _dynamicEntitySpatialCache = {};
         _trackTrajectoryCache.clear();
+        _trackProfileCalibrations.clear();
         _largeSceneryAssetModels.clear();
         _largeSceneryGeometryCache.clear();
         _largeSceneryGroupsByRegion.clear();
