@@ -12,6 +12,7 @@
 #include "../../SpriteIds.h"
 #include "../../paint/vehicle/VehiclePaint.h"
 #include "../../ride/RideData.h"
+#include "../../ride/VehicleVisualState.h"
 #include "../Paint.h"
 
 using namespace OpenRCT2;
@@ -28,32 +29,12 @@ void PaintVehicle(PaintSession& session, const Vehicle& vehicle, int32_t imageDi
         return;
     }
 
-    int32_t zOffset = 0;
-    if (vehicle.IsCableLift())
-    {
-        carEntry = &kCableLiftVehicle;
-    }
-    else
-    {
-        auto rideEntry = vehicle.GetRideEntry();
-        if (rideEntry == nullptr)
-        {
-            return;
-        }
+    const auto visual = ResolveVehicleVisualState(vehicle);
+    if (!visual)
+        return;
 
-        auto carEntryIndex = vehicle.vehicle_type;
-        if (vehicle.flags.has(VehicleFlag::carIsInverted))
-        {
-            carEntryIndex++;
-            zOffset += 16;
-        }
-
-        if (carEntryIndex >= std::size(rideEntry->Cars))
-        {
-            return;
-        }
-        carEntry = &rideEntry->Cars[carEntryIndex];
-    }
+    const int32_t zOffset = visual.zOffset;
+    carEntry = visual.carEntry;
 
     switch (carEntry->paintStyle)
     {

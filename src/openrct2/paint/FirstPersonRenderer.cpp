@@ -26,11 +26,13 @@
 #include "../drawing/RenderTarget.h"
 #include "../drawing/ScrollingText.h"
 #include "../entity/EntityBase.h"
+#include "../entity/EntityTweener.h"
 #include "../ride/CarEntry.h"
 #include "../ride/Ride.h"
 #include "../ride/RideData.h"
 #include "../ride/RideEntry.h"
 #include "../ride/TrackData.h"
+#include "../ride/TrackPaint.h"
 #include "../ride/TrackIteration.h"
 #include "../ride/Vehicle.h"
 #include "../ride/ted/TrackElementDescriptor.h"
@@ -1398,7 +1400,8 @@ namespace OpenRCT2::Paint
                 const Vehicle& vehicle, ImageId image)
         {
             AttachedVehicleComponent result{};
-            const auto* entry = vehicle.Entry();
+            const auto visual = ResolveVehicleVisualState(vehicle);
+            const auto* entry = visual.carEntry;
             if (entry == nullptr || !image.HasValue()
                 || entry->numCarImages == 0)
                 return result;
@@ -1426,12 +1429,13 @@ namespace OpenRCT2::Paint
                 const Vehicle& vehicle, uint8_t seatIndex)
         {
             if (seatIndex == 0xFF
-                || vehicle.flags.hasAny(
-                    VehicleFlag::carIsReversed,
-                    VehicleFlag::carIsInverted))
+                || vehicle.flags.has(
+                    VehicleFlag::carIsReversed))
                 return nullptr;
             const auto* ride = vehicle.GetRide();
-            const auto* entry = vehicle.Entry();
+            const auto visual =
+                ResolveVehicleVisualState(vehicle);
+            const auto* entry = visual.carEntry;
             if (ride == nullptr || entry == nullptr
                 || !ride->getRideTypeDescriptor().flags.has(RtdFlag::hasTrack))
                 return nullptr;
@@ -1468,13 +1472,19 @@ namespace OpenRCT2::Paint
             const FirstPersonVehicleBodyHull& hull,
             ImageId bodyImageTemplate)
         {
-            const auto carriage =
-                FirstPersonVehicleSimulationCarriageTransform(vehicle);
-            const auto loc = vehicle.getLocation();
+            const auto presentation =
+                BuildFirstPersonVehiclePresentationState(
+                    vehicle,
+                    EntityTweener::get().trackedVehicleVisuals(
+                        vehicle.id));
+            const auto& carriage = presentation.carriage;
             FirstPersonVec3 origin{
-                float(loc.x) + carriage.originOffset.x,
-                float(loc.y) + carriage.originOffset.y,
-                float(loc.z) + carriage.originOffset.z,
+                presentation.vehicleOrigin.x
+                    + carriage.originOffset.x,
+                presentation.vehicleOrigin.y
+                    + carriage.originOffset.y,
+                presentation.vehicleOrigin.z
+                    + carriage.originOffset.z,
             };
             const auto& basis = carriage.basis;
 
@@ -2267,22 +2277,41 @@ namespace OpenRCT2::Paint
         [[nodiscard]] FirstPersonSemanticSphere EntityVisualBounds(const EntityBase& entity)
         {
             const auto worldLoc = entity.getLocation();
-            float halfWidth = std::max(1.0f, float(entity.spriteData.width));
+            float halfWidth = std::max(
+                1.0f, float(entity.spriteData.width));
             float verticalExtent = std::max(
-                float(entity.spriteData.heightMin), float(entity.spriteData.heightMax));
-            if (const auto* vehicle = entity.as<Vehicle>(); vehicle != nullptr)
+                float(entity.spriteData.heightMin),
+                float(entity.spriteData.heightMax));
+            int32_t visualZOffset = 0;
+            if (const auto* vehicle =
+                    entity.as<Vehicle>();
+                vehicle != nullptr)
             {
-                if (const auto* entry = vehicle->Entry(); entry != nullptr)
+                const auto visual =
+                    ResolveVehicleVisualState(*vehicle);
+                visualZOffset = visual.zOffset;
+                if (visual.carEntry != nullptr)
                 {
-                    halfWidth = std::max(halfWidth, float(entry->spriteWidth));
+                    halfWidth = std::max(
+                        halfWidth,
+                        float(visual.carEntry->spriteWidth));
                     verticalExtent = std::max(
                         verticalExtent,
-                        float(std::max(entry->spriteHeightNegative, entry->spriteHeightPositive)));
+                        float(std::max(
+                            visual.carEntry->spriteHeightNegative,
+                            visual.carEntry->spriteHeightPositive)));
                 }
             }
             return {
-                { float(worldLoc.x), float(worldLoc.y), float(worldLoc.z) },
-                std::max(32.0f, std::hypot(halfWidth, verticalExtent) + 16.0f)
+                {
+                    float(worldLoc.x), float(worldLoc.y),
+                    float(worldLoc.z + visualZOffset)
+                },
+                std::max(
+                    32.0f,
+                    std::hypot(
+                        halfWidth, verticalExtent)
+                        + 16.0f)
             };
         }
 
@@ -2426,6 +2455,7 @@ namespace OpenRCT2::Paint
             bool hasBounds = false;
             int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
             std::vector<FirstPersonSurface> surfaces;
+            std::vector<FirstPersonPhysicalBoxProxy> collisionProxies;
         };
         static std::unordered_map<uint64_t, LargeSceneryGeometryCacheEntry> _largeSceneryGeometryCache;
         static std::unordered_map<uint64_t, std::unordered_set<uint64_t>>
@@ -2465,6 +2495,7 @@ namespace OpenRCT2::Paint
         void UnregisterLargeSceneryRegionMembership(
             uint64_t groupKey, const LargeSceneryGeometryCacheEntry& cached)
         {
+            WithdrawFirstPersonLargeSceneryPhysicalProxies(groupKey);
             std::unordered_set<uint64_t> regions;
             for (const auto& surface : cached.surfaces)
             {
@@ -2485,6 +2516,8 @@ namespace OpenRCT2::Paint
         void RegisterLargeSceneryRegionMembership(
             uint64_t groupKey, const LargeSceneryGeometryCacheEntry& cached)
         {
+            PublishFirstPersonLargeSceneryPhysicalProxies(
+                groupKey, cached.collisionProxies);
             for (const auto& surface : cached.surfaces)
             {
                 if (surface.gpuRegion != 0)
@@ -2569,6 +2602,206 @@ namespace OpenRCT2::Paint
             return result;
         }
 
+        [[nodiscard]] std::vector<FirstPersonPhysicalBoxProxy>
+            BuildFirstPersonLargeSceneryCollisionProxies(
+                const LargeSceneryEntry& entry,
+                const LargeSceneryAssetModel& model,
+                const ReconstructionGroupInfo& group,
+                uint8_t objectDirection)
+        {
+            std::vector<FirstPersonPhysicalBoxProxy> result;
+            constexpr float kCollisionSkin = 0.5f;
+            constexpr float kCellSize = 2.0f;
+            constexpr size_t kMaxCollisionCells = 2048;
+
+            for (const auto& face : model.faces)
+            {
+                if (face.sequence >= entry.tiles.size())
+                    continue;
+                const auto& tile = entry.tiles[face.sequence];
+                const uint8_t sourceRotation =
+                    FirstPersonViewportRotationForNativeView(
+                        objectDirection, face.sourceDirection);
+                const ImageIndex imageIndex =
+                    entry.image + 4
+                    + (ImageIndex(face.sequence) << 2)
+                    + face.sourceDirection;
+                const auto* g1 = GfxGetG1Element(imageIndex);
+                if (g1 == nullptr || g1->width <= 0
+                    || g1->height <= 0)
+                    return {};
+
+                const CoordsXY tileOffset =
+                    CoordsXY{
+                        tile.offset.x, tile.offset.y
+                    }.rotate(objectDirection);
+                const CoordsXY tileWorld{
+                    int32_t(std::lround(group.anchor.x))
+                        + tileOffset.x,
+                    int32_t(std::lround(group.anchor.y))
+                        + tileOffset.y,
+                };
+                const int32_t tileBaseZ =
+                    int32_t(std::lround(group.anchor.z))
+                    + tile.offset.z;
+                const auto spriteOrigin =
+                    GetTileElementPaintSpritePosition(
+                        tileWorld, sourceRotation);
+                const auto spritePos =
+                    Translate3DTo2DWithZ(
+                        sourceRotation,
+                        { spriteOrigin, tileBaseZ });
+
+                bool havePoint = false;
+                FirstPersonVec3 low{}, high{};
+                for (const auto& corner : face.corners)
+                {
+                    const auto localXY =
+                        FirstPersonLargeSceneryPlacedPoint(
+                            { tile.offset.x, tile.offset.y },
+                            { corner.x, corner.y },
+                            objectDirection);
+                    const FirstPersonVec3 world{
+                        group.anchor.x
+                            + float(localXY.x),
+                        group.anchor.y
+                            + float(localXY.y),
+                        group.anchor.z
+                            + float(corner.z),
+                    };
+                    if (!havePoint)
+                    {
+                        low = high = world;
+                        havePoint = true;
+                    }
+                    else
+                    {
+                        low.x = std::min(low.x, world.x);
+                        low.y = std::min(low.y, world.y);
+                        low.z = std::min(low.z, world.z);
+                        high.x = std::max(high.x, world.x);
+                        high.y = std::max(high.y, world.y);
+                        high.z = std::max(high.z, world.z);
+                    }
+                }
+                if (!havePoint)
+                    continue;
+
+                const int normalAxis =
+                    high.x - low.x < 0.01f ? 0
+                    : (high.y - low.y < 0.01f ? 1 : 2);
+                const std::array<float, 3> lo{
+                    low.x, low.y, low.z
+                };
+                const std::array<float, 3> hi{
+                    high.x, high.y, high.z
+                };
+                const int axisA =
+                    normalAxis == 0 ? 1 : 0;
+                const int axisB =
+                    normalAxis == 2 ? 1 : 2;
+
+                const auto worldPoint =
+                    [](const std::array<float, 3>& p) {
+                        return FirstPersonVec3{
+                            p[0], p[1], p[2]
+                        };
+                    };
+                const auto opaqueAt =
+                    [&](const std::array<float, 3>& point) {
+                        const auto p = worldPoint(point);
+                        const auto source =
+                            Translate3DTo2DWithZ(
+                                sourceRotation,
+                                {
+                                    int32_t(std::lround(p.x)),
+                                    int32_t(std::lround(p.y)),
+                                    int32_t(std::lround(p.z)),
+                                });
+                        return FirstPersonG1PixelOpaque(
+                            *g1,
+                            source.x - spritePos.x
+                                - g1->xOffset,
+                            source.y - spritePos.y
+                                - g1->yOffset);
+                    };
+
+                for (float a = lo[axisA];
+                     a < hi[axisA] - 0.01f;
+                     a += kCellSize)
+                for (float b = lo[axisB];
+                     b < hi[axisB] - 0.01f;
+                     b += kCellSize)
+                {
+                    const float a1 =
+                        std::min(a + kCellSize, hi[axisA]);
+                    const float b1 =
+                        std::min(b + kCellSize, hi[axisB]);
+                    std::array<float, 3> centre{
+                        0.5f * (lo[0] + hi[0]),
+                        0.5f * (lo[1] + hi[1]),
+                        0.5f * (lo[2] + hi[2]),
+                    };
+                    centre[axisA] = 0.5f * (a + a1);
+                    centre[axisB] = 0.5f * (b + b1);
+
+                    // Sample the centre plus four quarter-cell points. A cell
+                    // becomes physical only when the native face texture
+                    // contains opacity there; transparent arch/door pixels do
+                    // not acquire collision merely because their enclosing face
+                    // was geometrically validated.
+                    size_t opaqueSamples = 0;
+                    for (const float u :
+                        { 0.25f, 0.75f })
+                    for (const float v :
+                        { 0.25f, 0.75f })
+                    {
+                        auto sample = centre;
+                        sample[axisA] =
+                            a + (a1 - a) * u;
+                        sample[axisB] =
+                            b + (b1 - b) * v;
+                        if (opaqueAt(sample))
+                            ++opaqueSamples;
+                    }
+                    if (opaqueAt(centre))
+                        ++opaqueSamples;
+                    if (opaqueSamples == 0)
+                        continue;
+
+                    std::array<float, 3> cellLow = centre;
+                    std::array<float, 3> cellHigh = centre;
+                    cellLow[axisA] = a;
+                    cellHigh[axisA] = a1;
+                    cellLow[axisB] = b;
+                    cellHigh[axisB] = b1;
+                    cellLow[normalAxis] =
+                        lo[normalAxis] - kCollisionSkin;
+                    cellHigh[normalAxis] =
+                        hi[normalAxis] + kCollisionSkin;
+
+                    result.push_back({
+                        worldPoint(cellLow),
+                        worldPoint(cellHigh),
+                        FirstPersonPhysicalProxyProvenance::
+                            calibratedLargeSceneryArtwork,
+                        static_cast<uint8_t>(
+                            FirstPersonPhysicalProxyCapability::
+                                collide),
+                        group.key,
+                    });
+                    if (result.size()
+                        > kMaxCollisionCells)
+                    {
+                        // Complexity is not evidence. Fail open rather than
+                        // replacing a detailed/hollow asset with a coarse box.
+                        return {};
+                    }
+                }
+            }
+            return result;
+        }
+
         LargeSceneryGeometryCacheEntry BuildLargeSceneryInstanceGeometry(
             const LargeSceneryElement& large, const LargeSceneryEntry& entry,
             const LargeSceneryAssetModel& model, const ReconstructionGroupInfo& group,
@@ -2581,6 +2814,9 @@ namespace OpenRCT2::Paint
             result.bodyImageLast = model.bodyImageLast;
             const uint8_t objectDirection = static_cast<uint8_t>(large.getDirection()) & 3;
             const auto imageTemplate = LargeSceneryImageTemplate(large, entry);
+            result.collisionProxies =
+                BuildFirstPersonLargeSceneryCollisionProxies(
+                    entry, model, group, objectDirection);
 
             bool haveBounds = false;
             FirstPersonVec3 low{}, high{};
@@ -2664,6 +2900,7 @@ namespace OpenRCT2::Paint
                     int32_t(std::floor(faceCenter.y / float(kCoordsXYStep))));
                 EmitQuad(surface, vertices);
                 result.surfaces.emplace_back(std::move(surface));
+
             }
 
             if (haveBounds && !result.surfaces.empty())
@@ -2705,6 +2942,8 @@ namespace OpenRCT2::Paint
                     MarkLargeSceneryGeometryRegionsDirty(cached);
                 }
                 _largeSceneryGeometryEnabled = enabled;
+                if (!enabled)
+                    ClearFirstPersonLargeSceneryPhysicalProxies();
             }
             if (!enabled)
                 return;
@@ -2915,18 +3154,12 @@ namespace OpenRCT2::Paint
 
         struct FirstPersonTrackProfileCalibrationState
         {
-            bool hasCandidate = false;
+            bool syntheticAttempted = false;
             bool rejected = false;
-            uint8_t holdoutKinds = 0;
-            uint8_t passedHoldouts = 0;
-            uint64_t candidateSourceFingerprint = 0;
             FirstPersonTrackRailProfile profile{};
-            std::unordered_set<uint64_t> testedSourceGroups;
-            std::unordered_set<uint64_t> unusableSourceFingerprints;
-            std::unordered_set<uint64_t> contradictorySourceFingerprints;
-            std::unordered_set<uint64_t> testedHoldoutGroups;
         };
-        static std::unordered_map<uint8_t, FirstPersonTrackProfileCalibrationState>
+        static std::unordered_map<uint8_t,
+            FirstPersonTrackProfileCalibrationState>
             _trackProfileCalibrations;
 
         [[nodiscard]] uint64_t FirstPersonTrackProfileSignature(
@@ -3013,8 +3246,7 @@ namespace OpenRCT2::Paint
                     break;
                 } while (!(element++)->isLastForTile());
             }
-            if (sourceElement == nullptr || sourceTrack == nullptr
-                || sourceTrack->hasChain() || sourceTrack->hasCableLift())
+            if (sourceElement == nullptr || sourceTrack == nullptr)
                 return std::nullopt;
 
             const auto* ride = GetRide(sourceTrack->getRideIndex());
@@ -3044,53 +3276,6 @@ namespace OpenRCT2::Paint
                 group.anchor,
                 *trajectory,
             };
-        }
-
-        [[nodiscard]] bool FirstPersonTrackCalibrationTilesReady(
-            const FirstPersonTrackCalibrationInstance& instance,
-            bool requireAllRotations)
-        {
-            const auto& ted = TrackMetadata::GetTrackElementDescriptor(
-                instance.track->getTrackType());
-            if (ted.sequenceData.numSequences == 0)
-                return false;
-
-            const int32_t originX =
-                int32_t(std::lround(instance.groupAnchor.x));
-            const int32_t originY =
-                int32_t(std::lround(instance.groupAnchor.y));
-            for (uint8_t sequence = 0;
-                 sequence < ted.sequenceData.numSequences; ++sequence)
-            {
-                const auto& clearance =
-                    ted.sequenceData.sequences[sequence].clearance;
-                const auto offset =
-                    CoordsXY{ clearance.x, clearance.y }.rotate(
-                        instance.track->getDirection());
-                const CoordsXY tile{
-                    originX + offset.x,
-                    originY + offset.y,
-                };
-                const auto found = _staticPaintCache.find(TerrainKey(
-                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
-                if (found == _staticPaintCache.end()
-                    || !found->second.valid || found->second.dirty)
-                    return false;
-                if (!requireAllRotations)
-                    continue;
-                for (const auto& rotation : found->second.rotations)
-                {
-                    if (!rotation.valid)
-                        return false;
-                }
-            }
-            return true;
-        }
-
-        [[nodiscard]] bool FirstPersonTrackCalibrationViewsComplete(
-            const FirstPersonTrackCalibrationInstance& instance)
-        {
-            return FirstPersonTrackCalibrationTilesReady(instance, true);
         }
 
         [[nodiscard]] bool FirstPersonTrackChannelEnabledForImage(
@@ -3163,347 +3348,461 @@ namespace OpenRCT2::Paint
             return pixels;
         }
 
-        void AddFirstPersonTrackSurfaceObservation(
+        void AddFirstPersonSyntheticTrackImageObservation(
             FirstPersonTrackArtworkObservation& observation,
-            uint8_t rotation, const FirstPersonSurface& surface)
+            uint8_t rotation, ImageId image,
+            const ScreenCoordsXY& screenPos,
+            const ScreenCoordsXY& anchorScreen,
+            uint64_t& fingerprint)
         {
-            if (rotation >= 4 || surface.reconstructionGroup == 0
-                || !surface.viewFacing || !surface.image.HasValue()
-                || surface.image.IsBlended() || surface.mask.HasValue()
-                || !surface.immutablePixels.empty())
+            if (rotation >= 4 || !image.HasValue()
+                || image.IsBlended())
                 return;
-            const auto* g1 = GfxGetG1Element(surface.image);
+            const auto* g1 = GfxGetG1Element(image);
             if (g1 == nullptr)
                 return;
-            const auto pixels = DecodeFirstPersonTrackSprite(*g1);
+            const auto pixels =
+                DecodeFirstPersonTrackSprite(*g1);
             if (!pixels.has_value())
                 return;
 
             const int32_t left =
-                int32_t(std::lround(surface.billboardLeft));
+                screenPos.x + g1->xOffset
+                - anchorScreen.x;
             const int32_t top =
-                int32_t(std::lround(surface.billboardTop));
+                screenPos.y + g1->yOffset
+                - anchorScreen.y;
+            ExtendStableKey(
+                fingerprint, image.GetIndex());
+            ExtendStableKey(
+                fingerprint, uint32_t(left));
+            ExtendStableKey(
+                fingerprint, uint32_t(top));
+            ExtendStableKey(fingerprint, rotation);
+
             for (int32_t y = 0; y < g1->height; ++y)
             for (int32_t x = 0; x < g1->width; ++x)
             {
                 const uint8_t pixel =
-                    (*pixels)[size_t(y) * size_t(g1->width) + size_t(x)];
+                    (*pixels)[size_t(y)
+                        * size_t(g1->width)
+                        + size_t(x)];
                 if (pixel == 0)
                     continue;
                 for (size_t channelIndex = 0;
-                     channelIndex < kFirstPersonTrackPixelChannelCount;
+                     channelIndex
+                         < kFirstPersonTrackPixelChannelCount;
                      ++channelIndex)
                 {
                     const auto channel =
-                        static_cast<FirstPersonTrackPixelChannel>(
+                        static_cast<
+                            FirstPersonTrackPixelChannel>(
                             channelIndex);
                     if (!FirstPersonTrackChannelEnabledForImage(
-                            surface.image, channel)
+                            image, channel)
                         || !FirstPersonTrackPixelMatchesChannel(
                             pixel, channel))
                         continue;
-                    observation.channelViews[channelIndex][rotation].add(
-                        left + x, top + y);
-                    observation.channelSamples[channelIndex][rotation]
-                        .push_back({ left + x, top + y, pixel });
+                    observation
+                        .channelViews[channelIndex][rotation]
+                        .add(left + x, top + y);
+                    observation
+                        .channelSamples[channelIndex][rotation]
+                        .push_back({
+                            left + x, top + y, pixel
+                        });
                 }
             }
         }
 
-        [[nodiscard]] FirstPersonTrackArtworkObservation
-            CollectFirstPersonTrackArtworkObservation(uint64_t groupKey)
+        void CollectFirstPersonSyntheticTrackPaintTree(
+            FirstPersonTrackArtworkObservation& observation,
+            uint8_t rotation, const PaintStruct& root,
+            const ScreenCoordsXY& anchorScreen,
+            uint64_t& fingerprint)
         {
-            FirstPersonTrackArtworkObservation result{};
-            for (const auto& [tileKey, cached] : _staticPaintCache)
+            AddFirstPersonSyntheticTrackImageObservation(
+                observation, rotation, root.image_id,
+                root.ScreenPos, anchorScreen, fingerprint);
+
+            // Match native PaintDrawStruct exactly: a paint node with a child
+            // recurses into that child; attached overlays are consumed only on
+            // the leaf node. Do not invent an observation from paint records
+            // that native rendering itself would not draw.
+            if (root.Children != nullptr)
             {
-                (void)tileKey;
-                if (!cached.valid || cached.dirty)
-                    continue;
-                for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                CollectFirstPersonSyntheticTrackPaintTree(
+                    observation, rotation,
+                    *root.Children, anchorScreen,
+                    fingerprint);
+            }
+            else
+            {
+                for (auto* attached = root.Attached;
+                     attached != nullptr;
+                     attached = attached->NextEntry)
                 {
-                    const auto& variant = cached.rotations[rotation];
-                    if (!variant.valid)
+                    if (attached->IsMasked)
                         continue;
-                    const auto collect =
-                        [&](const std::vector<FirstPersonSurface>& surfaces) {
-                            for (const auto& surface : surfaces)
-                            {
-                                if (surface.reconstructionGroup != groupKey)
-                                    continue;
-                                AddFirstPersonTrackSurfaceObservation(
-                                    result, rotation, surface);
-                            }
-                        };
-                    collect(variant.residentSurfaces);
-                    collect(variant.streamedSurfaces);
+                    AddFirstPersonSyntheticTrackImageObservation(
+                        observation, rotation,
+                        attached->image_id,
+                        root.ScreenPos + attached->RelativePos,
+                        anchorScreen, fingerprint);
                 }
             }
+        }
+
+        struct FirstPersonSyntheticTrackObservation
+        {
+            bool supported = false;
+            bool valid = false;
+            uint64_t fingerprint =
+                14695981039346656037ull;
+            FirstPersonVec3 anchor{};
+            FirstPersonTrackTrajectory trajectory{};
+            FirstPersonTrackArtworkObservation artwork{};
+        };
+
+        [[nodiscard]] FirstPersonSyntheticTrackObservation
+            PaintFirstPersonCanonicalTrackObservation(
+                const FirstPersonTrackCalibrationInstance& instance,
+                TrackElemType requestedType)
+        {
+            FirstPersonSyntheticTrackObservation result{};
+            const auto type = uncoverTrackType(requestedType);
+            const auto& ted =
+                TrackMetadata::GetTrackElementDescriptor(type);
+            if (ted.sequenceData.numSequences == 0)
+                return result;
+
+            TrackPaintFunction paintFunction =
+                GetTrackPaintFunction(instance.style, type);
+            if (&paintFunction == &TrackPaintFunctionDummy)
+                return result;
+
+            constexpr CoordsXYZ kAnchor{
+                1024, 1024, 256
+            };
+            const auto& sequence0 =
+                ted.sequenceData.sequences[0].clearance;
+            const CoordsXYZ sampleOrigin{
+                kAnchor.x + sequence0.x,
+                kAnchor.y + sequence0.y,
+                kAnchor.z + sequence0.z,
+            };
+            const auto trajectory =
+                BuildFirstPersonTrackTrajectory(
+                    type, 0,
+                    {
+                        float(sampleOrigin.x),
+                        float(sampleOrigin.y),
+                        float(sampleOrigin.z),
+                    });
+            if (!trajectory.has_value()
+                || !FirstPersonTrackTrajectorySamplesContinuous(
+                    *trajectory))
+                return result;
+
+            result.supported = true;
+            result.anchor = {
+                float(kAnchor.x), float(kAnchor.y),
+                float(kAnchor.z)
+            };
+            result.trajectory = *trajectory;
+            ExtendStableKey(
+                result.fingerprint,
+                static_cast<uint8_t>(instance.style));
+            ExtendStableKey(
+                result.fingerprint,
+                static_cast<uint16_t>(type));
+
+            const auto& rtd =
+                instance.ride->getRideTypeDescriptor();
+            const bool covered =
+                trackTypeIsCovered(
+                    instance.track->getTrackType());
+            const auto drawer =
+                getTrackDrawerEntry(
+                    rtd, instance.track->isInverted(),
+                    covered);
+            const auto scheme = std::min<uint8_t>(
+                instance.track->getColourScheme(),
+                uint8_t(kNumRideColourSchemes - 1));
+
+            for (uint8_t rotation = 0;
+                 rotation < 4; ++rotation)
+            {
+                Drawing::RenderTarget target{};
+                target.x = -8192;
+                target.y = -8192;
+                target.width = 16384;
+                target.height = 16384;
+                target.cullingX = target.x;
+                target.cullingY = target.y;
+                target.cullingWidth = target.width;
+                target.cullingHeight = target.height;
+                target.zoom_level = ZoomLevel{ 0 };
+
+                auto* session =
+                    PaintSessionAlloc(target, 0, rotation);
+                if (session == nullptr)
+                    return result;
+
+                session->CurrentSource =
+                    PaintStructSource::tile;
+                session->TrackColours = ImageId(
+                    0,
+                    instance.ride
+                        ->trackColours[scheme].main,
+                    instance.ride
+                        ->trackColours[scheme].additional);
+                session->SupportColours = ImageId(
+                    0,
+                    instance.ride
+                        ->trackColours[scheme].supports,
+                    instance.ride
+                        ->trackColours[scheme].additional);
+                session->Flags =
+                    PaintSessionFlags::IsTrackPiecePreview;
+
+                std::vector<TrackElement>
+                    syntheticElements(
+                        ted.sequenceData.numSequences);
+                for (uint8_t sequence = 0;
+                     sequence
+                         < ted.sequenceData.numSequences;
+                     ++sequence)
+                {
+                    const auto& clearance =
+                        ted.sequenceData
+                            .sequences[sequence].clearance;
+                    const CoordsXY tile{
+                        kAnchor.x + clearance.x,
+                        kAnchor.y + clearance.y,
+                    };
+                    const int32_t height =
+                        kAnchor.z + clearance.z;
+
+                    auto& synthetic =
+                        syntheticElements[sequence];
+                    synthetic.setType(
+                        TileElementType::track);
+                    synthetic.setDirection(0);
+                    synthetic.setBaseZ(height);
+                    synthetic.setClearanceZ(
+                        height + 64);
+                    synthetic.setTrackType(type);
+                    synthetic.setRideType(
+                        instance.track->getRideType());
+                    synthetic.setSequenceIndex(sequence);
+                    synthetic.setRideIndex(
+                        instance.track->getRideIndex());
+                    synthetic.setColourScheme(
+                        static_cast<RideColourScheme>(
+                            instance.track
+                                ->getColourScheme()));
+                    synthetic.setInverted(
+                        instance.track->isInverted());
+
+                    session->MapPosition = tile;
+                    session->SpritePosition =
+                        GetTileElementPaintSpritePosition(
+                            tile, rotation);
+                    session->CurrentlyDrawnTileElement =
+                        reinterpret_cast<TileElement*>(
+                            &synthetic);
+                    session->LastPS = nullptr;
+                    session->LastAttachedPS = nullptr;
+                    session->InteractionType =
+                        ViewportInteractionItem::ride;
+
+                    paintFunction(
+                        *session, *instance.ride,
+                        sequence, rotation, height,
+                        synthetic, drawer.supportType);
+                }
+
+                PaintSessionArrange(*session);
+                const auto anchorScreen =
+                    Translate3DTo2DWithZ(
+                        rotation, kAnchor);
+                for (auto* root = session->PaintHead;
+                     root != nullptr;
+                     root = root->NextQuadrantEntry)
+                {
+                    CollectFirstPersonSyntheticTrackPaintTree(
+                        result.artwork, rotation,
+                        *root, anchorScreen,
+                        result.fingerprint);
+                }
+                PaintSessionFree(session);
+            }
+
+            result.valid =
+                FirstPersonTrackObservationHasCompleteChannel(
+                    result.artwork);
             return result;
         }
 
-        [[nodiscard]] uint64_t FirstPersonTrackArtworkFingerprint(
-            uint64_t groupKey)
+        [[nodiscard]] bool
+            TryCalibrateFirstPersonTrackStyleFromNativePainter(
+                const FirstPersonTrackCalibrationInstance& instance,
+                FirstPersonTrackProfileCalibrationState& state)
         {
-            std::vector<uint64_t> tokens;
-            for (const auto& [tileKey, cached] : _staticPaintCache)
+            const auto source =
+                PaintFirstPersonCanonicalTrackObservation(
+                    instance, TrackElemType::flat);
+            if (!source.supported || !source.valid)
+                return false;
+
+            const auto calibrated =
+                FitFirstPersonTrackRailProfileFromArtwork(
+                    source.artwork, source.trajectory,
+                    source.anchor);
+            if (!calibrated.valid)
+                return false;
+
+            auto profile = calibrated.profile;
+            uint8_t requiredKinds = 0;
+            uint8_t passedKinds = 0;
+            uint8_t passedHoldouts = 0;
+
+            struct HoldoutCategory
             {
-                (void)tileKey;
-                if (!cached.valid || cached.dirty)
-                    continue;
-                for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                FirstPersonTrackValidationKind kind;
+                std::array<TrackElemType, 4> candidates;
+            };
+            static constexpr std::array<
+                HoldoutCategory, 3>
+                kCategories{ {
+                    {
+                        FirstPersonTrackValidationKind::curve,
+                        {
+                            TrackElemType::leftQuarterTurn3Tiles,
+                            TrackElemType::leftQuarterTurn5Tiles,
+                            TrackElemType::sBendLeft,
+                            TrackElemType::leftQuarterTurn1Tile,
+                        },
+                    },
+                    {
+                        FirstPersonTrackValidationKind::slope,
+                        {
+                            TrackElemType::up25,
+                            TrackElemType::flatToUp25,
+                            TrackElemType::up25ToFlat,
+                            TrackElemType::down25,
+                        },
+                    },
+                    {
+                        FirstPersonTrackValidationKind::bank,
+                        {
+                            TrackElemType::leftBank,
+                            TrackElemType::flatToLeftBank,
+                            TrackElemType::leftBankToFlat,
+                            TrackElemType::rightBank,
+                        },
+                    },
+                } };
+
+            for (const auto& category : kCategories)
+            {
+                bool supported = false;
+                bool passed = false;
+                for (const auto type :
+                     category.candidates)
                 {
-                    const auto& variant = cached.rotations[rotation];
-                    if (!variant.valid)
+                    const auto holdout =
+                        PaintFirstPersonCanonicalTrackObservation(
+                            instance, type);
+                    if (!holdout.supported)
                         continue;
-                    const auto collect =
-                        [&](const std::vector<FirstPersonSurface>& surfaces) {
-                            for (const auto& surface : surfaces)
-                            {
-                                if (surface.reconstructionGroup != groupKey
-                                    || !surface.viewFacing
-                                    || !surface.image.HasValue())
-                                    continue;
-                                uint64_t token = 14695981039346656037ull;
-                                const auto extend = [&](uint64_t value) {
-                                    token ^= value;
-                                    token *= 1099511628211ull;
-                                };
-                                extend(rotation);
-                                extend(surface.image.GetIndex());
-                                extend(surface.image.HasPrimary() ? 1 : 0);
-                                extend(surface.image.HasSecondary() ? 1 : 0);
-                                extend(surface.image.HasTertiary() ? 1 : 0);
-                                extend(uint32_t(int32_t(std::lround(
-                                    surface.billboardLeft))));
-                                extend(uint32_t(int32_t(std::lround(
-                                    surface.billboardTop))));
-                                extend(uint32_t(std::lround(
-                                    surface.billboardWidth)));
-                                extend(uint32_t(std::lround(
-                                    surface.billboardHeight)));
-                                tokens.push_back(token);
-                            }
-                        };
-                    collect(variant.residentSurfaces);
-                    collect(variant.streamedSurfaces);
+                    supported = true;
+                    if (!holdout.valid)
+                        continue;
+
+                    const auto fit =
+                        ValidateFirstPersonTrackRailProfileAgainstArtwork(
+                            holdout.artwork,
+                            holdout.trajectory,
+                            holdout.anchor,
+                            profile);
+                    if (!IsFirstPersonTrackHoldoutFitReliable(
+                            fit))
+                        continue;
+
+                    passed = true;
+                    break;
                 }
+
+                if (!supported)
+                    continue;
+                const uint8_t kind =
+                    static_cast<uint8_t>(category.kind);
+                requiredKinds |= kind;
+                if (!passed)
+                    return false;
+                passedKinds |= kind;
+                ++passedHoldouts;
             }
-            if (tokens.empty())
-                return 0;
-            std::sort(tokens.begin(), tokens.end());
-            uint64_t result = 14695981039346656037ull;
-            for (const auto token : tokens)
-                ExtendStableKey(result, token);
-            return result;
+
+            // A source fit must survive at least one independently painted
+            // non-flat piece. Styles with richer capabilities must survive
+            // every supported canonical category, but a style is never
+            // penalised for a category it cannot paint.
+            if (requiredKinds == 0
+                || passedKinds != requiredKinds)
+                return false;
+
+            profile.verified = true;
+            state.profile = profile;
+            PublishFirstPersonVerifiedTrackProfile(
+                instance.style, profile,
+                source.fingerprint,
+                passedKinds, passedHoldouts);
+            return true;
         }
 
-        [[nodiscard]] uint8_t FirstPersonTrackCanonicalHoldoutKind(
-            TrackElemType trackType)
-        {
-            // Use deliberately ordinary held-outs. Special elements can add
-            // decorative geometry or radically different sprite composition,
-            // which is useful game art but poor evidence for a rail section.
-            switch (uncoverTrackType(trackType))
-            {
-                case TrackElemType::leftQuarterTurn5Tiles:
-                case TrackElemType::rightQuarterTurn5Tiles:
-                case TrackElemType::leftQuarterTurn3Tiles:
-                case TrackElemType::rightQuarterTurn3Tiles:
-                case TrackElemType::leftQuarterTurn1Tile:
-                case TrackElemType::rightQuarterTurn1Tile:
-                case TrackElemType::sBendLeft:
-                case TrackElemType::sBendRight:
-                    return static_cast<uint8_t>(
-                        FirstPersonTrackValidationKind::curve);
-
-                case TrackElemType::up25:
-                case TrackElemType::down25:
-                case TrackElemType::flatToUp25:
-                case TrackElemType::up25ToFlat:
-                case TrackElemType::flatToDown25:
-                case TrackElemType::down25ToFlat:
-                    return static_cast<uint8_t>(
-                        FirstPersonTrackValidationKind::slope);
-
-                case TrackElemType::leftBank:
-                case TrackElemType::rightBank:
-                case TrackElemType::flatToLeftBank:
-                case TrackElemType::flatToRightBank:
-                case TrackElemType::leftBankToFlat:
-                case TrackElemType::rightBankToFlat:
-                    return static_cast<uint8_t>(
-                        FirstPersonTrackValidationKind::bank);
-
-                default:
-                    return 0;
-            }
-        }
-
-        [[nodiscard]] bool FirstPersonTrackGroupNeedsCalibrationViews(
-            const ReconstructionGroupInfo& group)
+        [[nodiscard]] bool
+            FirstPersonTrackGroupNeedsCalibrationViews(
+                const ReconstructionGroupInfo& group)
         {
             const auto instance =
-                ResolveFirstPersonTrackCalibrationInstance(group);
-            if (!instance.has_value()
-                || !FirstPersonTrackCalibrationTilesReady(*instance, false))
-                return false;
-            auto& state = _trackProfileCalibrations[
-                static_cast<uint8_t>(instance->style)];
-            if (state.rejected
-                || (state.hasCandidate && state.profile.verified))
+                ResolveFirstPersonTrackCalibrationInstance(
+                    group);
+            if (!instance.has_value())
                 return false;
 
-            const auto baseType =
-                uncoverTrackType(instance->track->getTrackType());
-            if (!state.hasCandidate)
-            {
-                // Source suitability is an asset property, not an observation
-                // order property. Keep trying unseen flat instances; the
-                // complete four-view fingerprint is negative-cached only after
-                // the observation has actually been inspected.
-                return baseType == TrackElemType::flat
-                    && !state.testedSourceGroups.contains(group.key);
-            }
-
-            const uint8_t kinds =
-                FirstPersonTrackCanonicalHoldoutKind(instance->track->getTrackType());
-            if (kinds == 0
-                || state.testedHoldoutGroups.contains(group.key))
-                return false;
-            constexpr uint8_t kAllKinds =
-                static_cast<uint8_t>(FirstPersonTrackValidationKind::curve)
-                | static_cast<uint8_t>(FirstPersonTrackValidationKind::slope)
-                | static_cast<uint8_t>(FirstPersonTrackValidationKind::bank);
-            return state.passedHoldouts < 3
-                || (state.holdoutKinds & kAllKinds) != kAllKinds;
+            auto& state =
+                _trackProfileCalibrations[
+                    static_cast<uint8_t>(
+                        instance->style)];
+            return !state.syntheticAttempted;
         }
 
         void UpdateFirstPersonTrackProfileCalibration(
             const ReconstructionGroupInfo& group)
         {
             const auto instance =
-                ResolveFirstPersonTrackCalibrationInstance(group);
-            if (!instance.has_value()
-                || !FirstPersonTrackCalibrationViewsComplete(*instance))
+                ResolveFirstPersonTrackCalibrationInstance(
+                    group);
+            if (!instance.has_value())
                 return;
 
-            auto& state = _trackProfileCalibrations[
-                static_cast<uint8_t>(instance->style)];
-            if (state.rejected
-                || (state.hasCandidate && state.profile.verified))
+            auto& state =
+                _trackProfileCalibrations[
+                    static_cast<uint8_t>(
+                        instance->style)];
+            if (state.syntheticAttempted)
                 return;
 
-            const auto observation =
-                CollectFirstPersonTrackArtworkObservation(group.key);
-            const uint64_t sourceFingerprint =
-                FirstPersonTrackArtworkFingerprint(group.key);
-            const auto baseType =
-                uncoverTrackType(instance->track->getTrackType());
-            if (!state.hasCandidate)
+            state.syntheticAttempted = true;
+            if (!TryCalibrateFirstPersonTrackStyleFromNativePainter(
+                    *instance, state))
             {
-                if (baseType != TrackElemType::flat
-                    || state.testedSourceGroups.contains(group.key))
-                    return;
-
-                state.testedSourceGroups.insert(group.key);
-                if (sourceFingerprint == 0
-                    || state.unusableSourceFingerprints.contains(
-                        sourceFingerprint))
-                    return;
-
-                if (!FirstPersonTrackObservationHasCompleteChannel(
-                        observation))
-                {
-                    // No complete rail-colour/remap channel in this artwork is
-                    // absence of usable evidence, not evidence against the
-                    // TrackStyle. Cache only this artwork identity.
-                    state.unusableSourceFingerprints.insert(
-                        sourceFingerprint);
-                    return;
-                }
-
-                const auto calibrated =
-                    FitFirstPersonTrackRailProfileFromArtwork(
-                        observation, instance->trajectory,
-                        instance->groupAnchor);
-                if (!calibrated.valid)
-                {
-                    state.unusableSourceFingerprints.insert(
-                        sourceFingerprint);
-                    state.contradictorySourceFingerprints.insert(
-                        sourceFingerprint);
-                    // A style-level negative result requires several genuinely
-                    // distinct complete source artworks to disagree with the
-                    // two-rail model. Repeated instances of one bad sprite do
-                    // not accumulate contradictory weight.
-                    if (state.contradictorySourceFingerprints.size() >= 4)
-                        state.rejected = true;
-                    return;
-                }
-
-                state.hasCandidate = true;
-                state.candidateSourceFingerprint = sourceFingerprint;
-                state.profile = calibrated.profile;
-                state.profile.verified = false;
-                state.holdoutKinds = 0;
-                state.passedHoldouts = 0;
-                state.testedHoldoutGroups.clear();
-                return;
-            }
-
-            const uint8_t kinds =
-                FirstPersonTrackCanonicalHoldoutKind(
-                    instance->track->getTrackType());
-            if (kinds == 0
-                || state.testedHoldoutGroups.contains(group.key))
-                return;
-            state.testedHoldoutGroups.insert(group.key);
-            if (!FirstPersonTrackObservationHasCompleteChannel(observation))
-                return;
-
-            const auto fit =
-                ValidateFirstPersonTrackRailProfileAgainstArtwork(
-                    observation, instance->trajectory,
-                    instance->groupAnchor, state.profile);
-            if (!IsFirstPersonTrackHoldoutFitReliable(fit))
-            {
-                // This disproves the candidate profile, not the entire style.
-                // Negative-cache the flat artwork that produced the candidate
-                // so a different complete flat identity can still calibrate.
-                if (state.candidateSourceFingerprint != 0)
-                {
-                    state.unusableSourceFingerprints.insert(
-                        state.candidateSourceFingerprint);
-                    state.contradictorySourceFingerprints.insert(
-                        state.candidateSourceFingerprint);
-                }
-                WithdrawFirstPersonVerifiedTrackProfile(instance->style);
-                state.hasCandidate = false;
-                state.profile = {};
-                state.candidateSourceFingerprint = 0;
-                state.holdoutKinds = 0;
-                state.passedHoldouts = 0;
-                state.testedHoldoutGroups.clear();
-                if (state.contradictorySourceFingerprints.size() >= 4)
-                    state.rejected = true;
-                return;
-            }
-
-            state.holdoutKinds |= kinds;
-            ++state.passedHoldouts;
-
-            constexpr uint8_t kAllKinds =
-                static_cast<uint8_t>(FirstPersonTrackValidationKind::curve)
-                | static_cast<uint8_t>(FirstPersonTrackValidationKind::slope)
-                | static_cast<uint8_t>(FirstPersonTrackValidationKind::bank);
-            if (state.passedHoldouts >= 3
-                && (state.holdoutKinds & kAllKinds) == kAllKinds)
-            {
-                state.profile.verified = true;
-                PublishFirstPersonVerifiedTrackProfile(
-                    instance->style, state.profile,
-                    state.candidateSourceFingerprint,
-                    state.holdoutKinds, state.passedHoldouts);
+                state.rejected = true;
+                WithdrawFirstPersonVerifiedTrackProfile(
+                    instance->style);
             }
         }
 
@@ -4600,8 +4899,6 @@ namespace OpenRCT2::Paint
             for (auto& misses : missesByRotation)
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
             size_t trackCalibrationPaintBudget = 1;
-            std::unordered_map<uint64_t, ReconstructionGroupInfo>
-                trackCalibrationGroups;
             const auto& view = scene.resolvedView;
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
@@ -4701,18 +4998,12 @@ namespace OpenRCT2::Paint
                     state.lastSeen = frame;
                     rotationMask |= uint8_t(1u << selected);
 
-                    bool calibrationScheduled =
-                        trackCalibrationGroups.contains(group.key);
-                    if (!calibrationScheduled
-                        && trackCalibrationPaintBudget > 0
+                    if (trackCalibrationPaintBudget > 0
                         && FirstPersonTrackGroupNeedsCalibrationViews(group))
                     {
-                        trackCalibrationGroups.emplace(group.key, group);
+                        UpdateFirstPersonTrackProfileCalibration(group);
                         --trackCalibrationPaintBudget;
-                        calibrationScheduled = true;
                     }
-                    if (calibrationScheduled)
-                        rotationMask |= 0x0Fu;
                 }
 
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
@@ -5030,12 +5321,6 @@ namespace OpenRCT2::Paint
                 }
             }
 
-            for (const auto& [groupKey, group] : trackCalibrationGroups)
-            {
-                (void)groupKey;
-                UpdateFirstPersonTrackProfileCalibration(group);
-            }
-
             // Only geometry that cannot live in a persistent opaque region is
             // reconstructed at surface granularity on an ordinary frame.
             for (const auto tile : scene.visibleTiles)
@@ -5128,6 +5413,63 @@ namespace OpenRCT2::Paint
 
     } // namespace
 
+    std::optional<uint64_t>
+        EnsureFirstPersonLargeSceneryPhysicalProxy(
+            CoordsXY tile, const LargeSceneryElement& large)
+    {
+        if (large.isGhost() || large.isInvisible())
+            return std::nullopt;
+        const auto* entry = large.getEntry();
+        if (entry == nullptr)
+            return std::nullopt;
+
+        auto* element = reinterpret_cast<TileElement*>(
+            const_cast<LargeSceneryElement*>(&large));
+        const auto group =
+            GetReconstructionGroup(tile, element);
+        if (!group.has_value()
+            || group->type != TileElementType::largeScenery)
+            return std::nullopt;
+
+        if (const auto found =
+                gFirstPersonLargeSceneryPhysicalProxies.find(
+                    group->key);
+            found != gFirstPersonLargeSceneryPhysicalProxies.end()
+                && !found->second.empty())
+            return group->key;
+
+        if (const auto cached =
+                _largeSceneryGeometryCache.find(group->key);
+            cached != _largeSceneryGeometryCache.end()
+                && !cached->second.dirty
+                && !cached->second.collisionProxies.empty())
+        {
+            PublishFirstPersonLargeSceneryPhysicalProxies(
+                group->key, cached->second.collisionProxies);
+            return group->key;
+        }
+
+        const auto* model =
+            GetLargeSceneryAssetModel(*entry, true);
+        if (model == nullptr || !model->reliable)
+            return std::nullopt;
+
+        const uint8_t direction =
+            static_cast<uint8_t>(large.getDirection()) & 3u;
+        if (!LargeSceneryInstanceComplete(
+                *entry, *group, direction))
+            return std::nullopt;
+
+        auto proxies =
+            BuildFirstPersonLargeSceneryCollisionProxies(
+                *entry, *model, *group, direction);
+        if (proxies.empty())
+            return std::nullopt;
+        PublishFirstPersonLargeSceneryPhysicalProxies(
+            group->key, proxies);
+        return group->key;
+    }
+
     uint8_t GetFirstPersonTerrainSourceRotation(uint8_t slope)
     {
         return ChooseTerrainSourceRotation(slope);
@@ -5219,6 +5561,7 @@ namespace OpenRCT2::Paint
         ClearFirstPersonVerifiedTrackProfiles();
         _largeSceneryAssetModels.clear();
         _largeSceneryGeometryCache.clear();
+        ClearFirstPersonLargeSceneryPhysicalProxies();
         _largeSceneryGroupsByRegion.clear();
         _activeLargeSceneryRegions.clear();
         _largeSceneryGeometryEnabled = false;
@@ -5226,6 +5569,7 @@ namespace OpenRCT2::Paint
     }
     void InvalidateFirstPersonSceneRegion(CoordsXY low, CoordsXY high)
     {
+        ClearFirstPersonLargeSceneryPhysicalProxies();
         if (_regionBounds.empty() && _terrainCache.entries.empty()
             && _staticPaintCache.empty() && _trackTrajectoryCache.empty()
             && _largeSceneryGeometryCache.empty() && _staticRegionPackets.empty()) return;

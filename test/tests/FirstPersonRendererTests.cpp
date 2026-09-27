@@ -14,6 +14,7 @@
 #include <openrct2/paint/FirstPersonPeriodicPassengerMotion.h>
 #include <openrct2/paint/FirstPersonPhysicalProxy.h>
 #include <openrct2/paint/FirstPersonTrackTrajectory.h>
+#include <openrct2/paint/FirstPersonTrackProfileCalibration.h>
 #include <openrct2/paint/FirstPersonSmallSceneryCollision.h>
 #include <openrct2/paint/FirstPersonVehicleBodyHull.h>
 #include <openrct2/paint/FirstPersonWalkingSemantics.h>
@@ -411,6 +412,195 @@ TEST(FirstPersonTrackTrajectoryTest, EndpointGapMeasuresPhysicalDiscontinuity)
     EXPECT_TRUE(FirstPersonTrackTrajectorySamplesContinuous(first, 4.0f));
     EXPECT_TRUE(FirstPersonTrackTrajectorySamplesContinuous(next, 4.0f));
     EXPECT_FALSE(FirstPersonTrackTrajectorySamplesContinuous(next, 2.0f));
+}
+
+TEST(FirstPersonTrackProfileCalibrationTest, BroadSameColourSpineCannotVerifyNarrowRailPair)
+{
+    FirstPersonTrackArtworkObservation observation{};
+    std::array<FirstPersonSilhouette, 4> candidate{};
+    std::array<FirstPersonSilhouette, 4> negativeRail{};
+    std::array<FirstPersonSilhouette, 4> positiveRail{};
+
+    const auto channel =
+        FirstPersonTrackPixelChannel::trackRailPalette;
+    const size_t channelIndex =
+        static_cast<size_t>(channel);
+    for (size_t rotation = 0; rotation < 4; ++rotation)
+    {
+        // Deliberately broad same-colour structure: the old asymmetric metric
+        // would give a one-pixel rail pair perfect candidate->artwork coverage
+        // simply because the predicted rails sit inside this filled spine.
+        observation.channelViews[channelIndex][rotation] =
+            MakeSilhouetteRect(0, 0, 32, 24);
+
+        negativeRail[rotation] =
+            MakeSilhouetteRect(9, 2, 10, 22);
+        positiveRail[rotation] =
+            MakeSilhouetteRect(22, 2, 23, 22);
+        candidate[rotation] = negativeRail[rotation];
+        for (const auto pixel :
+             positiveRail[rotation].pixels)
+        {
+            const int32_t x =
+                int32_t(uint32_t(pixel >> 32));
+            const int32_t y =
+                int32_t(uint32_t(pixel));
+            candidate[rotation].add(x, y);
+        }
+    }
+
+    const auto fit =
+        EvaluateFirstPersonTrackProfileFit(
+            observation, candidate,
+            negativeRail, positiveRail, channel);
+    ASSERT_TRUE(fit.valid);
+    EXPECT_GT(fit.minimumCandidateCoverage, 0.99f);
+    EXPECT_GT(fit.minimumRailCoverage, 0.99f);
+    EXPECT_LT(fit.averageLocalObservedCoverage, 0.45f);
+    EXPECT_FALSE(
+        IsFirstPersonTrackCalibrationFitReliable(fit));
+}
+
+TEST(FirstPersonVehiclePresentationTest, HalfTweenOwnsOneSharedCarriageTransform)
+{
+    OpenRCT2::Vehicle car{};
+    car.x = 100;
+    car.y = 200;
+    car.z = 30;
+    car.orientation = 0;
+    car.pitch = VehiclePitch::up25;
+    car.roll = VehicleRoll::right45;
+    // Avoid any ride-object lookup; cable-lift visual state is a static native
+    // CarEntry and is sufficient for testing the presentation clock itself.
+    car.ride_subtype = 0xFFFF;
+    car.ride = RideId::GetNull();
+
+    OpenRCT2::FirstPersonTrackedVehicleVisuals tracked{};
+    tracked.yawBefore = 0;
+    tracked.yawAfter = 8;
+    tracked.pitchBefore =
+        static_cast<uint8_t>(VehiclePitch::flat);
+    tracked.pitchAfter =
+        static_cast<uint8_t>(VehiclePitch::up25);
+    tracked.rollBefore =
+        static_cast<uint8_t>(VehicleRoll::unbanked);
+    tracked.rollAfter =
+        static_cast<uint8_t>(VehicleRoll::right45);
+    tracked.alpha = 0.5f;
+
+    const auto state =
+        BuildFirstPersonVehiclePresentationState(
+            car, tracked);
+    const float yaw =
+        FirstPersonLerpAngle(
+            FirstPersonVehicleYawRadians(tracked.yawBefore),
+            FirstPersonVehicleYawRadians(tracked.yawAfter),
+            0.5f);
+    const float pitch =
+        FirstPersonLerpAngle(
+            FirstPersonVehiclePitchRadians(
+                VehiclePitch::flat),
+            FirstPersonVehiclePitchRadians(
+                VehiclePitch::up25),
+            0.5f);
+    const float roll =
+        FirstPersonLerpAngle(
+            FirstPersonVehicleRollRadians(
+                VehicleRoll::unbanked),
+            FirstPersonVehicleRollRadians(
+                VehicleRoll::right45),
+            0.5f);
+    const auto expected =
+        BuildFirstPersonCarriageTransform(
+            car,
+            FirstPersonVehicleTrackBasis(
+                car, yaw, pitch, roll),
+            0.0f, 0.0f, 0.0f);
+
+    EXPECT_NEAR(
+        state.carriage.basis.forward.x,
+        expected.basis.forward.x, 1e-5f);
+    EXPECT_NEAR(
+        state.carriage.basis.forward.y,
+        expected.basis.forward.y, 1e-5f);
+    EXPECT_NEAR(
+        state.carriage.basis.forward.z,
+        expected.basis.forward.z, 1e-5f);
+    EXPECT_NEAR(
+        state.carriage.basis.up.x,
+        expected.basis.up.x, 1e-5f);
+    EXPECT_NEAR(
+        state.carriage.basis.up.y,
+        expected.basis.up.y, 1e-5f);
+    EXPECT_NEAR(
+        state.carriage.basis.up.z,
+        expected.basis.up.z, 1e-5f);
+}
+
+TEST(FirstPersonPhysicalProxyTest, BankedRectangularRailRotatesWidthIntoVerticalExtent)
+{
+    const FirstPersonBasis banked{
+        { 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f },
+        { 0.0f, -1.0f, 0.0f },
+    };
+    const FirstPersonRailProxySegment rail{
+        { 0.0f, 0.0f, 10.0f },
+        { 10.0f, 0.0f, 10.0f },
+        banked,
+        banked,
+        2.0f,
+        0.25f,
+        FirstPersonPhysicalProxyProvenance::
+            verifiedTrackArtwork,
+    };
+
+    // At 90 degrees of bank, the 2-unit local width is vertical. Treating
+    // halfHeight as a world-Z extent would incorrectly miss this contact.
+    EXPECT_TRUE(FirstPersonRailProxyIntersectsWalkStep(
+        rail,
+        { 5.0f, -2.0f, 11.5f },
+        { 5.0f, 0.0f, 11.5f },
+        0.2f, 0.0f));
+    EXPECT_FALSE(FirstPersonRailProxyIntersectsWalkStep(
+        rail,
+        { 5.0f, -2.0f, 12.2f },
+        { 5.0f, 0.0f, 12.2f },
+        0.2f, 0.0f));
+}
+
+TEST(FirstPersonPhysicalProxyTest, LargeSceneryCollisionUsesRecoveredFacesNotReservedVolume)
+{
+    ClearFirstPersonLargeSceneryPhysicalProxies();
+    const uint64_t groupKey = 17;
+    const std::vector<FirstPersonPhysicalBoxProxy> faces{
+        {
+            { 10.0f, 0.0f, 0.0f },
+            { 11.0f, 32.0f, 32.0f },
+            FirstPersonPhysicalProxyProvenance::
+                calibratedLargeSceneryArtwork,
+            static_cast<uint8_t>(
+                FirstPersonPhysicalProxyCapability::collide),
+            groupKey,
+        },
+    };
+    PublishFirstPersonLargeSceneryPhysicalProxies(
+        groupKey, faces);
+
+    EXPECT_TRUE(
+        FirstPersonLargeSceneryProxyGroupIntersectsWalkStep(
+            groupKey,
+            { 0.0f, 16.0f, 0.0f },
+            { 20.0f, 16.0f, 0.0f }));
+    // Space inside the construction footprint but away from the recovered
+    // material face remains traversable.
+    EXPECT_FALSE(
+        FirstPersonLargeSceneryProxyGroupIntersectsWalkStep(
+            groupKey,
+            { 20.0f, 4.0f, 0.0f },
+            { 24.0f, 4.0f, 0.0f }));
+
+    ClearFirstPersonLargeSceneryPhysicalProxies();
 }
 
 TEST(FirstPersonPhysicalProxyTest, VerifiedRailGeometryFeedsWalkingCollision)

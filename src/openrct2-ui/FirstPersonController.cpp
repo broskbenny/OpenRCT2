@@ -395,49 +395,117 @@ namespace OpenRCT2::Ui::FirstPerson
         // are strong enough for a conservative walking blocker; the visual art
         // remains the original sprite and is not replaced by these boxes.
         bool WalkBlockedByLargeScenery(
-            const Paint::FirstPersonVec3& from, const Paint::FirstPersonVec3& to)
+            const Paint::FirstPersonVec3& from,
+            const Paint::FirstPersonVec3& to)
         {
-            const int32_t minX=std::max(0,int32_t(std::floor(std::min(from.x,to.x)/kCoordsXYStep))-1);
-            const int32_t minY=std::max(0,int32_t(std::floor(std::min(from.y,to.y)/kCoordsXYStep))-1);
-            const int32_t maxX=int32_t(std::floor(std::max(from.x,to.x)/kCoordsXYStep))+1;
-            const int32_t maxY=int32_t(std::floor(std::max(from.y,to.y)/kCoordsXYStep))+1;
-            static constexpr std::array<std::array<float,4>,4> kQuarterBounds{{
-                {{16.0f,16.0f,32.0f,32.0f}},
-                {{16.0f, 0.0f,32.0f,16.0f}},
-                {{ 0.0f, 0.0f,16.0f,16.0f}},
-                {{ 0.0f,16.0f,16.0f,32.0f}},
-            }};
-            for(int32_t ty=minY;ty<=maxY;++ty)
-            for(int32_t tx=minX;tx<=maxX;++tx)
+            const int32_t minX = std::max(
+                0, int32_t(std::floor(
+                    std::min(from.x, to.x)
+                    / kCoordsXYStep)) - 1);
+            const int32_t minY = std::max(
+                0, int32_t(std::floor(
+                    std::min(from.y, to.y)
+                    / kCoordsXYStep)) - 1);
+            const int32_t maxX = int32_t(std::floor(
+                std::max(from.x, to.x)
+                / kCoordsXYStep)) + 1;
+            const int32_t maxY = int32_t(std::floor(
+                std::max(from.y, to.y)
+                / kCoordsXYStep)) + 1;
+            static constexpr std::array<
+                std::array<float, 4>, 4>
+                kQuarterBounds{ {
+                    { { 16.0f, 16.0f, 32.0f, 32.0f } },
+                    { { 16.0f, 0.0f, 32.0f, 16.0f } },
+                    { { 0.0f, 0.0f, 16.0f, 16.0f } },
+                    { { 0.0f, 16.0f, 16.0f, 32.0f } },
+                } };
+
+            for (int32_t ty = minY; ty <= maxY; ++ty)
+            for (int32_t tx = minX; tx <= maxX; ++tx)
             {
-                const CoordsXY tilePos{tx*kCoordsXYStep,ty*kCoordsXYStep};
-                if(!MapIsLocationValid(tilePos)) continue;
-                for(const auto* large:TileElementsView<LargeSceneryElement>(tilePos))
+                const CoordsXY tilePos{
+                    tx * kCoordsXYStep,
+                    ty * kCoordsXYStep
+                };
+                if (!MapIsLocationValid(tilePos))
+                    continue;
+
+                for (const auto* large :
+                     TileElementsView<LargeSceneryElement>(
+                         tilePos))
                 {
-                    if(large==nullptr || large->isGhost() || large->isInvisible()) continue;
-                    const auto* entry=large->getEntry();
-                    const size_t sequence=large->getSequenceIndex();
-                    if(entry==nullptr || sequence>=entry->tiles.size()) continue;
-                    const auto& tile=entry->tiles[sequence];
-                    const uint8_t occupied=uint8_t(
-                        RotateQuarterMask(tile.corners,large->getDirection()) | large->getOccupiedQuadrants());
-                    const float lowZ=float(large->getBaseZ());
-                    const float highZ=float(std::max(
-                        large->getClearanceZ(),large->getBaseZ()+std::max(0,tile.zClearance)));
-                    if(highZ<=lowZ) continue;
-                    for(uint8_t q=0;q<4;++q)
+                    if (large == nullptr
+                        || large->isGhost()
+                        || large->isInvisible())
+                        continue;
+                    const auto* entry = large->getEntry();
+                    const size_t sequence =
+                        large->getSequenceIndex();
+                    if (entry == nullptr
+                        || sequence >= entry->tiles.size())
+                        continue;
+
+                    const auto& tile =
+                        entry->tiles[sequence];
+                    const uint8_t occupied = uint8_t(
+                        RotateQuarterMask(
+                            tile.corners,
+                            large->getDirection())
+                        | large->getOccupiedQuadrants());
+                    const float lowZ =
+                        float(large->getBaseZ());
+                    const float highZ = float(std::max(
+                        large->getClearanceZ(),
+                        large->getBaseZ()
+                            + std::max(
+                                0, tile.zClearance)));
+                    if (highZ <= lowZ)
+                        continue;
+
+                    bool broadPhaseHit = false;
+                    for (uint8_t q = 0; q < 4; ++q)
                     {
-                        if((occupied&(1u<<q))==0) continue;
-                        const auto& b=kQuarterBounds[q];
-                        if(Paint::FirstPersonBoxIntersectsWalkStep(
-                            from,to,
-                            {float(tilePos.x)+b[0],float(tilePos.y)+b[1],lowZ},
-                            {float(tilePos.x)+b[2],float(tilePos.y)+b[3],highZ},
-                            kEyeHeight))
-                            return true;
+                        if ((occupied & (1u << q)) == 0)
+                            continue;
+                        const auto& b =
+                            kQuarterBounds[q];
+                        if (Paint::FirstPersonBoxIntersectsWalkStep(
+                                from, to,
+                                {
+                                    float(tilePos.x) + b[0],
+                                    float(tilePos.y) + b[1],
+                                    lowZ,
+                                },
+                                {
+                                    float(tilePos.x) + b[2],
+                                    float(tilePos.y) + b[3],
+                                    highZ,
+                                },
+                                kEyeHeight))
+                        {
+                            broadPhaseHit = true;
+                            break;
+                        }
+                    }
+                    if (!broadPhaseHit)
+                        continue;
+
+                    const auto groupKey =
+                        Paint::EnsureFirstPersonLargeSceneryPhysicalProxy(
+                            tilePos, *large);
+                    if (groupKey.has_value()
+                        && Paint::
+                            FirstPersonLargeSceneryProxyGroupIntersectsWalkStep(
+                                *groupKey, from, to,
+                                kEyeHeight))
+                    {
+                        return true;
                     }
                 }
             }
+
+            // Construction reservation alone is never collision evidence.
             return false;
         }
 
@@ -1052,114 +1120,33 @@ namespace OpenRCT2::Ui::FirstPerson
                 return;
             }
             {
-                Paint::FirstPersonCamera carOrientation{};
-                carOrientation.yaw = Paint::FirstPersonVehicleYawRadians(car->orientation);
-                const auto interpolated = EntityTweener::get().trackedVehicleVisuals(_state.attachedVehicle);
-                if (interpolated.has_value())
-                {
-                    carOrientation.yaw = Paint::FirstPersonLerpAngle(
-                        Paint::FirstPersonVehicleYawRadians(interpolated->yawBefore),
-                        Paint::FirstPersonVehicleYawRadians(interpolated->yawAfter),
-                        interpolated->alpha);
-                }
-                // Vehicle::pitch and Vehicle::roll UNION with flat-ride animation bytes.
-                // Interpreting a Ferris wheel's frame index as 75-degree track pitch
-                // would make the passenger lurch arbitrarily as the animation advances.
-                const auto* ride = car->GetRide();
-                const bool flatRide = ride != nullptr &&
-                    ride->getRideTypeDescriptor().flags.has(RtdFlag::isFlatRide);
-                carOrientation.pitch = flatRide ? 0.0f : Paint::FirstPersonVehiclePitchRadians(car->pitch);
-                carOrientation.roll = flatRide ? 0.0f : Paint::FirstPersonVehicleRollRadians(car->roll);
-                if (interpolated.has_value() && !flatRide)
-                {
-                    carOrientation.pitch = Paint::FirstPersonLerpAngle(
-                        Paint::FirstPersonVehiclePitchRadians(static_cast<VehiclePitch>(interpolated->pitchBefore)),
-                        Paint::FirstPersonVehiclePitchRadians(static_cast<VehiclePitch>(interpolated->pitchAfter)),
-                        interpolated->alpha);
-                    carOrientation.roll = Paint::FirstPersonLerpAngle(
-                        Paint::FirstPersonVehicleRollRadians(static_cast<VehicleRoll>(interpolated->rollBefore)),
-                        Paint::FirstPersonVehicleRollRadians(static_cast<VehicleRoll>(interpolated->rollAfter)),
-                        interpolated->alpha);
-                }
-                // Carriage effects are local-frame transforms. Do not fold
-                // spin into world yaw: on pitched track that rotates about the
-                // wrong axis. Swing likewise follows its simulation state.
-                const auto* entry = car->Entry();
-                float spinAngle = 0.0f;
-                if (entry != nullptr && entry->flags.has(CarEntryFlag::hasSpinning))
-                {
-                    spinAngle = interpolated.has_value()
-                        ? Paint::FirstPersonLerpAngle(
-                              Paint::SpinSpriteYawRadians(interpolated->spinBefore),
-                              Paint::SpinSpriteYawRadians(interpolated->spinAfter), interpolated->alpha)
-                        : Paint::SpinSpriteYawRadians(car->spin_sprite);
-                }
-                float swingPosition = float(car->SwingPosition);
-                if (interpolated.has_value())
-                {
-                    swingPosition =
-                        float(interpolated->swingPositionBefore)
-                        + (float(interpolated->swingPositionAfter)
-                            - float(interpolated->swingPositionBefore))
-                            * interpolated->alpha;
-                }
-                float seatAngle = 0.0f;
-                if (entry != nullptr
-                    && entry->animation == CarEntryAnimation::multiDimension
-                    && entry->animationFrames > 0)
-                {
-                    seatAngle = interpolated.has_value()
-                        ? Paint::FirstPersonLerpAngle(
-                              Paint::FirstPersonMultiDimensionSeatAngle(
-                                  interpolated->seatRotationBefore,
-                                  interpolated->animationFrameBefore,
-                                  entry->animationFrames),
-                              Paint::FirstPersonMultiDimensionSeatAngle(
-                                  interpolated->seatRotationAfter,
-                                  interpolated->animationFrameAfter,
-                                  entry->animationFrames),
-                              interpolated->alpha)
-                        : Paint::FirstPersonMultiDimensionSeatAngle(
-                              car->seat_rotation, car->animation_frame,
-                              entry->animationFrames);
-                }
-
-                const auto trackBasis = Paint::FirstPersonVehicleTrackBasis(
-                    *car, carOrientation.yaw, carOrientation.pitch, carOrientation.roll);
-                const auto carriage = Paint::BuildFirstPersonCarriageTransform(
-                    *car, trackBasis, spinAngle, swingPosition, seatAngle);
-
-                float flatPrimaryFrame = float(car->flatRideAnimationFrame);
-                float flatSecondaryFrame = float(car->flatRideSecondaryAnimationFrame);
-                if (interpolated.has_value())
-                {
-                    flatPrimaryFrame = Paint::FirstPersonLerpCyclicFrame(
-                        float(interpolated->flatPrimaryBefore),
-                        float(interpolated->flatPrimaryAfter),
-                        interpolated->alpha,
-                        Paint::FirstPersonFlatRidePrimaryFrameCount(*car));
-                    flatSecondaryFrame = Paint::FirstPersonLerpCyclicFrame(
-                        float(interpolated->flatSecondaryBefore & 0x0F),
-                        float(interpolated->flatSecondaryAfter & 0x0F),
-                        interpolated->alpha, 16.0f);
-                }
-
-                const auto loc = car->getLocation();
+                const auto tracked =
+                    EntityTweener::get().trackedVehicleVisuals(
+                        _state.attachedVehicle);
+                const auto presentation =
+                    Paint::BuildFirstPersonVehiclePresentationState(
+                        *car, tracked);
                 const auto passenger =
                     Paint::BuildFirstPersonPassengerPoseWithCarriage(
-                        *car,
-                        { float(loc.x), float(loc.y), float(loc.z) },
-                        carriage,
-                        flatPrimaryFrame, flatSecondaryFrame,
+                        *car, presentation.vehicleOrigin,
+                        presentation.carriage,
+                        presentation.flatPrimaryFrame,
+                        presentation.flatSecondaryFrame,
                         _state.attachedSeat);
-                const auto headBasis = Paint::GetPassengerHeadBasis(
-                    passenger.basis, _state.headYaw, _state.headPitch);
+                const auto headBasis =
+                    Paint::GetPassengerHeadBasis(
+                        passenger.basis,
+                        _state.headYaw,
+                        _state.headPitch);
 
-                // Keep scalar yaw as a fallback for consumers that cannot use
-                // the explicit basis; the actual camera orientation is the
-                // passenger/cabin basis plus independent head look.
+                // The rider camera and every first-person consumer now share
+                // one presentation-time carriage transform. Scalar yaw remains
+                // only a fallback for consumers that cannot use the explicit
+                // basis.
                 _state.camera.yaw = std::atan2(
-                    passenger.basis.forward.y, passenger.basis.forward.x) + _state.headYaw;
+                    passenger.basis.forward.y,
+                    passenger.basis.forward.x)
+                    + _state.headYaw;
                 _state.camera.position = passenger.position;
                 _state.camera.hasExplicitBasis = true;
                 _state.camera.explicitBasis = headBasis;

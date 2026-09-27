@@ -8,12 +8,14 @@
 #include "FirstPersonPassengerAssetCalibration.h"
 #include "FirstPersonPeriodicPassengerMotion.h"
 #include "FirstPersonSwingAssetCalibration.h"
+#include "../entity/EntityTweener.h"
 #include "../entity/Yaw.hpp"
 #include "../ride/Angles.h"
 #include "../ride/CarEntry.h"
 #include "../ride/Ride.h"
 #include "../ride/RideData.h"
 #include "../ride/Vehicle.h"
+#include "../ride/VehicleVisualState.h"
 #include "../ride/VehicleGeometry.h"
 #include "../ride/VehicleSwing.h"
 
@@ -21,6 +23,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 
 namespace OpenRCT2::Paint
@@ -234,7 +237,8 @@ namespace OpenRCT2::Paint
             trackBasis = FirstPersonRotateLocalYaw(trackBasis, kPi);
         }
 
-        const auto* entry = car.Entry();
+        const auto visual = ResolveVehicleVisualState(car);
+        const auto* entry = visual.carEntry;
         if (entry != nullptr && entry->flags.has(CarEntryFlag::hasSpinning))
             trackBasis = FirstPersonRotateLocalYaw(trackBasis, spinAngle);
 
@@ -375,7 +379,8 @@ namespace OpenRCT2::Paint
     [[nodiscard]] inline FirstPersonVec3 FirstPersonPassengerFallbackEyeOffset(
         const Vehicle& car, uint8_t seatIndex)
     {
-        const auto* entry = car.Entry();
+        const auto visual = ResolveVehicleVisualState(car);
+        const auto* entry = visual.carEntry;
         if (entry == nullptr)
             return { 0.0f, 0.0f, 8.0f };
 
@@ -418,7 +423,8 @@ namespace OpenRCT2::Paint
         const uint8_t seatIndex = pinnedSeatIndex == 0xFF
             ? FirstPersonPassengerSeatIndex(car)
             : std::min<uint8_t>(pinnedSeatIndex, uint8_t(seatCount - 1));
-        const auto* entry = car.Entry();
+        const auto visual = ResolveVehicleVisualState(car);
+        const auto* entry = visual.carEntry;
         const uint8_t rows = entry != nullptr
             ? std::max<uint8_t>(entry->numSeatingRows, 1) : 1;
         const uint8_t row = std::min<uint8_t>(seatIndex / 2, rows - 1);
@@ -583,7 +589,8 @@ namespace OpenRCT2::Paint
             FirstPersonVehicleYawRadians(car.orientation),
             FirstPersonVehiclePitchRadians(car.pitch),
             FirstPersonVehicleRollRadians(car.roll));
-        const auto* entry = car.Entry();
+        const auto visual = ResolveVehicleVisualState(car);
+        const auto* entry = visual.carEntry;
         const float seatAngle =
             entry != nullptr
                 && entry->animation == CarEntryAnimation::multiDimension
@@ -594,6 +601,160 @@ namespace OpenRCT2::Paint
         return BuildFirstPersonCarriageTransform(
             car, trackBasis, SpinSpriteYawRadians(car.spin_sprite),
             float(car.SwingPosition), seatAngle);
+    }
+
+    struct FirstPersonVehiclePresentationState
+    {
+        VehicleVisualState visual{};
+        FirstPersonVec3 vehicleOrigin{};
+        FirstPersonCarriageTransform carriage{};
+        float flatPrimaryFrame = 0.0f;
+        float flatSecondaryFrame = 0.0f;
+    };
+
+    [[nodiscard]] inline FirstPersonVehiclePresentationState
+        BuildFirstPersonVehiclePresentationState(
+            const Vehicle& car,
+            const std::optional<FirstPersonTrackedVehicleVisuals>& tracked)
+    {
+        FirstPersonVehiclePresentationState result{};
+        result.visual = ResolveVehicleVisualState(car);
+
+        float yaw =
+            FirstPersonVehicleYawRadians(car.orientation);
+        const auto* ride = car.GetRide();
+        const bool flatRide = ride != nullptr
+            && ride->getRideTypeDescriptor().flags.has(
+                RtdFlag::isFlatRide);
+        float pitch = flatRide
+            ? 0.0f
+            : FirstPersonVehiclePitchRadians(car.pitch);
+        float roll = flatRide
+            ? 0.0f
+            : FirstPersonVehicleRollRadians(car.roll);
+
+        if (tracked.has_value())
+        {
+            yaw = FirstPersonLerpAngle(
+                FirstPersonVehicleYawRadians(tracked->yawBefore),
+                FirstPersonVehicleYawRadians(tracked->yawAfter),
+                tracked->alpha);
+            if (!flatRide)
+            {
+                pitch = FirstPersonLerpAngle(
+                    FirstPersonVehiclePitchRadians(
+                        static_cast<VehiclePitch>(
+                            tracked->pitchBefore)),
+                    FirstPersonVehiclePitchRadians(
+                        static_cast<VehiclePitch>(
+                            tracked->pitchAfter)),
+                    tracked->alpha);
+                roll = FirstPersonLerpAngle(
+                    FirstPersonVehicleRollRadians(
+                        static_cast<VehicleRoll>(
+                            tracked->rollBefore)),
+                    FirstPersonVehicleRollRadians(
+                        static_cast<VehicleRoll>(
+                            tracked->rollAfter)),
+                    tracked->alpha);
+            }
+        }
+
+        const auto* entry = result.visual.carEntry;
+        float spinAngle = 0.0f;
+        if (entry != nullptr
+            && entry->flags.has(CarEntryFlag::hasSpinning))
+        {
+            spinAngle = tracked.has_value()
+                ? FirstPersonLerpAngle(
+                    SpinSpriteYawRadians(tracked->spinBefore),
+                    SpinSpriteYawRadians(tracked->spinAfter),
+                    tracked->alpha)
+                : SpinSpriteYawRadians(car.spin_sprite);
+        }
+
+        float swingPosition = float(car.SwingPosition);
+        if (tracked.has_value())
+        {
+            swingPosition =
+                float(tracked->swingPositionBefore)
+                + (float(tracked->swingPositionAfter)
+                    - float(tracked->swingPositionBefore))
+                    * tracked->alpha;
+        }
+
+        float seatAngle = 0.0f;
+        if (entry != nullptr
+            && entry->animation
+                == CarEntryAnimation::multiDimension
+            && entry->animationFrames > 0)
+        {
+            seatAngle = tracked.has_value()
+                ? FirstPersonLerpAngle(
+                    FirstPersonMultiDimensionSeatAngle(
+                        tracked->seatRotationBefore,
+                        tracked->animationFrameBefore,
+                        entry->animationFrames),
+                    FirstPersonMultiDimensionSeatAngle(
+                        tracked->seatRotationAfter,
+                        tracked->animationFrameAfter,
+                        entry->animationFrames),
+                    tracked->alpha)
+                : FirstPersonMultiDimensionSeatAngle(
+                    car.seat_rotation, car.animation_frame,
+                    entry->animationFrames);
+        }
+
+        const auto trackBasis =
+            FirstPersonVehicleTrackBasis(
+                car, yaw, pitch, roll);
+        result.carriage =
+            BuildFirstPersonCarriageTransform(
+                car, trackBasis, spinAngle,
+                swingPosition, seatAngle);
+
+        result.flatPrimaryFrame =
+            float(car.flatRideAnimationFrame);
+        result.flatSecondaryFrame =
+            float(car.flatRideSecondaryAnimationFrame);
+        if (tracked.has_value())
+        {
+            result.flatPrimaryFrame =
+                FirstPersonLerpCyclicFrame(
+                    float(tracked->flatPrimaryBefore),
+                    float(tracked->flatPrimaryAfter),
+                    tracked->alpha,
+                    FirstPersonFlatRidePrimaryFrameCount(car));
+            result.flatSecondaryFrame =
+                FirstPersonLerpCyclicFrame(
+                    float(tracked->flatSecondaryBefore & 0x0F),
+                    float(tracked->flatSecondaryAfter & 0x0F),
+                    tracked->alpha, 16.0f);
+        }
+
+        const auto loc = car.getLocation();
+        result.vehicleOrigin = {
+            float(loc.x),
+            float(loc.y),
+            float(loc.z + result.visual.zOffset),
+        };
+        return result;
+    }
+
+    [[nodiscard]] inline FirstPersonPassengerPose
+        BuildFirstPersonVehiclePresentationPassengerPose(
+            const Vehicle& car,
+            const std::optional<FirstPersonTrackedVehicleVisuals>& tracked,
+            uint8_t pinnedSeatIndex = 0xFF)
+    {
+        const auto state =
+            BuildFirstPersonVehiclePresentationState(
+                car, tracked);
+        return BuildFirstPersonPassengerPoseWithCarriage(
+            car, state.vehicleOrigin, state.carriage,
+            state.flatPrimaryFrame,
+            state.flatSecondaryFrame,
+            pinnedSeatIndex);
     }
 
     [[nodiscard]] inline FirstPersonCamera
@@ -611,10 +772,14 @@ namespace OpenRCT2::Paint
     {
         const auto carriage =
             FirstPersonVehicleSimulationCarriageTransform(car);
+        const auto visual = ResolveVehicleVisualState(car);
         const auto loc = car.getLocation();
         return BuildFirstPersonPassengerPoseWithCarriage(
             car,
-            { float(loc.x), float(loc.y), float(loc.z) },
+            {
+                float(loc.x), float(loc.y),
+                float(loc.z + visual.zOffset)
+            },
             carriage, -1.0f, -1.0f, pinnedSeatIndex);
     }
 } // namespace OpenRCT2::Paint

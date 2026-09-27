@@ -83,6 +83,17 @@ namespace OpenRCT2::Paint
         float averageCandidateCoverage = 0.0f;
         float minimumCandidateCoverage = 0.0f;
         float averageObservedCoverage = 0.0f;
+        // Observed evidence is measured only in a narrow band around the
+        // predicted rail section, so remote sleepers/supports neither help nor
+        // hurt the fit.
+        float averageLocalObservedCoverage = 0.0f;
+        // Both predicted rails must be independently supported. This prevents
+        // one broad same-colour structure from standing in for a twin-rail
+        // section merely because the combined prism lies inside it.
+        float minimumRailCoverage = 0.0f;
+        // Holdouts use a property the source optimizer does not optimise:
+        // support continuity along each predicted rail locus.
+        float minimumContinuityCoverage = 0.0f;
         FirstPersonTrackPixelChannel channel =
             FirstPersonTrackPixelChannel::trackRailPalette;
     };
@@ -325,6 +336,52 @@ namespace OpenRCT2::Paint
                     AddFirstPersonTrackProfileSegmentSilhouette(
                         result[rotation], rotation, anchor, a, b, profile,
                         profile.halfGauge);
+                }
+            }
+            previous = i;
+        }
+        return result;
+    }
+
+    [[nodiscard]] inline std::array<FirstPersonSilhouette, 4>
+        BuildFirstPersonTrackSingleRailSilhouettes(
+            const FirstPersonTrackTrajectory& trajectory,
+            const FirstPersonVec3& anchor,
+            const FirstPersonTrackRailProfile& profile,
+            float gaugeSide)
+    {
+        std::array<FirstPersonSilhouette, 4> result{};
+        if (trajectory.points.size() < 2
+            || profile.halfWidth <= 0.0f
+            || profile.halfHeight <= 0.0f)
+            return result;
+
+        size_t previous = 0;
+        for (size_t i = 1; i < trajectory.points.size(); ++i)
+        {
+            const auto& a = trajectory.points[previous];
+            const auto& b = trajectory.points[i];
+            const float distance =
+                FirstPersonTrackTrajectoryPointDistance(a, b);
+            const bool turns =
+                DotFirstPersonTrackVector(
+                    a.basis.forward, b.basis.forward)
+                    < 0.9914449f
+                || DotFirstPersonTrackVector(
+                    a.basis.up, b.basis.up)
+                    < 0.9914449f;
+            const bool last =
+                i + 1 == trajectory.points.size();
+            if (!last && distance < 3.0f && !turns)
+                continue;
+            if (distance > 0.05f)
+            {
+                for (uint8_t rotation = 0;
+                     rotation < 4; ++rotation)
+                {
+                    AddFirstPersonTrackProfileSegmentSilhouette(
+                        result[rotation], rotation, anchor,
+                        a, b, profile, gaugeSide);
                 }
             }
             previous = i;
@@ -669,10 +726,42 @@ namespace OpenRCT2::Paint
         return false;
     }
 
+    [[nodiscard]] inline float
+        FirstPersonTrackLocalObservedCoverage(
+            const FirstPersonSilhouette& observed,
+            const FirstPersonSilhouette& candidate,
+            int32_t bandTolerance = 3,
+            int32_t matchTolerance = 1)
+    {
+        if (observed.empty() || candidate.empty())
+            return 0.0f;
+        size_t localObserved = 0;
+        size_t explained = 0;
+        for (const auto pixel : observed.pixels)
+        {
+            const int32_t x =
+                int32_t(uint32_t(pixel >> 32));
+            const int32_t y =
+                int32_t(uint32_t(pixel));
+            if (!FirstPersonTrackSilhouetteContainsNear(
+                    candidate, x, y, bandTolerance))
+                continue;
+            ++localObserved;
+            if (FirstPersonTrackSilhouetteContainsNear(
+                    candidate, x, y, matchTolerance))
+                ++explained;
+        }
+        return localObserved != 0
+            ? float(explained) / float(localObserved)
+            : 0.0f;
+    }
+
     [[nodiscard]] inline FirstPersonTrackProfileFit
         EvaluateFirstPersonTrackProfileFit(
             const FirstPersonTrackArtworkObservation& observation,
             const std::array<FirstPersonSilhouette, 4>& candidate,
+            const std::array<FirstPersonSilhouette, 4>& negativeRail,
+            const std::array<FirstPersonSilhouette, 4>& positiveRail,
             FirstPersonTrackPixelChannel channel)
     {
         FirstPersonTrackProfileFit result{};
@@ -682,48 +771,90 @@ namespace OpenRCT2::Paint
             return result;
 
         const auto& observed =
-            observation.channelViews[static_cast<size_t>(channel)];
+            observation.channelViews[
+                static_cast<size_t>(channel)];
         result.valid = true;
         result.minimumCandidateCoverage = 1.0f;
-        for (size_t rotation = 0; rotation < 4; ++rotation)
+        result.minimumRailCoverage = 1.0f;
+        for (size_t rotation = 0;
+             rotation < 4; ++rotation)
         {
             if (candidate[rotation].overflowed
-                || candidate[rotation].size() < 8)
+                || candidate[rotation].size() < 8
+                || negativeRail[rotation].overflowed
+                || positiveRail[rotation].overflowed
+                || negativeRail[rotation].size() < 3
+                || positiveRail[rotation].size() < 3)
             {
                 return {};
             }
-            const float candidateCoverage = FirstPersonTrackNearCoverage(
-                candidate[rotation], observed[rotation], 1);
-            const float observedCoverage = FirstPersonTrackNearCoverage(
-                observed[rotation], candidate[rotation], 1);
-            result.minimumCandidateCoverage = std::min(
-                result.minimumCandidateCoverage, candidateCoverage);
-            result.averageCandidateCoverage += candidateCoverage * 0.25f;
-            result.averageObservedCoverage += observedCoverage * 0.25f;
+
+            const float candidateCoverage =
+                FirstPersonTrackNearCoverage(
+                    candidate[rotation],
+                    observed[rotation], 1);
+            const float observedCoverage =
+                FirstPersonTrackNearCoverage(
+                    observed[rotation],
+                    candidate[rotation], 1);
+            const float localObservedCoverage =
+                FirstPersonTrackLocalObservedCoverage(
+                    observed[rotation],
+                    candidate[rotation], 3, 1);
+            const float negativeCoverage =
+                FirstPersonTrackNearCoverage(
+                    negativeRail[rotation],
+                    observed[rotation], 1);
+            const float positiveCoverage =
+                FirstPersonTrackNearCoverage(
+                    positiveRail[rotation],
+                    observed[rotation], 1);
+
+            result.minimumCandidateCoverage =
+                std::min(
+                    result.minimumCandidateCoverage,
+                    candidateCoverage);
+            result.minimumRailCoverage =
+                std::min({
+                    result.minimumRailCoverage,
+                    negativeCoverage,
+                    positiveCoverage,
+                });
+            result.averageCandidateCoverage +=
+                candidateCoverage * 0.25f;
+            result.averageObservedCoverage +=
+                observedCoverage * 0.25f;
+            result.averageLocalObservedCoverage +=
+                localObservedCoverage * 0.25f;
         }
 
-        const float symmetricEvidence = std::sqrt(std::max(
-            0.0f,
-            result.averageCandidateCoverage
-                * result.averageObservedCoverage));
+        // Local two-sided evidence dominates. Global observed coverage remains
+        // diagnostic only because remote supports/sleepers may legitimately
+        // share the selected palette/remap channel.
         result.score =
-            0.85f * result.averageCandidateCoverage
-            + 0.15f * symmetricEvidence;
+            0.45f * result.averageCandidateCoverage
+            + 0.30f * result.averageLocalObservedCoverage
+            + 0.25f * result.minimumRailCoverage;
         return result;
     }
 
     [[nodiscard]] inline FirstPersonTrackProfileFit
         BestFirstPersonTrackProfileFit(
             const FirstPersonTrackArtworkObservation& observation,
-            const std::array<FirstPersonSilhouette, 4>& candidate)
+            const std::array<FirstPersonSilhouette, 4>& candidate,
+            const std::array<FirstPersonSilhouette, 4>& negativeRail,
+            const std::array<FirstPersonSilhouette, 4>& positiveRail)
     {
         FirstPersonTrackProfileFit best{};
-        for (size_t i = 0; i < kFirstPersonTrackPixelChannelCount; ++i)
+        for (size_t i = 0;
+             i < kFirstPersonTrackPixelChannelCount; ++i)
         {
             const auto channel =
                 static_cast<FirstPersonTrackPixelChannel>(i);
-            const auto fit = EvaluateFirstPersonTrackProfileFit(
-                observation, candidate, channel);
+            const auto fit =
+                EvaluateFirstPersonTrackProfileFit(
+                    observation, candidate,
+                    negativeRail, positiveRail, channel);
             if (!fit.valid)
                 continue;
             if (!best.valid || fit.score > best.score)
@@ -732,29 +863,99 @@ namespace OpenRCT2::Paint
         return best;
     }
 
-    [[nodiscard]] inline bool IsFirstPersonTrackCalibrationFitReliable(
-        const FirstPersonTrackProfileFit& fit)
+    [[nodiscard]] inline float
+        FirstPersonTrackRailContinuityCoverage(
+            const FirstPersonTrackArtworkObservation& observation,
+            const FirstPersonTrackTrajectory& trajectory,
+            const FirstPersonVec3& anchor,
+            const FirstPersonTrackRailProfile& profile,
+            FirstPersonTrackPixelChannel channel)
     {
-        // The fitted prism is deliberately allowed to explain only the rail
-        // subset of a remap channel: sleepers, spine and supports can share a
-        // colour. What must be strong is candidate -> artwork agreement in all
-        // four native projections.
-        return fit.valid
-            && fit.minimumCandidateCoverage >= 0.72f
-            && fit.averageCandidateCoverage >= 0.80f
-            && fit.score >= 0.70f;
+        if (!FirstPersonTrackObservationChannelComplete(
+                observation, channel)
+            || trajectory.points.empty())
+            return 0.0f;
+
+        const auto& observed =
+            observation.channelViews[
+                static_cast<size_t>(channel)];
+        float minimum = 1.0f;
+        const size_t stride = std::max<size_t>(
+            1, trajectory.points.size() / 24);
+        for (const float gaugeSide :
+            { -profile.halfGauge, profile.halfGauge })
+        {
+            for (uint8_t rotation = 0;
+                 rotation < 4; ++rotation)
+            {
+                size_t samples = 0;
+                size_t supported = 0;
+                for (size_t i = 0;
+                     i < trajectory.points.size();
+                     i += stride)
+                {
+                    const auto& point =
+                        trajectory.points[i];
+                    const FirstPersonVec3 centre{
+                        point.position.x
+                            + point.basis.right.x * gaugeSide
+                            + point.basis.up.x
+                                * profile.verticalOffset,
+                        point.position.y
+                            + point.basis.right.y * gaugeSide
+                            + point.basis.up.y
+                                * profile.verticalOffset,
+                        point.position.z
+                            + point.basis.right.z * gaugeSide
+                            + point.basis.up.z
+                                * profile.verticalOffset,
+                    };
+                    const auto projected =
+                        ProjectFirstPersonTrackArtworkPoint(
+                            rotation, anchor, centre);
+                    ++samples;
+                    if (FirstPersonTrackSilhouetteContainsNear(
+                            observed[rotation],
+                            projected.x, projected.y, 2))
+                        ++supported;
+                }
+                if (samples == 0)
+                    return 0.0f;
+                minimum = std::min(
+                    minimum,
+                    float(supported)
+                        / float(samples));
+            }
+        }
+        return minimum;
     }
 
-    [[nodiscard]] inline bool IsFirstPersonTrackHoldoutFitReliable(
-        const FirstPersonTrackProfileFit& fit)
+    [[nodiscard]] inline bool
+        IsFirstPersonTrackCalibrationFitReliable(
+            const FirstPersonTrackProfileFit& fit)
     {
-        // Curves/slopes/banks have more raster aliasing than the calibration
-        // straight, but still require the same fixed 3-D profile to explain
-        // most projected rail pixels in every view.
         return fit.valid
-            && fit.minimumCandidateCoverage >= 0.62f
-            && fit.averageCandidateCoverage >= 0.72f
-            && fit.score >= 0.63f;
+            && fit.minimumCandidateCoverage >= 0.70f
+            && fit.averageCandidateCoverage >= 0.78f
+            && fit.minimumRailCoverage >= 0.65f
+            && fit.averageLocalObservedCoverage >= 0.45f
+            && fit.score >= 0.68f;
+    }
+
+    [[nodiscard]] inline bool
+        IsFirstPersonTrackHoldoutFitReliable(
+            const FirstPersonTrackProfileFit& fit)
+    {
+        // Continuity is intentionally a holdout-only discriminator. The source
+        // optimizer never receives it as an objective, so a source fit cannot
+        // optimise its way into passing this independent check.
+        return fit.valid
+            && fit.minimumCandidateCoverage >= 0.60f
+            && fit.averageCandidateCoverage >= 0.68f
+            && fit.minimumRailCoverage >= 0.55f
+            && fit.averageLocalObservedCoverage >= 0.38f
+            && fit.minimumContinuityCoverage >= 0.70f
+            && fit.score >= 0.60f;
     }
 
     [[nodiscard]] inline FirstPersonTrackProfileCalibrationResult
@@ -765,22 +966,30 @@ namespace OpenRCT2::Paint
     {
         FirstPersonTrackProfileCalibrationResult result{};
         if (trajectory.points.size() < 2
-            || !FirstPersonTrackObservationHasCompleteChannel(observation))
+            || !FirstPersonTrackObservationHasCompleteChannel(
+                observation))
             return result;
 
         struct SearchResult
         {
             bool valid = false;
+            float selectionScore =
+                -std::numeric_limits<float>::infinity();
             FirstPersonTrackRailProfile profile{};
             FirstPersonTrackProfileFit fit{};
         };
         SearchResult best{};
 
-        const auto tryCandidate = [&](float halfGauge, float halfWidth,
-                                      float verticalOffset,
-                                      SearchResult& destination) {
-            if (!(halfGauge >= 1.5f && halfGauge <= 15.0f)
-                || !(halfWidth >= 0.35f && halfWidth <= 4.0f)
+        const auto tryCandidate = [&](
+            float halfGauge, float halfWidth,
+            float halfHeight, float verticalOffset,
+            SearchResult& destination) {
+            if (!(halfGauge >= 1.5f
+                    && halfGauge <= 15.0f)
+                || !(halfWidth >= 0.35f
+                    && halfWidth <= 4.0f)
+                || !(halfHeight >= 0.25f
+                    && halfHeight <= 4.0f)
                 || halfGauge <= halfWidth + 0.5f
                 || !(verticalOffset >= -20.0f
                     && verticalOffset <= 20.0f))
@@ -789,65 +998,109 @@ namespace OpenRCT2::Paint
             FirstPersonTrackRailProfile profile{};
             profile.halfGauge = halfGauge;
             profile.halfWidth = halfWidth;
-            // The fitted "rail width" is used as the square prism section.
-            // This avoids inventing a second, unobserved thickness parameter.
-            profile.halfHeight = halfWidth;
+            profile.halfHeight = halfHeight;
             profile.verticalOffset = verticalOffset;
 
-            const auto candidate = BuildFirstPersonTrackRailSilhouettes(
-                trajectory, anchor, profile);
+            const auto candidate =
+                BuildFirstPersonTrackRailSilhouettes(
+                    trajectory, anchor, profile);
+            const auto negativeRail =
+                BuildFirstPersonTrackSingleRailSilhouettes(
+                    trajectory, anchor, profile,
+                    -profile.halfGauge);
+            const auto positiveRail =
+                BuildFirstPersonTrackSingleRailSilhouettes(
+                    trajectory, anchor, profile,
+                    profile.halfGauge);
             const auto fit =
-                BestFirstPersonTrackProfileFit(observation, candidate);
+                BestFirstPersonTrackProfileFit(
+                    observation, candidate,
+                    negativeRail, positiveRail);
             if (!fit.valid)
                 return;
 
+            // Height is independently observable, but extra section anisotropy
+            // must earn its freedom. A small regularizer favours the simpler
+            // square section only when the multi-view evidence is effectively
+            // tied.
+            const float anisotropyPenalty =
+                0.006f
+                * std::abs(halfHeight - halfWidth);
+            const float selectionScore =
+                fit.score - anisotropyPenalty;
             const float oldComplexity =
                 destination.profile.halfWidth
+                + destination.profile.halfHeight
                 + destination.profile.halfGauge * 0.01f;
             const float newComplexity =
-                halfWidth + halfGauge * 0.01f;
-            if (!destination.valid || fit.score > destination.fit.score + 1e-5f
-                || (std::abs(fit.score - destination.fit.score) <= 1e-5f
+                halfWidth + halfHeight
+                + halfGauge * 0.01f;
+            if (!destination.valid
+                || selectionScore
+                    > destination.selectionScore + 1e-5f
+                || (std::abs(
+                        selectionScore
+                        - destination.selectionScore)
+                        <= 1e-5f
                     && newComplexity < oldComplexity))
             {
                 destination.valid = true;
+                destination.selectionScore =
+                    selectionScore;
                 destination.profile = profile;
                 destination.fit = fit;
             }
         };
 
-        for (float halfGauge = 2.0f; halfGauge <= 14.0f; halfGauge += 2.0f)
-        for (float halfWidth = 0.5f; halfWidth <= 3.5f; halfWidth += 1.0f)
+        for (float halfGauge = 2.0f;
+             halfGauge <= 14.0f; halfGauge += 2.0f)
+        for (float halfWidth = 0.5f;
+             halfWidth <= 3.5f; halfWidth += 1.0f)
+        for (const float halfHeight :
+            { 0.5f, 1.0f, 2.0f, 3.0f })
         for (float verticalOffset = -16.0f;
-             verticalOffset <= 16.0f; verticalOffset += 4.0f)
+             verticalOffset <= 16.0f;
+             verticalOffset += 4.0f)
         {
             tryCandidate(
-                halfGauge, halfWidth, verticalOffset, best);
+                halfGauge, halfWidth, halfHeight,
+                verticalOffset, best);
         }
         if (!best.valid)
             return result;
 
         SearchResult refined = best;
-        for (float halfGauge = best.profile.halfGauge - 1.5f;
-             halfGauge <= best.profile.halfGauge + 1.5f;
+        for (float halfGauge =
+                 best.profile.halfGauge - 1.0f;
+             halfGauge <= best.profile.halfGauge + 1.0f;
              halfGauge += 0.5f)
-        for (float halfWidth = best.profile.halfWidth - 1.0f;
-             halfWidth <= best.profile.halfWidth + 1.0f;
+        for (float halfWidth =
+                 best.profile.halfWidth - 0.75f;
+             halfWidth <= best.profile.halfWidth + 0.75f;
              halfWidth += 0.25f)
-        for (float verticalOffset = best.profile.verticalOffset - 3.0f;
-             verticalOffset <= best.profile.verticalOffset + 3.0f;
+        for (float halfHeight =
+                 best.profile.halfHeight - 0.75f;
+             halfHeight <= best.profile.halfHeight + 0.75f;
+             halfHeight += 0.25f)
+        for (float verticalOffset =
+                 best.profile.verticalOffset - 2.0f;
+             verticalOffset
+                 <= best.profile.verticalOffset + 2.0f;
              verticalOffset += 1.0f)
         {
             tryCandidate(
-                halfGauge, halfWidth, verticalOffset, refined);
+                halfGauge, halfWidth, halfHeight,
+                verticalOffset, refined);
         }
 
         if (!refined.valid
-            || !IsFirstPersonTrackCalibrationFitReliable(refined.fit))
+            || !IsFirstPersonTrackCalibrationFitReliable(
+                refined.fit))
             return result;
 
         refined.profile.sourceChannelMask =
-            FirstPersonTrackPixelChannelBit(refined.fit.channel);
+            FirstPersonTrackPixelChannelBit(
+                refined.fit.channel);
         DeriveFirstPersonTrackRailMaterial(
             refined.profile, observation, trajectory,
             anchor, refined.fit.channel);
@@ -865,22 +1118,42 @@ namespace OpenRCT2::Paint
             const FirstPersonTrackRailProfile& profile)
     {
         if (trajectory.points.size() < 2
-            || !FirstPersonTrackObservationHasCompleteChannel(observation))
+            || !FirstPersonTrackObservationHasCompleteChannel(
+                observation))
             return {};
-        const auto candidate = BuildFirstPersonTrackRailSilhouettes(
-            trajectory, anchor, profile);
+
+        const auto candidate =
+            BuildFirstPersonTrackRailSilhouettes(
+                trajectory, anchor, profile);
+        const auto negativeRail =
+            BuildFirstPersonTrackSingleRailSilhouettes(
+                trajectory, anchor, profile,
+                -profile.halfGauge);
+        const auto positiveRail =
+            BuildFirstPersonTrackSingleRailSilhouettes(
+                trajectory, anchor, profile,
+                profile.halfGauge);
+
         FirstPersonTrackProfileFit best{};
-        for (size_t i = 0; i < kFirstPersonTrackPixelChannelCount; ++i)
+        for (size_t i = 0;
+             i < kFirstPersonTrackPixelChannelCount; ++i)
         {
             const auto channel =
                 static_cast<FirstPersonTrackPixelChannel>(i);
             if ((profile.sourceChannelMask
-                    & FirstPersonTrackPixelChannelBit(channel)) == 0)
+                    & FirstPersonTrackPixelChannelBit(channel))
+                == 0)
                 continue;
-            const auto fit = EvaluateFirstPersonTrackProfileFit(
-                observation, candidate, channel);
+            auto fit =
+                EvaluateFirstPersonTrackProfileFit(
+                    observation, candidate,
+                    negativeRail, positiveRail, channel);
             if (!fit.valid)
                 continue;
+            fit.minimumContinuityCoverage =
+                FirstPersonTrackRailContinuityCoverage(
+                    observation, trajectory, anchor,
+                    profile, channel);
             if (!best.valid || fit.score > best.score)
                 best = fit;
         }

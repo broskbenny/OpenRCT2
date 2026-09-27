@@ -40,6 +40,7 @@ namespace OpenRCT2::Paint
         nativeStationGeometry,
         nativePathGeometry,
         calibratedSceneryArtwork,
+        calibratedLargeSceneryArtwork,
     };
 
     enum class FirstPersonPhysicalProxyCapability : uint8_t
@@ -583,6 +584,65 @@ namespace OpenRCT2::Paint
         }
     }
 
+    inline std::unordered_map<
+        uint64_t, std::vector<FirstPersonPhysicalBoxProxy>>
+        gFirstPersonLargeSceneryPhysicalProxies;
+
+    inline void PublishFirstPersonLargeSceneryPhysicalProxies(
+        uint64_t groupKey,
+        const std::vector<FirstPersonPhysicalBoxProxy>& proxies)
+    {
+        if (groupKey == 0 || proxies.empty())
+        {
+            gFirstPersonLargeSceneryPhysicalProxies.erase(
+                groupKey);
+            return;
+        }
+        gFirstPersonLargeSceneryPhysicalProxies[groupKey] =
+            proxies;
+    }
+
+    inline void WithdrawFirstPersonLargeSceneryPhysicalProxies(
+        uint64_t groupKey)
+    {
+        gFirstPersonLargeSceneryPhysicalProxies.erase(
+            groupKey);
+    }
+
+    inline void ClearFirstPersonLargeSceneryPhysicalProxies()
+    {
+        gFirstPersonLargeSceneryPhysicalProxies.clear();
+    }
+
+    [[nodiscard]] inline bool
+        FirstPersonLargeSceneryProxyGroupIntersectsWalkStep(
+            uint64_t groupKey,
+            FirstPersonVec3 from, FirstPersonVec3 to,
+            float eyeHeight = 20.0f, float radius = 2.0f)
+    {
+        const auto found =
+            gFirstPersonLargeSceneryPhysicalProxies.find(
+                groupKey);
+        if (found
+            == gFirstPersonLargeSceneryPhysicalProxies.end())
+            return false;
+
+        for (const auto& proxy : found->second)
+        {
+            if ((proxy.capabilities
+                    & static_cast<uint8_t>(
+                        FirstPersonPhysicalProxyCapability::
+                            collide))
+                == 0)
+                continue;
+            if (FirstPersonBoxIntersectsWalkStep(
+                    from, to, proxy.low, proxy.high,
+                    eyeHeight, radius))
+                return true;
+        }
+        return false;
+    }
+
     struct FirstPersonRailProxySegment
     {
         FirstPersonVec3 a{};
@@ -805,10 +865,47 @@ namespace OpenRCT2::Paint
             FirstPersonVec3 from, FirstPersonVec3 to,
             float eyeHeight = 20.0f, float radius = 2.0f)
     {
-        const float railLow = std::min(rail.a.z, rail.b.z)
-            - rail.halfHeight;
-        const float railHigh = std::max(rail.a.z, rail.b.z)
-            + rail.halfHeight;
+        struct SectionExtent
+        {
+            float horizontal = 0.0f;
+            float vertical = 0.0f;
+        };
+        const auto sectionExtent =
+            [&](const FirstPersonBasis& basis) {
+                SectionExtent result{};
+                result.vertical =
+                    std::abs(basis.right.z) * rail.halfWidth
+                    + std::abs(basis.up.z) * rail.halfHeight;
+                for (const float rightSign :
+                    { -1.0f, 1.0f })
+                for (const float upSign :
+                    { -1.0f, 1.0f })
+                {
+                    const float x =
+                        basis.right.x * rail.halfWidth
+                            * rightSign
+                        + basis.up.x * rail.halfHeight
+                            * upSign;
+                    const float y =
+                        basis.right.y * rail.halfWidth
+                            * rightSign
+                        + basis.up.y * rail.halfHeight
+                            * upSign;
+                    result.horizontal = std::max(
+                        result.horizontal,
+                        std::hypot(x, y));
+                }
+                return result;
+            };
+
+        const auto extentA = sectionExtent(rail.basisA);
+        const auto extentB = sectionExtent(rail.basisB);
+        const float railLow = std::min(
+            rail.a.z - extentA.vertical,
+            rail.b.z - extentB.vertical);
+        const float railHigh = std::max(
+            rail.a.z + extentA.vertical,
+            rail.b.z + extentB.vertical);
         const float walkLow = std::min(from.z, to.z);
         const float walkHigh =
             std::max(from.z, to.z) + eyeHeight;
@@ -816,17 +913,23 @@ namespace OpenRCT2::Paint
             return false;
 
         const float threshold =
-            std::max(0.25f, rail.halfWidth) + radius;
+            std::max({
+                0.25f,
+                extentA.horizontal,
+                extentB.horizontal,
+            }) + radius;
         const float threshold2 = threshold * threshold;
 
         const float fromDistance =
             FirstPersonPointSegmentDistance2(
                 from.x, from.y,
-                rail.a.x, rail.a.y, rail.b.x, rail.b.y);
+                rail.a.x, rail.a.y,
+                rail.b.x, rail.b.y);
         const float toDistance =
             FirstPersonPointSegmentDistance2(
                 to.x, to.y,
-                rail.a.x, rail.a.y, rail.b.x, rail.b.y);
+                rail.a.x, rail.a.y,
+                rail.b.x, rail.b.y);
 
         // Preserve the established "do not trap an already-overlapping
         // walker" rule before any exact segment-crossing early return.

@@ -16,6 +16,7 @@
 #include <vector>
 
 namespace OpenRCT2::Drawing { struct RenderTarget; }
+namespace OpenRCT2 { struct LargeSceneryElement; }
 struct PaintStruct;
 
 namespace OpenRCT2::Paint
@@ -180,6 +181,9 @@ namespace OpenRCT2::Paint
     FirstPersonScene CollectFirstPersonScene(
         const FirstPersonRenderOptions& options, const ScreenSize& dimensions);
     // Release derived terrain geometry on exiting POV or closing/reloading a park.
+    [[nodiscard]] std::optional<uint64_t>
+        EnsureFirstPersonLargeSceneryPhysicalProxy(
+            CoordsXY tile, const LargeSceneryElement& large);
     void ClearFirstPersonSceneCache();
     // OpenRCT2 map redraw/invalidation points invalidate geometry/height bounds.
     // Both APIs are no-ops when POV is inactive and no cache exists.
