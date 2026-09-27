@@ -30,7 +30,8 @@ OpenGLFramebuffer::OpenGLFramebuffer(SDL_Window* window)
 }
 
 OpenGLFramebuffer::OpenGLFramebuffer(
-    int32_t width, int32_t height, bool depth, bool integer, bool word, bool dword)
+    int32_t width, int32_t height, bool depth, bool integer, bool word, bool dword,
+    GLenum depthInternalFormat)
 {
     _width = width;
     _height = height;
@@ -54,7 +55,7 @@ OpenGLFramebuffer::OpenGLFramebuffer(
 
     if (depth)
     {
-        _depth = CreateDepthTexture(width, height);
+        _depth = CreateDepthTexture(width, height, depthInternalFormat);
     }
     else
     {
@@ -167,13 +168,22 @@ void OpenGLFramebuffer::Copy(OpenGLFramebuffer& src, GLenum filter)
     Bind();
 }
 
-GLuint OpenGLFramebuffer::CreateDepthTexture(int32_t width, int32_t height)
+GLuint OpenGLFramebuffer::CreateDepthTexture(
+    int32_t width, int32_t height, GLenum internalFormat)
 {
+    assert(
+        internalFormat == GL_DEPTH_COMPONENT24
+        || internalFormat == GL_DEPTH_COMPONENT32F);
+    const GLenum type =
+        internalFormat == GL_DEPTH_COMPONENT32F
+        ? GL_FLOAT : GL_UNSIGNED_INT;
+
     GLuint depth;
     glCall(glGenTextures, 1, &depth);
     glCall(glBindTexture, GL_TEXTURE_2D, depth);
     glCall(
-        glTexImage2D, GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width, height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+        glTexImage2D, GL_TEXTURE_2D, 0, internalFormat, width, height, 0,
+        GL_DEPTH_COMPONENT, type, nullptr);
     glCall(glTexParameteri, GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glCall(glTexParameteri, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glCall(glTexParameteri, GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);

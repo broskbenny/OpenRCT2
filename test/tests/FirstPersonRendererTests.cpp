@@ -97,6 +97,19 @@ TEST(FirstPersonWalkingSemanticsTest, StableDoorStatesHaveAuthoritativeCollision
     EXPECT_TRUE(FirstPersonDoorBlocksWalking(15));
 }
 
+TEST(FirstPersonSmallSceneryCollisionTest, PartialWalkingMaskCannotReplaceTallArtwork)
+{
+    EXPECT_TRUE(
+        FirstPersonSmallSceneryVisualReconstructionCoversHeight(
+            20, 20));
+    EXPECT_FALSE(
+        FirstPersonSmallSceneryVisualReconstructionCoversHeight(
+            20, 18));
+    EXPECT_FALSE(
+        FirstPersonSmallSceneryVisualReconstructionCoversHeight(
+            64, 20));
+}
+
 TEST(FirstPersonSmallSceneryCollisionTest, QuarterMappingMatchesNativeConstructionQuadrants)
 {
     EXPECT_EQ(FirstPersonSmallSceneryQuarterForPoint(24, 24), 0);
@@ -1113,6 +1126,39 @@ TEST(FirstPersonVehiclePoseTest, MissingSeatPivotKeepsPassengerPositionNeutral)
     EXPECT_GT(
         std::hypot(rotated.x - expected.x, rotated.z - expected.z),
         1.0f);
+}
+
+TEST(FirstPersonVehiclePoseTest, RideSpecificTranslationSurvivesCarriageFallback)
+{
+    FirstPersonCamera camera{};
+    const auto neutral = GetFirstPersonBasis(camera);
+    FirstPersonCarriageTransform carriage{};
+    carriage.positionBasis = neutral;
+    carriage.basis =
+        FirstPersonRotateLocalPitch(neutral, kPi / 2.0f);
+    carriage.orientationOnlySeatRotation = true;
+
+    FirstPersonPassengerPose pose{};
+    pose.position = { 101.0f, 202.0f, 303.0f };
+    pose.localEyeOffset = { 4.0f, -2.0f, 9.0f };
+    pose.rideSpecificTransform = true;
+    const auto completed = pose.position;
+
+    ApplyFirstPersonPassengerCarriagePositionFallback(
+        pose, { 10.0f, 20.0f, 30.0f }, carriage);
+    EXPECT_FLOAT_EQ(pose.position.x, completed.x);
+    EXPECT_FLOAT_EQ(pose.position.y, completed.y);
+    EXPECT_FLOAT_EQ(pose.position.z, completed.z);
+
+    pose.rideSpecificTransform = false;
+    ApplyFirstPersonPassengerCarriagePositionFallback(
+        pose, { 10.0f, 20.0f, 30.0f }, carriage);
+    const auto expected = FirstPersonPassengerEye(
+        { 10.0f, 20.0f, 30.0f },
+        carriage.positionBasis, pose.localEyeOffset);
+    EXPECT_NEAR(pose.position.x, expected.x, 0.0001f);
+    EXPECT_NEAR(pose.position.y, expected.y, 0.0001f);
+    EXPECT_NEAR(pose.position.z, expected.z, 0.0001f);
 }
 
 TEST(FirstPersonVehiclePoseTest, SwingCalibrationFitsOneRigidFourViewOrbit)

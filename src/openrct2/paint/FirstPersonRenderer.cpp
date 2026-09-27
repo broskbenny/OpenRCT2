@@ -1880,6 +1880,24 @@ namespace OpenRCT2::Paint
                     proxies, ps.MapPos, *small))
                 return false;
 
+            float reconstructedTop =
+                -std::numeric_limits<float>::infinity();
+            for (const auto& proxy : proxies)
+                reconstructedTop =
+                    std::max(reconstructedTop, proxy.high.z);
+            const int32_t reconstructedHeight =
+                int32_t(std::floor(
+                    reconstructedTop
+                    - float(small->getBaseZ()) + 0.5f));
+            if (!FirstPersonSmallSceneryVisualReconstructionCoversHeight(
+                    entry->height, reconstructedHeight))
+            {
+                // Walking collision deliberately samples only the lower body.
+                // That is useful collision evidence, not permission to replace
+                // taller native artwork with a truncated visual mesh.
+                return false;
+            }
+
             const auto emitFace =
                 [&](const std::array<FirstPersonVec3, 4>& world) {
                     FirstPersonSurface surface{};

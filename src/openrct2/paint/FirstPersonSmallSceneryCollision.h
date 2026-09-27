@@ -20,6 +20,17 @@
 
 namespace OpenRCT2::Paint
 {
+    inline constexpr int32_t kFirstPersonSmallSceneryCollisionMaxHeight = 20;
+
+    [[nodiscard]] constexpr bool
+        FirstPersonSmallSceneryVisualReconstructionCoversHeight(
+            int32_t visualHeight, int32_t reconstructedHeight)
+    {
+        return visualHeight > 0
+            && visualHeight <= kFirstPersonSmallSceneryCollisionMaxHeight
+            && reconstructedHeight >= visualHeight;
+    }
+
     struct FirstPersonSmallSceneryWalkingMask
     {
         bool valid = false;
@@ -195,7 +206,9 @@ namespace OpenRCT2::Paint
             return result;
 
         const int32_t sampleTop =
-            std::min<int32_t>(entry.height - 1, 18);
+            std::min<int32_t>(
+                entry.height - 1,
+                kFirstPersonSmallSceneryCollisionMaxHeight - 2);
         std::vector<int32_t> heights;
         for (const int32_t z : { 2, 6, 10, 14, 18 })
         {
@@ -227,7 +240,9 @@ namespace OpenRCT2::Paint
             heights.size(),
             FirstPersonSmallSceneryWalkingMask::kMaxZLayers));
         const int32_t collisionTop =
-            std::min<int32_t>(entry.height, 20);
+            std::min<int32_t>(
+                entry.height,
+                kFirstPersonSmallSceneryCollisionMaxHeight);
         for (size_t layer = 0; layer < result.layerCount; ++layer)
         {
             const int32_t low = layer == 0

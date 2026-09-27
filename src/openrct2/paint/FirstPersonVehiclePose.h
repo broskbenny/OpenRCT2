@@ -543,6 +543,22 @@ namespace OpenRCT2::Paint
             transformedOrigin, positionBasis, localEyeOffset);
     }
 
+    inline void ApplyFirstPersonPassengerCarriagePositionFallback(
+        FirstPersonPassengerPose& pose,
+        FirstPersonVec3 transformedOrigin,
+        const FirstPersonCarriageTransform& carriage)
+    {
+        // Only the uncalibrated orientation-only seat rotation needs a
+        // position fallback. Ride-specific poses have already completed their
+        // cabin/orbit translation and must not be re-anchored to the carriage.
+        if (!carriage.orientationOnlySeatRotation
+            || pose.rideSpecificTransform)
+            return;
+
+        pose.position = FirstPersonPassengerEyeForCarriage(
+            transformedOrigin, carriage, pose.localEyeOffset, false);
+    }
+
     [[nodiscard]] inline FirstPersonPassengerPose
         BuildFirstPersonPassengerPoseWithCarriage(
             const Vehicle& car, FirstPersonVec3 vehicleOrigin,
@@ -559,9 +575,8 @@ namespace OpenRCT2::Paint
         auto pose = BuildFirstPersonPassengerPose(
             car, transformedOrigin, carriage.basis,
             flatPrimaryFrame, flatSecondaryFrame, pinnedSeatIndex);
-        pose.position = FirstPersonPassengerEyeForCarriage(
-            transformedOrigin, carriage,
-            pose.localEyeOffset, pose.rideSpecificTransform);
+        ApplyFirstPersonPassengerCarriagePositionFallback(
+            pose, transformedOrigin, carriage);
         return pose;
     }
 

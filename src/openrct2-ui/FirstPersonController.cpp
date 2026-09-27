@@ -255,12 +255,58 @@ namespace OpenRCT2::Ui::FirstPerson
                 && (to.edges & (1u << reverse)) != 0;
         }
 
-        WalkingFloorSample ResolveWalkingFloorSample(
-            const CoordsXY& position, const WalkingFloorSample& previous)
+        [[nodiscard]] WalkingFloorSample WalkingTerrainSampleAt(
+            const CoordsXY& position)
         {
             WalkingFloorSample terrain{};
             terrain.z = static_cast<float>(TileElementHeight(position));
             terrain.support.tile = position.toTileStart();
+            return terrain;
+        }
+
+        [[nodiscard]] std::optional<WalkingFloorSample>
+            RevalidateWalkingStartFloor(
+                const CoordsXY& position,
+                const WalkingFloorSample& previous)
+        {
+            if (!MapIsLocationValid(position))
+                return std::nullopt;
+
+            if (previous.IsPath())
+            {
+                for (auto* path :
+                    TileElementsView<PathElement>(position))
+                {
+                    if (path == nullptr || path->isGhost()
+                        || path->isInvisible()
+                        || !PointOnPathDeck(*path, position))
+                        continue;
+                    const auto candidate =
+                        WalkingPathSampleAt(*path, position);
+                    if (SameWalkingPath(
+                            previous.support,
+                            candidate.support))
+                    {
+                        return candidate;
+                    }
+                }
+
+                // The support itself was removed or replaced by a map edit.
+                // Recover explicitly to terrain at the current XY instead of
+                // silently acquiring some unrelated nearby raised path.
+                return WalkingTerrainSampleAt(position);
+            }
+
+            // Terrain is the same semantic support even if terraforming changed
+            // its height beneath the player; follow that edited support rather
+            // than resolving upward to another surface.
+            return WalkingTerrainSampleAt(position);
+        }
+
+        WalkingFloorSample ResolveWalkingFloorSample(
+            const CoordsXY& position, const WalkingFloorSample& previous)
+        {
+            const auto terrain = WalkingTerrainSampleAt(position);
 
             float bestDelta = std::numeric_limits<float>::max();
             std::optional<WalkingFloorSample> bestPath;
@@ -304,7 +350,26 @@ namespace OpenRCT2::Ui::FirstPerson
             const CoordsXY startPosition{
                 int32_t(std::lround(fromX)), int32_t(std::lround(fromY))
             };
-            auto floor = ResolveWalkingFloorSample(startPosition, startFloor);
+            const auto revalidatedStart =
+                RevalidateWalkingStartFloor(
+                    startPosition, startFloor);
+            if (!revalidatedStart.has_value())
+                return std::nullopt;
+            auto floor = *revalidatedStart;
+
+            if (!floor.IsPath())
+            {
+                const float waterZ =
+                    float(TileElementWaterHeight(startPosition));
+                if (waterZ > floor.z + 0.5f)
+                    return std::nullopt;
+            }
+
+            // A zero-length traversal is support preservation, not a request to
+            // resolve a different nearby floor. This keeps terrain beneath a
+            // raised path from snapping upward before movement begins.
+            if (distance <= std::numeric_limits<float>::epsilon())
+                return floor;
 
             for (int32_t i = 1; i <= samples; ++i)
             {

@@ -143,9 +143,11 @@ void main() {
     float logarithmic = log2(1.0 + depth)/log2(1.0 + uNearFar.y);
     gl_FragDepth = logarithmic;
     if ((fFlags & 1) != 0) {
-        const float eps = 0.00000002;
+        // Opaque depth still comes from the renderer's fixed-point depth
+        // buffer; this tolerance belongs only to that opaque comparison.
+        const float opaqueDepthEps = 0.00000002;
         float opaqueDepth = texelFetch(uOpaqueDepth,ivec2(gl_FragCoord.xy),0).r;
-        if (logarithmic >= opaqueDepth - eps) discard;
+        if (logarithmic >= opaqueDepth - opaqueDepthEps) discard;
 
         uint row = uint(fPalettes.y);
         // Native water mask changes its palette row with the mask texel.
@@ -160,8 +162,8 @@ void main() {
             // Far-to-near lexicographic remainder:
             // lower physical depth remains after the previous layer; at exactly
             // equal physical depth only a later native paint ordinal remains.
-            if (logarithmic > previousDepth + eps) discard;
-            if (abs(logarithmic - previousDepth) <= eps && ordinal <= previousOrdinal) discard;
+            if (logarithmic > previousDepth) discard;
+            if (logarithmic == previousDepth && ordinal <= previousOrdinal) discard;
         }
 
         if (uPeelStage == 1) {
@@ -176,7 +178,10 @@ void main() {
             // occupy the selected physical layer. Geometry/depth is unchanged.
             float selectedDepth = texelFetch(
                 uSelectedPhysicalDepth,ivec2(gl_FragCoord.xy),0).r;
-            if (abs(logarithmic - selectedDepth) > eps) discard;
+            // Physical peel depth is stored as DEPTH_COMPONENT32F. Compare
+            // the exact float key selected by stage one, rather than comparing
+            // a freshly calculated value with a quantized fixed-point sample.
+            if (floatBitsToUint(logarithmic) != floatBitsToUint(selectedDepth)) discard;
             gl_FragDepth = (float(ordinal) + 0.5) / 16777216.0;
             // Low byte stores filter row+1, high 24 bits store paint ordinal.
             oIndex = (ordinal << 8u) | (row + 1u);
@@ -713,7 +718,8 @@ void main() {
                         screenWidth,screenHeight,true,true,false,true);
                 for(auto& layer:_peelDepthLayers)
                     layer = std::make_unique<OpenGLFramebuffer>(
-                        screenWidth,screenHeight,true,true,false);
+                        screenWidth, screenHeight, true, true, false, false,
+                        GL_DEPTH_COMPONENT32F);
             }
 
             // Keep one immutable opaque colour/depth snapshot for all screen

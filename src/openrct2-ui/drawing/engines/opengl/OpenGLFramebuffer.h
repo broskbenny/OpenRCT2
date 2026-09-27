@@ -32,7 +32,8 @@ namespace OpenRCT2::Ui
         explicit OpenGLFramebuffer(SDL_Window* window);
         OpenGLFramebuffer(
             int32_t width, int32_t height, bool depth = true, bool integer = true,
-            bool word = false, bool dword = false);
+            bool word = false, bool dword = false,
+            GLenum depthInternalFormat = GL_DEPTH_COMPONENT24);
         ~OpenGLFramebuffer();
 
         OpenGLFramebuffer(const OpenGLFramebuffer&) = delete;
@@ -69,6 +70,8 @@ namespace OpenRCT2::Ui
         void Copy(OpenGLFramebuffer& src, GLenum filter);
         void SetPixels(const Drawing::RenderTarget& rt);
 
-        static GLuint CreateDepthTexture(int32_t width, int32_t height);
+        static GLuint CreateDepthTexture(
+            int32_t width, int32_t height,
+            GLenum internalFormat = GL_DEPTH_COMPONENT24);
     };
 } // namespace OpenRCT2::Ui
