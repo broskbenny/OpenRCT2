@@ -20,6 +20,27 @@ struct PaintStruct;
 
 namespace OpenRCT2::Paint
 {
+    enum class FirstPersonHiddenComponentDisposition : uint8_t
+    {
+        emit,
+        suppressSelfContinueChain,
+        suppressSubtree,
+    };
+
+    [[nodiscard]] constexpr FirstPersonHiddenComponentDisposition
+        FirstPersonHiddenComponentPolicy(
+            bool matchesHiddenEntity, bool entityPainted,
+            bool selectedTilePassenger)
+    {
+        if (!matchesHiddenEntity)
+            return FirstPersonHiddenComponentDisposition::emit;
+        if (entityPainted)
+            return FirstPersonHiddenComponentDisposition::suppressSubtree;
+        if (selectedTilePassenger)
+            return FirstPersonHiddenComponentDisposition::suppressSelfContinueChain;
+        return FirstPersonHiddenComponentDisposition::emit;
+    }
+
     struct FirstPersonRenderOptions
     {
         FirstPersonCamera camera{};

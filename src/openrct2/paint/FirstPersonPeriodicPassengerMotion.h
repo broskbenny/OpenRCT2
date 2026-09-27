@@ -108,6 +108,19 @@ namespace OpenRCT2::Paint
         return baseImageId + 32u + uint32_t(direction & 3u) * 128u + frame;
     }
 
+    [[nodiscard]] constexpr bool FirstPersonFerrisWheelImageMatchesSeatPair(
+        uint32_t baseImageId, uint32_t imageIndex,
+        uint8_t primaryFrame, uint8_t seatIndex)
+    {
+        for (uint8_t direction = 0; direction < 4; ++direction)
+        {
+            if (imageIndex == FirstPersonFerrisWheelRiderImageIndex(
+                    baseImageId, direction, primaryFrame, seatIndex))
+                return true;
+        }
+        return false;
+    }
+
     [[nodiscard]] inline FirstPersonPeriodicOrbitPoint
         FirstPersonFerrisWheelSeatBaseOffsetFromVehicle(
             FirstPersonPeriodicOrbitPoint painterLocalSeat,

@@ -157,6 +157,9 @@ namespace OpenRCT2
                 v.flatSecondaryBefore = v.flatSecondaryAfter = vehicle->flatRideSecondaryAnimationFrame;
                 v.swingPositionBefore = v.swingPositionAfter = vehicle->SwingPosition;
                 v.swingSpriteBefore = v.swingSpriteAfter = vehicle->SwingSprite;
+                v.seatRotationBefore = v.seatRotationAfter = vehicle->seat_rotation;
+                v.animationFrameBefore = v.animationFrameAfter = vehicle->animation_frame;
+                v.animationStateBefore = v.animationStateAfter = vehicle->animationState;
                 _trackedVisuals = v;
             }
         }
@@ -176,6 +179,9 @@ namespace OpenRCT2
                 _trackedVisuals->flatSecondaryAfter = vehicle->flatRideSecondaryAnimationFrame;
                 _trackedVisuals->swingPositionAfter = vehicle->SwingPosition;
                 _trackedVisuals->swingSpriteAfter = vehicle->SwingSprite;
+                _trackedVisuals->seatRotationAfter = vehicle->seat_rotation;
+                _trackedVisuals->animationFrameAfter = vehicle->animation_frame;
+                _trackedVisuals->animationStateAfter = vehicle->animationState;
                 _trackedVisuals->alpha = 1.0f;
             }
             else _trackedVisuals.reset();

@@ -888,9 +888,6 @@ namespace OpenRCT2::Paint
         {
             if (kind == LargeSceneryAssetFaceKind::top)
                 return true;
-            static constexpr std::array<CoordsXY, 4> kViewDirection{ {
-                { 1, 1 }, { -1, 1 }, { -1, -1 }, { 1, -1 },
-            } };
             CoordsXY normal{};
             switch (kind)
             {
@@ -900,8 +897,7 @@ namespace OpenRCT2::Paint
                 case LargeSceneryAssetFaceKind::maxY: normal = { 0, 1 }; break;
                 case LargeSceneryAssetFaceKind::top: return true;
             }
-            const auto view = kViewDirection[direction & 3];
-            return normal.x * view.x + normal.y * view.y < 0;
+            return FirstPersonFaceVisibleFromNativeView(normal, direction);
         }
 
         [[nodiscard]] FirstPersonSilhouette RasterizeLargeSceneryAssetFace(
@@ -913,6 +909,54 @@ namespace OpenRCT2::Paint
             FirstPersonSilhouette result{};
             AddFirstPersonSilhouetteQuad(result, projected);
             return result;
+        }
+
+        [[nodiscard]] std::optional<size_t>
+            EstimateLargeSceneryAssetRasterWork(
+                const std::vector<LargeSceneryAssetFace>& faces)
+        {
+            size_t work = 0;
+            constexpr size_t kMaxFaceRasterWork = 32768;
+            constexpr size_t kMaxCandidateRasterWork = 131072;
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
+            for (const auto& face : faces)
+            {
+                if (!LargeSceneryFaceVisibleFromDirection(
+                        face.kind, rotation))
+                    continue;
+                std::array<ScreenCoordsXY, 4> projected{};
+                for (size_t n = 0; n < face.corners.size(); ++n)
+                {
+                    projected[n] =
+                        Translate3DTo2DWithZ(
+                            rotation, face.corners[n]);
+                }
+                int32_t minX = projected[0].x;
+                int32_t maxX = projected[0].x;
+                int32_t minY = projected[0].y;
+                int32_t maxY = projected[0].y;
+                for (size_t n = 1; n < projected.size(); ++n)
+                {
+                    minX = std::min(minX, projected[n].x);
+                    maxX = std::max(maxX, projected[n].x);
+                    minY = std::min(minY, projected[n].y);
+                    maxY = std::max(maxY, projected[n].y);
+                }
+                const int64_t width =
+                    int64_t(maxX) - int64_t(minX);
+                const int64_t height =
+                    int64_t(maxY) - int64_t(minY);
+                if (width <= 0 || height <= 0)
+                    continue;
+                const uint64_t faceWork =
+                    uint64_t(width) * uint64_t(height);
+                if (faceWork > kMaxFaceRasterWork)
+                    return std::nullopt;
+                work += size_t(faceWork);
+                if (work > kMaxCandidateRasterWork)
+                    return std::nullopt;
+            }
+            return work;
         }
 
         [[nodiscard]] std::array<FirstPersonSilhouette, 4> RasterizeLargeSceneryAssetViews(
@@ -968,47 +1012,41 @@ namespace OpenRCT2::Paint
         }
 
         [[nodiscard]] LargeSceneryAssetModel BuildLargeSceneryAssetModel(
-            const LargeSceneryEntry& entry,
-            std::chrono::steady_clock::time_point deadline)
+            const LargeSceneryEntry& entry)
         {
             LargeSceneryAssetModel model{};
             model.bodyImageFirst = entry.image + 4;
             model.bodyImageLast = model.bodyImageFirst + uint32_t(entry.tiles.size() * 4);
-            if (!LargeSceneryAssetEligible(entry))
-            {
-                model.attempted = true;
-                return model;
-            }
-            if (std::chrono::steady_clock::now() >= deadline)
-                return model;
             model.attempted = true;
+            if (!LargeSceneryAssetEligible(entry))
+                return model;
 
             const auto cells = BuildLargeSceneryAssetCells(entry);
-            if (!cells.has_value())
+            constexpr size_t kMaxReconstructionCells = 48;
+            if (!cells.has_value() || cells->size() > kMaxReconstructionCells)
                 return model;
+
             const auto observed = CollectLargeSceneryObservedViews(entry);
             if (!observed.valid)
                 return model;
-            if (std::chrono::steady_clock::now() >= deadline)
-            {
-                model.attempted = false;
-                return model;
-            }
 
             static constexpr std::array<int32_t, 7> kHeightTrims{ { 0, 2, 4, 6, 8, 12, 16 } };
             float bestScore = -std::numeric_limits<float>::infinity();
             std::vector<LargeSceneryAssetFace> bestFaces;
             for (const int32_t trim : kHeightTrims)
             {
-                if (std::chrono::steady_clock::now() >= deadline)
-                {
-                    model.attempted = false;
-                    return model;
-                }
                 const auto faces = BuildLargeSceneryAssetFaces(*cells, trim);
-                if (faces.empty())
+                constexpr size_t kMaxReconstructionFaces = 144;
+                if (faces.empty() || faces.size() > kMaxReconstructionFaces
+                    || !EstimateLargeSceneryAssetRasterWork(faces).has_value())
                     continue;
                 const auto candidate = RasterizeLargeSceneryAssetViews(faces);
+                size_t candidatePixels = 0;
+                for (const auto& view : candidate)
+                    candidatePixels += view.size();
+                constexpr size_t kMaxCandidatePixels = 393216;
+                if (candidatePixels > kMaxCandidatePixels)
+                    continue;
                 const auto fit = CompareFirstPersonMultiViewSilhouettes(
                     observed.combined, candidate);
                 if (!fit.valid)
@@ -1031,11 +1069,6 @@ namespace OpenRCT2::Paint
             float minimumFaceOwnership = 1.0f;
             for (size_t faceIndex = 0; faceIndex < bestFaces.size(); ++faceIndex)
             {
-                if (std::chrono::steady_clock::now() >= deadline)
-                {
-                    model.attempted = false;
-                    return model;
-                }
                 auto& face = bestFaces[faceIndex];
                 float bestScore = -1.0f;
                 float bestCoverage = 0.0f;
@@ -1109,8 +1142,7 @@ namespace OpenRCT2::Paint
         }
 
         [[nodiscard]] const LargeSceneryAssetModel* GetLargeSceneryAssetModel(
-            const LargeSceneryEntry& entry, bool allowBuild,
-            std::chrono::steady_clock::time_point deadline)
+            const LargeSceneryEntry& entry, bool allowBuild)
         {
             auto [it, inserted] = _largeSceneryAssetModels.try_emplace(&entry);
             if (inserted)
@@ -1119,7 +1151,7 @@ namespace OpenRCT2::Paint
             {
                 if (!allowBuild)
                     return nullptr;
-                it->second = BuildLargeSceneryAssetModel(entry, deadline);
+                it->second = BuildLargeSceneryAssetModel(entry);
             }
             return &it->second;
         }
@@ -1207,15 +1239,11 @@ namespace OpenRCT2::Paint
                 || ride->getRideTypeDescriptor().Name != "ferris_wheel")
                 return false;
 
-            const uint32_t image = ps.image_id.GetIndex();
-            for (uint8_t direction = 0; direction < 4; ++direction)
-            {
-                if (image == FirstPersonFerrisWheelRiderImageIndex(
-                        rideEntry->Cars[0].baseImageId, direction,
-                        vehicle->flatRideAnimationFrame, hiddenSeatIndex))
-                    return true;
-            }
-            return false;
+            return FirstPersonFerrisWheelImageMatchesSeatPair(
+                rideEntry->Cars[0].baseImageId,
+                ps.image_id.GetIndex(),
+                vehicle->flatRideAnimationFrame,
+                hiddenSeatIndex);
         }
 
         void AppendRoot(
@@ -1224,16 +1252,33 @@ namespace OpenRCT2::Paint
             uint32_t viewFlags, EntityId hidden, uint8_t hiddenSeatIndex,
             uint8_t rotation, bool emitPathDeck)
         {
-            if (ps.Entity != nullptr && !hidden.IsNull() && ps.Entity->id == hidden)
+            const bool matchesHiddenEntity =
+                ps.Entity != nullptr && !hidden.IsNull()
+                && ps.Entity->id == hidden;
+            const auto hiddenPolicy = FirstPersonHiddenComponentPolicy(
+                matchesHiddenEntity,
+                ps.Source == PaintStructSource::entity,
+                matchesHiddenEntity
+                    && IsHiddenPassengerTileComponent(
+                        ps, hidden, hiddenSeatIndex));
+            if (hiddenPolicy
+                == FirstPersonHiddenComponentDisposition::suppressSubtree)
+                return;
+            if (hiddenPolicy
+                == FirstPersonHiddenComponentDisposition::suppressSelfContinueChain)
             {
-                // Entity-painted art is the attached vehicle body. Tile-painted
-                // art can merely borrow that entity for interaction ownership;
-                // hiding it wholesale deletes mechanisms such as Ferris wheels.
-                if (ps.Source == PaintStructSource::entity
-                    || IsHiddenPassengerTileComponent(
-                        ps, hidden, hiddenSeatIndex))
-                    return;
+                // Children is a paint-chain link, not ownership of this one
+                // rider component. Skip the selected passenger artwork while
+                // still traversing later gondolas and the final support.
+                if (ps.Children != nullptr)
+                {
+                    AppendRoot(
+                        scene, *ps.Children, anchor, basis, isoAnchor,
+                        viewFlags, hidden, hiddenSeatIndex, rotation, false);
+                }
+                return;
             }
+
             const auto visibility = GetPaintStructVisibility(&ps, viewFlags);
             if (visibility == VisibilityKind::hidden)
                 return;
@@ -1842,11 +1887,10 @@ namespace OpenRCT2::Paint
                 return;
 
             // Discovery reuses the reconstruction groups already collected by
-            // the static-tile semantic cache. Ordinary presentation frames no
-            // longer walk every visible tile-element stack a second time.
-            constexpr auto kColdFitBudget = std::chrono::microseconds(1500);
-            const auto fitDeadline =
-                std::chrono::steady_clock::now() + kColdFitBudget;
+            // the static-tile semantic cache. Cold fitting is deterministic:
+            // at most one previously unseen asset is attempted per frame, and
+            // every success OR fallback decision is cached. No asset restarts
+            // identical work forever after missing a wall-clock deadline.
             size_t assetFitBudget = 1;
             std::unordered_set<uint64_t> seenGroups;
             seenGroups.reserve(scene.visibleTiles.size() / 2 + 1);
@@ -1920,11 +1964,9 @@ namespace OpenRCT2::Paint
                         existingModel != _largeSceneryAssetModels.end()
                         && existingModel->second.attempted;
                     const bool allowBuild =
-                        alreadyAttempted
-                        || (assetFitBudget > 0
-                            && std::chrono::steady_clock::now() < fitDeadline);
-                    const auto* model = GetLargeSceneryAssetModel(
-                        *entry, allowBuild, fitDeadline);
+                        alreadyAttempted || assetFitBudget > 0;
+                    const auto* model =
+                        GetLargeSceneryAssetModel(*entry, allowBuild);
                     if (!alreadyAttempted && model != nullptr)
                         --assetFitBudget;
                     if (model == nullptr || !model->reliable)

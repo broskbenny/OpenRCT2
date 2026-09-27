@@ -33,6 +33,9 @@ namespace OpenRCT2
         uint8_t flatSecondaryBefore{}, flatSecondaryAfter{};
         int16_t swingPositionBefore{}, swingPositionAfter{};
         uint8_t swingSpriteBefore{}, swingSpriteAfter{};
+        uint8_t seatRotationBefore{}, seatRotationAfter{};
+        uint8_t animationFrameBefore{}, animationFrameAfter{};
+        uint32_t animationStateBefore{}, animationStateAfter{};
         float alpha = 1.0f;
     };
 

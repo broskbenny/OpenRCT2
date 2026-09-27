@@ -196,6 +196,78 @@ TEST(FirstPersonAssetReconstructionTest, DepthOwnerRejectsOccludedTextureSource)
     EXPECT_GT(FirstPersonDepthOwnerCoverage(owners, 2, silhouette), 0.99f);
 }
 
+
+TEST(FirstPersonAssetReconstructionTest, NativeFacingAndDepthOwnershipAgreeForAsymmetricBox)
+{
+    struct Face
+    {
+        CoordsXY normal{};
+        std::array<CoordsXYZ, 4> corners{};
+        uint32_t owner{};
+        bool top = false;
+    };
+
+    const std::array<Face, 5> faces{ {
+        { { -1, 0 }, { { { 0, 0, 0 }, { 0, 24, 0 }, { 0, 24, 32 }, { 0, 0, 32 } } }, 0, false },
+        { { 1, 0 }, { { { 16, 24, 0 }, { 16, 0, 0 }, { 16, 0, 32 }, { 16, 24, 32 } } }, 1, false },
+        { { 0, -1 }, { { { 16, 0, 0 }, { 0, 0, 0 }, { 0, 0, 32 }, { 16, 0, 32 } } }, 2, false },
+        { { 0, 1 }, { { { 0, 24, 0 }, { 16, 24, 0 }, { 16, 24, 32 }, { 0, 24, 32 } } }, 3, false },
+        { { 0, 0 }, { { { 0, 0, 32 }, { 16, 0, 32 }, { 16, 24, 32 }, { 0, 24, 32 } } }, 4, true },
+    } };
+
+    for (uint8_t rotation = 0; rotation < 4; ++rotation)
+    {
+        FirstPersonDepthOwnerMap owners{};
+        std::array<FirstPersonSilhouette, 5> projected{};
+        for (const auto& face : faces)
+        {
+            if (!face.top
+                && !FirstPersonFaceVisibleFromNativeView(
+                    face.normal, rotation))
+                continue;
+
+            std::array<ScreenCoordsXY, 4> screen{};
+            std::array<float, 4> depth{};
+            for (size_t i = 0; i < 4; ++i)
+            {
+                screen[i] =
+                    Translate3DTo2DWithZ(rotation, face.corners[i]);
+                depth[i] =
+                    FirstPersonIsoDepth(rotation, face.corners[i]);
+            }
+            AddFirstPersonSilhouetteQuad(
+                projected[face.owner], screen);
+            AddFirstPersonDepthTriangle(
+                owners, face.owner,
+                { screen[0], screen[1], screen[2] },
+                { depth[0], depth[1], depth[2] });
+            AddFirstPersonDepthTriangle(
+                owners, face.owner,
+                { screen[0], screen[2], screen[3] },
+                { depth[0], depth[2], depth[3] });
+        }
+
+        const auto view = FirstPersonNativeViewDirection(rotation);
+        const uint32_t xOwner = view.x > 0 ? 1u : 0u;
+        const uint32_t yOwner = view.y > 0 ? 3u : 2u;
+        ASSERT_FALSE(projected[xOwner].empty());
+        ASSERT_FALSE(projected[yOwner].empty());
+        EXPECT_GT(
+            FirstPersonDepthOwnerCoverage(
+                owners, xOwner, projected[xOwner]),
+            0.97f);
+        EXPECT_GT(
+            FirstPersonDepthOwnerCoverage(
+                owners, yOwner, projected[yOwner]),
+            0.97f);
+
+        const uint32_t backX = view.x > 0 ? 0u : 1u;
+        const uint32_t backY = view.y > 0 ? 2u : 3u;
+        EXPECT_TRUE(projected[backX].empty());
+        EXPECT_TRUE(projected[backY].empty());
+    }
+}
+
 TEST(FirstPersonTrackTrajectoryTest, MotionTemplateIsCachedButDoesNotClaimRailProfile)
 {
     const auto* a = GetFirstPersonTrackTrajectoryTemplate(
@@ -667,22 +739,86 @@ TEST(FirstPersonVehiclePoseTest, ReversalIsLocalHalfTurnNotWorldEulerHack)
     EXPECT_NEAR(reversed.up.z, basis.up.z, 0.000001f);
 }
 
-TEST(FirstPersonVehiclePoseTest, SwingPositionInterpolatesCalibratedArtworkAngles)
+
+TEST(FirstPersonVehiclePoseTest, MultiDimensionSeatUsesNativeFrameMapAndLocalPitchAxis)
+{
+    EXPECT_EQ(FirstPersonMultiDimensionAnimationFrame(4, 8), 0);
+    EXPECT_EQ(FirstPersonMultiDimensionAnimationFrame(5, 8), 1);
+    EXPECT_EQ(FirstPersonMultiDimensionAnimationFrame(3, 8), 7);
+    EXPECT_EQ(FirstPersonMultiDimensionAnimationFrame(12, 8), 0);
+
+    EXPECT_NEAR(
+        FirstPersonMultiDimensionSeatAngle(6, 2, 8),
+        kPi / 2.0f, 0.000001f);
+    // If semantic and rendered state momentarily disagree, the visible native
+    // animation frame wins the camera pose.
+    EXPECT_NEAR(
+        FirstPersonMultiDimensionSeatAngle(6, 3, 8),
+        3.0f * kPi / 4.0f, 0.000001f);
+
+    FirstPersonCamera track{};
+    track.yaw = 0.25f;
+    track.pitch = 0.35f;
+    const auto basis = GetFirstPersonBasis(track);
+    const auto rotated =
+        FirstPersonRotateLocalPitch(basis, kPi / 2.0f);
+    EXPECT_NEAR(rotated.forward.x, basis.up.x, 0.000001f);
+    EXPECT_NEAR(rotated.forward.y, basis.up.y, 0.000001f);
+    EXPECT_NEAR(rotated.forward.z, basis.up.z, 0.000001f);
+    EXPECT_NEAR(rotated.right.x, basis.right.x, 0.000001f);
+    EXPECT_NEAR(rotated.right.y, basis.right.y, 0.000001f);
+    EXPECT_NEAR(rotated.right.z, basis.right.z, 0.000001f);
+}
+
+TEST(FirstPersonVehiclePoseTest, SwingCalibrationUsesNativeThresholdBands)
 {
     FirstPersonSwingCalibration calibration{};
     calibration.valid = true;
-    calibration.positiveAngles = { 0.0f, 0.1f, 0.3f, 0.6f };
+    calibration.pairCount = 6;
+    calibration.positiveAngles = {
+        0.0f, 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f
+    };
     calibration.pivotLength = 20.0f;
+
+    EXPECT_EQ(OpenRCT2::VehicleSwingLevelForPosition(910), 0);
+    EXPECT_EQ(OpenRCT2::VehicleSwingLevelForPosition(911), 1);
+    EXPECT_EQ(OpenRCT2::VehicleSwingLevelForPosition(2730), 1);
+    EXPECT_EQ(OpenRCT2::VehicleSwingLevelForPosition(2731), 2);
+    EXPECT_EQ(OpenRCT2::VehicleSwingLevelForPosition(4550), 2);
+    EXPECT_EQ(OpenRCT2::VehicleSwingLevelForPosition(4551), 3);
+    EXPECT_EQ(OpenRCT2::VehicleSwingLevelForPosition(5460), 3);
+    EXPECT_EQ(OpenRCT2::VehicleSwingLevelForPosition(6371), 4);
+    EXPECT_EQ(OpenRCT2::VehicleSwingLevelForPosition(8191), 5);
+    EXPECT_EQ(OpenRCT2::VehicleSwingLevelForPosition(10011), 6);
+    EXPECT_EQ(OpenRCT2::VehicleSwingSpriteForPosition(-911), 1);
+    EXPECT_EQ(OpenRCT2::VehicleSwingSpriteForPosition(911), 2);
+    EXPECT_EQ(OpenRCT2::VehicleSwingSpriteForPosition(-5460), 5);
+    EXPECT_EQ(OpenRCT2::VehicleSwingSpriteForPosition(5460), 6);
 
     EXPECT_NEAR(
         FirstPersonSwingAngleForPosition(calibration, 1820.0f),
         0.1f, 0.000001f);
     EXPECT_NEAR(
+        FirstPersonSwingAngleForPosition(calibration, 3640.0f),
+        0.2f, 0.000001f);
+    EXPECT_NEAR(
         FirstPersonSwingAngleForPosition(calibration, -5460.0f),
         -0.3f, 0.000001f);
-    EXPECT_GT(
-        FirstPersonSwingAngleForPosition(calibration, 8000.0f),
-        0.3f);
+    EXPECT_NEAR(
+        FirstPersonSwingAngleForPosition(calibration, 10920.0f),
+        0.6f, 0.000001f);
+
+    // At native sprite boundaries, continuous SwingPosition lies halfway
+    // between the adjacent calibrated category centres.
+    EXPECT_NEAR(
+        FirstPersonSwingAngleForPosition(calibration, 910.0f),
+        0.05f, 0.000001f);
+    EXPECT_NEAR(
+        FirstPersonSwingAngleForPosition(calibration, 2730.0f),
+        0.15f, 0.000001f);
+    EXPECT_NEAR(
+        FirstPersonSwingAngleForPosition(calibration, 4550.0f),
+        0.25f, 0.000001f);
 }
 
 
@@ -692,6 +828,108 @@ TEST(FirstPersonVehiclePoseTest, CyclicPassengerFrameInterpolationTakesShortestW
     EXPECT_NEAR(FirstPersonLerpCyclicFrame(0.0f, 47.0f, 0.5f, 48.0f), 47.5f, 0.0001f);
     EXPECT_NEAR(FirstPersonLerpCyclicFrame(15.0f, 0.0f, 0.5f, 16.0f), 15.5f, 0.0001f);
     EXPECT_NEAR(FirstPersonLerpCyclicFrame(0.0f, 1.0f, 0.5f, 16.0f), 0.5f, 0.0001f);
+}
+
+TEST(FirstPersonFerrisVisibilityTest, SelectedTileRiderSuppressesOnlyItself)
+{
+    EXPECT_EQ(
+        FirstPersonHiddenComponentPolicy(true, false, true),
+        FirstPersonHiddenComponentDisposition::suppressSelfContinueChain);
+    EXPECT_EQ(
+        FirstPersonHiddenComponentPolicy(true, true, false),
+        FirstPersonHiddenComponentDisposition::suppressSubtree);
+    EXPECT_EQ(
+        FirstPersonHiddenComponentPolicy(true, false, false),
+        FirstPersonHiddenComponentDisposition::emit);
+
+    // Early and middle rider pairs are both component suppressions, never
+    // subtree suppressions; later gondolas/supports must remain traversable.
+    const auto early =
+        FirstPersonFerrisWheelRiderImageIndex(1000, 0, 20, 0);
+    const auto middle =
+        FirstPersonFerrisWheelRiderImageIndex(1000, 0, 20, 8);
+    EXPECT_NE(early, middle);
+    EXPECT_TRUE(
+        FirstPersonFerrisWheelImageMatchesSeatPair(
+            1000, early, 20, 0));
+    EXPECT_FALSE(
+        FirstPersonFerrisWheelImageMatchesSeatPair(
+            1000, middle, 20, 0));
+    EXPECT_TRUE(
+        FirstPersonFerrisWheelImageMatchesSeatPair(
+            1000, middle, 20, 8));
+}
+
+TEST(FirstPersonPassengerAssetCalibrationTest, FourRiderViewsRecoverCarLocalEyePoint)
+{
+    constexpr FirstPersonVec3 worldLocal{ -7.0f, 3.0f, 11.0f };
+    std::array<FirstPersonRiderChannelObservation, 4> views{};
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        const auto projected =
+            ProjectFirstPersonLocalIso(direction, worldLocal);
+        views[direction] = {
+            true, projected[0], projected[1], 5.0f, 8.0f
+        };
+    }
+
+    float rmse = -1.0f;
+    const auto recovered =
+        RecoverFirstPersonLocalPointFromFourViews(views, &rmse);
+    ASSERT_TRUE(recovered.has_value());
+    EXPECT_NEAR(recovered->x, worldLocal.x, 0.000001f);
+    EXPECT_NEAR(recovered->y, worldLocal.y, 0.000001f);
+    EXPECT_NEAR(recovered->z, worldLocal.z, 0.000001f);
+    EXPECT_NEAR(rmse, 0.0f, 0.000001f);
+}
+
+TEST(FirstPersonPassengerAssetCalibrationTest, RiderColourChannelsAreDistinctEvidence)
+{
+    EXPECT_TRUE(FirstPersonRiderPixelUsesPrimaryRemap(
+        static_cast<uint8_t>(OpenRCT2::Drawing::PaletteIndex::primaryRemap5)));
+    EXPECT_FALSE(FirstPersonRiderPixelUsesPrimaryRemap(
+        static_cast<uint8_t>(OpenRCT2::Drawing::PaletteIndex::secondaryRemap5)));
+    EXPECT_TRUE(FirstPersonRiderPixelUsesSecondaryRemap(
+        static_cast<uint8_t>(OpenRCT2::Drawing::PaletteIndex::secondaryRemap5)));
+    EXPECT_FALSE(FirstPersonRiderPixelUsesSecondaryRemap(
+        static_cast<uint8_t>(OpenRCT2::Drawing::PaletteIndex::primaryRemap5)));
+}
+
+
+TEST(FirstPersonPassengerAssetCalibrationTest, MultiDimensionArtworkRecoversRightAxisPivotAndWinding)
+{
+    std::array<FirstPersonVec3, 16> points{};
+    constexpr uint8_t frames = 8;
+    constexpr FirstPersonVec3 pivot{ 3.0f, -4.0f, 7.0f };
+    constexpr float radius = 12.0f;
+    for (uint8_t frame = 0; frame < frames; ++frame)
+    {
+        const float phase =
+            float(frame) * (2.0f * kPi / float(frames));
+        points[frame] = {
+            pivot.x + radius * std::cos(phase),
+            pivot.y,
+            pivot.z + radius * std::sin(phase),
+        };
+    }
+
+    const auto calibration =
+        FitFirstPersonMultiDimensionArtworkCalibration(
+            points, frames, 0.5f);
+    ASSERT_TRUE(calibration.valid);
+    EXPECT_EQ(calibration.angleSign, 1);
+    EXPECT_NEAR(calibration.pivotLocal.x, pivot.x, 0.0001f);
+    EXPECT_NEAR(calibration.pivotLocal.y, pivot.y, 0.0001f);
+    EXPECT_NEAR(calibration.pivotLocal.z, pivot.z, 0.0001f);
+    EXPECT_NEAR(calibration.radius, radius, 0.0001f);
+    EXPECT_GE(calibration.uncertainty, 0.5f);
+
+    // Lateral movement means the artwork does not describe rotation about the
+    // carriage's local right axis, so the calibration must be rejected.
+    points[3].y += 8.0f;
+    EXPECT_FALSE(
+        FitFirstPersonMultiDimensionArtworkCalibration(
+            points, frames).valid);
 }
 
 TEST(FirstPersonPeriodicPassengerMotionTest, FerrisRiderPhaseMatchesNativePairStride)

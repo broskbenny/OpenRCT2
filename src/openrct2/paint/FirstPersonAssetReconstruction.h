@@ -29,6 +29,24 @@ namespace OpenRCT2::Paint
         return placedTile + rotatedWithin;
     }
 
+    [[nodiscard]] constexpr CoordsXY FirstPersonNativeViewDirection(
+        uint8_t rotation)
+    {
+        // Translate3DTo2DWithZ() depth increases toward the native camera.
+        // At rotation zero, +X/+Y is therefore the viewer-facing quadrant.
+        constexpr std::array<CoordsXY, 4> kDirections{ {
+            { 1, 1 }, { -1, 1 }, { -1, -1 }, { 1, -1 },
+        } };
+        return kDirections[rotation & 3u];
+    }
+
+    [[nodiscard]] constexpr bool FirstPersonFaceVisibleFromNativeView(
+        CoordsXY outwardNormal, uint8_t rotation)
+    {
+        const auto view = FirstPersonNativeViewDirection(rotation);
+        return outwardNormal.x * view.x + outwardNormal.y * view.y > 0;
+    }
+
     // Large-scenery body images are indexed by
     // (objectDirection + viewportRotation) & 3. Recover the viewport rotation
     // that makes a chosen native image the correct projective source.

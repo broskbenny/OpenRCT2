@@ -766,10 +766,31 @@ namespace OpenRCT2::Ui::FirstPerson
                             - float(interpolated->swingPositionBefore))
                             * interpolated->alpha;
                 }
+                float seatAngle = 0.0f;
+                if (entry != nullptr
+                    && entry->animation == CarEntryAnimation::multiDimension
+                    && entry->animationFrames > 0)
+                {
+                    seatAngle = interpolated.has_value()
+                        ? Paint::FirstPersonLerpAngle(
+                              Paint::FirstPersonMultiDimensionSeatAngle(
+                                  interpolated->seatRotationBefore,
+                                  interpolated->animationFrameBefore,
+                                  entry->animationFrames),
+                              Paint::FirstPersonMultiDimensionSeatAngle(
+                                  interpolated->seatRotationAfter,
+                                  interpolated->animationFrameAfter,
+                                  entry->animationFrames),
+                              interpolated->alpha)
+                        : Paint::FirstPersonMultiDimensionSeatAngle(
+                              car->seat_rotation, car->animation_frame,
+                              entry->animationFrames);
+                }
+
                 const auto trackBasis = Paint::FirstPersonVehicleTrackBasis(
                     *car, carOrientation.yaw, carOrientation.pitch, carOrientation.roll);
                 const auto carriage = Paint::BuildFirstPersonCarriageTransform(
-                    *car, trackBasis, spinAngle, swingPosition);
+                    *car, trackBasis, spinAngle, swingPosition, seatAngle);
 
                 float flatPrimaryFrame = float(car->flatRideAnimationFrame);
                 float flatSecondaryFrame = float(car->flatRideSecondaryAnimationFrame);

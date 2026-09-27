@@ -5,6 +5,7 @@
 #pragma once
 
 #include "FirstPersonMath.h"
+#include "FirstPersonPassengerAssetCalibration.h"
 #include "FirstPersonPeriodicPassengerMotion.h"
 #include "../entity/Yaw.hpp"
 #include "../ride/Angles.h"
@@ -13,6 +14,7 @@
 #include "../ride/RideData.h"
 #include "../ride/Vehicle.h"
 #include "../ride/VehicleGeometry.h"
+#include "../ride/VehicleSwing.h"
 
 #include <algorithm>
 #include <array>
@@ -128,6 +130,26 @@ namespace OpenRCT2::Paint
         };
     }
 
+    [[nodiscard]] inline FirstPersonBasis FirstPersonRotateLocalPitch(
+        const FirstPersonBasis& basis, float angle)
+    {
+        const float c = std::cos(angle);
+        const float s = std::sin(angle);
+        return {
+            {
+                basis.forward.x * c + basis.up.x * s,
+                basis.forward.y * c + basis.up.y * s,
+                basis.forward.z * c + basis.up.z * s,
+            },
+            basis.right,
+            {
+                basis.up.x * c - basis.forward.x * s,
+                basis.up.y * c - basis.forward.y * s,
+                basis.up.z * c - basis.forward.z * s,
+            },
+        };
+    }
+
     [[nodiscard]] inline FirstPersonBasis FirstPersonRotateLocalRoll(
         const FirstPersonBasis& basis, float angle)
     {
@@ -151,7 +173,8 @@ namespace OpenRCT2::Paint
     struct FirstPersonSwingCalibration
     {
         bool valid = false;
-        std::array<float, 4> positiveAngles{};
+        uint8_t pairCount = 0;
+        std::array<float, 7> positiveAngles{};
         float pivotLength = 0.0f;
         float angularUncertainty = 0.0f;
     };
@@ -169,13 +192,28 @@ namespace OpenRCT2::Paint
         if (g1 == nullptr || g1->width <= 0 || g1->height <= 0
             || g1->width > 512 || g1->height > 512)
             return {};
-        // G1 bounds are already cropped to the stored sprite. A lower-body
-        // marker is more stable for a hanging cabin than the silhouette centre.
         return {
             true,
             float(g1->xOffset) + 0.5f * float(g1->width),
             float(g1->yOffset) + 0.72f * float(g1->height),
         };
+    }
+
+    [[nodiscard]] inline uint8_t FirstPersonSwingPairCount(
+        const CarEntry& entry)
+    {
+        if (!entry.flags.has(CarEntryFlag::hasSwinging))
+            return 0;
+        if (entry.flags.hasAll(
+                CarEntryFlag::useSuspendedSwing,
+                CarEntryFlag::useSlideSwing))
+            return 6;
+        if (entry.flags.hasAny(
+                CarEntryFlag::useSuspendedSwing,
+                CarEntryFlag::useSlideSwing))
+            return 3;
+        return entry.flags.has(CarEntryFlag::useWoodenWildMouseSwing)
+            ? 1 : 2;
     }
 
     [[nodiscard]] inline FirstPersonSwingCalibration
@@ -187,36 +225,44 @@ namespace OpenRCT2::Paint
             || entry.flags.has(CarEntryFlag::hasVehicleAnimation))
             return result;
 
-        std::array<std::array<FirstPersonSpriteMarker, 7>, 2> views{};
+        const uint8_t pairCount = FirstPersonSwingPairCount(entry);
+        if (pairCount == 0 || pairCount > 6)
+            return result;
+        const uint8_t frameCount = uint8_t(1 + pairCount * 2);
+
+        std::array<std::array<FirstPersonSpriteMarker, 13>, 2> views{};
         for (size_t view = 0; view < views.size(); ++view)
         {
             const int32_t imageDirection = view == 0 ? 0 : 8;
             const int32_t base =
-                entry.getSpriteOffset(SpriteGroupType::slopeFlat, imageDirection, 0);
-            for (uint8_t frame = 0; frame < 7; ++frame)
+                entry.getSpriteOffset(
+                    SpriteGroupType::slopeFlat, imageDirection, 0);
+            for (uint8_t frame = 0; frame < frameCount; ++frame)
             {
                 views[view][frame] =
-                    FirstPersonSpriteMarkerFromG1(GfxGetG1Element(base + frame));
+                    FirstPersonSpriteMarkerFromG1(
+                        GfxGetG1Element(base + frame));
                 if (!views[view][frame].valid)
                     return result;
             }
         }
 
-        static constexpr std::array<uint8_t, 3> kNegativeFrames{ 1, 3, 5 };
-        static constexpr std::array<uint8_t, 3> kPositiveFrames{ 2, 4, 6 };
-        std::array<float, 3> pairAngles{};
-        std::array<float, 3> pairPivots{};
+        std::array<float, 6> pairAngles{};
+        std::array<float, 6> pairPivots{};
         float uncertainty = 0.0f;
-        for (size_t level = 0; level < pairAngles.size(); ++level)
+        for (uint8_t level = 0; level < pairCount; ++level)
         {
+            const uint8_t negativeFrame = uint8_t(1 + level * 2);
+            const uint8_t positiveFrame = uint8_t(2 + level * 2);
             std::array<float, 2> viewAngles{};
             std::array<float, 2> viewPivots{};
             for (size_t view = 0; view < views.size(); ++view)
             {
                 const auto& centre = views[view][0];
-                const auto& negative = views[view][kNegativeFrames[level]];
-                const auto& positive = views[view][kPositiveFrames[level]];
-                const float midpointX = 0.5f * (negative.x + positive.x);
+                const auto& negative = views[view][negativeFrame];
+                const auto& positive = views[view][positiveFrame];
+                const float midpointX =
+                    0.5f * (negative.x + positive.x);
                 const float lateral =
                     0.5f * std::abs(positive.x - negative.x);
                 const float rise =
@@ -226,37 +272,47 @@ namespace OpenRCT2::Paint
                     return result;
 
                 const float angle =
-                    2.0f * std::atan2(std::max(rise, 0.25f), lateral);
-                if (!(angle > 0.0f) || angle > 1.35f)
+                    2.0f * std::atan2(
+                        std::max(rise, 0.25f), lateral);
+                if (!(angle > 0.0f) || angle > 1.55f)
                     return result;
                 const float pivot =
                     lateral / std::max(std::sin(angle), 0.05f);
                 viewAngles[view] = angle;
                 viewPivots[view] = pivot;
             }
-            pairAngles[level] = 0.5f * (viewAngles[0] + viewAngles[1]);
-            pairPivots[level] = 0.5f * (viewPivots[0] + viewPivots[1]);
+            pairAngles[level] =
+                0.5f * (viewAngles[0] + viewAngles[1]);
+            pairPivots[level] =
+                0.5f * (viewPivots[0] + viewPivots[1]);
             uncertainty = std::max(
-                uncertainty, std::abs(viewAngles[0] - viewAngles[1]));
+                uncertainty,
+                std::abs(viewAngles[0] - viewAngles[1]));
+            if (level > 0
+                && pairAngles[level] + 0.05f < pairAngles[level - 1])
+                return result;
         }
 
-        // Sprite categories are ordered by increasing physical swing.
-        if (pairAngles[1] + 0.05f < pairAngles[0]
-            || pairAngles[2] + 0.05f < pairAngles[1])
-            return result;
+        result.pairCount = pairCount;
+        result.positiveAngles[0] = 0.0f;
+        float pivotSum = 0.0f;
+        for (uint8_t level = 0; level < pairCount; ++level)
+        {
+            result.positiveAngles[level + 1] = pairAngles[level];
+            pivotSum += pairPivots[level];
+        }
+        result.pivotLength = pivotSum / float(pairCount);
 
-        result.positiveAngles = {
-            0.0f, pairAngles[0], pairAngles[1], pairAngles[2]
-        };
-        result.pivotLength =
-            (pairPivots[0] + pairPivots[1] + pairPivots[2]) / 3.0f;
-        const float pivotSpread = std::max({
-            std::abs(pairPivots[0] - result.pivotLength),
-            std::abs(pairPivots[1] - result.pivotLength),
-            std::abs(pairPivots[2] - result.pivotLength),
-        });
+        float pivotSpread = 0.0f;
+        for (uint8_t level = 0; level < pairCount; ++level)
+        {
+            pivotSpread = std::max(
+                pivotSpread,
+                std::abs(pairPivots[level] - result.pivotLength));
+        }
         result.angularUncertainty =
-            uncertainty + pivotSpread / std::max(result.pivotLength, 1.0f);
+            uncertainty
+            + pivotSpread / std::max(result.pivotLength, 1.0f);
         result.valid = std::isfinite(result.pivotLength)
             && result.pivotLength >= 2.0f
             && result.pivotLength <= 128.0f
@@ -292,23 +348,36 @@ namespace OpenRCT2::Paint
     }
 
     [[nodiscard]] inline float FirstPersonSwingAngleForPosition(
-        const FirstPersonSwingCalibration& calibration, float swingPosition)
+        const FirstPersonSwingCalibration& calibration,
+        float swingPosition)
     {
         const float sign = swingPosition < 0.0f ? -1.0f : 1.0f;
         const float position = std::abs(swingPosition);
-        static constexpr std::array<float, 4> kRepresentativePosition{
-            0.0f, 1820.0f, 5460.0f, 10000.0f
-        };
-        size_t upper = 1;
-        while (upper + 1 < kRepresentativePosition.size()
-            && position > kRepresentativePosition[upper])
+        // Interpolate through centres derived from the SAME thresholds
+        // Vehicle::UpdateSwingingCar() uses to select SwingSprite.
+        if (calibration.pairCount == 0)
+            return 0.0f;
+
+        const uint8_t last =
+            std::min<uint8_t>(calibration.pairCount, 6);
+        const float lastCentre =
+            VehicleSwingPositiveBandCentre(last);
+        if (position >= lastCentre)
+            return sign * calibration.positiveAngles[last];
+
+        uint8_t upper = 1;
+        while (upper < last
+            && position > VehicleSwingPositiveBandCentre(upper))
             ++upper;
-        const size_t lower = upper - 1;
-        const float span =
-            kRepresentativePosition[upper] - kRepresentativePosition[lower];
+        const uint8_t lower = upper - 1;
+        const float lowerCentre =
+            VehicleSwingPositiveBandCentre(lower);
+        const float upperCentre =
+            VehicleSwingPositiveBandCentre(upper);
+        const float span = upperCentre - lowerCentre;
         const float alpha = span > 0.0f
             ? std::clamp(
-                (position - kRepresentativePosition[lower]) / span,
+                (position - lowerCentre) / span,
                 0.0f, 1.0f)
             : 0.0f;
         const float angle =
@@ -318,17 +387,56 @@ namespace OpenRCT2::Paint
         return sign * angle;
     }
 
+    [[nodiscard]] constexpr int16_t FirstPersonMultiDimensionAnimationFrame(
+        int16_t seatRotation, int16_t animationFrames)
+    {
+        if (animationFrames <= 0)
+            return 0;
+        return ((seatRotation - 4) % animationFrames + animationFrames)
+            % animationFrames;
+    }
+
+    [[nodiscard]] inline float FirstPersonMultiDimensionFrameAngle(
+        int16_t animationFrame, int16_t animationFrames)
+    {
+        if (animationFrames <= 0)
+            return 0.0f;
+        constexpr float kTwoPi = 6.28318530717958647692f;
+        const int16_t wrapped =
+            ((animationFrame % animationFrames) + animationFrames)
+            % animationFrames;
+        return std::remainder(
+            float(wrapped) * (kTwoPi / float(animationFrames)), kTwoPi);
+    }
+
+    [[nodiscard]] inline float FirstPersonMultiDimensionSeatAngle(
+        int16_t seatRotation, int16_t animationFrame,
+        int16_t animationFrames)
+    {
+        if (animationFrames <= 0)
+            return 0.0f;
+        const int16_t semanticFrame =
+            FirstPersonMultiDimensionAnimationFrame(
+                seatRotation, animationFrames);
+        const int16_t renderedFrame =
+            animationFrame >= 0 && animationFrame < animationFrames
+            ? animationFrame : semanticFrame;
+        return FirstPersonMultiDimensionFrameAngle(
+            renderedFrame, animationFrames);
+    }
+
     struct FirstPersonCarriageTransform
     {
         FirstPersonBasis basis{};
         FirstPersonVec3 originOffset{};
         float swingAngle = 0.0f;
+        float seatAngle = 0.0f;
     };
 
     [[nodiscard]] inline FirstPersonCarriageTransform
         BuildFirstPersonCarriageTransform(
             const Vehicle& car, FirstPersonBasis trackBasis,
-            float spinAngle, float swingPosition)
+            float spinAngle, float swingPosition, float seatAngle)
     {
         FirstPersonCarriageTransform result{};
         if (car.flags.has(VehicleFlag::carIsReversed))
@@ -361,9 +469,61 @@ namespace OpenRCT2::Paint
                     trackBasis.right.z * lateral + trackBasis.up.z * rise,
                 };
                 trackBasis =
-                    FirstPersonRotateLocalRoll(trackBasis, result.swingAngle);
+                    FirstPersonRotateLocalRoll(
+                        trackBasis, result.swingAngle);
             }
         }
+
+        if (entry != nullptr
+            && entry->animation == CarEntryAnimation::multiDimension
+            && entry->animationFrames > 0)
+        {
+            // Multi-dimension animation frames are the seat's independent
+            // rotation around the car-local right axis. seat_rotation=4 is the
+            // neutral native frame. Rider-overlay motion across the full frame
+            // cycle determines winding and, when reliable, the physical pivot.
+            const auto* artwork =
+                GetFirstPersonMultiDimensionArtworkCalibration(*entry);
+            const float physicalAngle = artwork != nullptr
+                ? seatAngle * float(artwork->angleSign)
+                : seatAngle;
+            result.seatAngle = physicalAngle;
+
+            const auto chassisBasis = trackBasis;
+            const auto seatBasis =
+                FirstPersonRotateLocalPitch(chassisBasis, physicalAngle);
+            if (artwork != nullptr)
+            {
+                const auto& pivot = artwork->pivotLocal;
+                const FirstPersonVec3 before{
+                    chassisBasis.forward.x * pivot.x
+                        + chassisBasis.right.x * pivot.y
+                        + chassisBasis.up.x * pivot.z,
+                    chassisBasis.forward.y * pivot.x
+                        + chassisBasis.right.y * pivot.y
+                        + chassisBasis.up.y * pivot.z,
+                    chassisBasis.forward.z * pivot.x
+                        + chassisBasis.right.z * pivot.y
+                        + chassisBasis.up.z * pivot.z,
+                };
+                const FirstPersonVec3 after{
+                    seatBasis.forward.x * pivot.x
+                        + seatBasis.right.x * pivot.y
+                        + seatBasis.up.x * pivot.z,
+                    seatBasis.forward.y * pivot.x
+                        + seatBasis.right.y * pivot.y
+                        + seatBasis.up.y * pivot.z,
+                    seatBasis.forward.z * pivot.x
+                        + seatBasis.right.z * pivot.y
+                        + seatBasis.up.z * pivot.z,
+                };
+                result.originOffset.x += before.x - after.x;
+                result.originOffset.y += before.y - after.y;
+                result.originOffset.z += before.z - after.z;
+            }
+            trackBasis = seatBasis;
+        }
+
         result.basis = trackBasis;
         return result;
     }
@@ -408,6 +568,11 @@ namespace OpenRCT2::Paint
         if (entry == nullptr)
             return { 0.0f, 0.0f, 8.0f };
 
+        if (const auto* calibrated =
+                GetFirstPersonPassengerAssetSeat(*entry, seatIndex);
+            calibrated != nullptr)
+            return calibrated->localEye;
+
         const uint8_t rows = std::max<uint8_t>(entry->numSeatingRows, 1);
         const uint8_t row = std::min<uint8_t>(seatIndex / 2, rows - 1);
         const float visualRadius = std::max(8.0f, float(entry->spriteWidth));
@@ -429,21 +594,7 @@ namespace OpenRCT2::Paint
     [[nodiscard]] inline FirstPersonBasis FirstPersonRotatePassengerPitch(
         const FirstPersonBasis& basis, float angle)
     {
-        const float c = std::cos(angle);
-        const float s = std::sin(angle);
-        return {
-            {
-                basis.forward.x * c + basis.up.x * s,
-                basis.forward.y * c + basis.up.y * s,
-                basis.forward.z * c + basis.up.z * s,
-            },
-            basis.right,
-            {
-                basis.up.x * c - basis.forward.x * s,
-                basis.up.y * c - basis.forward.y * s,
-                basis.up.z * c - basis.forward.z * s,
-            },
-        };
+        return FirstPersonRotateLocalPitch(basis, angle);
     }
 
     [[nodiscard]] inline FirstPersonPassengerPose BuildFirstPersonPassengerPose(
@@ -584,9 +735,17 @@ namespace OpenRCT2::Paint
             FirstPersonVehicleYawRadians(car.orientation),
             FirstPersonVehiclePitchRadians(car.pitch),
             FirstPersonVehicleRollRadians(car.roll));
+        const auto* entry = car.Entry();
+        const float seatAngle =
+            entry != nullptr
+                && entry->animation == CarEntryAnimation::multiDimension
+            ? FirstPersonMultiDimensionSeatAngle(
+                  car.seat_rotation, car.animation_frame,
+                  entry->animationFrames)
+            : 0.0f;
         return BuildFirstPersonCarriageTransform(
             car, trackBasis, SpinSpriteYawRadians(car.spin_sprite),
-            float(car.SwingPosition));
+            float(car.SwingPosition), seatAngle);
     }
 
     [[nodiscard]] inline FirstPersonCamera

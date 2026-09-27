@@ -22,6 +22,7 @@
 #include "RideEntry.h"
 #include "TrackData.h"
 #include "VehicleData.h"
+#include "VehicleSwing.h"
 #include "ted/TrackElementDescriptor.h"
 
 #include <cassert>
@@ -617,41 +618,6 @@ namespace OpenRCT2
         }
     }
 
-    static uint8_t GetSwingSprite(int16_t swingPosition)
-    {
-        if (swingPosition < -10010)
-            return 11;
-        if (swingPosition > 10010)
-            return 12;
-
-        if (swingPosition < -8190)
-            return 9;
-        if (swingPosition > 8190)
-            return 10;
-
-        if (swingPosition < -6370)
-            return 7;
-        if (swingPosition > 6370)
-            return 8;
-
-        if (swingPosition < -4550)
-            return 5;
-        if (swingPosition > 4550)
-            return 6;
-
-        if (swingPosition < -2730)
-            return 3;
-        if (swingPosition > 2730)
-            return 4;
-
-        if (swingPosition < -910)
-            return 1;
-        if (swingPosition > 910)
-            return 2;
-
-        return 0;
-    }
-
     /**
      *
      *  rct2: 0x006D6776
@@ -741,7 +707,7 @@ namespace OpenRCT2
             SwingSpeed = 0;
         }
 
-        uint8_t swingSprite = GetSwingSprite(SwingPosition);
+        uint8_t swingSprite = VehicleSwingSpriteForPosition(SwingPosition);
 
         if (swingSprite != SwingSprite)
         {
