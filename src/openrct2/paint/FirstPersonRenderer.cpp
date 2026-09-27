@@ -3108,8 +3108,6 @@ namespace OpenRCT2::Paint
                 return;
             }
 
-            state.profile.sourceChannelMask |=
-                FirstPersonTrackPixelChannelBit(fit.channel);
             state.holdoutKinds |= kinds;
             ++state.passedHoldouts;
 

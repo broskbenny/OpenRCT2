@@ -577,6 +577,21 @@ namespace OpenRCT2::Paint
             return {};
         const auto candidate = BuildFirstPersonTrackRailSilhouettes(
             trajectory, anchor, profile);
-        return BestFirstPersonTrackProfileFit(observation, candidate);
+        FirstPersonTrackProfileFit best{};
+        for (size_t i = 0; i < kFirstPersonTrackPixelChannelCount; ++i)
+        {
+            const auto channel =
+                static_cast<FirstPersonTrackPixelChannel>(i);
+            if ((profile.sourceChannelMask
+                    & FirstPersonTrackPixelChannelBit(channel)) == 0)
+                continue;
+            const auto fit = EvaluateFirstPersonTrackProfileFit(
+                observation, candidate, channel);
+            if (!fit.valid)
+                continue;
+            if (!best.valid || fit.score > best.score)
+                best = fit;
+        }
+        return best;
     }
 } // namespace OpenRCT2::Paint
