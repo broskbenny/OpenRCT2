@@ -1429,26 +1429,35 @@ namespace OpenRCT2::Paint
         }
 
         [[nodiscard]] const FirstPersonVehicleBodyHull*
-            GetUsableAttachedVehicleHull(
-                const Vehicle& vehicle, uint8_t seatIndex)
+            GetUsableVehicleHull(const Vehicle& vehicle)
         {
-            if (seatIndex == 0xFF
-                || vehicle.flags.has(
-                    VehicleFlag::carIsReversed))
-                return nullptr;
-            const auto* ride = vehicle.GetRide();
             const auto visual =
                 ResolveVehicleVisualState(vehicle);
             const auto* entry = visual.carEntry;
-            if (ride == nullptr || entry == nullptr
-                || !ride->getRideTypeDescriptor().flags.has(RtdFlag::hasTrack))
+            if (entry == nullptr)
                 return nullptr;
+            return GetFirstPersonVehicleBodyHull(*entry);
+        }
 
+        [[nodiscard]] const FirstPersonVehicleBodyHull*
+            GetUsableAttachedVehicleHull(
+                const Vehicle& vehicle, uint8_t seatIndex)
+        {
+            if (seatIndex == 0xFF)
+                return nullptr;
+            const auto visual =
+                ResolveVehicleVisualState(vehicle);
+            const auto* entry = visual.carEntry;
             const auto* hull =
-                GetFirstPersonVehicleBodyHull(*entry);
+                GetUsableVehicleHull(vehicle);
+            if (entry == nullptr || hull == nullptr)
+                return nullptr;
             const auto* seat =
                 GetFirstPersonPassengerAssetSeat(*entry, seatIndex);
-            if (hull == nullptr || seat == nullptr
+            // The body model can be perfectly usable for rendering while still
+            // being unsuitable for a camera attachment whose calibrated eye is
+            // embedded in the reconstructed shell.
+            if (seat == nullptr
                 || hull->containsPoint(seat->localEye))
                 return nullptr;
             return hull;
@@ -1471,7 +1480,7 @@ namespace OpenRCT2::Paint
             };
         }
 
-        void AppendAttachedVehicleHull(
+        void AppendVehicleHull(
             FirstPersonScene& scene, const Vehicle& vehicle,
             const FirstPersonVehicleBodyHull& hull,
             ImageId bodyImageTemplate)
@@ -1977,23 +1986,15 @@ namespace OpenRCT2::Paint
         [[nodiscard]] bool IsHiddenPassengerTileComponent(
             const PaintStruct& ps, EntityId hiddenEntity, uint8_t hiddenSeatIndex)
         {
-            if (ps.Source != PaintStructSource::tile || ps.Entity == nullptr
-                || hiddenEntity.IsNull() || ps.Entity->id != hiddenEntity
-                || hiddenSeatIndex == 0xFF || !ps.image_id.HasValue())
-                return false;
-
-            const auto* vehicle = ps.Entity->as<Vehicle>();
-            const auto* ride = vehicle != nullptr ? vehicle->GetRide() : nullptr;
-            const auto* rideEntry = vehicle != nullptr ? vehicle->GetRideEntry() : nullptr;
-            if (vehicle == nullptr || ride == nullptr || rideEntry == nullptr
-                || ride->getRideTypeDescriptor().Name != "ferris_wheel")
-                return false;
-
-            return FirstPersonFerrisWheelImageMatchesSeatPair(
-                rideEntry->Cars[0].baseImageId,
-                ps.image_id.GetIndex(),
-                vehicle->flatRideAnimationFrame,
-                hiddenSeatIndex);
+            return ps.Source == PaintStructSource::tile
+                && ps.Entity != nullptr
+                && !hiddenEntity.IsNull()
+                && ps.Entity->id == hiddenEntity
+                && hiddenSeatIndex < 32
+                && (ps.FirstPersonPassengerSeatMask
+                    & (uint32_t{ 1 }
+                        << hiddenSeatIndex))
+                    != 0;
         }
 
         void AppendRoot(
