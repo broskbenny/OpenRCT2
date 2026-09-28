@@ -17,6 +17,8 @@
 #include "../../support/WoodenSupports.h"
 #include "../../tile_element/Segment.h"
 
+#include <cmath>
+
 using namespace OpenRCT2;
 
 static int16_t TopSpinSeatHeightOffset[] = {
@@ -33,6 +35,35 @@ static int8_t TopSpinSeatPositionOffset[] = {
     0, -3, -8, -12, -16, -20, -23, -26, -28, -30, -32, -33, -33, -33, -32, -30, -28, -26, -23, -20, -16, -12, -8, -3,
 };
 
+static float FirstPersonResolvePaintFrame(
+    const PaintSession& session, uint8_t current,
+    bool secondary, float frameCount)
+{
+    if (!session.FirstPersonPassengerInterpolation.enabled
+        || !(frameCount > 0.0f))
+        return float(current);
+
+    const auto& interpolation =
+        session.FirstPersonPassengerInterpolation;
+    float before = float(
+        secondary ? interpolation.secondaryBefore
+                  : interpolation.primaryBefore);
+    float after = float(
+        secondary ? interpolation.secondaryAfter
+                  : interpolation.primaryAfter);
+    float delta = std::fmod(after - before, frameCount);
+    if (delta > frameCount * 0.5f)
+        delta -= frameCount;
+    else if (delta < -frameCount * 0.5f)
+        delta += frameCount;
+    float frame = before + delta
+        * std::clamp(interpolation.alpha, 0.0f, 1.0f);
+    frame = std::fmod(frame, frameCount);
+    if (frame < 0.0f)
+        frame += frameCount;
+    return frame;
+}
+
 static void PaintTopSpinRiders(
     PaintSession& session, const Vehicle& vehicle, ImageIndex seatImageIndex, const CoordsXYZ& seatCoords,
     const BoundBoxXYZ& bb)
@@ -48,7 +79,13 @@ static void PaintTopSpinRiders(
             auto imageIndex = seatImageIndex + ((i + 1) * 76);
             auto imageId = ImageId(
                 imageIndex, vehicle.peep_tshirt_colours[peepIndex], vehicle.peep_tshirt_colours[peepIndex + 1]);
+            const uint32_t previousSeatMask =
+                session.FirstPersonPassengerSeatMask;
+            session.FirstPersonPassengerSeatMask =
+                uint32_t{ 3 } << peepIndex;
             PaintAddImageAsChild(session, imageId, seatCoords, bb);
+            session.FirstPersonPassengerSeatMask =
+                previousSeatMask;
         }
         else
         {
@@ -104,6 +141,55 @@ static void PaintTopSpinSeat(
     if (stationColour != TrackStationColour)
     {
         imageTemplate = stationColour;
+    }
+
+    if (vehicle != nullptr)
+    {
+        const float armFrame = FirstPersonResolvePaintFrame(
+            session, vehicle->flatRideAnimationFrame,
+            false, 48.0f);
+        const int32_t arm0 =
+            int32_t(std::floor(armFrame)) % 48;
+        const int32_t arm1 = (arm0 + 1) % 48;
+        const float armAlpha =
+            armFrame - std::floor(armFrame);
+        const float seatPosition =
+            float(TopSpinSeatPositionOffset[arm0])
+            + (float(TopSpinSeatPositionOffset[arm1])
+                - float(TopSpinSeatPositionOffset[arm0]))
+                * armAlpha;
+        const float seatHeight =
+            float(TopSpinSeatHeightOffset[arm0])
+            + (float(TopSpinSeatHeightOffset[arm1])
+                - float(TopSpinSeatHeightOffset[arm0]))
+                * armAlpha;
+
+        float anchorX = float(offset.x);
+        float anchorY = float(offset.y);
+        switch (direction)
+        {
+            case 0: anchorX -= seatPosition; break;
+            case 1: anchorY += seatPosition; break;
+            case 2: anchorX += seatPosition; break;
+            case 3: anchorY -= seatPosition; break;
+        }
+        const float seatFrame = FirstPersonResolvePaintFrame(
+            session, vehicle->flatRideSecondaryAnimationFrame,
+            true, 16.0f);
+        constexpr float kTwoPi =
+            6.28318530717958647692f;
+        const float localPitch =
+            seatFrame * (kTwoPi / 16.0f);
+        const uint32_t seatMask =
+            vehicle->num_seats >= 32
+            ? 0xffffffffu
+            : ((uint32_t{ 1 } << vehicle->num_seats) - 1u);
+        PaintSessionPublishFirstPersonPassengerLocalAnchor(
+            session, *vehicle, seatMask,
+            anchorX, anchorY,
+            float(offset.z) + seatHeight,
+            false, 0.0f, 0.0f, 0.0f,
+            true, localPitch);
     }
 
     PaintAddImageAsChild(session, imageTemplate.WithIndex(seatImageIndex), seatCoords, bb);
