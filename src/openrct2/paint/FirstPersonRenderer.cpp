@@ -1882,103 +1882,166 @@ namespace OpenRCT2::Paint
             if (image.GetIndex() != expectedBodyImage)
                 return false;
 
-            const auto layout =
-                GetSpriteCompositeLayout(image, mask);
-            if (!layout.has_value())
+            const auto* hull =
+                GetFirstPersonSmallSceneryVisualHull(
+                    *entry, *small);
+            if (hull == nullptr)
                 return false;
 
-            std::vector<FirstPersonPhysicalBoxProxy> proxies;
-            proxies.reserve(32);
-            if (!AppendFirstPersonSmallSceneryProxies(
-                    proxies, ps.MapPos, *small))
-                return false;
-
-            float reconstructedTop =
-                -std::numeric_limits<float>::infinity();
-            for (const auto& proxy : proxies)
-                reconstructedTop =
-                    std::max(reconstructedTop, proxy.high.z);
-            const int32_t reconstructedHeight =
-                int32_t(std::floor(
-                    reconstructedTop
-                    - float(small->getBaseZ()) + 0.5f));
-            if (!FirstPersonSmallSceneryVisualReconstructionCoversHeight(
-                    entry->height, reconstructedHeight))
+            struct SmallSceneryFaceSource
             {
-                // Walking collision deliberately samples only the lower body.
-                // That is useful collision evidence, not permission to replace
-                // taller native artwork with a truncated visual mesh.
-                return false;
-            }
+                ImageId image{};
+                const G1Element* g1 = nullptr;
+                uint8_t rotation = 0;
+            };
+            const auto sourceForFace =
+                [&](FirstPersonVec3 normal)
+                    -> std::optional<SmallSceneryFaceSource> {
+                    float bestScore =
+                        -std::numeric_limits<float>::infinity();
+                    std::optional<SmallSceneryFaceSource> best;
+                    for (const auto& view : hull->textureViews)
+                    {
+                        const auto sourceImage =
+                            image.WithIndex(view.image);
+                        const auto* g1 =
+                            GfxGetG1Element(sourceImage);
+                        if (g1 == nullptr)
+                            continue;
 
-            const auto emitFace =
-                [&](const std::array<FirstPersonVec3, 4>& world) {
+                        float score = 0.0f;
+                        if (normal.z > 0.5f)
+                        {
+                            score =
+                                view.imageDirection == rotation
+                                ? 2.0f : 1.0f;
+                        }
+                        else
+                        {
+                            const auto viewDirection =
+                                FirstPersonNativeViewDirection(
+                                    view.imageDirection);
+                            score =
+                                normal.x * float(viewDirection.x)
+                                + normal.y * float(viewDirection.y);
+                            if (score <= 0.0f)
+                                continue;
+                        }
+                        if (!best.has_value()
+                            || score > bestScore)
+                        {
+                            bestScore = score;
+                            best = SmallSceneryFaceSource{
+                                sourceImage, g1,
+                                view.imageDirection,
+                            };
+                        }
+                    }
+                    return best;
+                };
+
+            const float half = hull->step * 0.5f;
+            const float tileX = float(ps.MapPos.x);
+            const float tileY = float(ps.MapPos.y);
+            const float baseZ = float(small->getBaseZ());
+            const auto appendFace =
+                [&](const std::array<FirstPersonVec3, 4>& local,
+                    FirstPersonVec3 normal) {
+                    const auto source =
+                        sourceForFace(normal);
+                    if (!source.has_value())
+                        return;
+
+                    const auto paintOffset =
+                        FirstPersonSmallSceneryPaintOffset(
+                            *entry, *small, source->rotation);
+                    const auto spriteOrigin =
+                        Translate3DTo2DWithZ(
+                            source->rotation,
+                            { paintOffset, 0 });
+
                     FirstPersonSurface surface{};
-                    surface.image = image;
+                    surface.image = source->image;
                     std::array<FirstPersonVertex, 4> vertices{};
                     for (size_t i = 0; i < vertices.size(); ++i)
                     {
-                        const auto& p = world[i];
-                        const CoordsXYZ loc{
-                            int32_t(std::lround(p.x)),
-                            int32_t(std::lround(p.y)),
-                            int32_t(std::lround(p.z)),
+                        const auto& p = local[i];
+                        vertices[i].world = {
+                            tileX + p.x,
+                            tileY + p.y,
+                            baseZ + p.z,
                         };
-                        const auto iso =
-                            Translate3DTo2DWithZ(rotation, loc);
-                        vertices[i] = {
-                            p,
-                            float(
-                                iso.x - spritePos.x
-                                - layout->xOffset),
-                            float(
-                                iso.y - spritePos.y
-                                - layout->yOffset),
-                        };
+                        const auto projected =
+                            Translate3DTo2DWithZ(
+                                source->rotation,
+                                {
+                                    int32_t(std::lround(p.x)),
+                                    int32_t(std::lround(p.y)),
+                                    int32_t(std::lround(p.z)),
+                                });
+                        vertices[i].u =
+                            float(projected.x
+                                - spriteOrigin.x
+                                - source->g1->xOffset);
+                        vertices[i].v =
+                            float(projected.y
+                                - spriteOrigin.y
+                                - source->g1->yOffset);
                     }
                     EmitQuad(surface, vertices);
                     scene.surfaces.emplace_back(
                         std::move(surface));
                 };
 
-            for (const auto& proxy : proxies)
+            for (int32_t up = 0;
+                 up < hull->sizeUp; ++up)
+            for (int32_t right = 0;
+                 right < hull->sizeRight; ++right)
+            for (int32_t forward = 0;
+                 forward < hull->sizeForward; ++forward)
             {
-                const auto& low = proxy.low;
-                const auto& high = proxy.high;
-                // Top and four exposed vertical candidates. Internal faces
-                // between adjacent run-length boxes are harmlessly occluded;
-                // omitting bottoms avoids inventing artwork that native
-                // isometric sprites never observe.
-                emitFace({ {
-                    { low.x, low.y, high.z },
-                    { high.x, low.y, high.z },
-                    { high.x, high.y, high.z },
-                    { low.x, high.y, high.z },
-                } });
-                emitFace({ {
-                    { low.x, low.y, low.z },
-                    { high.x, low.y, low.z },
-                    { high.x, low.y, high.z },
-                    { low.x, low.y, high.z },
-                } });
-                emitFace({ {
-                    { high.x, low.y, low.z },
-                    { high.x, high.y, low.z },
-                    { high.x, high.y, high.z },
-                    { high.x, low.y, high.z },
-                } });
-                emitFace({ {
-                    { high.x, high.y, low.z },
-                    { low.x, high.y, low.z },
-                    { low.x, high.y, high.z },
-                    { high.x, high.y, high.z },
-                } });
-                emitFace({ {
-                    { low.x, high.y, low.z },
-                    { low.x, low.y, low.z },
-                    { low.x, low.y, high.z },
-                    { low.x, high.y, high.z },
-                } });
+                if (!hull->contains(
+                        forward, right, up))
+                    continue;
+                const auto centre =
+                    hull->centre(forward, right, up);
+                const float f0 = centre.x - half;
+                const float f1 = centre.x + half;
+                const float r0 = centre.y - half;
+                const float r1 = centre.y + half;
+                const float u0 = centre.z - half;
+                const float u1 = centre.z + half;
+
+                if (!hull->contains(
+                        forward - 1, right, up))
+                    appendFace({ {
+                        { f0, r1, u0 }, { f0, r0, u0 },
+                        { f0, r0, u1 }, { f0, r1, u1 },
+                    } }, { -1.0f, 0.0f, 0.0f });
+                if (!hull->contains(
+                        forward + 1, right, up))
+                    appendFace({ {
+                        { f1, r0, u0 }, { f1, r1, u0 },
+                        { f1, r1, u1 }, { f1, r0, u1 },
+                    } }, { 1.0f, 0.0f, 0.0f });
+                if (!hull->contains(
+                        forward, right - 1, up))
+                    appendFace({ {
+                        { f0, r0, u0 }, { f1, r0, u0 },
+                        { f1, r0, u1 }, { f0, r0, u1 },
+                    } }, { 0.0f, -1.0f, 0.0f });
+                if (!hull->contains(
+                        forward, right + 1, up))
+                    appendFace({ {
+                        { f1, r1, u0 }, { f0, r1, u0 },
+                        { f0, r1, u1 }, { f1, r1, u1 },
+                    } }, { 0.0f, 1.0f, 0.0f });
+                if (!hull->contains(
+                        forward, right, up + 1))
+                    appendFace({ {
+                        { f0, r1, u1 }, { f0, r0, u1 },
+                        { f1, r0, u1 }, { f1, r1, u1 },
+                    } }, { 0.0f, 0.0f, 1.0f });
             }
             return true;
         }
