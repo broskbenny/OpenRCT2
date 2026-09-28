@@ -102,45 +102,6 @@ static constexpr uint8_t Byte97B55D[] = {
     1, 5, 1, 3, 2, 3, 1, 5, 0,
 };
 
-struct TunnelDescriptor
-{
-    uint8_t height;
-    uint8_t boundBoxLength;
-    int16_t boundBoxZOffset;
-    int8_t lowerEdgeBoundingBoxZ;
-    TunnelType lowClearanceAlternative;
-    uint8_t imageOffset;
-};
-static constexpr TunnelDescriptor kTunnels[] = {
-    { 2, 2, 0,   15, TunnelType::standardFlat,                    36 }, // TunnelType::StandardFlat
-    { 3, 3, 0,   15, TunnelType::standardFlat,                    40 }, // TunnelType::StandardSlopeStart
-    { 3, 5, -32,  4, TunnelType::standardFlat,                    44 }, // TunnelType::StandardSlopeEnd
-    { 3, 3, 0,   15, TunnelType::invertedFlat,                    48 }, // TunnelType::InvertedFlat
-    { 4, 4, 0,   15, TunnelType::invertedFlat,                    52 }, // TunnelType::InvertedSlopeStart
-    { 4, 7, -48,  4, TunnelType::invertedFlat,                    56 }, // TunnelType::InvertedSlopeEnd
-    { 2, 2, 0,   15, TunnelType::squareFlat,                      60 }, // TunnelType::SquareFlat
-    { 3, 3, 0,   15, TunnelType::squareFlat,                      64 }, // TunnelType::SquareSlopeStart
-    { 3, 5, -32,  4, TunnelType::squareFlat,                      68 }, // TunnelType::SquareSlopeEnd
-    { 3, 3, 0,   15, TunnelType::squareFlat,                      72 }, // TunnelType::InvertedSquare
-    { 2, 3, -16, 15, TunnelType::pathAndMiniGolf,                 76 }, // TunnelType::PathAndMiniGolf
-    { 2, 3, -16, 15, TunnelType::path11,                          80 }, // TunnelType::Path11
-    { 2, 3, -16,  4, TunnelType::standardFlatTo25Deg,             36 }, // TunnelType::StandardFlatTo25Deg
-    { 3, 4, -16,  4, TunnelType::invertedFlatTo25Deg,             48 }, // TunnelType::InvertedFlatTo25Deg
-    { 2, 3, -16,  4, TunnelType::squareFlatTo25Deg,               60 }, // TunnelType::SquareFlatTo25Deg
-    { 3, 4, -16,  4, TunnelType::squareFlatTo25Deg,               72 }, // TunnelType::InvertedSquareFlatTo25Deg
-    { 2, 2, 0,   15, TunnelType::doorClosed,                      84 }, // TunnelType::doorClosed
-    { 2, 2, 0,   15, TunnelType::doorOpeningOutward,              88 }, // TunnelType::doorOpeningOutward
-    { 2, 2, 0,   15, TunnelType::doorOpenOutward,                 92 }, // TunnelType::doorOpenOutward
-    { 2, 2, 0,   15, TunnelType::doorOpeningInward,               96 }, // TunnelType::doorOpeningInward
-    { 2, 2, 0,   15, TunnelType::doorOpenInward,                 100 }, // TunnelType::doorOpenInward
-    { 2, 3, -16,  4, TunnelType::doorClosedFlatToDown25,          84 }, // TunnelType::doorClosedFlatToDown25
-    { 2, 3, -16,  4, TunnelType::doorOpeningOutwardFlatToDown25,  88 }, // TunnelType::doorOpeningOutwardFlatToDown25
-    { 2, 3, -16,  4, TunnelType::doorOpenOutwardFlatToDown25,     92 }, // TunnelType::doorOpenOutwardFlatToDown25
-    { 2, 3, -16,  4, TunnelType::doorOpeningInwardFlatToDown25,   96 }, // TunnelType::doorOpeningInwardFlatToDown25
-    { 2, 3, -16,  4, TunnelType::doorOpenInwardFlatToDown25,     100 }, // TunnelType::doorOpenInwardFlatToDown25
-};
-static_assert(std::size(kTunnels) == kTunnelTypeCount);
-
 // clang-format on
 // tunnel offset
 
@@ -303,7 +264,7 @@ static ImageId GetTunnelImage(const TerrainEdgeObject* edgeObject, TunnelType ty
     if (!hasDoors && EnumValue(type) >= kRegularTunnelTypeCount)
         type = TunnelType::standardFlat;
 
-    ImageId result = GetEdgeImageWithOffset(edgeObject, kTunnels[EnumValue(type)].imageOffset)
+    ImageId result = GetEdgeImageWithOffset(edgeObject, GetTunnelDescriptor(type).imageOffset)
                          .WithIndexOffset(edge == EDGE_BOTTOMRIGHT ? 2 : 0);
 
     return result;
@@ -605,7 +566,7 @@ static void ViewportSurfaceDrawTileSideBottom(
             continue;
         }
 
-        const auto tdOriginal = kTunnels[EnumValue(tunnel.type)];
+        const auto tdOriginal = GetTunnelDescriptor(tunnel.type);
 
         // Draw land edges up to the bottom of the tunnel
         while (curHeight < tunnel.height)
@@ -624,7 +585,7 @@ static void ViewportSurfaceDrawTileSideBottom(
         if ((zOffset + tunnelHeight) > neighbourCornerHeight1 || (zOffset + tunnelHeight) > cornerHeight1)
         {
             tunnelType = td.lowClearanceAlternative;
-            td = kTunnels[EnumValue(tunnelType)];
+            td = GetTunnelDescriptor(tunnelType);
         }
 
         zOffset *= 16;
