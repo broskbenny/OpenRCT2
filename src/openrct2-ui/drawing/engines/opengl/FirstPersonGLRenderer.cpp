@@ -554,6 +554,7 @@ void main() {
 
             auto found=_staticOpaqueRegions.find(key);
             if(found!=_staticOpaqueRegions.end()
+                && found->second.sceneEpoch==packet.sceneEpoch
                 && found->second.generation==packet.generation
                 && found->second.dependencyStamp==dependencyStamp)
             {
@@ -606,6 +607,7 @@ void main() {
             _staticRegionBytes=_staticRegionBytes-region.bytes+bytes;
             region.bytes=bytes;
             region.count=GLsizei(packed.size());
+            region.sceneEpoch=packet.sceneEpoch;
             region.generation=packet.generation;
             region.dependencyStamp=dependencyStamp;
             region.lastSeen=_frame;
@@ -638,77 +640,286 @@ void main() {
 
         if (!streamedTransparent.empty())
         {
+            struct TransparentTileCandidate
+            {
+                const Paint::FirstPersonSurface* surface{};
+                int32_t x0{}, y0{}, x1{}, y1{};
+            };
             struct TransparentScreenTile
             {
                 int32_t x0{}, y0{}, x1{}, y1{};
-                std::vector<const Paint::FirstPersonSurface*> surfaces;
+                std::vector<TransparentTileCandidate> candidates;
             };
 
             constexpr int32_t kTransparencyTileSize = 128;
-            const int32_t tileColumns = (width + kTransparencyTileSize - 1) / kTransparencyTileSize;
-            const int32_t tileRows = (height + kTransparencyTileSize - 1) / kTransparencyTileSize;
+            const int32_t tileColumns =
+                (width + kTransparencyTileSize - 1)
+                / kTransparencyTileSize;
+            const int32_t tileRows =
+                (height + kTransparencyTileSize - 1)
+                / kTransparencyTileSize;
             std::vector<TransparentScreenTile> transparencyTiles(
                 size_t(tileColumns) * size_t(tileRows));
             for (int32_t ty = 0; ty < tileRows; ++ty)
             for (int32_t tx = 0; tx < tileColumns; ++tx)
             {
-                auto& tile = transparencyTiles[size_t(ty) * size_t(tileColumns) + size_t(tx)];
+                auto& tile =
+                    transparencyTiles[
+                        size_t(ty) * size_t(tileColumns)
+                        + size_t(tx)];
                 tile.x0 = tx * kTransparencyTileSize;
                 tile.y0 = ty * kTransparencyTileSize;
-                tile.x1 = std::min(width, tile.x0 + kTransparencyTileSize);
-                tile.y1 = std::min(height, tile.y0 + kTransparencyTileSize);
+                tile.x1 =
+                    std::min(
+                        width,
+                        tile.x0 + kTransparencyTileSize);
+                tile.y1 =
+                    std::min(
+                        height,
+                        tile.y0 + kTransparencyTileSize);
             }
 
-            // Assign each transparent quad only to the screen tiles it can
-            // touch. A near-plane crossing is conservatively full-viewport:
-            // missing one palette-filter fragment would be a correctness bug.
+            struct TransparentCameraPoint
+            {
+                float x{}, y{}, z{};
+            };
+            const float clipZ =
+                std::max(view.nearClip, 0.001f);
+            const float focalY =
+                foc * float(width) / float(height);
+            const auto toCamera =
+                [&](const Paint::FirstPersonVec3& world) {
+                    const Paint::FirstPersonVec3 delta{
+                        world.x - eye.x,
+                        world.y - eye.y,
+                        world.z - eye.z,
+                    };
+                    return TransparentCameraPoint{
+                        Paint::FpDot(delta, b.right),
+                        Paint::FpDot(delta, b.up),
+                        Paint::FpDot(delta, b.forward),
+                    };
+                };
+            const auto projectCameraPoint =
+                [&](const TransparentCameraPoint& p) {
+                    const float ndcX =
+                        p.x * foc / p.z;
+                    const float ndcY =
+                        p.y * focalY / p.z;
+                    return std::array<float, 2>{
+                        (0.5f + 0.5f * ndcX)
+                            * float(width),
+                        (0.5f - 0.5f * ndcY)
+                            * float(height),
+                    };
+                };
+
+            // Clip the two native quad triangles against the real near plane
+            // before screen binning. A crossing surface therefore occupies
+            // only tiles reached by its clipped polygon, never the full
+            // viewport merely because one original vertex was behind the eye.
             for (const auto* surface : streamedTransparent)
             {
-                bool fullViewport = false;
+                float minX =
+                    std::numeric_limits<float>::infinity();
+                float minY =
+                    std::numeric_limits<float>::infinity();
+                float maxX =
+                    -std::numeric_limits<float>::infinity();
+                float maxY =
+                    -std::numeric_limits<float>::infinity();
                 bool haveProjection = false;
-                float minX = float(width), minY = float(height);
-                float maxX = 0.0f, maxY = 0.0f;
-                for (const auto& vertex : surface->triangles)
+
+                for (size_t triangleStart :
+                     { size_t{ 0 }, size_t{ 3 } })
                 {
-                    const auto projected = Paint::ProjectFirstPersonPoint(
-                        view.camera, vertex.world, scene.dimensions,
-                        view.fieldOfViewDegrees, view.nearClip);
-                    if (!projected.has_value())
+                    std::array<TransparentCameraPoint, 3>
+                        input{};
+                    for (size_t i = 0; i < input.size(); ++i)
                     {
-                        fullViewport = true;
-                        break;
+                        input[i] = toCamera(
+                            surface->triangles[
+                                triangleStart + i].world);
                     }
-                    haveProjection = true;
-                    minX = std::min(minX, projected->x);
-                    minY = std::min(minY, projected->y);
-                    maxX = std::max(maxX, projected->x);
-                    maxY = std::max(maxY, projected->y);
+                    std::array<TransparentCameraPoint, 4>
+                        clipped{};
+                    size_t clippedCount = 0;
+                    for (size_t i = 0; i < input.size(); ++i)
+                    {
+                        const auto& current = input[i];
+                        const auto& next =
+                            input[(i + 1) % input.size()];
+                        const bool currentInside =
+                            current.z >= clipZ;
+                        const bool nextInside =
+                            next.z >= clipZ;
+                        if (currentInside)
+                            clipped[clippedCount++] = current;
+                        if (currentInside != nextInside)
+                        {
+                            const float t =
+                                (clipZ - current.z)
+                                / (next.z - current.z);
+                            clipped[clippedCount++] = {
+                                current.x
+                                    + (next.x - current.x) * t,
+                                current.y
+                                    + (next.y - current.y) * t,
+                                clipZ,
+                            };
+                        }
+                    }
+
+                    for (size_t i = 0;
+                         i < clippedCount; ++i)
+                    {
+                        const auto projected =
+                            projectCameraPoint(clipped[i]);
+                        haveProjection = true;
+                        minX = std::min(
+                            minX, projected[0]);
+                        minY = std::min(
+                            minY, projected[1]);
+                        maxX = std::max(
+                            maxX, projected[0]);
+                        maxY = std::max(
+                            maxY, projected[1]);
+                    }
                 }
 
-                int32_t x0 = 0, y0 = 0, x1 = width, y1 = height;
-                if (!fullViewport && haveProjection)
+                if (!haveProjection
+                    || maxX < 0.0f || maxY < 0.0f
+                    || minX >= float(width)
+                    || minY >= float(height))
+                    continue;
+
+                const int32_t x0 =
+                    std::clamp(
+                        int32_t(std::floor(minX)) - 1,
+                        0, width);
+                const int32_t y0 =
+                    std::clamp(
+                        int32_t(std::floor(minY)) - 1,
+                        0, height);
+                const int32_t x1 =
+                    std::clamp(
+                        int32_t(std::ceil(maxX)) + 1,
+                        0, width);
+                const int32_t y1 =
+                    std::clamp(
+                        int32_t(std::ceil(maxY)) + 1,
+                        0, height);
+                if (x1 <= x0 || y1 <= y0)
+                    continue;
+
+                const int32_t firstColumn =
+                    std::clamp(
+                        x0 / kTransparencyTileSize,
+                        0, tileColumns - 1);
+                const int32_t lastColumn =
+                    std::clamp(
+                        (x1 - 1) / kTransparencyTileSize,
+                        0, tileColumns - 1);
+                const int32_t firstRow =
+                    std::clamp(
+                        y0 / kTransparencyTileSize,
+                        0, tileRows - 1);
+                const int32_t lastRow =
+                    std::clamp(
+                        (y1 - 1) / kTransparencyTileSize,
+                        0, tileRows - 1);
+                for (int32_t ty = firstRow;
+                     ty <= lastRow; ++ty)
+                for (int32_t tx = firstColumn;
+                     tx <= lastColumn; ++tx)
                 {
-                    if (maxX < 0.0f || maxY < 0.0f || minX >= float(width) || minY >= float(height))
-                        continue;
-                    x0 = std::clamp(int32_t(std::floor(minX)) - 1, 0, width);
-                    y0 = std::clamp(int32_t(std::floor(minY)) - 1, 0, height);
-                    x1 = std::clamp(int32_t(std::ceil(maxX)) + 1, 0, width);
-                    y1 = std::clamp(int32_t(std::ceil(maxY)) + 1, 0, height);
-                    if (x1 <= x0 || y1 <= y0)
-                        continue;
+                    auto& tile =
+                        transparencyTiles[
+                            size_t(ty) * size_t(tileColumns)
+                            + size_t(tx)];
+                    tile.candidates.push_back({
+                        surface,
+                        std::max(x0, tile.x0),
+                        std::max(y0, tile.y0),
+                        std::min(x1, tile.x1),
+                        std::min(y1, tile.y1),
+                    });
                 }
-
-                const int32_t firstColumn = std::clamp(x0 / kTransparencyTileSize, 0, tileColumns - 1);
-                const int32_t lastColumn = std::clamp((std::max(x1, 1) - 1) / kTransparencyTileSize, 0, tileColumns - 1);
-                const int32_t firstRow = std::clamp(y0 / kTransparencyTileSize, 0, tileRows - 1);
-                const int32_t lastRow = std::clamp((std::max(y1, 1) - 1) / kTransparencyTileSize, 0, tileRows - 1);
-                for (int32_t ty = firstRow; ty <= lastRow; ++ty)
-                for (int32_t tx = firstColumn; tx <= lastColumn; ++tx)
-                    transparencyTiles[size_t(ty) * size_t(tileColumns) + size_t(tx)]
-                        .surfaces.push_back(surface);
             }
 
-            auto& front = output.GetFinalFramebuffer();
+            // Rectangle coverage deliberately overestimates real sprite
+            // coverage. Its maximum is therefore a safe upper bound on the
+            // number of logical transparent layers any pixel can contain.
+            const auto conservativeLayerLimit =
+                [](const TransparentScreenTile& tile) {
+                    const int32_t tileWidth =
+                        tile.x1 - tile.x0;
+                    const int32_t tileHeight =
+                        tile.y1 - tile.y0;
+                    if (tileWidth <= 0 || tileHeight <= 0
+                        || tile.candidates.empty())
+                        return size_t{ 0 };
+
+                    const int32_t stride = tileWidth + 1;
+                    std::vector<int32_t> overlap(
+                        size_t(tileWidth + 1)
+                            * size_t(tileHeight + 1),
+                        0);
+                    const auto at =
+                        [&](int32_t x, int32_t y)
+                            -> int32_t& {
+                            return overlap[
+                                size_t(y) * size_t(stride)
+                                + size_t(x)];
+                        };
+                    for (const auto& candidate :
+                         tile.candidates)
+                    {
+                        const int32_t x0 =
+                            candidate.x0 - tile.x0;
+                        const int32_t y0 =
+                            candidate.y0 - tile.y0;
+                        const int32_t x1 =
+                            candidate.x1 - tile.x0;
+                        const int32_t y1 =
+                            candidate.y1 - tile.y0;
+                        if (x1 <= x0 || y1 <= y0)
+                            continue;
+                        ++at(x0, y0);
+                        --at(x1, y0);
+                        --at(x0, y1);
+                        ++at(x1, y1);
+                    }
+
+                    for (int32_t y = 0;
+                         y <= tileHeight; ++y)
+                    for (int32_t x = 1;
+                         x <= tileWidth; ++x)
+                    {
+                        at(x, y) += at(x - 1, y);
+                    }
+                    for (int32_t x = 0;
+                         x <= tileWidth; ++x)
+                    for (int32_t y = 1;
+                         y <= tileHeight; ++y)
+                    {
+                        at(x, y) += at(x, y - 1);
+                    }
+
+                    int32_t maximum = 0;
+                    for (int32_t y = 0;
+                         y < tileHeight; ++y)
+                    for (int32_t x = 0;
+                         x < tileWidth; ++x)
+                    {
+                        maximum =
+                            std::max(maximum, at(x, y));
+                    }
+                    return size_t(
+                        std::max(maximum, 0));
+                };
+
+            auto& front = output.GetFinalFramebuffer();            auto& front = output.GetFinalFramebuffer();
             if (!_background || _background->GetWidth()!=GLuint(screenWidth) || _background->GetHeight()!=GLuint(screenHeight))
             {
                 _background = std::make_unique<OpenGLFramebuffer>(screenWidth,screenHeight,false,true,false);
@@ -765,13 +976,18 @@ void main() {
             glCall(glBindBuffer,GL_ARRAY_BUFFER,_vbo);
             for (const auto& tile : transparencyTiles)
             {
-                if (tile.surfaces.empty())
+                if (tile.candidates.empty())
                     continue;
 
                 std::vector<GPUVertex> tileVertices;
-                tileVertices.reserve(tile.surfaces.size() * 6);
-                for (const auto* surface : tile.surfaces)
-                    appendVertices(tileVertices, *surface);
+                tileVertices.reserve(
+                    tile.candidates.size() * 6);
+                for (const auto& candidate :
+                     tile.candidates)
+                {
+                    appendVertices(
+                        tileVertices, *candidate.surface);
+                }
                 if (tileVertices.empty())
                     continue;
 
@@ -781,10 +997,13 @@ void main() {
                     GLsizeiptr(tileVertices.size()*sizeof(GPUVertex)),
                     tileVertices.data(),GL_STREAM_DRAW);
 
-                // Screen-space tiling bounds candidate count without changing
-                // semantics. Every local candidate is peeled exactly; there is
-                // no global six-layer approximation.
-                const size_t logicalPasses = tile.surfaces.size();
+                // The rectangle-overlap maximum is conservative: transparent
+                // pixels can only reduce it. Exact physical-depth/native-order
+                // peeling is retained for every layer that can exist.
+                const size_t logicalPasses =
+                    std::min(
+                        tile.candidates.size(),
+                        conservativeLayerLimit(tile));
                 for(size_t pass=0; pass<logicalPasses; ++pass)
                 {
                     auto& physicalLayer = *_peelDepthLayers[size_t(pass&1)];

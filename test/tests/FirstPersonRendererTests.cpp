@@ -373,12 +373,53 @@ TEST(FirstPersonTrackTrajectoryTest, MotionTemplateIsCachedButDoesNotClaimRailPr
     ASSERT_NE(a, nullptr);
     EXPECT_EQ(a, b);
     ASSERT_FALSE(a->points.empty());
+    EXPECT_TRUE(
+        FirstPersonTrackTrajectoryTemplateSamplesContinuous(
+            OpenRCT2::TrackElemType::flat, 0));
 
     const FirstPersonTrackRailProfile profile{};
     EXPECT_FALSE(profile.verified);
     EXPECT_FLOAT_EQ(profile.halfGauge, 0.0f);
     EXPECT_FLOAT_EQ(profile.halfWidth, 0.0f);
     EXPECT_FLOAT_EQ(profile.halfHeight, 0.0f);
+}
+
+TEST(FirstPersonTrackProfileCalibrationTest, IncrementalSearchHonoursCandidateBudget)
+{
+    const auto* trajectory =
+        GetFirstPersonTrackTrajectoryTemplate(
+            OpenRCT2::TrackElemType::flat, 0);
+    ASSERT_NE(trajectory, nullptr);
+
+    FirstPersonTrackRailProfile source{};
+    source.halfGauge = 6.0f;
+    source.halfWidth = 1.0f;
+    source.halfHeight = 1.0f;
+    source.verticalOffset = 0.0f;
+
+    FirstPersonTrackArtworkObservation observation{};
+    const auto channel =
+        FirstPersonTrackPixelChannel::trackRailPalette;
+    observation.channelViews[
+        static_cast<size_t>(channel)] =
+        BuildFirstPersonTrackRailSilhouettes(
+            *trajectory, { 0.0f, 0.0f, 0.0f },
+            source);
+    ASSERT_TRUE(
+        FirstPersonTrackObservationHasCompleteChannel(
+            observation));
+
+    FirstPersonTrackProfileSearchState state{};
+    EXPECT_FALSE(
+        StepFirstPersonTrackRailProfileFromArtwork(
+            observation, *trajectory,
+            { 0.0f, 0.0f, 0.0f },
+            state, 1));
+    EXPECT_TRUE(state.initialized);
+    EXPECT_EQ(
+        state.phase,
+        FirstPersonTrackProfileSearchState::Phase::coarse);
+    EXPECT_EQ(state.candidateIndex, 1u);
 }
 
 TEST(FirstPersonTrackTrajectoryTest, StandardSamplesMatchVehicleMotionSource)
@@ -720,6 +761,19 @@ TEST(FirstPersonWalkingTest, NativeStepAllowedButCliffRejected)
     EXPECT_TRUE(FirstPersonWalkingHeightTransitionAllowed(108.0f, 100.0f));
     EXPECT_FALSE(FirstPersonWalkingHeightTransitionAllowed(100.0f, 116.0f));
     EXPECT_FALSE(FirstPersonWalkingHeightTransitionAllowed(116.0f, 100.0f));
+}
+
+TEST(FirstPersonTerrainCacheTest, DirtyRevalidationRestoresPacketMembership)
+{
+    EXPECT_TRUE(
+        FirstPersonTerrainRevalidationNeedsRegionRebuild(
+            true, false));
+    EXPECT_TRUE(
+        FirstPersonTerrainRevalidationNeedsRegionRebuild(
+            false, true));
+    EXPECT_FALSE(
+        FirstPersonTerrainRevalidationNeedsRegionRebuild(
+            false, false));
 }
 
 TEST(FirstPersonProjectionTest, ForwardPointProjectsToCentre)

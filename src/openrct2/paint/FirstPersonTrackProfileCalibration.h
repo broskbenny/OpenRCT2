@@ -958,159 +958,267 @@ namespace OpenRCT2::Paint
             && fit.score >= 0.60f;
     }
 
+    struct FirstPersonTrackProfileSearchState
+    {
+        enum class Phase : uint8_t
+        {
+            coarse,
+            refine,
+            complete,
+        };
+
+        bool initialized = false;
+        Phase phase = Phase::coarse;
+        size_t candidateIndex = 0;
+        bool bestValid = false;
+        float bestSelectionScore =
+            -std::numeric_limits<float>::infinity();
+        FirstPersonTrackRailProfile bestProfile{};
+        FirstPersonTrackProfileFit bestFit{};
+        FirstPersonTrackRailProfile refinementBase{};
+        FirstPersonTrackProfileCalibrationResult result{};
+    };
+
+    inline void ConsiderFirstPersonTrackProfileCandidate(
+        const FirstPersonTrackArtworkObservation& observation,
+        const FirstPersonTrackTrajectory& trajectory,
+        const FirstPersonVec3& anchor,
+        FirstPersonTrackProfileSearchState& state,
+        float halfGauge, float halfWidth,
+        float halfHeight, float verticalOffset)
+    {
+        if (!(halfGauge >= 1.5f && halfGauge <= 15.0f)
+            || !(halfWidth >= 0.35f && halfWidth <= 4.0f)
+            || !(halfHeight >= 0.25f && halfHeight <= 4.0f)
+            || halfGauge <= halfWidth + 0.5f
+            || !(verticalOffset >= -20.0f
+                && verticalOffset <= 20.0f))
+            return;
+
+        FirstPersonTrackRailProfile profile{};
+        profile.halfGauge = halfGauge;
+        profile.halfWidth = halfWidth;
+        profile.halfHeight = halfHeight;
+        profile.verticalOffset = verticalOffset;
+
+        const auto candidate =
+            BuildFirstPersonTrackRailSilhouettes(
+                trajectory, anchor, profile);
+        const auto negativeRail =
+            BuildFirstPersonTrackSingleRailSilhouettes(
+                trajectory, anchor, profile,
+                -profile.halfGauge);
+        const auto positiveRail =
+            BuildFirstPersonTrackSingleRailSilhouettes(
+                trajectory, anchor, profile,
+                profile.halfGauge);
+        const auto fit =
+            BestFirstPersonTrackProfileFit(
+                observation, candidate,
+                negativeRail, positiveRail);
+        if (!fit.valid)
+            return;
+
+        const float anisotropyPenalty =
+            0.006f * std::abs(halfHeight - halfWidth);
+        const float selectionScore =
+            fit.score - anisotropyPenalty;
+        const float oldComplexity =
+            state.bestProfile.halfWidth
+            + state.bestProfile.halfHeight
+            + state.bestProfile.halfGauge * 0.01f;
+        const float newComplexity =
+            halfWidth + halfHeight
+            + halfGauge * 0.01f;
+        if (!state.bestValid
+            || selectionScore
+                > state.bestSelectionScore + 1e-5f
+            || (std::abs(
+                    selectionScore
+                    - state.bestSelectionScore)
+                    <= 1e-5f
+                && newComplexity < oldComplexity))
+        {
+            state.bestValid = true;
+            state.bestSelectionScore = selectionScore;
+            state.bestProfile = profile;
+            state.bestFit = fit;
+        }
+    }
+
+    [[nodiscard]] inline bool
+        StepFirstPersonTrackRailProfileFromArtwork(
+            const FirstPersonTrackArtworkObservation& observation,
+            const FirstPersonTrackTrajectory& trajectory,
+            const FirstPersonVec3& anchor,
+            FirstPersonTrackProfileSearchState& state,
+            size_t candidateBudget)
+    {
+        constexpr size_t kCoarseGaugeCount = 7;
+        constexpr size_t kCoarseWidthCount = 4;
+        constexpr size_t kCoarseHeightCount = 4;
+        constexpr size_t kCoarseOffsetCount = 9;
+        constexpr size_t kCoarseCandidates =
+            kCoarseGaugeCount * kCoarseWidthCount
+            * kCoarseHeightCount * kCoarseOffsetCount;
+        constexpr size_t kRefineGaugeCount = 5;
+        constexpr size_t kRefineWidthCount = 7;
+        constexpr size_t kRefineHeightCount = 7;
+        constexpr size_t kRefineOffsetCount = 5;
+        constexpr size_t kRefineCandidates =
+            kRefineGaugeCount * kRefineWidthCount
+            * kRefineHeightCount * kRefineOffsetCount;
+        static constexpr std::array<float, 4>
+            kCoarseHeights{ 0.5f, 1.0f, 2.0f, 3.0f };
+
+        if (state.phase
+            == FirstPersonTrackProfileSearchState::Phase::complete)
+            return true;
+
+        if (!state.initialized)
+        {
+            state.initialized = true;
+            if (trajectory.points.size() < 2
+                || !FirstPersonTrackObservationHasCompleteChannel(
+                    observation))
+            {
+                state.phase =
+                    FirstPersonTrackProfileSearchState::Phase::complete;
+                return true;
+            }
+        }
+
+        const auto completeSearch = [&]() {
+            if (state.bestValid
+                && IsFirstPersonTrackCalibrationFitReliable(
+                    state.bestFit))
+            {
+                auto profile = state.bestProfile;
+                profile.sourceChannelMask =
+                    FirstPersonTrackPixelChannelBit(
+                        state.bestFit.channel);
+                DeriveFirstPersonTrackRailMaterial(
+                    profile, observation, trajectory,
+                    anchor, state.bestFit.channel);
+                state.result.valid = true;
+                state.result.profile = profile;
+                state.result.fit = state.bestFit;
+            }
+            state.phase =
+                FirstPersonTrackProfileSearchState::Phase::complete;
+        };
+
+        const auto advancePhase = [&]() {
+            if (state.phase
+                    == FirstPersonTrackProfileSearchState::Phase::coarse
+                && state.candidateIndex >= kCoarseCandidates)
+            {
+                if (!state.bestValid)
+                {
+                    completeSearch();
+                    return;
+                }
+                state.refinementBase = state.bestProfile;
+                state.phase =
+                    FirstPersonTrackProfileSearchState::Phase::refine;
+                state.candidateIndex = 0;
+            }
+            if (state.phase
+                    == FirstPersonTrackProfileSearchState::Phase::refine
+                && state.candidateIndex >= kRefineCandidates)
+            {
+                completeSearch();
+            }
+        };
+
+        advancePhase();
+        while (candidateBudget > 0
+            && state.phase
+                != FirstPersonTrackProfileSearchState::Phase::complete)
+        {
+            size_t index = state.candidateIndex++;
+            float halfGauge = 0.0f;
+            float halfWidth = 0.0f;
+            float halfHeight = 0.0f;
+            float verticalOffset = 0.0f;
+
+            if (state.phase
+                == FirstPersonTrackProfileSearchState::Phase::coarse)
+            {
+                const size_t offsetIndex =
+                    index % kCoarseOffsetCount;
+                index /= kCoarseOffsetCount;
+                const size_t heightIndex =
+                    index % kCoarseHeightCount;
+                index /= kCoarseHeightCount;
+                const size_t widthIndex =
+                    index % kCoarseWidthCount;
+                index /= kCoarseWidthCount;
+                const size_t gaugeIndex =
+                    index % kCoarseGaugeCount;
+                halfGauge =
+                    2.0f + 2.0f * float(gaugeIndex);
+                halfWidth =
+                    0.5f + float(widthIndex);
+                halfHeight =
+                    kCoarseHeights[heightIndex];
+                verticalOffset =
+                    -16.0f + 4.0f * float(offsetIndex);
+            }
+            else
+            {
+                const size_t offsetIndex =
+                    index % kRefineOffsetCount;
+                index /= kRefineOffsetCount;
+                const size_t heightIndex =
+                    index % kRefineHeightCount;
+                index /= kRefineHeightCount;
+                const size_t widthIndex =
+                    index % kRefineWidthCount;
+                index /= kRefineWidthCount;
+                const size_t gaugeIndex =
+                    index % kRefineGaugeCount;
+                halfGauge =
+                    state.refinementBase.halfGauge
+                    - 1.0f + 0.5f * float(gaugeIndex);
+                halfWidth =
+                    state.refinementBase.halfWidth
+                    - 0.75f + 0.25f * float(widthIndex);
+                halfHeight =
+                    state.refinementBase.halfHeight
+                    - 0.75f + 0.25f * float(heightIndex);
+                verticalOffset =
+                    state.refinementBase.verticalOffset
+                    - 2.0f + float(offsetIndex);
+            }
+
+            ConsiderFirstPersonTrackProfileCandidate(
+                observation, trajectory, anchor, state,
+                halfGauge, halfWidth,
+                halfHeight, verticalOffset);
+            --candidateBudget;
+            advancePhase();
+        }
+        return state.phase
+            == FirstPersonTrackProfileSearchState::Phase::complete;
+    }
+
     [[nodiscard]] inline FirstPersonTrackProfileCalibrationResult
         FitFirstPersonTrackRailProfileFromArtwork(
             const FirstPersonTrackArtworkObservation& observation,
             const FirstPersonTrackTrajectory& trajectory,
             const FirstPersonVec3& anchor)
     {
-        FirstPersonTrackProfileCalibrationResult result{};
-        if (trajectory.points.size() < 2
-            || !FirstPersonTrackObservationHasCompleteChannel(
-                observation))
-            return result;
-
-        struct SearchResult
+        FirstPersonTrackProfileSearchState state{};
+        while (!StepFirstPersonTrackRailProfileFromArtwork(
+            observation, trajectory, anchor, state, 256))
         {
-            bool valid = false;
-            float selectionScore =
-                -std::numeric_limits<float>::infinity();
-            FirstPersonTrackRailProfile profile{};
-            FirstPersonTrackProfileFit fit{};
-        };
-        SearchResult best{};
-
-        const auto tryCandidate = [&](
-            float halfGauge, float halfWidth,
-            float halfHeight, float verticalOffset,
-            SearchResult& destination) {
-            if (!(halfGauge >= 1.5f
-                    && halfGauge <= 15.0f)
-                || !(halfWidth >= 0.35f
-                    && halfWidth <= 4.0f)
-                || !(halfHeight >= 0.25f
-                    && halfHeight <= 4.0f)
-                || halfGauge <= halfWidth + 0.5f
-                || !(verticalOffset >= -20.0f
-                    && verticalOffset <= 20.0f))
-                return;
-
-            FirstPersonTrackRailProfile profile{};
-            profile.halfGauge = halfGauge;
-            profile.halfWidth = halfWidth;
-            profile.halfHeight = halfHeight;
-            profile.verticalOffset = verticalOffset;
-
-            const auto candidate =
-                BuildFirstPersonTrackRailSilhouettes(
-                    trajectory, anchor, profile);
-            const auto negativeRail =
-                BuildFirstPersonTrackSingleRailSilhouettes(
-                    trajectory, anchor, profile,
-                    -profile.halfGauge);
-            const auto positiveRail =
-                BuildFirstPersonTrackSingleRailSilhouettes(
-                    trajectory, anchor, profile,
-                    profile.halfGauge);
-            const auto fit =
-                BestFirstPersonTrackProfileFit(
-                    observation, candidate,
-                    negativeRail, positiveRail);
-            if (!fit.valid)
-                return;
-
-            // Height is independently observable, but extra section anisotropy
-            // must earn its freedom. A small regularizer favours the simpler
-            // square section only when the multi-view evidence is effectively
-            // tied.
-            const float anisotropyPenalty =
-                0.006f
-                * std::abs(halfHeight - halfWidth);
-            const float selectionScore =
-                fit.score - anisotropyPenalty;
-            const float oldComplexity =
-                destination.profile.halfWidth
-                + destination.profile.halfHeight
-                + destination.profile.halfGauge * 0.01f;
-            const float newComplexity =
-                halfWidth + halfHeight
-                + halfGauge * 0.01f;
-            if (!destination.valid
-                || selectionScore
-                    > destination.selectionScore + 1e-5f
-                || (std::abs(
-                        selectionScore
-                        - destination.selectionScore)
-                        <= 1e-5f
-                    && newComplexity < oldComplexity))
-            {
-                destination.valid = true;
-                destination.selectionScore =
-                    selectionScore;
-                destination.profile = profile;
-                destination.fit = fit;
-            }
-        };
-
-        for (float halfGauge = 2.0f;
-             halfGauge <= 14.0f; halfGauge += 2.0f)
-        for (float halfWidth = 0.5f;
-             halfWidth <= 3.5f; halfWidth += 1.0f)
-        for (const float halfHeight :
-            { 0.5f, 1.0f, 2.0f, 3.0f })
-        for (float verticalOffset = -16.0f;
-             verticalOffset <= 16.0f;
-             verticalOffset += 4.0f)
-        {
-            tryCandidate(
-                halfGauge, halfWidth, halfHeight,
-                verticalOffset, best);
         }
-        if (!best.valid)
-            return result;
-
-        SearchResult refined = best;
-        for (float halfGauge =
-                 best.profile.halfGauge - 1.0f;
-             halfGauge <= best.profile.halfGauge + 1.0f;
-             halfGauge += 0.5f)
-        for (float halfWidth =
-                 best.profile.halfWidth - 0.75f;
-             halfWidth <= best.profile.halfWidth + 0.75f;
-             halfWidth += 0.25f)
-        for (float halfHeight =
-                 best.profile.halfHeight - 0.75f;
-             halfHeight <= best.profile.halfHeight + 0.75f;
-             halfHeight += 0.25f)
-        for (float verticalOffset =
-                 best.profile.verticalOffset - 2.0f;
-             verticalOffset
-                 <= best.profile.verticalOffset + 2.0f;
-             verticalOffset += 1.0f)
-        {
-            tryCandidate(
-                halfGauge, halfWidth, halfHeight,
-                verticalOffset, refined);
-        }
-
-        if (!refined.valid
-            || !IsFirstPersonTrackCalibrationFitReliable(
-                refined.fit))
-            return result;
-
-        refined.profile.sourceChannelMask =
-            FirstPersonTrackPixelChannelBit(
-                refined.fit.channel);
-        DeriveFirstPersonTrackRailMaterial(
-            refined.profile, observation, trajectory,
-            anchor, refined.fit.channel);
-        result.valid = true;
-        result.profile = refined.profile;
-        result.fit = refined.fit;
-        return result;
+        return state.result;
     }
 
     [[nodiscard]] inline FirstPersonTrackProfileFit
+        ValidateFirstPersonTrackRailProfileAgainstArtwork(    [[nodiscard]] inline FirstPersonTrackProfileFit
         ValidateFirstPersonTrackRailProfileAgainstArtwork(
             const FirstPersonTrackArtworkObservation& observation,
             const FirstPersonTrackTrajectory& trajectory,

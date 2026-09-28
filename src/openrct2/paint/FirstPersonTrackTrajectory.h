@@ -151,6 +151,27 @@ namespace OpenRCT2::Paint
         return true;
     }
 
+    [[nodiscard]] inline bool
+        FirstPersonTrackTrajectoryTemplateSamplesContinuous(
+            TrackElemType type, uint8_t direction)
+    {
+        const size_t key =
+            size_t(EnumValue(type)) * kNumOrthogonalDirections
+            + (direction & 3);
+        static std::unordered_map<size_t, bool> cache;
+        if (const auto found = cache.find(key);
+            found != cache.end())
+            return found->second;
+
+        const auto* trajectory =
+            GetFirstPersonTrackTrajectoryTemplate(type, direction);
+        const bool continuous = trajectory != nullptr
+            && FirstPersonTrackTrajectorySamplesContinuous(
+                *trajectory);
+        cache.emplace(key, continuous);
+        return continuous;
+    }
+
     [[nodiscard]] inline float FirstPersonTrackTrajectoryEndpointGap(
         const FirstPersonTrackTrajectory& a, const FirstPersonTrackTrajectory& b)
     {

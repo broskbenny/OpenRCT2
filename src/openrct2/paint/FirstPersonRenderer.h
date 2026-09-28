@@ -121,6 +121,7 @@ namespace OpenRCT2::Paint
     struct FirstPersonStaticRegion
     {
         uint64_t key{};
+        uint64_t sceneEpoch{};
         uint64_t generation{};
         FirstPersonVec3 center{};
         float radius{};
@@ -166,6 +167,12 @@ namespace OpenRCT2::Paint
     [[nodiscard]] bool IsFirstPersonEntityPaintRoot(const ::PaintStruct& root);
     [[nodiscard]] bool FirstPersonVerticalTunnelCutsTerrain(
         int32_t terrainBaseZ, uint8_t verticalTunnelHeight);
+    [[nodiscard]] constexpr bool
+        FirstPersonTerrainRevalidationNeedsRegionRebuild(
+            bool wasDirty, bool geometryChanged)
+    {
+        return wasDirty || geometryChanged;
+    }
 
     // Authoritative full-tile wall geometry shared by rendering and walking
     // collision. Wall slope values are the native EDGE_SLOPE values stored in
