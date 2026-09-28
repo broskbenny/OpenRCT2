@@ -73,6 +73,9 @@ namespace OpenRCT2::Paint
 {
     namespace
     {
+        static std::unordered_map<uint16_t, CoordsXY>
+            _passengerAnchorSourceTiles;
+
 
         float Dot(FirstPersonVec3 a, FirstPersonVec3 b)
         {
@@ -5878,6 +5881,130 @@ namespace OpenRCT2::Paint
 
     } // namespace
 
+    std::optional<PassengerPaintAnchor>
+        CaptureFirstPersonPassengerPaintAnchor(
+            const Vehicle& vehicle, uint8_t seatIndex)
+    {
+        return CaptureFirstPersonPassengerPaintAnchor(
+            vehicle, seatIndex,
+            FirstPersonPassengerPaintInterpolation{});
+    }
+
+    std::optional<PassengerPaintAnchor>
+        CaptureFirstPersonPassengerPaintAnchor(
+            const Vehicle& vehicle, uint8_t seatIndex,
+            const FirstPersonPassengerPaintInterpolation& interpolation)
+    {
+        if (seatIndex >= 32)
+            return std::nullopt;
+        const auto* ride = vehicle.GetRide();
+        if (ride == nullptr
+            || !ride->getRideTypeDescriptor().flags.has(
+                RtdFlag::isFlatRide))
+            return std::nullopt;
+
+        const auto tryTile =
+            [&](CoordsXY tile)
+                -> std::optional<PassengerPaintAnchor> {
+                if (!MapIsLocationValid(tile))
+                    return std::nullopt;
+
+                const auto projected =
+                    Translate3DTo2DWithZ(
+                        0,
+                        {
+                            tile.x + kCoordsXYHalfTile,
+                            tile.y + kCoordsXYHalfTile,
+                            vehicle.TrackLocation.z,
+                        });
+                Drawing::RenderTarget target{};
+                target.x = projected.x - 2048;
+                target.y = projected.y - 2048;
+                target.width = 4096;
+                target.height = 4096;
+                target.cullingX = target.x;
+                target.cullingY = target.y;
+                target.cullingWidth = target.width;
+                target.cullingHeight = target.height;
+                target.zoom_level = ZoomLevel{ 0 };
+
+                auto* session =
+                    PaintSessionAlloc(target, 0, 0);
+                if (session == nullptr)
+                    return std::nullopt;
+                PassengerPaintAnchor anchor{};
+                session->CurrentSource =
+                    PaintStructSource::tile;
+                session->FirstPersonPassengerAnchorSink =
+                    &anchor;
+                session->FirstPersonPassengerAnchorEntity =
+                    const_cast<Vehicle*>(&vehicle);
+                session->FirstPersonPassengerAnchorSeatIndex =
+                    seatIndex;
+                session->FirstPersonPassengerInterpolation =
+                    interpolation;
+                TileElementPaintSetup(*session, tile);
+                PaintSessionFree(session);
+
+                if (anchor.Entity != &vehicle
+                    || (anchor.seatMask
+                        & (uint32_t{ 1 }
+                            << seatIndex))
+                        == 0)
+                    return std::nullopt;
+                return anchor;
+            };
+
+        const uint16_t key = vehicle.id.ToUnderlying();
+        if (const auto cached =
+                _passengerAnchorSourceTiles.find(key);
+            cached != _passengerAnchorSourceTiles.end())
+        {
+            if (const auto anchor =
+                    tryTile(cached->second);
+                anchor.has_value())
+                return anchor;
+            _passengerAnchorSourceTiles.erase(cached);
+        }
+
+        const CoordsXY origin{
+            vehicle.TrackLocation.x,
+            vehicle.TrackLocation.y
+        };
+        const auto originTile = origin.toTileStart();
+        constexpr int32_t kSearchRadius = 4;
+        for (int32_t radius = 0;
+             radius <= kSearchRadius; ++radius)
+        {
+            for (int32_t dy = -radius;
+                 dy <= radius; ++dy)
+            for (int32_t dx = -radius;
+                 dx <= radius; ++dx)
+            {
+                if (radius != 0
+                    && std::max(
+                        std::abs(dx),
+                        std::abs(dy)) != radius)
+                    continue;
+                const CoordsXY tile{
+                    originTile.x
+                        + dx * kCoordsXYStep,
+                    originTile.y
+                        + dy * kCoordsXYStep,
+                };
+                if (const auto anchor =
+                        tryTile(tile);
+                    anchor.has_value())
+                {
+                    _passengerAnchorSourceTiles[key] =
+                        tile;
+                    return anchor;
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
     std::optional<uint64_t>
         EnsureFirstPersonLargeSceneryPhysicalProxy(
             CoordsXY tile, const LargeSceneryElement& large)
@@ -6023,6 +6150,7 @@ namespace OpenRCT2::Paint
         _staticPaintCache.clear();
         _reconstructionRotations.clear();
         _entityRotations.clear();
+        _passengerAnchorSourceTiles.clear();
         _dynamicEntitySpatialCache = {};
         _trackTrajectoryCache.clear();
         _trackTrajectoryGroupsByRegion.clear();
