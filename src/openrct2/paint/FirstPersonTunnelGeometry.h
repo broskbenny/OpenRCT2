@@ -5,6 +5,7 @@
 #pragma once
 
 #include "FirstPersonMath.h"
+#include "FirstPersonTrackTrajectory.h"
 #include "tile_element/Paint.Tunnel.h"
 
 #include "../world/Location.hpp"
@@ -327,6 +328,66 @@ namespace OpenRCT2::Paint
             { { br, ar, art, brt } },
             { { alt, blt, brt, art } },
         } };
+    }
+
+    struct FirstPersonTunnelRouteQuad
+    {
+        FirstPersonTunnelQuad quad{};
+        FirstPersonVec3 midpoint{};
+    };
+
+    [[nodiscard]] inline bool
+        FirstPersonTunnelClearanceUnderTerrain(
+            FirstPersonVec3 point, float ceilingOffset)
+    {
+        const CoordsXY position{
+            int32_t(std::lround(point.x)),
+            int32_t(std::lround(point.y)),
+        };
+        if (!MapIsLocationValid(position))
+            return false;
+        return float(TileElementHeight(position))
+            > point.z + ceilingOffset + 0.5f;
+    }
+
+    [[nodiscard]] inline std::vector<FirstPersonTunnelRouteQuad>
+        BuildFirstPersonTrackTunnelRoute(
+            const FirstPersonTrackTrajectory& trajectory,
+            float halfWidth, float floorOffset,
+            float ceilingOffset)
+    {
+        std::vector<FirstPersonTunnelRouteQuad> result;
+        if (trajectory.points.size() < 2
+            || !(halfWidth > 0.0f)
+            || !(ceilingOffset > floorOffset))
+            return result;
+
+        result.reserve(
+            (trajectory.points.size() - 1) * 3);
+        for (size_t i = 1;
+             i < trajectory.points.size(); ++i)
+        {
+            const auto& a = trajectory.points[i - 1];
+            const auto& b = trajectory.points[i];
+            const FirstPersonVec3 midpoint{
+                (a.position.x + b.position.x) * 0.5f,
+                (a.position.y + b.position.y) * 0.5f,
+                (a.position.z + b.position.z) * 0.5f,
+            };
+            if (!FirstPersonTunnelClearanceUnderTerrain(
+                    midpoint, ceilingOffset))
+                continue;
+
+            const auto quads =
+                BuildFirstPersonTunnelSweepSegment(
+                    a.position, b.position,
+                    a.basis.right, b.basis.right,
+                    halfWidth, floorOffset,
+                    ceilingOffset);
+            for (const auto& quad : quads)
+                result.push_back({ quad, midpoint });
+        }
+        return result;
     }
 
     template<typename TunnelContainer>
