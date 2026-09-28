@@ -6,6 +6,7 @@
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonPhysicalProxy.h"
 #include "FirstPersonTrackTrajectory.h"
+#include "FirstPersonTunnelGeometry.h"
 #include "FirstPersonTrackProfileCalibration.h"
 #include "FirstPersonVehicleBodyHull.h"
 #include "FirstPersonVehiclePose.h"
@@ -2301,6 +2302,7 @@ namespace OpenRCT2::Paint
             uint8_t verticalTunnelHeight = 0xFF;
             std::vector<TunnelEntry> leftTunnels;
             std::vector<TunnelEntry> rightTunnels;
+            std::vector<FirstPersonTunnelPortal> portals;
             std::vector<FirstPersonSurface> residentSurfaces;
             std::vector<FirstPersonSurface> streamedSurfaces;
         };
@@ -5307,6 +5309,43 @@ namespace OpenRCT2::Paint
                         addPhysicalPrimitive(primitive);
                 }
 
+                if (const auto portalCache =
+                        _staticPaintCache.find(tileKey);
+                    portalCache != _staticPaintCache.end()
+                    && portalCache->second.valid
+                    && !portalCache->second.dirty
+                    && portalCache->second.hasSelectedRotation)
+                {
+                    const auto& portalVariant =
+                        portalCache->second.rotations[
+                            portalCache->second.selectedRotation & 3u];
+                    uint8_t portalColour =
+                        static_cast<uint8_t>(
+                            Drawing::getColourMap(
+                                Drawing::Colour::darkBrown).midDark);
+                    if (portalColour == 0)
+                        portalColour = static_cast<uint8_t>(
+                            Drawing::PaletteIndex::trackRails1);
+                    for (const auto& portal :
+                         portalVariant.portals)
+                    {
+                        for (const auto& quad :
+                             BuildFirstPersonTunnelPortalTerrainWall(
+                                 portal))
+                        {
+                            FirstPersonSurface surface{};
+                            surface.solidColour = portalColour;
+                            surface.gpuRegion = regionKey;
+                            std::array<FirstPersonVertex, 4> vertices{};
+                            for (size_t i = 0; i < 4; ++i)
+                                vertices[i].world =
+                                    quad.corners[i];
+                            EmitQuad(surface, vertices);
+                            addSurface(surface);
+                        }
+                    }
+                }
+
                 const auto cacheIt = _staticPaintCache.find(tileKey);
                 if (cacheIt == _staticPaintCache.end() || !cacheIt->second.valid
                     || cacheIt->second.dirty || cacheIt->second.animated)
@@ -5584,6 +5623,7 @@ namespace OpenRCT2::Paint
                         variant.verticalTunnelHeight = 0xFF;
                         variant.leftTunnels.clear();
                         variant.rightTunnels.clear();
+                        variant.portals.clear();
                         variant.residentSurfaces.clear();
                         variant.streamedSurfaces.clear();
                     }
@@ -5831,6 +5871,19 @@ namespace OpenRCT2::Paint
                                     session->LeftTunnels.begin(), session->LeftTunnels.end());
                                 variant.rightTunnels.assign(
                                     session->RightTunnels.begin(), session->RightTunnels.end());
+                                variant.portals.clear();
+                                AppendFirstPersonTunnelPortals(
+                                    variant.portals,
+                                    item.position,
+                                    FirstPersonLeftTunnelWorldEdge(
+                                        rotation),
+                                    variant.leftTunnels);
+                                AppendFirstPersonTunnelPortals(
+                                    variant.portals,
+                                    item.position,
+                                    FirstPersonRightTunnelWorldEdge(
+                                        rotation),
+                                    variant.rightTunnels);
 
                                 if (auto terrainIt = _terrainCache.entries.find(item.key);
                                     terrainIt != _terrainCache.entries.end())
