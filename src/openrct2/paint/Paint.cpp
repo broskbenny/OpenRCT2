@@ -899,6 +899,43 @@ void PaintSessionPublishFirstPersonPassengerAnchor(
     };
 }
 
+void PaintSessionPublishFirstPersonPassengerLocalAnchor(
+    PaintSession& session, EntityBase& entity,
+    uint32_t seatMask, float localX, float localY, float localZ,
+    bool hasEyeOffset, float eyeForward,
+    float eyeRight, float eyeUp,
+    bool hasLocalPitch, float localPitch)
+{
+    const uint8_t rotation =
+        DirectionFlipXAxis(session.CurrentRotation) & 3u;
+    float rotatedX = localX;
+    float rotatedY = localY;
+    switch (rotation)
+    {
+        case 1:
+            rotatedX = localY;
+            rotatedY = -localX;
+            break;
+        case 2:
+            rotatedX = -localX;
+            rotatedY = -localY;
+            break;
+        case 3:
+            rotatedX = -localY;
+            rotatedY = localX;
+            break;
+        default:
+            break;
+    }
+    PaintSessionPublishFirstPersonPassengerAnchor(
+        session, entity, seatMask,
+        float(session.SpritePosition.x) + rotatedX,
+        float(session.SpritePosition.y) + rotatedY,
+        localZ,
+        hasEyeOffset, eyeForward, eyeRight, eyeUp,
+        hasLocalPitch, localPitch);
+}
+
 void PaintSessionAddFirstPersonPhysicalBox(
     PaintSession& session,
     FirstPersonPaintPhysicalPrimitiveKind kind,
