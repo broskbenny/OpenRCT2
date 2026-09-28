@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 using namespace OpenRCT2;
 using namespace OpenRCT2::Drawing;
