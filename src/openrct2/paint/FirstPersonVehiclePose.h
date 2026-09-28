@@ -6,8 +6,8 @@
 
 #include "FirstPersonMath.h"
 #include "FirstPersonPassengerAssetCalibration.h"
-#include "FirstPersonPeriodicPassengerMotion.h"
 #include "FirstPersonSwingAssetCalibration.h"
+#include "Paint.h"
 #include "../entity/EntityTweener.h"
 #include "../entity/Yaw.hpp"
 #include "../ride/Angles.h"
@@ -351,6 +351,7 @@ namespace OpenRCT2::Paint
         uint8_t seatIndex = 0;
         uint8_t seatingRow = 0;
         bool rideSpecificTransform = false;
+        bool supported = true;
     };
 
     [[nodiscard]] inline uint8_t FirstPersonPassengerSeatIndex(const Vehicle& car)
@@ -362,18 +363,6 @@ namespace OpenRCT2::Paint
                 return i;
         }
         return 0;
-    }
-
-    [[nodiscard]] inline float FirstPersonFlatRidePrimaryFrameCount(
-        const Vehicle& car)
-    {
-        const auto* ride = car.GetRide();
-        if (ride != nullptr && ride->getRideTypeDescriptor().Name == "ferris_wheel")
-            return float(kFirstPersonFerrisWheelFrameCount);
-        // Existing Top Spin arm geometry is a 48-frame source. Other flat
-        // rides keep the legacy interpolation period until their own native
-        // animation semantics are reconstructed explicitly.
-        return 48.0f;
     }
 
     [[nodiscard]] inline FirstPersonVec3 FirstPersonPassengerFallbackEyeOffset(
@@ -416,7 +405,7 @@ namespace OpenRCT2::Paint
     [[nodiscard]] inline FirstPersonPassengerPose BuildFirstPersonPassengerPose(
         const Vehicle& car, FirstPersonVec3 vehiclePosition,
         const FirstPersonBasis& vehicleBasis,
-        float flatPrimaryFrame = -1.0f, float flatSecondaryFrame = -1.0f,
+        const PassengerPaintAnchor* nativeAnchor = nullptr,
         uint8_t pinnedSeatIndex = 0xFF)
     {
         const uint8_t seatCount = std::max<uint8_t>(car.num_seats, 1);
@@ -428,99 +417,68 @@ namespace OpenRCT2::Paint
         const uint8_t rows = entry != nullptr
             ? std::max<uint8_t>(entry->numSeatingRows, 1) : 1;
         const uint8_t row = std::min<uint8_t>(seatIndex / 2, rows - 1);
-        const auto localEye = FirstPersonPassengerFallbackEyeOffset(car, seatIndex);
+        const auto* calibrated =
+            entry != nullptr
+            ? GetFirstPersonPassengerAssetSeat(*entry, seatIndex)
+            : nullptr;
 
         FirstPersonPassengerPose pose{};
         pose.basis = vehicleBasis;
-        pose.localEyeOffset = localEye;
         pose.seatIndex = seatIndex;
         pose.seatingRow = row;
 
-        const auto* ride = car.GetRide();
-        if (ride != nullptr && ride->getRideTypeDescriptor().Name == "ferris_wheel")
+        const bool anchorMatches =
+            nativeAnchor != nullptr
+            && nativeAnchor->Entity == &car
+            && seatIndex < 32
+            && (nativeAnchor->seatMask
+                & (uint32_t{ 1 } << seatIndex)) != 0;
+        if (anchorMatches)
         {
-            const auto* rideEntry = car.GetRideEntry();
-            const auto* calibration = rideEntry != nullptr
-                ? GetFirstPersonFerrisWheelCalibration(*rideEntry)
-                : nullptr;
-            if (calibration != nullptr)
-            {
-                const float primaryFrame = flatPrimaryFrame >= 0.0f
-                    ? flatPrimaryFrame : float(car.flatRideAnimationFrame);
-                const float phase =
-                    FirstPersonFerrisWheelRiderPhase(primaryFrame, seatIndex);
-                const auto orbit =
-                    SampleFirstPersonPeriodicOrbit(*calibration, phase);
-
-                // For Ferris wheel's integral vehicle, native vehicle creation
-                // anchors the stationary entity at sequence-0 tile centre
-                // (+16,+16,+VehicleZOffset). The painter's sequence-0 wheel
-                // origin is (-16,0,+7) from that tile. Express the calibrated
-                // asset-space orbit relative to the vehicle so rotated ride
-                // placements reuse exactly the same recovered mechanism.
-                const auto seatBaseOffset =
-                    FirstPersonFerrisWheelSeatBaseOffsetFromVehicle(
-                        orbit, uint8_t((car.orientation >> 3) & 3u),
-                        float(ride->getRideTypeDescriptor().Heights.VehicleZOffset));
-                vehiclePosition.x += seatBaseOffset.x;
-                vehiclePosition.y += seatBaseOffset.y;
-                vehiclePosition.z += seatBaseOffset.z;
-
-                // The fitted orbit tracks a lower-body seat marker, not the
-                // changing rider-sprite centroid. Apply a separately measured
-                // eye height and pair separation inside the upright cabin.
-                const float lateral = (seatIndex & 1u) != 0
-                    ? calibration->seatHalfSeparation
-                    : -calibration->seatHalfSeparation;
-                pose.localEyeOffset = {
-                    0.0f, lateral, calibration->eyeHeight
-                };
-                pose.rideSpecificTransform = true;
-            }
-        }
-        else if (ride != nullptr && ride->getRideTypeDescriptor().Name == "top_spin")
-        {
-            // These are the same physical seat offsets used by the native Top
-            // Spin painter. Unlike most flat rides, its cabin translation and
-            // independent seat-bank frame are recoverable from simulation state.
-            static constexpr int16_t kSeatHeight[48] = {
-                -10,-10,-9,-7,-4,-1,2,6,11,16,21,26,31,37,42,47,52,57,61,64,67,70,72,73,
-                73,73,72,70,67,64,61,57,52,47,42,37,31,26,21,16,11,6,2,-1,-4,-7,-9,-10
-            };
-            static constexpr int8_t kSeatPosition[48] = {
-                0,4,9,13,17,21,24,27,29,31,33,34,34,34,33,31,29,27,24,21,17,13,9,4,
-                0,-3,-8,-12,-16,-20,-23,-26,-28,-30,-32,-33,-33,-33,-32,-30,-28,-26,-23,-20,-16,-12,-8,-3
-            };
-            float armFrame = flatPrimaryFrame >= 0.0f
-                ? flatPrimaryFrame : float(car.flatRideAnimationFrame);
-            armFrame = std::fmod(armFrame, 48.0f);
-            if (armFrame < 0.0f)
-                armFrame += 48.0f;
-            const int32_t arm0 = int32_t(std::floor(armFrame));
-            const int32_t arm1 = (arm0 + 1) % 48;
-            const float armAlpha = armFrame - float(arm0);
-            const float seatPosition =
-                float(kSeatPosition[arm0])
-                + (float(kSeatPosition[arm1]) - float(kSeatPosition[arm0])) * armAlpha;
-            const float seatHeight =
-                float(kSeatHeight[arm0])
-                + (float(kSeatHeight[arm1]) - float(kSeatHeight[arm0])) * armAlpha;
-
-            float seatFrame = flatSecondaryFrame >= 0.0f
-                ? flatSecondaryFrame
-                : float(car.flatRideSecondaryAnimationFrame & 0x0F);
-            seatFrame = std::fmod(seatFrame, 16.0f);
-            if (seatFrame < 0.0f)
-                seatFrame += 16.0f;
-            const float seatAngle = seatFrame
-                * (6.28318530717958647692f / 16.0f);
-            pose.basis = FirstPersonRotatePassengerPitch(vehicleBasis, seatAngle);
             vehiclePosition = {
-                vehiclePosition.x + vehicleBasis.forward.x * seatPosition,
-                vehiclePosition.y + vehicleBasis.forward.y * seatPosition,
-                vehiclePosition.z + 3.0f + seatHeight,
+                nativeAnchor->x,
+                nativeAnchor->y,
+                nativeAnchor->z,
             };
+            if (nativeAnchor->hasLocalPitch)
+            {
+                pose.basis = FirstPersonRotatePassengerPitch(
+                    pose.basis, nativeAnchor->localPitch);
+            }
+            if (nativeAnchor->hasEyeOffset)
+            {
+                pose.localEyeOffset = {
+                    nativeAnchor->eyeForward,
+                    nativeAnchor->eyeRight,
+                    nativeAnchor->eyeUp,
+                };
+            }
+            else if (calibrated != nullptr)
+            {
+                pose.localEyeOffset = calibrated->localEye;
+            }
+            else
+            {
+                pose.supported = false;
+                return pose;
+            }
             pose.rideSpecificTransform = true;
+        }
+        else
+        {
+            const auto* ride = car.GetRide();
+            const bool flatRide = ride != nullptr
+                && ride->getRideTypeDescriptor().flags.has(
+                    RtdFlag::isFlatRide);
+            // Sprite-baked moving cabins must publish their authoritative
+            // passenger anchor. For ordinary vehicles, the calibrated seat
+            // remains the explicit carriage-local attachment contract.
+            if (flatRide || calibrated == nullptr)
+            {
+                pose.supported = false;
+                return pose;
+            }
+            pose.localEyeOffset = calibrated->localEye;
         }
 
         pose.position = FirstPersonPassengerEye(
@@ -563,8 +521,7 @@ namespace OpenRCT2::Paint
         BuildFirstPersonPassengerPoseWithCarriage(
             const Vehicle& car, FirstPersonVec3 vehicleOrigin,
             const FirstPersonCarriageTransform& carriage,
-            float flatPrimaryFrame = -1.0f,
-            float flatSecondaryFrame = -1.0f,
+            const PassengerPaintAnchor* nativeAnchor = nullptr,
             uint8_t pinnedSeatIndex = 0xFF)
     {
         FirstPersonVec3 transformedOrigin{
@@ -574,7 +531,9 @@ namespace OpenRCT2::Paint
         };
         auto pose = BuildFirstPersonPassengerPose(
             car, transformedOrigin, carriage.basis,
-            flatPrimaryFrame, flatSecondaryFrame, pinnedSeatIndex);
+            nativeAnchor, pinnedSeatIndex);
+        if (!pose.supported)
+            return pose;
         ApplyFirstPersonPassengerCarriagePositionFallback(
             pose, transformedOrigin, carriage);
         return pose;
