@@ -988,6 +988,56 @@ void PaintSessionAddFirstPersonPhysicalBox(
     }
 }
 
+void PaintSessionAddFirstPersonPhysicalSegment(
+    PaintSession& session,
+    FirstPersonPaintPhysicalPrimitiveKind kind,
+    const CoordsXYZ& localA, const CoordsXYZ& localB,
+    int32_t halfWidth, ImageId image)
+{
+    if (session.FirstPersonPhysicalPrimitiveSink == nullptr)
+        return;
+
+    halfWidth = std::max(1, halfWidth);
+    const int32_t dx = localB.x - localA.x;
+    const int32_t dy = localB.y - localA.y;
+    const int32_t dz = localB.z - localA.z;
+    const int32_t span =
+        std::max({ std::abs(dx), std::abs(dy), std::abs(dz) });
+    const int32_t steps = std::max(1, (span + 3) / 4);
+    for (int32_t i = 0; i < steps; ++i)
+    {
+        const auto interpolate =
+            [&](int32_t a, int32_t b, int32_t numerator) {
+                return a + int32_t(std::lround(
+                    double(b - a) * double(numerator)
+                    / double(steps)));
+            };
+        const CoordsXYZ a{
+            interpolate(localA.x, localB.x, i),
+            interpolate(localA.y, localB.y, i),
+            interpolate(localA.z, localB.z, i),
+        };
+        const CoordsXYZ b{
+            interpolate(localA.x, localB.x, i + 1),
+            interpolate(localA.y, localB.y, i + 1),
+            interpolate(localA.z, localB.z, i + 1),
+        };
+        PaintSessionAddFirstPersonPhysicalBox(
+            session, kind,
+            {
+                std::min(a.x, b.x) - halfWidth,
+                std::min(a.y, b.y) - halfWidth,
+                std::min(a.z, b.z) - halfWidth,
+            },
+            {
+                std::max(a.x, b.x) + halfWidth,
+                std::max(a.y, b.y) + halfWidth,
+                std::max(a.z, b.z) + halfWidth,
+            },
+            image);
+    }
+}
+
 /**
  *  rct2: 0x00686806, 0x006869B2, 0x00686B6F, 0x00686D31, 0x0098197C
  *
