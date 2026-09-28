@@ -1,0 +1,328 @@
+/*****************************************************************************
+ * Copyright (c) 2014-2026 OpenRCT2 developers
+ * OpenRCT2 is licensed under the GNU General Public License version 3.
+ *****************************************************************************/
+#pragma once
+
+#include "FirstPersonAssetReconstruction.h"
+#include "FirstPersonMath.h"
+
+#include "../drawing/Drawing.Sprite.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+namespace OpenRCT2::Paint
+{
+    struct FirstPersonVisualHullTextureView
+    {
+        uint8_t direction{};
+        ImageIndex image{};
+    };
+
+    struct FirstPersonVisualHull
+    {
+        bool valid = false;
+        float step = 4.0f;
+        float minForward{};
+        float minRight{};
+        float minUp{};
+        uint8_t sizeForward{};
+        uint8_t sizeRight{};
+        uint8_t sizeUp{};
+        std::vector<uint8_t> occupied;
+        std::vector<FirstPersonVisualHullTextureView> textureViews;
+        float minimumCandidateCoverage{};
+        float minimumObservedCoverage{};
+        int32_t maximumEdgeError{};
+
+        [[nodiscard]] bool contains(
+            int32_t forward, int32_t right, int32_t up) const
+        {
+            if (forward < 0 || right < 0 || up < 0
+                || forward >= sizeForward
+                || right >= sizeRight || up >= sizeUp)
+                return false;
+            const size_t index =
+                (size_t(up) * sizeRight + size_t(right))
+                    * sizeForward + size_t(forward);
+            return index < occupied.size()
+                && occupied[index] != 0;
+        }
+
+        [[nodiscard]] FirstPersonVec3 centre(
+            int32_t forward, int32_t right, int32_t up) const
+        {
+            return {
+                minForward
+                    + (float(forward) + 0.5f) * step,
+                minRight
+                    + (float(right) + 0.5f) * step,
+                minUp
+                    + (float(up) + 0.5f) * step,
+            };
+        }
+
+        [[nodiscard]] bool containsPoint(
+            FirstPersonVec3 point) const
+        {
+            const int32_t forward = int32_t(std::floor(
+                (point.x - minForward) / step));
+            const int32_t right = int32_t(std::floor(
+                (point.y - minRight) / step));
+            const int32_t up = int32_t(std::floor(
+                (point.z - minUp) / step));
+            return contains(forward, right, up);
+        }
+    };
+
+    struct FirstPersonVisualHullView
+    {
+        uint8_t direction{};
+        ImageIndex image{};
+        const G1Element* g1{};
+        FirstPersonSilhouette observed{};
+    };
+
+    struct FirstPersonVisualHullBounds
+    {
+        float minForward{};
+        float maxForward{};
+        float minRight{};
+        float maxRight{};
+        float minUp{};
+        float maxUp{};
+        float step = 4.0f;
+    };
+
+    struct FirstPersonVisualHullConfig
+    {
+        size_t minimumViews = 4;
+        size_t minimumConstructionViews = 2;
+        size_t minimumValidationViews = 2;
+        size_t minimumOccupiedCells = 4;
+        size_t maximumOccupiedCells = 4096;
+        int32_t maximumAxisCells = 24;
+        float minimumCandidateCoverage = 0.60f;
+        float minimumObservedCoverage = 0.32f;
+        int32_t maximumEdgeError = 6;
+    };
+
+    [[nodiscard]] inline bool
+        FirstPersonVisualHullPixelOpaque(
+            const G1Element& g1, int32_t x, int32_t y)
+    {
+        if (g1.offset == nullptr || x < 0 || y < 0
+            || x >= g1.width || y >= g1.height
+            || g1.flags.has(G1Flag::isPalette))
+            return false;
+        if (g1.flags.has(G1Flag::hasRLECompression))
+        {
+            const uint16_t lineOffset =
+                uint16_t(g1.offset[y * 2])
+                | (uint16_t(g1.offset[y * 2 + 1]) << 8);
+            const uint8_t* run = g1.offset + lineOffset;
+            bool endOfLine = false;
+            size_t guard = 0;
+            while (!endOfLine && guard++ < 256)
+            {
+                uint8_t length = *run++;
+                const int32_t start = *run++;
+                endOfLine = (length & 0x80u) != 0;
+                length &= 0x7Fu;
+                if (x >= start && x < start + length)
+                    return run[x - start] != 0;
+                run += length;
+            }
+            return false;
+        }
+        const uint8_t pixel =
+            g1.offset[size_t(y) * size_t(g1.width)
+                + size_t(x)];
+        return !g1.flags.has(G1Flag::hasTransparency)
+            || pixel != 0;
+    }
+
+    template<typename ProjectPoint, typename OccupancyPredicate>
+    [[nodiscard]] FirstPersonVisualHull BuildFirstPersonVisualHull(
+        const std::vector<FirstPersonVisualHullView>& views,
+        const FirstPersonVisualHullBounds& bounds,
+        const FirstPersonVisualHullConfig& config,
+        ProjectPoint&& projectPoint,
+        OccupancyPredicate&& occupancyPredicate)
+    {
+        FirstPersonVisualHull result{};
+        if (views.size() < config.minimumViews
+            || !(bounds.step > 0.0f)
+            || bounds.maxForward <= bounds.minForward
+            || bounds.maxRight <= bounds.minRight
+            || bounds.maxUp <= bounds.minUp)
+            return result;
+
+        std::vector<const FirstPersonVisualHullView*> construction;
+        std::vector<const FirstPersonVisualHullView*> validation;
+        for (size_t i = 0; i < views.size(); ++i)
+            (i & 1u ? validation : construction).push_back(
+                &views[i]);
+        if (construction.size()
+                < config.minimumConstructionViews
+            || validation.size()
+                < config.minimumValidationViews)
+            return result;
+
+        const int32_t nForward = int32_t(std::ceil(
+            (bounds.maxForward - bounds.minForward)
+            / bounds.step));
+        const int32_t nRight = int32_t(std::ceil(
+            (bounds.maxRight - bounds.minRight)
+            / bounds.step));
+        const int32_t nUp = int32_t(std::ceil(
+            (bounds.maxUp - bounds.minUp)
+            / bounds.step));
+        if (nForward <= 0 || nRight <= 0 || nUp <= 0
+            || nForward > config.maximumAxisCells
+            || nRight > config.maximumAxisCells
+            || nUp > config.maximumAxisCells
+            || nForward > 255 || nRight > 255 || nUp > 255)
+            return result;
+
+        result.step = bounds.step;
+        result.minForward = bounds.minForward;
+        result.minRight = bounds.minRight;
+        result.minUp = bounds.minUp;
+        result.sizeForward = uint8_t(nForward);
+        result.sizeRight = uint8_t(nRight);
+        result.sizeUp = uint8_t(nUp);
+        result.occupied.assign(
+            size_t(nForward) * size_t(nRight)
+                * size_t(nUp),
+            0);
+        result.textureViews.reserve(views.size());
+        for (const auto& view : views)
+            result.textureViews.push_back(
+                { view.direction, view.image });
+
+        const auto pointSupported =
+            [&](const FirstPersonVisualHullView& view,
+                FirstPersonVec3 point) {
+                if (view.g1 == nullptr)
+                    return false;
+                const auto projected =
+                    projectPoint(view.direction, point);
+                const int32_t px =
+                    int32_t(std::lround(projected[0]))
+                    - view.g1->xOffset;
+                const int32_t py =
+                    int32_t(std::lround(projected[1]))
+                    - view.g1->yOffset;
+                for (int32_t dy = -1; dy <= 1; ++dy)
+                for (int32_t dx = -1; dx <= 1; ++dx)
+                {
+                    if (FirstPersonVisualHullPixelOpaque(
+                            *view.g1, px + dx, py + dy))
+                        return true;
+                }
+                return false;
+            };
+
+        size_t occupiedCount = 0;
+        for (int32_t up = 0; up < nUp; ++up)
+        for (int32_t right = 0; right < nRight; ++right)
+        for (int32_t forward = 0;
+             forward < nForward; ++forward)
+        {
+            const auto point =
+                result.centre(forward, right, up);
+            if (!occupancyPredicate(point))
+                continue;
+            bool supported = true;
+            for (const auto* view : construction)
+            {
+                if (!pointSupported(*view, point))
+                {
+                    supported = false;
+                    break;
+                }
+            }
+            if (!supported)
+                continue;
+            const size_t index =
+                (size_t(up) * size_t(nRight)
+                    + size_t(right))
+                    * size_t(nForward)
+                    + size_t(forward);
+            result.occupied[index] = 1;
+            ++occupiedCount;
+        }
+        if (occupiedCount < config.minimumOccupiedCells
+            || occupiedCount
+                > config.maximumOccupiedCells)
+            return {};
+
+        result.minimumCandidateCoverage = 1.0f;
+        result.minimumObservedCoverage = 1.0f;
+        result.maximumEdgeError = 0;
+        const int32_t radius = std::max(
+            1, int32_t(std::ceil(
+                result.step * 0.75f)));
+        for (const auto* view : validation)
+        {
+            FirstPersonSilhouette predicted{};
+            for (int32_t up = 0; up < nUp; ++up)
+            for (int32_t right = 0;
+                 right < nRight; ++right)
+            for (int32_t forward = 0;
+                 forward < nForward; ++forward)
+            {
+                if (!result.contains(
+                        forward, right, up))
+                    continue;
+                const auto projected =
+                    projectPoint(
+                        view->direction,
+                        result.centre(
+                            forward, right, up));
+                const int32_t x =
+                    int32_t(std::lround(projected[0]));
+                const int32_t y =
+                    int32_t(std::lround(projected[1]));
+                for (int32_t py = y - radius;
+                     py <= y + radius; ++py)
+                for (int32_t px = x - radius;
+                     px <= x + radius; ++px)
+                    predicted.add(px, py);
+            }
+
+            const auto fit =
+                CompareFirstPersonSilhouettes(
+                    view->observed, predicted);
+            if (!fit.valid
+                || fit.candidateCoverage
+                    < config.minimumCandidateCoverage
+                || fit.observedCoverage
+                    < config.minimumObservedCoverage
+                || fit.maxEdgeError
+                    > config.maximumEdgeError)
+                return {};
+            result.minimumCandidateCoverage =
+                std::min(
+                    result.minimumCandidateCoverage,
+                    fit.candidateCoverage);
+            result.minimumObservedCoverage =
+                std::min(
+                    result.minimumObservedCoverage,
+                    fit.observedCoverage);
+            result.maximumEdgeError =
+                std::max(
+                    result.maximumEdgeError,
+                    fit.maxEdgeError);
+        }
+
+        result.valid = true;
+        return result;
+    }
+} // namespace OpenRCT2::Paint
