@@ -6024,13 +6024,15 @@ namespace OpenRCT2::Paint
                                     item.position,
                                     FirstPersonLeftTunnelWorldEdge(
                                         rotation),
-                                    variant.leftTunnels);
+                                    variant.leftTunnels,
+                                    rotation, true);
                                 AppendFirstPersonTunnelPortals(
                                     variant.portals,
                                     item.position,
                                     FirstPersonRightTunnelWorldEdge(
                                         rotation),
-                                    variant.rightTunnels);
+                                    variant.rightTunnels,
+                                    rotation, false);
 
                                 if (auto terrainIt = _terrainCache.entries.find(item.key);
                                     terrainIt != _terrainCache.entries.end())
