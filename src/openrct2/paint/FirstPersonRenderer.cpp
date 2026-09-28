@@ -2006,10 +2006,16 @@ namespace OpenRCT2::Paint
             const bool matchesHiddenEntity =
                 ps.Entity != nullptr && !hidden.IsNull()
                 && ps.Entity->id == hidden;
-            const auto* attachedVehicle =
-                matchesHiddenEntity
-                    && ps.Source == PaintStructSource::entity
+            const auto* entityVehicle =
+                ps.Source == PaintStructSource::entity
+                    && ps.Entity != nullptr
                 ? ps.Entity->as<Vehicle>() : nullptr;
+            const auto* vehicleHull =
+                entityVehicle != nullptr
+                ? GetUsableVehicleHull(*entityVehicle)
+                : nullptr;
+            const auto* attachedVehicle =
+                matchesHiddenEntity ? entityVehicle : nullptr;
             const auto* attachedHull =
                 attachedVehicle != nullptr
                 ? GetUsableAttachedVehicleHull(
@@ -2017,6 +2023,8 @@ namespace OpenRCT2::Paint
                 : nullptr;
             const bool reconstructAttachedVehicle =
                 attachedVehicle != nullptr && attachedHull != nullptr;
+            const bool reconstructVehicleBody =
+                entityVehicle != nullptr && vehicleHull != nullptr;
             const auto hiddenPolicy = FirstPersonHiddenComponentPolicy(
                 matchesHiddenEntity && !reconstructAttachedVehicle,
                 ps.Source == PaintStructSource::entity,
@@ -2075,21 +2083,23 @@ namespace OpenRCT2::Paint
             }
 
             bool suppressCurrentImage = false;
-            if (reconstructAttachedVehicle)
+            if (reconstructVehicleBody)
             {
                 const auto component =
                     GetAttachedVehicleComponent(
-                        *attachedVehicle, ps.image_id);
+                        *entityVehicle, ps.image_id);
                 if (component.role
                     == AttachedVehicleComponentRole::body)
                 {
-                    AppendAttachedVehicleHull(
-                        scene, *attachedVehicle, *attachedHull,
+                    AppendVehicleHull(
+                        scene, *entityVehicle, *vehicleHull,
                         colourify(ps.image_id));
                     suppressCurrentImage = true;
                 }
-                else if (component.role
-                    == AttachedVehicleComponentRole::rider)
+                else if (matchesHiddenEntity
+                    && reconstructAttachedVehicle
+                    && component.role
+                        == AttachedVehicleComponentRole::rider)
                 {
                     const uint8_t selectedRow =
                         hiddenSeatIndex / 2;
@@ -2100,7 +2110,7 @@ namespace OpenRCT2::Paint
                         const uint8_t adjacentSeat =
                             (hiddenSeatIndex & 1u) != 0
                             ? rowBase : uint8_t(rowBase + 1);
-                        if (attachedVehicle->num_peeps > adjacentSeat)
+                        if (entityVehicle->num_peeps > adjacentSeat)
                         {
                             const auto surfaceStart =
                                 scene.surfaces.size();
@@ -2119,11 +2129,14 @@ namespace OpenRCT2::Paint
                         suppressCurrentImage = true;
                     }
                 }
-                else
+                else if (matchesHiddenEntity
+                    && reconstructAttachedVehicle
+                    && component.role
+                        == AttachedVehicleComponentRole::other)
                 {
-                    // Unknown special component of an otherwise reconstructable
-                    // attached car: do not let an uncalibrated close billboard
-                    // reintroduce self-clipping.
+                    // Unknown close-up components of the attached vehicle can
+                    // still intersect the passenger eye. Other vehicles retain
+                    // those native components around their reconstructed body.
                     suppressCurrentImage = true;
                 }
             }
