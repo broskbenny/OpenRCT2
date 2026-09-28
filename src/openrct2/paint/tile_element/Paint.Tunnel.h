@@ -78,6 +78,18 @@ struct TunnelEntry
         , type(_type) {};
 };
 
+struct TunnelDescriptor
+{
+    uint8_t height;
+    uint8_t boundBoxLength;
+    int16_t boundBoxZOffset;
+    int8_t lowerEdgeBoundingBoxZ;
+    TunnelType lowClearanceAlternative;
+    uint8_t imageOffset;
+};
+
+[[nodiscard]] const TunnelDescriptor& GetTunnelDescriptor(TunnelType type);
+
 TunnelType GetTunnelType(TunnelGroup tunnelGroup, TunnelSubType tunnelSubType);
 
 void PaintUtilPushTunnelLeft(PaintSession& session, uint16_t height, TunnelType type);
