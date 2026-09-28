@@ -582,8 +582,6 @@ namespace OpenRCT2::Paint
         VehicleVisualState visual{};
         FirstPersonVec3 vehicleOrigin{};
         FirstPersonCarriageTransform carriage{};
-        float flatPrimaryFrame = 0.0f;
-        float flatSecondaryFrame = 0.0f;
     };
 
     [[nodiscard]] inline FirstPersonVehiclePresentationState
@@ -687,25 +685,6 @@ namespace OpenRCT2::Paint
                 car, trackBasis, spinAngle,
                 swingPosition, seatAngle);
 
-        result.flatPrimaryFrame =
-            float(car.flatRideAnimationFrame);
-        result.flatSecondaryFrame =
-            float(car.flatRideSecondaryAnimationFrame);
-        if (tracked.has_value())
-        {
-            result.flatPrimaryFrame =
-                FirstPersonLerpCyclicFrame(
-                    float(tracked->flatPrimaryBefore),
-                    float(tracked->flatPrimaryAfter),
-                    tracked->alpha,
-                    FirstPersonFlatRidePrimaryFrameCount(car));
-            result.flatSecondaryFrame =
-                FirstPersonLerpCyclicFrame(
-                    float(tracked->flatSecondaryBefore & 0x0F),
-                    float(tracked->flatSecondaryAfter & 0x0F),
-                    tracked->alpha, 16.0f);
-        }
-
         const auto loc = car.getLocation();
         result.vehicleOrigin = {
             float(loc.x),
@@ -719,6 +698,7 @@ namespace OpenRCT2::Paint
         BuildFirstPersonVehiclePresentationPassengerPose(
             const Vehicle& car,
             const std::optional<FirstPersonTrackedVehicleVisuals>& tracked,
+            const PassengerPaintAnchor* nativeAnchor = nullptr,
             uint8_t pinnedSeatIndex = 0xFF)
     {
         const auto state =
@@ -726,9 +706,7 @@ namespace OpenRCT2::Paint
                 car, tracked);
         return BuildFirstPersonPassengerPoseWithCarriage(
             car, state.vehicleOrigin, state.carriage,
-            state.flatPrimaryFrame,
-            state.flatSecondaryFrame,
-            pinnedSeatIndex);
+            nativeAnchor, pinnedSeatIndex);
     }
 
     [[nodiscard]] inline FirstPersonCamera
@@ -742,7 +720,9 @@ namespace OpenRCT2::Paint
     }
 
     [[nodiscard]] inline FirstPersonPassengerPose FirstPersonVehicleSimulationPassengerPose(
-        const Vehicle& car, uint8_t pinnedSeatIndex = 0xFF)
+        const Vehicle& car,
+        const PassengerPaintAnchor* nativeAnchor = nullptr,
+        uint8_t pinnedSeatIndex = 0xFF)
     {
         const auto carriage =
             FirstPersonVehicleSimulationCarriageTransform(car);
@@ -754,7 +734,7 @@ namespace OpenRCT2::Paint
                 float(loc.x), float(loc.y),
                 float(loc.z + visual.zOffset)
             },
-            carriage, -1.0f, -1.0f, pinnedSeatIndex);
+            carriage, nativeAnchor, pinnedSeatIndex);
     }
 } // namespace OpenRCT2::Paint
 
