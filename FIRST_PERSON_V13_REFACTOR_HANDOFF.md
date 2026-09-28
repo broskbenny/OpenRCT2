@@ -361,6 +361,72 @@ First-person crowd noise no longer runs a full 3-D spatial calculation over ever
 
 It resolves the current first-person listener once, visits only entity tiles whose XY bounds intersect the existing 48-tile hard audio cutoff, and then applies the unchanged exact 3-D distance/gain calculation to those guest candidates. Guests outside the cutoff contributed zero before and still contribute zero.
 
+## Windows 7 / VS2019 build verification — 2026-09-28
+
+Current verified branch commit:
+
+* `e5927f0655ccb90ee84175d9fc45147899528a5e`
+* `Fix first-person build with VS2019`
+
+This post-refactor source successfully compiled on the real target machine: Windows 7 Ultimate SP1 x64, OS 6.1.7601.
+
+Toolchain remained:
+
+* Visual Studio Build Tools 2019 16.11
+* MSVC v142 / compiler 19.29.30147
+* Windows SDK 10.0.17763.0
+
+The proven compiler compatibility environment remained:
+
+```bat
+set "OPENRCT2_CL_ADDITIONALOPTIONS=/D_SILENCE_CXX20_U8PATH_DEPRECATION_WARNING /wd4267 /U__ENABLE_DISCORD__"
+```
+
+The successful GUI build used the established single-worker settings:
+
+```bat
+msbuild src\openrct2-win\openrct2-win.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /m:1 /p:BuildInParallel=false /p:CL_MPCount=1
+```
+
+Fresh executable:
+
+* Path: `bin\openrct2.exe`
+* Size: `18898944` bytes
+* Build timestamp: `2026-09-28 08:30`
+* SHA-256: `ec9752ec5f38ff113781054192f0fc70fc7e2032444e4f423ce5c5f777c7731f`
+
+Native `openrct2.exe --version` succeeded with exit code 0 and reported OpenRCT2 v0.5.5, Windows x86-64, Network version 0.5.5-0, Plugin API 122, park file version 61, minimum park file version 57, Breakpad disabled.
+
+Normal GUI launch succeeded natively on Windows 7 and reached `Loading Objects... (100%)`. The GUI process exited normally with exit code 0. No crash dialog or loader failure was observed. VxKex was NOT required.
+
+The user subsequently manually ran the freshly compiled version and confirmed that it works.
+
+This confirmation does **not** mean every item in the long manual-verification checklist below has been exhaustively verified.
+
+Compile compatibility fixes in commit `e5927f0655ccb90ee84175d9fc45147899528a5e`:
+
+1. `FirstPersonPhysicalProxy.h`
+   * added the canonical `TrackData.h` include for `TrackMetadata::GetTrackElementDescriptor`;
+   * added the canonical `Footpath.h` include for path surface/railings descriptors and railing flags;
+   * removed a duplicate local `kPathSlopeToLandSlope` table and uses the native global table instead.
+
+2. `FirstPersonController.cpp`
+   * passes the track element through the normal generic TileElement representation when calling `FirstPersonTrackSampleOrigin`.
+
+3. `FirstPersonRenderer.cpp`
+   * includes `Paint.SessionFlags.h`;
+   * renamed the shadowing per-face `bestScore` variable to `bestFaceScore`;
+   * removed the unused `scene.options` local.
+
+These are build/toolchain integration corrections rather than an intentional change to first-person gameplay/rendering behaviour.
+
+Stable rollback remains unchanged and must not be treated as moved:
+
+* Stable rollback tag: `first-person-v13-win7-known-good-2026-09-26`
+* Stable rollback commit: `59e4d72e2603564001298fdae1424d91e973faf6`
+
+The old stable tag has **NOT** been moved and remains the rollback checkpoint.
+
 ## Required manual verification before creating a new stable tag
 
 Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HANDOFF.md`, then verify:
