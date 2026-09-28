@@ -10,6 +10,7 @@
 #include "FirstPersonVehicleBodyHull.h"
 #include "FirstPersonVehiclePose.h"
 #include "Paint.h"
+#include "Paint.SessionFlags.h"
 #include "tile_element/Paint.Surface.h"
 #include "tile_element/Paint.Path.h"
 #include "tile_element/Paint.TileElement.h"
@@ -1227,7 +1228,7 @@ namespace OpenRCT2::Paint
             for (size_t faceIndex = 0; faceIndex < bestFaces.size(); ++faceIndex)
             {
                 auto& face = bestFaces[faceIndex];
-                float bestScore = -1.0f;
+                float bestFaceScore = -1.0f;
                 float bestCoverage = 0.0f;
                 float bestOwnership = 0.0f;
                 uint8_t bestDirection = 0;
@@ -1257,14 +1258,14 @@ namespace OpenRCT2::Paint
                         continue;
                     const float score =
                         std::min(fit.candidateCoverage, ownership);
-                    if (score <= bestScore)
+                    if (score <= bestFaceScore)
                         continue;
-                    bestScore = score;
+                    bestFaceScore = score;
                     bestCoverage = fit.candidateCoverage;
                     bestOwnership = ownership;
                     bestDirection = direction;
                 }
-                if (bestScore < 0.0f)
+                if (bestFaceScore < 0.0f)
                     return model;
                 face.sourceDirection = bestDirection;
                 minimumFaceCoverage =
@@ -4505,7 +4506,6 @@ namespace OpenRCT2::Paint
         void DiscoverVisibleTiles(FirstPersonScene& scene)
         {
             PROFILED_FUNCTION();
-            const auto& opt = scene.options;
             const auto& view = scene.resolvedView;
             const auto frustum = FirstPersonFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,

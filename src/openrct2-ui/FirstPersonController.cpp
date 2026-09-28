@@ -771,7 +771,7 @@ namespace OpenRCT2::Ui::FirstPerson
 
                     const auto sampleOrigin =
                         Paint::FirstPersonTrackSampleOrigin(
-                            tilePos, track);
+                            tilePos, track->as<TileElement>());
                     if (!sampleOrigin.has_value())
                         continue;
 

@@ -12,12 +12,14 @@
 #include "../ride/RideData.h"
 #include "../ride/RideEntry.h"
 #include "../ride/Track.h"
+#include "../ride/TrackData.h"
 #include "../ride/TrackStyle.h"
 #include "../ride/ted/TrackElementDescriptor.h"
 #include "../ride/ted/TrackElemType.h"
 #include "../object/FootpathEntry.h"
 #include "../object/PathAdditionEntry.h"
 #include "../object/StationObject.h"
+#include "../world/Footpath.h"
 #include "../world/Map.h"
 #include "../world/tile_element/PathElement.h"
 #include "../world/tile_element/SmallSceneryElement.h"
@@ -215,13 +217,6 @@ namespace OpenRCT2::Paint
         }
         else if (path.isSloped())
         {
-            static constexpr std::array<uint8_t, 4>
-                kPathSlopeToLandSlope{ {
-                    kTileSlopeSWSideUp,
-                    kTileSlopeNWSideUp,
-                    kTileSlopeNESideUp,
-                    kTileSlopeSESideUp,
-                } };
             const uint8_t direction =
                 path.getSlopeDirection() & 3u;
             if (surface->getSlope()
