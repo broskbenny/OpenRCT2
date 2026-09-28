@@ -1003,7 +1003,7 @@ void PaintSessionAddFirstPersonPhysicalSegment(
     const int32_t dz = localB.z - localA.z;
     const int32_t span =
         std::max({ std::abs(dx), std::abs(dy), std::abs(dz) });
-    const int32_t steps = std::max(1, (span + 3) / 4);
+    const int32_t steps = std::max(1, (span + 7) / 8);
     for (int32_t i = 0; i < steps; ++i)
     {
         const auto interpolate =
