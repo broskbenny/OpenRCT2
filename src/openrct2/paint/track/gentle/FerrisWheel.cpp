@@ -15,10 +15,14 @@
 #include "../../../ride/RideEntry.h"
 #include "../../../ride/TrackPaint.h"
 #include "../../../ride/Vehicle.h"
+#include "../../../ride/VehicleVisualState.h"
 #include "../../Boundbox.h"
+#include "../../FirstPersonPeriodicPassengerMotion.h"
 #include "../../Paint.h"
 #include "../../support/WoodenSupports.h"
 #include "../../tile_element/Segment.h"
+
+#include <cmath>
 
 using namespace OpenRCT2;
 
@@ -44,6 +48,31 @@ static constexpr BoundBoxXY kFerrisWheelData[] = {
     { { 8, 1 }, { 16, 31 } },
 };
 
+static float FirstPersonResolveFerrisPaintFrame(
+    const PaintSession& session, uint8_t current)
+{
+    constexpr float frameCount =
+        float(Paint::kFirstPersonFerrisWheelFrameCount);
+    if (!session.FirstPersonPassengerInterpolation.enabled)
+        return float(current);
+
+    const auto& interpolation =
+        session.FirstPersonPassengerInterpolation;
+    float before = float(interpolation.primaryBefore);
+    float after = float(interpolation.primaryAfter);
+    float delta = std::fmod(after - before, frameCount);
+    if (delta > frameCount * 0.5f)
+        delta -= frameCount;
+    else if (delta < -frameCount * 0.5f)
+        delta += frameCount;
+    float frame = before + delta
+        * std::clamp(interpolation.alpha, 0.0f, 1.0f);
+    frame = std::fmod(frame, frameCount);
+    if (frame < 0.0f)
+        frame += frameCount;
+    return frame;
+}
+
 static void PaintFerrisWheelRiders(
     PaintSession& session, const RideObjectEntry& rideEntry, const Vehicle& vehicle, uint8_t direction, const CoordsXYZ offset,
     const BoundBoxXYZ& bb)
@@ -57,7 +86,69 @@ static void PaintFerrisWheelRiders(
         auto frameNum = (vehicle.flatRideAnimationFrame + i * 4) % 128;
         auto imageIndex = rideEntry.Cars[0].baseImageId + 32 + direction * 128 + frameNum;
         auto imageId = ImageId(imageIndex, vehicle.peep_tshirt_colours[i], vehicle.peep_tshirt_colours[i + 1]);
+
+        if (const auto* calibration =
+                Paint::GetFirstPersonFerrisWheelCalibration(
+                    rideEntry);
+            calibration != nullptr
+            && session.FirstPersonPassengerAnchorSink != nullptr
+            && session.FirstPersonPassengerAnchorEntity
+                == &vehicle
+            && session.FirstPersonPassengerAnchorSeatIndex
+                >= uint8_t(i)
+            && session.FirstPersonPassengerAnchorSeatIndex
+                < uint8_t(i + 2))
+        {
+            const float primaryFrame =
+                FirstPersonResolveFerrisPaintFrame(
+                    session,
+                    vehicle.flatRideAnimationFrame);
+            const float phase =
+                Paint::FirstPersonFerrisWheelRiderPhase(
+                    primaryFrame, uint8_t(i));
+            const auto orbit =
+                Paint::SampleFirstPersonPeriodicOrbit(
+                    *calibration, phase);
+            const auto* ride = vehicle.GetRide();
+            if (ride != nullptr)
+            {
+                const auto visual =
+                    ResolveVehicleVisualState(vehicle);
+                const auto loc = vehicle.getLocation();
+                const auto seatOffset =
+                    Paint::FirstPersonFerrisWheelSeatBaseOffsetFromVehicle(
+                        orbit,
+                        uint8_t(
+                            (vehicle.orientation >> 3)
+                            & 3u),
+                        float(
+                            ride->getRideTypeDescriptor()
+                                .Heights.VehicleZOffset));
+                const float lateral =
+                    (session.FirstPersonPassengerAnchorSeatIndex
+                        & 1u) != 0
+                    ? calibration->seatHalfSeparation
+                    : -calibration->seatHalfSeparation;
+                PaintSessionPublishFirstPersonPassengerAnchor(
+                    session,
+                    const_cast<Vehicle&>(vehicle),
+                    uint32_t{ 3 } << i,
+                    float(loc.x) + seatOffset.x,
+                    float(loc.y) + seatOffset.y,
+                    float(loc.z + visual.zOffset)
+                        + seatOffset.z,
+                    true, 0.0f, lateral,
+                    calibration->eyeHeight);
+            }
+        }
+
+        const uint32_t previousSeatMask =
+            session.FirstPersonPassengerSeatMask;
+        session.FirstPersonPassengerSeatMask =
+            uint32_t{ 3 } << i;
         PaintAddImageAsChild(session, imageId, offset, bb);
+        session.FirstPersonPassengerSeatMask =
+            previousSeatMask;
     }
 }
 
