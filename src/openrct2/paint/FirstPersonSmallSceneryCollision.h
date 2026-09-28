@@ -4,6 +4,8 @@
  *****************************************************************************/
 #pragma once
 
+#include "FirstPersonVisualHull.h"
+
 #include "../drawing/Drawing.Sprite.h"
 #include "../interface/Viewport.h"
 #include "../object/SmallSceneryEntry.h"
@@ -83,35 +85,8 @@ namespace OpenRCT2::Paint
     [[nodiscard]] inline bool FirstPersonG1PixelOpaque(
         const G1Element& g1, int32_t x, int32_t y)
     {
-        if (g1.offset == nullptr || x < 0 || y < 0
-            || x >= g1.width || y >= g1.height
-            || g1.flags.has(G1Flag::isPalette))
-            return false;
-
-        if (g1.flags.has(G1Flag::hasRLECompression))
-        {
-            const uint16_t lineOffset =
-                uint16_t(g1.offset[y * 2])
-                | (uint16_t(g1.offset[y * 2 + 1]) << 8);
-            const uint8_t* run = g1.offset + lineOffset;
-            bool endOfLine = false;
-            size_t guard = 0;
-            while (!endOfLine && guard++ < 256)
-            {
-                uint8_t length = *run++;
-                const int32_t startX = *run++;
-                endOfLine = (length & 0x80u) != 0;
-                length &= 0x7Fu;
-                if (x >= startX && x < startX + length)
-                    return run[x - startX] != 0;
-                run += length;
-            }
-            return false;
-        }
-
-        const uint8_t pixel =
-            g1.offset[size_t(y) * size_t(g1.width) + size_t(x)];
-        return !g1.flags.has(G1Flag::hasTransparency) || pixel != 0;
+        return FirstPersonVisualHullPixelOpaque(
+            g1, x, y);
     }
 
     [[nodiscard]] inline CoordsXY FirstPersonSmallSceneryPaintOffset(
@@ -296,6 +271,198 @@ namespace OpenRCT2::Paint
         }
 
         return result;
+    }
+
+    [[nodiscard]] inline FirstPersonVisualHull
+        BuildFirstPersonSmallSceneryVisualHull(
+            const SmallSceneryEntry& entry,
+            const SmallSceneryElement& element)
+    {
+        // Preserve the established visual eligibility: the old collision-derived
+        // renderer only replaced objects whose complete declared height fit
+        // inside the 20-unit reconstruction envelope. The new visual hull is
+        // independent of collision, but does not broaden that policy implicitly.
+        if (!FirstPersonSmallSceneryVisualReconstructionCoversHeight(
+                entry.height, entry.height)
+            || entry.flags.hasAny(
+                SmallSceneryFlag::isAnimated,
+                SmallSceneryFlag::hasGlass,
+                SmallSceneryFlag::isFountain,
+                SmallSceneryFlag::isCupidFountain))
+            return {};
+
+        const uint8_t occupied =
+            element.getOccupiedQuadrants() & 0x0Fu;
+        if (occupied == 0)
+            return {};
+
+        const uint8_t witherStage =
+            FirstPersonSmallSceneryWitherStage(
+                entry, element);
+        std::vector<FirstPersonVisualHullView> views;
+        views.reserve(4);
+        for (uint8_t rotation = 0; rotation < 4; ++rotation)
+        {
+            const uint8_t direction =
+                element.getDirectionWithOffset(rotation)
+                & 3u;
+            const ImageIndex image =
+                entry.image + direction
+                + uint32_t(witherStage) * 4u;
+            const auto* g1 = GfxGetG1Element(image);
+            constexpr size_t kMaxSourcePixels = 65536;
+            if (g1 == nullptr || g1->offset == nullptr
+                || g1->width <= 0 || g1->height <= 0
+                || size_t(g1->width)
+                        * size_t(g1->height)
+                    > kMaxSourcePixels)
+                return {};
+
+            FirstPersonVisualHullView view{};
+            view.imageDirection = rotation;
+            view.image = image;
+            view.g1 = g1;
+            for (int32_t y = 0; y < g1->height; ++y)
+            for (int32_t x = 0; x < g1->width; ++x)
+            {
+                if (FirstPersonVisualHullPixelOpaque(
+                        *g1, x, y))
+                {
+                    view.observed.add(
+                        g1->xOffset + x,
+                        g1->yOffset + y);
+                }
+            }
+            if (view.observed.empty())
+                return {};
+            views.push_back(std::move(view));
+        }
+
+        FirstPersonVisualHullBounds bounds{};
+        bounds.minForward = 0.0f;
+        bounds.maxForward = float(kCoordsXYStep);
+        bounds.minRight = 0.0f;
+        bounds.maxRight = float(kCoordsXYStep);
+        bounds.minUp = 0.0f;
+        bounds.maxUp = float(entry.height);
+        bounds.step = 2.0f;
+
+        FirstPersonVisualHullConfig config{};
+        config.minimumViews = 4;
+        config.minimumConstructionViews = 2;
+        config.minimumValidationViews = 2;
+        config.minimumOccupiedCells = 4;
+        config.maximumOccupiedCells = 4096;
+        config.maximumAxisCells = 20;
+        config.minimumCandidateCoverage = 0.55f;
+        config.minimumObservedCoverage = 0.30f;
+        config.maximumEdgeError = 8;
+
+        return BuildFirstPersonVisualHull(
+            views, bounds, config,
+            [&](uint8_t rotation,
+                FirstPersonVec3 point) {
+                const auto offset =
+                    FirstPersonSmallSceneryPaintOffset(
+                        entry, element, rotation);
+                const auto spriteOrigin =
+                    Translate3DTo2DWithZ(
+                        rotation, { offset, 0 });
+                const auto projected =
+                    Translate3DTo2DWithZ(
+                        rotation,
+                        {
+                            int32_t(std::lround(point.x)),
+                            int32_t(std::lround(point.y)),
+                            int32_t(std::lround(point.z)),
+                        });
+                return std::array<float, 2>{
+                    float(projected.x - spriteOrigin.x),
+                    float(projected.y - spriteOrigin.y),
+                };
+            },
+            [occupied](FirstPersonVec3 point) {
+                const int32_t x =
+                    std::clamp(
+                        int32_t(std::floor(point.x)),
+                        0, kCoordsXYStep - 1);
+                const int32_t y =
+                    std::clamp(
+                        int32_t(std::floor(point.y)),
+                        0, kCoordsXYStep - 1);
+                const uint8_t quarter =
+                    FirstPersonSmallSceneryQuarterForPoint(
+                        x, y);
+                return (occupied
+                        & (1u << quarter))
+                    != 0;
+            });
+    }
+
+    [[nodiscard]] inline const FirstPersonVisualHull*
+        GetFirstPersonSmallSceneryVisualHull(
+            const SmallSceneryEntry& entry,
+            const SmallSceneryElement& element)
+    {
+        struct CacheKey
+        {
+            const SmallSceneryEntry* entry{};
+            uint8_t direction{};
+            uint8_t quadrant{};
+            uint8_t occupied{};
+            uint8_t witherStage{};
+
+            bool operator==(const CacheKey&) const = default;
+        };
+        struct CacheKeyHash
+        {
+            size_t operator()(const CacheKey& key) const
+            {
+                size_t value =
+                    reinterpret_cast<uintptr_t>(
+                        key.entry) >> 4;
+                value ^= size_t(key.direction) << 1;
+                value ^= size_t(key.quadrant) << 4;
+                value ^= size_t(key.occupied) << 7;
+                value ^= size_t(key.witherStage) << 12;
+                return value;
+            }
+        };
+        struct CacheEntry
+        {
+            const uint8_t* sourceIdentity{};
+            FirstPersonVisualHull hull{};
+        };
+        static std::unordered_map<
+            CacheKey, CacheEntry, CacheKeyHash> cache;
+
+        const CacheKey key{
+            &entry,
+            uint8_t(element.getDirection() & 3u),
+            element.getSceneryQuadrant(),
+            uint8_t(element.getOccupiedQuadrants()
+                & 0x0Fu),
+            FirstPersonSmallSceneryWitherStage(
+                entry, element),
+        };
+        const auto* first =
+            GfxGetG1Element(
+                entry.image + key.direction
+                + uint32_t(key.witherStage) * 4u);
+        if (first == nullptr
+            || first->offset == nullptr)
+            return nullptr;
+
+        auto& cached = cache[key];
+        if (cached.sourceIdentity != first->offset)
+        {
+            cached.sourceIdentity = first->offset;
+            cached.hull =
+                BuildFirstPersonSmallSceneryVisualHull(
+                    entry, element);
+        }
+        return cached.hull.valid
+            ? &cached.hull : nullptr;
     }
 
     [[nodiscard]] inline const FirstPersonSmallSceneryWalkingMask*
