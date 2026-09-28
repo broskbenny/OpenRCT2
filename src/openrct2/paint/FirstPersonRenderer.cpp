@@ -2259,6 +2259,8 @@ namespace OpenRCT2::Paint
             int32_t visibilityMaxZ = 0;
             uint32_t lastVisibilityGeneration = 0;
             std::vector<ReconstructionGroupInfo> reconstructionGroups;
+            std::vector<FirstPersonPaintPhysicalPrimitive>
+                physicalPrimitives;
             // Keep all four native quarter-turn variants. Crossing a viewpoint
             // boundary can paint a variant once without destroying the previous
             // one, so moving back and forth does not thrash the whole park.
@@ -5386,6 +5388,8 @@ namespace OpenRCT2::Paint
                     cached.valid = true;
                     cached.dirty = false;
                     cached.reconstructionGroups.clear();
+                    cached.physicalPrimitives.clear();
+                    WithdrawFirstPersonSemanticSupportProxies(tile);
                     cached.hasUngroupedResident = false;
 
                     auto* element = MapGetFirstElementAt(tile);
@@ -5609,14 +5613,54 @@ namespace OpenRCT2::Paint
                         session->CurrentlyDrawnTileElement = nullptr;
                         if (item.staticMiss)
                         {
+                            std::vector<FirstPersonPaintPhysicalPrimitive>
+                                physicalPrimitives;
                             session->CurrentSource = PaintStructSource::tile;
+                            session->FirstPersonPhysicalPrimitiveSink =
+                                &physicalPrimitives;
                             TileElementPaintSetup(*session, item.position);
+                            session->FirstPersonPhysicalPrimitiveSink =
+                                nullptr;
 
-                            // Tunnel data is transient session state and is reset
-                            // by the next tile. Preserve it while it is authoritative.
+                            // Tunnel data and physical support primitives are
+                            // transient session state. Preserve them while the
+                            // native generator's placement is authoritative.
                             auto cacheIt = _staticPaintCache.find(item.key);
                             if (cacheIt != _staticPaintCache.end())
                             {
+                                cacheIt->second.physicalPrimitives =
+                                    std::move(physicalPrimitives);
+                                std::vector<FirstPersonPhysicalBoxProxy>
+                                    supportProxies;
+                                supportProxies.reserve(
+                                    cacheIt->second.physicalPrimitives.size());
+                                for (const auto& primitive :
+                                     cacheIt->second.physicalPrimitives)
+                                {
+                                    FirstPersonPhysicalBoxProxy proxy{};
+                                    proxy.low = {
+                                        primitive.lowX,
+                                        primitive.lowY,
+                                        primitive.lowZ,
+                                    };
+                                    proxy.high = {
+                                        primitive.highX,
+                                        primitive.highY,
+                                        primitive.highZ,
+                                    };
+                                    proxy.provenance =
+                                        FirstPersonPhysicalProxyProvenance::
+                                            semanticSupportGeometry;
+                                    proxy.capabilities =
+                                        static_cast<uint8_t>(
+                                            FirstPersonPhysicalProxyCapability::render)
+                                        | static_cast<uint8_t>(
+                                            FirstPersonPhysicalProxyCapability::collide);
+                                    supportProxies.push_back(proxy);
+                                }
+                                PublishFirstPersonSemanticSupportProxies(
+                                    item.position,
+                                    std::move(supportProxies));
                                 auto& variant = cacheIt->second.rotations[rotation];
                                 variant.verticalTunnelHeight = session->VerticalTunnelHeight;
                                 variant.leftTunnels.assign(
@@ -6191,6 +6235,7 @@ namespace OpenRCT2::Paint
         _largeSceneryGroupsByRegion.clear();
         _activeLargeSceneryRegions.clear();
         _largeSceneryGeometryEnabled = false;
+        ClearFirstPersonSemanticSupportProxies();
         _staticRegionPackets.clear();
     }
     void InvalidateFirstPersonSceneRegion(CoordsXY low, CoordsXY high)
@@ -6214,6 +6259,13 @@ namespace OpenRCT2::Paint
             const int32_t originY = int32_t(key & 0xffffffffu);
             if (x0 < entry.x1 && x1 >= originX && y0 < entry.y1 && y1 >= originY)
                 entry.dirty = true;
+        }
+        for (int32_t ty = y0; ty <= y1; ++ty)
+        for (int32_t tx = x0; tx <= x1; ++tx)
+        {
+            WithdrawFirstPersonSemanticSupportProxies(
+                { tx * kCoordsXYStep,
+                  ty * kCoordsXYStep });
         }
         for (auto& [key, terrain] : _terrainCache.entries)
         {
