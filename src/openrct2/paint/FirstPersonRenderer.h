@@ -5,6 +5,7 @@
 #pragma once
 
 #include "FirstPersonMath.h"
+#include "Paint.h"
 #include "FirstPersonStreaming.h"
 #include "../Identifiers.h"
 #include "../drawing/ImageId.hpp"
@@ -16,7 +17,11 @@
 #include <vector>
 
 namespace OpenRCT2::Drawing { struct RenderTarget; }
-namespace OpenRCT2 { struct LargeSceneryElement; }
+namespace OpenRCT2
+{
+    struct LargeSceneryElement;
+    struct Vehicle;
+}
 struct PaintStruct;
 
 namespace OpenRCT2::Paint
@@ -184,6 +189,14 @@ namespace OpenRCT2::Paint
         const FirstPersonCamera& camera, const FirstPersonVec3& worldPoint,
         const ScreenSize& screenSize, float fieldOfViewDegrees = 70.0f,
         float nearClip = 2.0f);
+    [[nodiscard]] std::optional<PassengerPaintAnchor>
+        CaptureFirstPersonPassengerPaintAnchor(
+            const Vehicle& vehicle, uint8_t seatIndex);
+    [[nodiscard]] std::optional<PassengerPaintAnchor>
+        CaptureFirstPersonPassengerPaintAnchor(
+            const Vehicle& vehicle, uint8_t seatIndex,
+            const FirstPersonPassengerPaintInterpolation& interpolation);
+
     // A single authoritative park-state -> perspective-scene collector.
     FirstPersonScene CollectFirstPersonScene(
         const FirstPersonRenderOptions& options, const ScreenSize& dimensions);
