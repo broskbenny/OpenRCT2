@@ -344,6 +344,26 @@ static WoodenSupportSubType rotatedWoodenSupportSubTypes[kNumWoodenSupportSubTyp
     },
 };
 
+struct FirstPersonWoodenSupportRoleScope
+{
+    PaintSession& session;
+    FirstPersonPaintSemanticRole previous;
+
+    explicit FirstPersonWoodenSupportRoleScope(
+        PaintSession& s)
+        : session(s)
+        , previous(s.FirstPersonSemanticRole)
+    {
+        session.FirstPersonSemanticRole =
+            FirstPersonPaintSemanticRole::support;
+    }
+
+    ~FirstPersonWoodenSupportRoleScope()
+    {
+        session.FirstPersonSemanticRole = previous;
+    }
+};
+
 static std::array<CoordsXY, 2>
     FirstPersonWoodenSupportPosts(
         WoodenSupportSubType subType)
@@ -373,15 +393,16 @@ static std::array<CoordsXY, 2>
     }
 }
 
-static void PublishFirstPersonWoodenSupportPosts(
+static void PublishFirstPersonWoodenSupportGeometry(
     PaintSession& session, WoodenSupportSubType subType,
     int32_t lowZ, int32_t highZ, ImageId image)
 {
     if (highZ <= lowZ
         || subType == WoodenSupportSubType::null)
         return;
-    for (const auto point :
-         FirstPersonWoodenSupportPosts(subType))
+    const auto posts =
+        FirstPersonWoodenSupportPosts(subType);
+    for (const auto point : posts)
     {
         PaintSessionAddFirstPersonPhysicalBox(
             session,
@@ -389,6 +410,32 @@ static void PublishFirstPersonWoodenSupportPosts(
             { point.x - 2, point.y - 2, lowZ },
             { point.x + 2, point.y + 2, highZ },
             image);
+    }
+
+    for (int32_t sectionLow = lowZ;
+         sectionLow < highZ;
+         sectionLow += 16)
+    {
+        const int32_t sectionHigh =
+            std::min(sectionLow + 16, highZ);
+        PaintSessionAddFirstPersonPhysicalSegment(
+            session,
+            FirstPersonPaintPhysicalPrimitiveKind::supportBeam,
+            { posts[0].x, posts[0].y, sectionHigh },
+            { posts[1].x, posts[1].y, sectionHigh },
+            1, image);
+        PaintSessionAddFirstPersonPhysicalSegment(
+            session,
+            FirstPersonPaintPhysicalPrimitiveKind::supportBeam,
+            { posts[0].x, posts[0].y, sectionLow },
+            { posts[1].x, posts[1].y, sectionHigh },
+            1, image);
+        PaintSessionAddFirstPersonPhysicalSegment(
+            session,
+            FirstPersonPaintPhysicalPrimitiveKind::supportBeam,
+            { posts[1].x, posts[1].y, sectionLow },
+            { posts[0].x, posts[0].y, sectionHigh },
+            1, image);
     }
 }
 
@@ -399,6 +446,8 @@ static void PaintRepeatedWoodenSupports(
     const SupportsIdDescriptor supportImages, const ImageId& imageTemplate, int16_t heightSteps, PaintSession& session,
     uint16_t& baseHeight, bool& hasSupports)
 {
+    FirstPersonWoodenSupportRoleScope
+        firstPersonRole(session);
     while (heightSteps > 0)
     {
         const bool isHalf = baseHeight & 0x10 || heightSteps == 1 || baseHeight + kWaterHeightStep == session.WaterHeight;
@@ -600,7 +649,7 @@ inline bool WoodenABSupportsPaintSetupCommon(
 
     if (hasSupports)
     {
-        PublishFirstPersonWoodenSupportPosts(
+        PublishFirstPersonWoodenSupportGeometry(
             session, subType,
             firstPersonBase, height,
             imageTemplate);
@@ -707,7 +756,7 @@ bool PathBoxSupportsPaintSetup(
 
     if (hasSupports)
     {
-        PublishFirstPersonWoodenSupportPosts(
+        PublishFirstPersonWoodenSupportGeometry(
             session, supportType,
             firstPersonBase, height,
             imageTemplate);
