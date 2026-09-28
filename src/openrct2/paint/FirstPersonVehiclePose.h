@@ -365,37 +365,6 @@ namespace OpenRCT2::Paint
         return 0;
     }
 
-    [[nodiscard]] inline FirstPersonVec3 FirstPersonPassengerFallbackEyeOffset(
-        const Vehicle& car, uint8_t seatIndex)
-    {
-        const auto visual = ResolveVehicleVisualState(car);
-        const auto* entry = visual.carEntry;
-        if (entry == nullptr)
-            return { 0.0f, 0.0f, 8.0f };
-
-        if (const auto* calibrated =
-                GetFirstPersonPassengerAssetSeat(*entry, seatIndex);
-            calibrated != nullptr)
-            return calibrated->localEye;
-
-        const uint8_t rows = std::max<uint8_t>(entry->numSeatingRows, 1);
-        const uint8_t row = std::min<uint8_t>(seatIndex / 2, rows - 1);
-        const float visualRadius = std::max(8.0f, float(entry->spriteWidth));
-        const float rowSpan = std::min(16.0f, visualRadius * 0.5f);
-        const float forward = rows > 1
-            ? (0.5f - float(row) / float(rows - 1)) * rowSpan
-            : 0.0f;
-        const float lateralMagnitude = car.num_seats > 1
-            ? std::clamp(visualRadius * 0.125f, 2.0f, 4.0f)
-            : 0.0f;
-        const float lateral = (seatIndex & 1) != 0
-            ? lateralMagnitude : -lateralMagnitude;
-        const float eyeHeight = std::clamp(
-            0.35f * float(std::max<uint8_t>(entry->spriteHeightPositive, 1)),
-            8.0f, 20.0f);
-        return { forward, lateral, eyeHeight };
-    }
-
     [[nodiscard]] inline FirstPersonBasis FirstPersonRotatePassengerPitch(
         const FirstPersonBasis& basis, float angle)
     {
