@@ -32,6 +32,13 @@ namespace OpenRCT2::Ui
         std::array<GLuint,3> _timerQueries{};
         std::array<bool,3> _timerPending{};
         uint32_t _nextTimer{};
+        // Boolean occlusion queries are used only as nonblocking early-out
+        // probes for pathological transparency stacks. Unavailable results are
+        // ignored, so they can never introduce a CPU/GPU synchronisation.
+        std::array<GLuint,8> _peelCoverageQueries{};
+        std::array<bool,8> _peelCoveragePending{};
+        std::array<uint64_t,8> _peelCoverageTokens{};
+        uint64_t _nextPeelCoverageToken{};
         float _lastGpuTimeMs{};
         std::unique_ptr<OpenGLFramebuffer> _background; // indexed composite scratch
         std::unique_ptr<OpenGLFramebuffer> _opaqueSnapshot; // indexed pixels AND physical depth
