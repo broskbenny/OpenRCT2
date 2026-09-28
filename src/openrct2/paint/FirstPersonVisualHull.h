@@ -20,7 +20,7 @@ namespace OpenRCT2::Paint
 {
     struct FirstPersonVisualHullTextureView
     {
-        uint8_t direction{};
+        uint8_t imageDirection{};
         ImageIndex image{};
     };
 
@@ -82,7 +82,7 @@ namespace OpenRCT2::Paint
 
     struct FirstPersonVisualHullView
     {
-        uint8_t direction{};
+        uint8_t imageDirection{};
         ImageIndex image{};
         const G1Element* g1{};
         FirstPersonSilhouette observed{};
@@ -204,7 +204,7 @@ namespace OpenRCT2::Paint
         result.textureViews.reserve(views.size());
         for (const auto& view : views)
             result.textureViews.push_back(
-                { view.direction, view.image });
+                { view.imageDirection, view.image });
 
         const auto pointSupported =
             [&](const FirstPersonVisualHullView& view,
@@ -212,7 +212,7 @@ namespace OpenRCT2::Paint
                 if (view.g1 == nullptr)
                     return false;
                 const auto projected =
-                    projectPoint(view.direction, point);
+                    projectPoint(view.imageDirection, point);
                 const int32_t px =
                     int32_t(std::lround(projected[0]))
                     - view.g1->xOffset;
@@ -283,7 +283,7 @@ namespace OpenRCT2::Paint
                     continue;
                 const auto projected =
                     projectPoint(
-                        view->direction,
+                        view->imageDirection,
                         result.centre(
                             forward, right, up));
                 const int32_t x =
