@@ -4527,6 +4527,57 @@ namespace OpenRCT2::Paint
                     topColour, sideColour);
             }
 
+            const auto& tunnelDescriptor =
+                GetTunnelDescriptor(
+                    track.isInverted()
+                    ? TunnelType::invertedFlat
+                    : TunnelType::standardFlat);
+            const float tunnelFloor =
+                profile.verticalOffset
+                - profile.halfHeight - 4.0f;
+            const float tunnelCeiling =
+                tunnelFloor
+                + float(tunnelDescriptor.height
+                    * kCoordsZPerTinyZ);
+            const float tunnelHalfWidth =
+                std::max(
+                    8.0f,
+                    profile.halfGauge
+                        + profile.halfWidth + 4.0f);
+            uint8_t tunnelColour =
+                static_cast<uint8_t>(
+                    Drawing::getColourMap(
+                        Drawing::Colour::darkBrown).midDark);
+            if (tunnelColour == 0)
+                tunnelColour = static_cast<uint8_t>(
+                    Drawing::PaletteIndex::trackRails1);
+            for (const auto& tunnel :
+                 BuildFirstPersonTrackTunnelRoute(
+                     trajectory, tunnelHalfWidth,
+                     tunnelFloor, tunnelCeiling))
+            {
+                FirstPersonSurface surface{};
+                surface.solidColour = tunnelColour;
+                const int32_t tileX =
+                    int32_t(std::floor(
+                        tunnel.midpoint.x
+                        / float(kCoordsXYStep)));
+                const int32_t tileY =
+                    int32_t(std::floor(
+                        tunnel.midpoint.y
+                        / float(kCoordsXYStep)));
+                surface.gpuRegion =
+                    FirstPersonGpuRegionKey(tileX, tileY);
+                std::array<FirstPersonVertex, 4>
+                    vertices{};
+                for (size_t i = 0; i < 4; ++i)
+                    vertices[i].world =
+                        tunnel.quad.corners[i];
+                EmitQuad(surface, vertices);
+                result.surfaces.push_back(
+                    std::move(surface));
+            }
+
             if (const auto next = NextFirstPersonTrackTrajectory(
                     ride, sampleOrigin, originElement);
                 next.has_value())
