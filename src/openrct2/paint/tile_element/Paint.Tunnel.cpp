@@ -8,6 +8,40 @@
 
 using namespace OpenRCT2;
 
+static constexpr std::array<TunnelDescriptor, kTunnelTypeCount> kTunnelDescriptors = {{
+    { 2, 2, 0,   15, TunnelType::standardFlat,                    36 },
+    { 3, 3, 0,   15, TunnelType::standardFlat,                    40 },
+    { 3, 5, -32,  4, TunnelType::standardFlat,                    44 },
+    { 3, 3, 0,   15, TunnelType::invertedFlat,                    48 },
+    { 4, 4, 0,   15, TunnelType::invertedFlat,                    52 },
+    { 4, 7, -48,  4, TunnelType::invertedFlat,                    56 },
+    { 2, 2, 0,   15, TunnelType::squareFlat,                      60 },
+    { 3, 3, 0,   15, TunnelType::squareFlat,                      64 },
+    { 3, 5, -32,  4, TunnelType::squareFlat,                      68 },
+    { 3, 3, 0,   15, TunnelType::squareFlat,                      72 },
+    { 2, 3, -16, 15, TunnelType::pathAndMiniGolf,                 76 },
+    { 2, 3, -16, 15, TunnelType::path11,                          80 },
+    { 2, 3, -16,  4, TunnelType::standardFlatTo25Deg,             36 },
+    { 3, 4, -16,  4, TunnelType::invertedFlatTo25Deg,             48 },
+    { 2, 3, -16,  4, TunnelType::squareFlatTo25Deg,               60 },
+    { 3, 4, -16,  4, TunnelType::squareFlatTo25Deg,               72 },
+    { 2, 2, 0,   15, TunnelType::doorClosed,                      84 },
+    { 2, 2, 0,   15, TunnelType::doorOpeningOutward,              88 },
+    { 2, 2, 0,   15, TunnelType::doorOpenOutward,                 92 },
+    { 2, 2, 0,   15, TunnelType::doorOpeningInward,               96 },
+    { 2, 2, 0,   15, TunnelType::doorOpenInward,                 100 },
+    { 2, 3, -16,  4, TunnelType::doorClosedFlatToDown25,          84 },
+    { 2, 3, -16,  4, TunnelType::doorOpeningOutwardFlatToDown25,  88 },
+    { 2, 3, -16,  4, TunnelType::doorOpenOutwardFlatToDown25,     92 },
+    { 2, 3, -16,  4, TunnelType::doorOpeningInwardFlatToDown25,   96 },
+    { 2, 3, -16,  4, TunnelType::doorOpenInwardFlatToDown25,     100 },
+}};
+
+const TunnelDescriptor& GetTunnelDescriptor(TunnelType type)
+{
+    return kTunnelDescriptors[EnumValue(type)];
+}
+
 using TunnelGroupMap = std::array<TunnelType, kTunnelSubTypeCount>;
 static std::array<TunnelGroupMap, kTunnelGroupCount> tunnelMap = {
     TunnelGroupMap{ TunnelType::standardFlat, TunnelType::standardSlopeStart, TunnelType::standardSlopeEnd,
