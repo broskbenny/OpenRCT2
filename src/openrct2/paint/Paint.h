@@ -329,6 +329,11 @@ void PaintSessionAddFirstPersonPhysicalBox(
     FirstPersonPaintPhysicalPrimitiveKind kind,
     const CoordsXYZ& localLow, const CoordsXYZ& localHigh,
     ImageId image);
+void PaintSessionAddFirstPersonPhysicalSegment(
+    PaintSession& session,
+    FirstPersonPaintPhysicalPrimitiveKind kind,
+    const CoordsXYZ& localA, const CoordsXYZ& localB,
+    int32_t halfWidth, ImageId image);
 
 // Globals for paint clipping
 extern uint8_t gClipHeight;
