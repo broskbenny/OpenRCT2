@@ -317,6 +317,13 @@ void PaintSessionPublishFirstPersonPassengerAnchor(
     float eyeRight = 0.0f, float eyeUp = 0.0f,
     bool hasLocalPitch = false, float localPitch = 0.0f);
 
+void PaintSessionPublishFirstPersonPassengerLocalAnchor(
+    PaintSession& session, OpenRCT2::EntityBase& entity,
+    uint32_t seatMask, float localX, float localY, float localZ,
+    bool hasEyeOffset = false, float eyeForward = 0.0f,
+    float eyeRight = 0.0f, float eyeUp = 0.0f,
+    bool hasLocalPitch = false, float localPitch = 0.0f);
+
 void PaintSessionAddFirstPersonPhysicalBox(
     PaintSession& session,
     FirstPersonPaintPhysicalPrimitiveKind kind,
