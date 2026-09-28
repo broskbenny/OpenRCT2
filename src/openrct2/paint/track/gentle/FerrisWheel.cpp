@@ -22,6 +22,7 @@
 #include "../../support/WoodenSupports.h"
 #include "../../tile_element/Segment.h"
 
+#include <algorithm>
 #include <cmath>
 
 using namespace OpenRCT2;
