@@ -316,6 +316,7 @@ void main() {
         glCall(glDeleteShader, cf);
         if (status != GL_TRUE) throw std::runtime_error("First-person compositor linking failed");
         glCall(glGenQueries, GLsizei(_timerQueries.size()), _timerQueries.data());
+        glCall(glGenQueries, GLsizei(_peelCoverageQueries.size()), _peelCoverageQueries.data());
         glCall(glGenVertexArrays, 1, &_vao);
         glCall(glGenBuffers, 1, &_vbo);
         ConfigureVertexInput(_vao,_vbo);
@@ -342,6 +343,7 @@ void main() {
         glCall(glDeleteProgram, _program);
         glCall(glDeleteProgram, _composeProgram);
         glCall(glDeleteQueries,GLsizei(_timerQueries.size()),_timerQueries.data());
+        glCall(glDeleteQueries,GLsizei(_peelCoverageQueries.size()),_peelCoverageQueries.data());
     }
     void FirstPersonGLRenderer::Draw(
         const Paint::FirstPersonScene& scene, TextureCache& textures, SwapFramebuffer& output,
@@ -373,6 +375,37 @@ void main() {
         }
         if(timerSlot<_timerQueries.size())
             glCall(glBeginQuery,GL_TIME_ELAPSED,_timerQueries[timerSlot]);
+
+        const auto pollPeelCoverageQueries =
+            [&](uint64_t token) {
+                bool exhausted = false;
+                for (size_t i = 0;
+                     i < _peelCoverageQueries.size(); ++i)
+                {
+                    if (!_peelCoveragePending[i])
+                        continue;
+                    GLuint ready = 0;
+                    glCall(
+                        glGetQueryObjectuiv,
+                        _peelCoverageQueries[i],
+                        GL_QUERY_RESULT_AVAILABLE, &ready);
+                    if (ready == 0)
+                        continue;
+                    GLuint anySamples = 1;
+                    glCall(
+                        glGetQueryObjectuiv,
+                        _peelCoverageQueries[i],
+                        GL_QUERY_RESULT, &anySamples);
+                    if (_peelCoverageTokens[i] == token
+                        && anySamples == 0)
+                        exhausted = true;
+                    _peelCoveragePending[i] = false;
+                }
+                return exhausted;
+            };
+        // Retire completed probes from earlier tiles/frames without waiting.
+        (void)pollPeelCoverageQueries(0);
+
         // We are inside an OpenRCT2 onDraw callback. Earlier 2-D commands have been flushed.
         output.BindOpaque();
         const int32_t width = scene.dimensions.width;
@@ -1004,8 +1037,24 @@ void main() {
                     std::min(
                         tile.candidates.size(),
                         conservativeLayerLimit(tile));
+                constexpr size_t kCoverageProbeThreshold = 8;
+                const bool probeExhaustion =
+                    logicalPasses > kCoverageProbeThreshold;
+                uint64_t coverageToken = 0;
+                if (probeExhaustion)
+                {
+                    coverageToken = ++_nextPeelCoverageToken;
+                    if (coverageToken == 0)
+                        coverageToken = ++_nextPeelCoverageToken;
+                }
+
                 for(size_t pass=0; pass<logicalPasses; ++pass)
                 {
+                    if (probeExhaustion
+                        && pollPeelCoverageQueries(
+                            coverageToken))
+                        break;
+
                     auto& physicalLayer = *_peelDepthLayers[size_t(pass&1)];
                     auto& logicalLayer = *_peelLayers[size_t(pass&1)];
                     const bool peeling = pass != 0;
@@ -1036,7 +1085,52 @@ void main() {
                     // Unit 5 is unused in stage one; bind a non-attached depth
                     // texture anyway to avoid framebuffer/texture feedback.
                     OpenGLAPI::SetTexture(5,GL_TEXTURE_2D,_opaqueSnapshot->GetDepthTexture());
+
+                    size_t coverageSlot =
+                        _peelCoverageQueries.size();
+                    if (probeExhaustion)
+                    {
+                        for (size_t i = 0;
+                             i < _peelCoverageQueries.size(); ++i)
+                        {
+                            if (!_peelCoveragePending[i])
+                            {
+                                coverageSlot = i;
+                                break;
+                            }
+                        }
+                    }
+                    if (coverageSlot
+                        < _peelCoverageQueries.size())
+                    {
+                        glCall(
+                            glBeginQuery,
+                            GL_ANY_SAMPLES_PASSED,
+                            _peelCoverageQueries[
+                                coverageSlot]);
+                    }
                     glCall(glDrawArrays,GL_TRIANGLES,0,GLsizei(tileVertices.size()));
+                    if (coverageSlot
+                        < _peelCoverageQueries.size())
+                    {
+                        glCall(
+                            glEndQuery,
+                            GL_ANY_SAMPLES_PASSED);
+                        _peelCoverageTokens[
+                            coverageSlot] =
+                            coverageToken;
+                        _peelCoveragePending[
+                            coverageSlot] = true;
+                    }
+
+                    // A completed zero-sample result is definitive: every
+                    // subsequent logical layer is empty too. Never wait for
+                    // the result; if the driver is still working, continue the
+                    // exact peel path and poll again after composition.
+                    if (probeExhaustion
+                        && pollPeelCoverageQueries(
+                            coverageToken))
+                        break;
 
                     // Stage 2: at that exact physical depth, select the earliest
                     // remaining native paint ordinal. gl_FragDepth is an ordinal
@@ -1063,6 +1157,11 @@ void main() {
                     OpenGLAPI::SetTexture(5,GL_TEXTURE_2D,physicalLayer.GetDepthTexture());
                     glCall(glDrawArrays,GL_TRIANGLES,0,GLsizei(tileVertices.size()));
                     composeLayer(logicalLayer,tile);
+
+                    if (probeExhaustion
+                        && pollPeelCoverageQueries(
+                            coverageToken))
+                        break;
                 }
             }
 
