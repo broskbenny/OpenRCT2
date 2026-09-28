@@ -8,9 +8,13 @@
 #include "tile_element/Paint.Tunnel.h"
 
 #include "../world/Location.hpp"
+#include "../world/Map.h"
+#include "../world/tile_element/Slope.h"
+#include "../world/tile_element/SurfaceElement.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -139,6 +143,127 @@ namespace OpenRCT2::Paint
             } });
         }
         return result;
+    }
+
+    [[nodiscard]] inline std::vector<FirstPersonTunnelQuad>
+        BuildFirstPersonTunnelPortalTerrainWall(
+            FirstPersonTunnelPortal portal)
+    {
+        const auto* surface =
+            MapGetSurfaceElementAt(portal.tile);
+        if (surface == nullptr)
+            return {};
+
+        const auto self =
+            GetSlopeCornerHeights(
+                surface->getBaseZ(),
+                surface->getSlope());
+        CoordsXY neighbourTile = portal.tile;
+        switch (portal.edge)
+        {
+            case FirstPersonTunnelEdge::xMin:
+                neighbourTile.x -= kCoordsXYStep;
+                break;
+            case FirstPersonTunnelEdge::yMax:
+                neighbourTile.y += kCoordsXYStep;
+                break;
+            case FirstPersonTunnelEdge::xMax:
+                neighbourTile.x += kCoordsXYStep;
+                break;
+            case FirstPersonTunnelEdge::yMin:
+                neighbourTile.y -= kCoordsXYStep;
+                break;
+        }
+
+        float lowerA = 0.0f;
+        float lowerB = 0.0f;
+        float upperA = 0.0f;
+        float upperB = 0.0f;
+        const auto* neighbour =
+            MapIsLocationValid(neighbourTile)
+            ? MapGetSurfaceElementAt(neighbourTile)
+            : nullptr;
+        const auto neighbourHeights =
+            neighbour != nullptr
+            ? GetSlopeCornerHeights(
+                neighbour->getBaseZ(),
+                neighbour->getSlope())
+            : decltype(self){};
+
+        switch (portal.edge)
+        {
+            case FirstPersonTunnelEdge::xMin:
+                upperA = float(self.south);
+                upperB = float(self.west);
+                if (neighbour != nullptr)
+                {
+                    lowerA = float(neighbourHeights.east);
+                    lowerB = float(neighbourHeights.north);
+                }
+                break;
+            case FirstPersonTunnelEdge::yMax:
+                upperA = float(self.west);
+                upperB = float(self.north);
+                if (neighbour != nullptr)
+                {
+                    lowerA = float(neighbourHeights.south);
+                    lowerB = float(neighbourHeights.east);
+                }
+                break;
+            case FirstPersonTunnelEdge::xMax:
+                upperA = float(self.north);
+                upperB = float(self.east);
+                if (neighbour != nullptr)
+                {
+                    lowerA = float(neighbourHeights.west);
+                    lowerB = float(neighbourHeights.south);
+                }
+                break;
+            case FirstPersonTunnelEdge::yMin:
+                upperA = float(self.east);
+                upperB = float(self.south);
+                if (neighbour != nullptr)
+                {
+                    lowerA = float(neighbourHeights.north);
+                    lowerB = float(neighbourHeights.west);
+                }
+                break;
+        }
+
+        const auto& requested =
+            GetTunnelDescriptor(portal.type);
+        const float clearance =
+            std::min({
+                upperA, upperB,
+                neighbour != nullptr ? lowerA
+                    : upperA,
+                neighbour != nullptr ? lowerB
+                    : upperB,
+            });
+        if (float(portal.lowZ)
+                + float(requested.height
+                    * kCoordsZPerTinyZ)
+            > clearance)
+        {
+            const auto& fallback =
+                GetTunnelDescriptor(
+                    requested.lowClearanceAlternative);
+            portal.type =
+                requested.lowClearanceAlternative;
+            portal.highZ = portal.lowZ
+                + int32_t(fallback.height)
+                    * kCoordsZPerTinyZ;
+            portal.boundBoxZOffset =
+                fallback.boundBoxZOffset;
+            portal.boundBoxLength =
+                fallback.boundBoxLength;
+        }
+
+        lowerA = std::min(lowerA, upperA);
+        lowerB = std::min(lowerB, upperB);
+        return BuildFirstPersonTunnelPortalWall(
+            portal, lowerA, lowerB,
+            upperA, upperB);
     }
 
     [[nodiscard]] inline std::array<FirstPersonTunnelQuad, 3>
