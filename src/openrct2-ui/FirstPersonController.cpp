@@ -1094,16 +1094,29 @@ namespace OpenRCT2::Ui::FirstPerson
         if (vehicle == nullptr)
             return false;
 
+        const uint8_t seatIndex =
+            Paint::FirstPersonPassengerSeatIndex(*vehicle);
+        const auto nativeAnchor =
+            Paint::CaptureFirstPersonPassengerPaintAnchor(
+                *vehicle, seatIndex);
+        const auto initialPassenger =
+            Paint::FirstPersonVehicleSimulationPassengerPose(
+                *vehicle,
+                nativeAnchor.has_value()
+                    ? &*nativeAnchor : nullptr,
+                seatIndex);
+        if (!initialPassenger.supported)
+            return false;
+        const auto initialOrientation =
+            Paint::FirstPersonVehicleSimulationOrientation(*vehicle);
+
         Exit();
 
         _state.mode = Mode::rideAttached;
         EntityTweener::get().setTrackedVehicle(vehicleId);
         _state.attachedVehicle = vehicleId;
         _state.attachedRide = vehicle->ride;
-        _state.attachedSeat = Paint::FirstPersonPassengerSeatIndex(*vehicle);
-        const auto initialOrientation = Paint::FirstPersonVehicleSimulationOrientation(*vehicle);
-        const auto initialPassenger = Paint::FirstPersonVehicleSimulationPassengerPose(
-            *vehicle, _state.attachedSeat);
+        _state.attachedSeat = seatIndex;
         _state.camera.position = initialPassenger.position;
         _state.camera.yaw = initialOrientation.yaw;
         _state.camera.pitch = initialOrientation.pitch;
@@ -1191,13 +1204,37 @@ namespace OpenRCT2::Ui::FirstPerson
                 const auto presentation =
                     Paint::BuildFirstPersonVehiclePresentationState(
                         *car, tracked);
+                FirstPersonPassengerPaintInterpolation
+                    interpolation{};
+                if (tracked.has_value())
+                {
+                    interpolation.enabled = true;
+                    interpolation.primaryBefore =
+                        tracked->flatPrimaryBefore;
+                    interpolation.primaryAfter =
+                        tracked->flatPrimaryAfter;
+                    interpolation.secondaryBefore =
+                        tracked->flatSecondaryBefore;
+                    interpolation.secondaryAfter =
+                        tracked->flatSecondaryAfter;
+                    interpolation.alpha = tracked->alpha;
+                }
+                const auto nativeAnchor =
+                    Paint::CaptureFirstPersonPassengerPaintAnchor(
+                        *car, _state.attachedSeat,
+                        interpolation);
                 const auto passenger =
                     Paint::BuildFirstPersonPassengerPoseWithCarriage(
                         *car, presentation.vehicleOrigin,
                         presentation.carriage,
-                        presentation.flatPrimaryFrame,
-                        presentation.flatSecondaryFrame,
+                        nativeAnchor.has_value()
+                            ? &*nativeAnchor : nullptr,
                         _state.attachedSeat);
+                if (!passenger.supported)
+                {
+                    Exit();
+                    return;
+                }
                 const auto headBasis =
                     Paint::GetPassengerHeadBasis(
                         passenger.basis,
