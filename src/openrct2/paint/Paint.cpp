@@ -220,6 +220,9 @@ static PaintStruct* CreateNormalPaintStruct(
     ps->Element = session.CurrentlyDrawnTileElement;
     ps->Entity = session.CurrentlyDrawnEntity;
     ps->Source = session.CurrentSource;
+    ps->FirstPersonSemanticRole = session.FirstPersonSemanticRole;
+    ps->FirstPersonPassengerSeatMask =
+        session.FirstPersonPassengerSeatMask;
 
     return ps;
 }
@@ -270,6 +273,9 @@ static PaintStruct* CreateNormalPaintStructHeight(
     ps->Element = session.CurrentlyDrawnTileElement;
     ps->Entity = session.CurrentlyDrawnEntity;
     ps->Source = session.CurrentSource;
+    ps->FirstPersonSemanticRole = session.FirstPersonSemanticRole;
+    ps->FirstPersonPassengerSeatMask =
+        session.FirstPersonPassengerSeatMask;
 
     return ps;
 }
@@ -860,6 +866,89 @@ PaintSession* PaintSessionAlloc(RenderTarget& rt, uint32_t viewFlags, uint8_t ro
 void PaintSessionFree(PaintSession* session)
 {
     GetContext()->GetPainter()->ReleaseSession(session);
+}
+
+void PaintSessionPublishFirstPersonPassengerAnchor(
+    PaintSession& session, EntityBase& entity,
+    uint32_t seatMask, float worldX, float worldY, float worldZ,
+    bool hasEyeOffset, float eyeForward,
+    float eyeRight, float eyeUp,
+    bool hasLocalPitch, float localPitch)
+{
+    if (session.FirstPersonPassengerAnchorSink == nullptr
+        || session.FirstPersonPassengerAnchorEntity != &entity
+        || session.FirstPersonPassengerAnchorSeatIndex >= 32
+        || (seatMask
+            & (uint32_t{ 1 }
+                << session.FirstPersonPassengerAnchorSeatIndex))
+            == 0)
+        return;
+
+    *session.FirstPersonPassengerAnchorSink = {
+        &entity,
+        seatMask,
+        worldX,
+        worldY,
+        worldZ,
+        hasEyeOffset,
+        eyeForward,
+        eyeRight,
+        eyeUp,
+        hasLocalPitch,
+        localPitch,
+    };
+}
+
+void PaintSessionAddFirstPersonPhysicalBox(
+    PaintSession& session,
+    FirstPersonPaintPhysicalPrimitiveKind kind,
+    const CoordsXYZ& localLow, const CoordsXYZ& localHigh,
+    ImageId image)
+{
+    if (session.FirstPersonPhysicalPrimitiveSink == nullptr)
+        return;
+
+    const uint8_t rotation =
+        DirectionFlipXAxis(session.CurrentRotation) & 3u;
+    const auto rotate =
+        [rotation](float x, float y) {
+            switch (rotation)
+            {
+                case 1: return std::array<float, 2>{ y, -x };
+                case 2: return std::array<float, 2>{ -x, -y };
+                case 3: return std::array<float, 2>{ -y, x };
+                default: return std::array<float, 2>{ x, y };
+            }
+        };
+
+    const auto a = rotate(float(localLow.x), float(localLow.y));
+    const auto b = rotate(float(localHigh.x), float(localLow.y));
+    const auto d = rotate(float(localLow.x), float(localHigh.y));
+    const auto e = rotate(float(localHigh.x), float(localHigh.y));
+    const float originX = float(session.SpritePosition.x);
+    const float originY = float(session.SpritePosition.y);
+
+    FirstPersonPaintPhysicalPrimitive primitive{};
+    primitive.kind = kind;
+    primitive.mapPosition = session.MapPosition;
+    primitive.lowX = originX
+        + std::min({ a[0], b[0], d[0], e[0] });
+    primitive.lowY = originY
+        + std::min({ a[1], b[1], d[1], e[1] });
+    primitive.lowZ = float(std::min(localLow.z, localHigh.z));
+    primitive.highX = originX
+        + std::max({ a[0], b[0], d[0], e[0] });
+    primitive.highY = originY
+        + std::max({ a[1], b[1], d[1], e[1] });
+    primitive.highZ = float(std::max(localLow.z, localHigh.z));
+    primitive.image = image;
+    if (primitive.highX > primitive.lowX
+        && primitive.highY > primitive.lowY
+        && primitive.highZ > primitive.lowZ)
+    {
+        session.FirstPersonPhysicalPrimitiveSink->push_back(
+            primitive);
+    }
 }
 
 /**
