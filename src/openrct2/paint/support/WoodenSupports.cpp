@@ -344,6 +344,54 @@ static WoodenSupportSubType rotatedWoodenSupportSubTypes[kNumWoodenSupportSubTyp
     },
 };
 
+static std::array<CoordsXY, 2>
+    FirstPersonWoodenSupportPosts(
+        WoodenSupportSubType subType)
+{
+    switch (subType)
+    {
+        case WoodenSupportSubType::neSw:
+            return { CoordsXY{ 4, 28 },
+                     CoordsXY{ 28, 4 } };
+        case WoodenSupportSubType::nwSe:
+            return { CoordsXY{ 4, 4 },
+                     CoordsXY{ 28, 28 } };
+        case WoodenSupportSubType::corner0:
+            return { CoordsXY{ 4, 4 },
+                     CoordsXY{ 16, 16 } };
+        case WoodenSupportSubType::corner1:
+            return { CoordsXY{ 28, 4 },
+                     CoordsXY{ 16, 16 } };
+        case WoodenSupportSubType::corner2:
+            return { CoordsXY{ 28, 28 },
+                     CoordsXY{ 16, 16 } };
+        case WoodenSupportSubType::corner3:
+            return { CoordsXY{ 4, 28 },
+                     CoordsXY{ 16, 16 } };
+        default:
+            return { CoordsXY{}, CoordsXY{} };
+    }
+}
+
+static void PublishFirstPersonWoodenSupportPosts(
+    PaintSession& session, WoodenSupportSubType subType,
+    int32_t lowZ, int32_t highZ, ImageId image)
+{
+    if (highZ <= lowZ
+        || subType == WoodenSupportSubType::null)
+        return;
+    for (const auto point :
+         FirstPersonWoodenSupportPosts(subType))
+    {
+        PaintSessionAddFirstPersonPhysicalBox(
+            session,
+            FirstPersonPaintPhysicalPrimitiveKind::supportColumn,
+            { point.x - 2, point.y - 2, lowZ },
+            { point.x + 2, point.y + 2, highZ },
+            image);
+    }
+}
+
 /**
  * Draw repeated supports for left over space
  */
@@ -541,11 +589,21 @@ inline bool WoodenABSupportsPaintSetupCommon(
     uint16_t baseHeight = 0;
     bool hasSupports = false;
     auto supportIds = GetWoodenSupportIds(supportType, subType);
+    const int32_t firstPersonBase =
+        ceil2(session.Support.height, 16);
 
     if (!WoodenSupportsPaintSetupCommon<zOffset, doHeightStepsCheck>(
             session, supportIds, height, imageTemplate, hasSupports, baseHeight))
     {
         return false;
+    }
+
+    if (hasSupports)
+    {
+        PublishFirstPersonWoodenSupportPosts(
+            session, subType,
+            firstPersonBase, height,
+            imageTemplate);
     }
 
     if (transitionType != WoodenSupportTransitionType::none)
@@ -633,6 +691,8 @@ bool PathBoxSupportsPaintSetup(
 
     uint16_t baseHeight = 0;
     bool hasSupports = false;
+    const int32_t firstPersonBase =
+        ceil2(session.Support.height, 16);
     SupportsIdDescriptor supportIds = {
         .Full = railings.bridgeImage + 22 + supportOrientationOffset,
         .Half = railings.bridgeImage + 23 + supportOrientationOffset,
@@ -643,6 +703,14 @@ bool PathBoxSupportsPaintSetup(
     if (!WoodenSupportsPaintSetupCommon<11, false>(session, supportIds, height, imageTemplate, hasSupports, baseHeight))
     {
         return false;
+    }
+
+    if (hasSupports)
+    {
+        PublishFirstPersonWoodenSupportPosts(
+            session, supportType,
+            firstPersonBase, height,
+            imageTemplate);
     }
 
     if (isSloped)
