@@ -43,6 +43,7 @@ namespace OpenRCT2::Paint
         nativePathGeometry,
         calibratedSceneryArtwork,
         calibratedLargeSceneryArtwork,
+        semanticSupportGeometry,
     };
 
     enum class FirstPersonPhysicalProxyCapability : uint8_t
@@ -100,6 +101,65 @@ namespace OpenRCT2::Paint
                     FirstPersonPhysicalProxyCapability::collide),
             sourceKey,
         });
+    }
+
+    [[nodiscard]] inline uint64_t FirstPersonPhysicalTileKey(
+        CoordsXY tile)
+    {
+        const auto origin = tile.toTileStart();
+        return (uint64_t(uint32_t(
+                    origin.x / kCoordsXYStep))
+                << 32)
+            | uint32_t(
+                origin.y / kCoordsXYStep);
+    }
+
+    inline auto& FirstPersonSemanticSupportProxyRegistry()
+    {
+        static std::unordered_map<
+            uint64_t,
+            std::vector<FirstPersonPhysicalBoxProxy>>
+            registry;
+        return registry;
+    }
+
+    inline void PublishFirstPersonSemanticSupportProxies(
+        CoordsXY tile,
+        std::vector<FirstPersonPhysicalBoxProxy> proxies)
+    {
+        auto& registry =
+            FirstPersonSemanticSupportProxyRegistry();
+        const auto key =
+            FirstPersonPhysicalTileKey(tile);
+        if (proxies.empty())
+            registry.erase(key);
+        else
+            registry[key] = std::move(proxies);
+    }
+
+    [[nodiscard]] inline const std::vector<
+        FirstPersonPhysicalBoxProxy>*
+        GetFirstPersonSemanticSupportProxies(
+            CoordsXY tile)
+    {
+        const auto& registry =
+            FirstPersonSemanticSupportProxyRegistry();
+        const auto found = registry.find(
+            FirstPersonPhysicalTileKey(tile));
+        return found != registry.end()
+            ? &found->second : nullptr;
+    }
+
+    inline void WithdrawFirstPersonSemanticSupportProxies(
+        CoordsXY tile)
+    {
+        FirstPersonSemanticSupportProxyRegistry().erase(
+            FirstPersonPhysicalTileKey(tile));
+    }
+
+    inline void ClearFirstPersonSemanticSupportProxies()
+    {
+        FirstPersonSemanticSupportProxyRegistry().clear();
     }
 
     [[nodiscard]] inline bool AppendFirstPersonSmallSceneryProxies(
