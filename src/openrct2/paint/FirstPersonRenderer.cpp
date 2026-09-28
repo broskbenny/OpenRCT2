@@ -2240,7 +2240,9 @@ namespace OpenRCT2::Paint
                 AppendSemanticPathDeck(scene, ps, colourify(deckImage), rotation);
             }
 
-            bool suppressCurrentImage = false;
+            bool suppressCurrentImage =
+                ps.FirstPersonSemanticRole
+                    == FirstPersonPaintSemanticRole::support;
             if (reconstructVehicleBody)
             {
                 const auto component =
