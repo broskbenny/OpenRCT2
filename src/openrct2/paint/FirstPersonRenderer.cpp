@@ -1385,6 +1385,100 @@ namespace OpenRCT2::Paint
             }
             EmitQuad(surface, v, UsesOppositeTerrainDiagonal(slope));
             scene.surfaces.emplace_back(std::move(surface));
+
+            const uint8_t edges = path->getEdges();
+            if (edges != 0)
+            {
+                const FirstPersonVec3 centre{
+                    float(origin.x + kCoordsXYHalfTile),
+                    float(origin.y + kCoordsXYHalfTile),
+                    0.25f * float(
+                        world[0].z + world[1].z
+                        + world[2].z + world[3].z),
+                };
+                const float tunnelHeight = float(
+                    GetTunnelDescriptor(
+                        TunnelType::pathAndMiniGolf).height
+                    * kCoordsZPerTinyZ);
+                uint8_t tunnelColour =
+                    static_cast<uint8_t>(
+                        Drawing::getColourMap(
+                            Drawing::Colour::darkBrown).midDark);
+                if (tunnelColour == 0)
+                    tunnelColour = static_cast<uint8_t>(
+                        Drawing::PaletteIndex::trackRails1);
+
+                static constexpr std::array<
+                    std::array<size_t, 2>, 4>
+                    kEdgeCorners{ {
+                        { 0, 3 }, { 3, 2 },
+                        { 1, 2 }, { 0, 1 },
+                    } };
+                static constexpr std::array<
+                    CoordsXY, 4> kEdgeMidpoints{ {
+                        { 0, kCoordsXYHalfTile },
+                        { kCoordsXYHalfTile, kCoordsXYStep },
+                        { kCoordsXYStep, kCoordsXYHalfTile },
+                        { kCoordsXYHalfTile, 0 },
+                    } };
+                static constexpr std::array<
+                    FirstPersonVec3, 4> kRouteRight{ {
+                        { 0.0f, -1.0f, 0.0f },
+                        { 1.0f, 0.0f, 0.0f },
+                        { 0.0f, 1.0f, 0.0f },
+                        { -1.0f, 0.0f, 0.0f },
+                    } };
+
+                for (uint8_t edge = 0; edge < 4; ++edge)
+                {
+                    if ((edges & (1u << edge)) == 0)
+                        continue;
+                    const auto corners =
+                        kEdgeCorners[edge];
+                    const FirstPersonVec3 edgePoint{
+                        float(origin.x
+                            + kEdgeMidpoints[edge].x),
+                        float(origin.y
+                            + kEdgeMidpoints[edge].y),
+                        0.5f * float(
+                            world[corners[0]].z
+                            + world[corners[1]].z),
+                    };
+                    const FirstPersonVec3 midpoint{
+                        0.5f * (centre.x + edgePoint.x),
+                        0.5f * (centre.y + edgePoint.y),
+                        0.5f * (centre.z + edgePoint.z),
+                    };
+                    if (!FirstPersonTunnelClearanceUnderTerrain(
+                            midpoint, tunnelHeight))
+                        continue;
+
+                    const auto quads =
+                        BuildFirstPersonTunnelSweepSegment(
+                            centre, edgePoint,
+                            kRouteRight[edge],
+                            kRouteRight[edge],
+                            float(kCoordsXYHalfTile) * 0.5f,
+                            0.0f, tunnelHeight);
+                    for (const auto& quad : quads)
+                    {
+                        FirstPersonSurface tunnel{};
+                        tunnel.solidColour = tunnelColour;
+                        tunnel.gpuRegion =
+                            FirstPersonGpuRegionKey(
+                                origin.x / kCoordsXYStep,
+                                origin.y / kCoordsXYStep);
+                        std::array<FirstPersonVertex, 4>
+                            tunnelVertices{};
+                        for (size_t i = 0; i < 4; ++i)
+                            tunnelVertices[i].world =
+                                quad.corners[i];
+                        EmitQuad(tunnel, tunnelVertices);
+                        scene.surfaces.emplace_back(
+                            std::move(tunnel));
+                    }
+                }
+            }
         }
         enum class AttachedVehicleComponentRole : uint8_t
         {
