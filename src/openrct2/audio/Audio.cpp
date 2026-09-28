@@ -31,6 +31,7 @@
 #include "../world/Map.h"
 #include "../world/Weather.h"
 #include "../world/tile_element/SurfaceElement.h"
+#include "../paint/FirstPersonRenderer.h"
 #include "../paint/FirstPersonVehiclePose.h"
 #include "../GameState.h"
 #include "../ride/Vehicle.h"
@@ -92,8 +93,17 @@ namespace OpenRCT2::Audio
             auto* vehicle = getGameState().entities.getEntity<Vehicle>(attachment.vehicleId);
             if (vehicle == nullptr || vehicle->ride != attachment.rideId)
                 return std::nullopt;
-            const auto passenger = Paint::FirstPersonVehicleSimulationPassengerPose(
-                *vehicle, attachment.seatIndex);
+            const auto nativeAnchor =
+                Paint::CaptureFirstPersonPassengerPaintAnchor(
+                    *vehicle, attachment.seatIndex);
+            const auto passenger =
+                Paint::FirstPersonVehicleSimulationPassengerPose(
+                    *vehicle,
+                    nativeAnchor.has_value()
+                        ? &*nativeAnchor : nullptr,
+                    attachment.seatIndex);
+            if (!passenger.supported)
+                return std::nullopt;
             const auto headBasis = Paint::GetPassengerHeadBasis(
                 passenger.basis, attachment.headYaw, attachment.headPitch);
             return FirstPersonAudioListener{
