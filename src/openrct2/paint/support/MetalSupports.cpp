@@ -351,6 +351,67 @@ constexpr MetalSupportGraphic kMetalSupportGraphicRotated[kMetalSupportTypeCount
       MetalSupportGraphic::boxedCoated },
 };
 
+struct FirstPersonSupportRoleScope
+{
+    PaintSession& session;
+    FirstPersonPaintSemanticRole previous;
+
+    explicit FirstPersonSupportRoleScope(PaintSession& s)
+        : session(s)
+        , previous(s.FirstPersonSemanticRole)
+    {
+        session.FirstPersonSemanticRole =
+            FirstPersonPaintSemanticRole::support;
+    }
+
+    ~FirstPersonSupportRoleScope()
+    {
+        session.FirstPersonSemanticRole = previous;
+    }
+};
+
+static void PublishFirstPersonMetalSupportColumn(
+    PaintSession& session, uint8_t segment,
+    int32_t lowZ, int32_t highZ, ImageId image)
+{
+    if (highZ <= lowZ
+        || segment >= std::size(kMetalSupportBoundBoxOffsets))
+        return;
+    const auto point =
+        kMetalSupportBoundBoxOffsets[segment];
+    PaintSessionAddFirstPersonPhysicalBox(
+        session,
+        FirstPersonPaintPhysicalPrimitiveKind::supportColumn,
+        { point.x - 2, point.y - 2, lowZ },
+        { point.x + 2, point.y + 2, highZ },
+        image);
+}
+
+static void PublishFirstPersonMetalSupportCrossBeam(
+    PaintSession& session, uint8_t segment,
+    uint8_t crossBeamIndex, int32_t z, ImageId image)
+{
+    if (segment >= std::size(kMetalSupportBoundBoxOffsets)
+        || crossBeamIndex
+            >= std::size(kMetalSupportCrossBeamBoundBoxOffsets))
+        return;
+    const auto low =
+        kMetalSupportBoundBoxOffsets[segment]
+        + kMetalSupportCrossBeamBoundBoxOffsets[
+            crossBeamIndex];
+    const auto length =
+        kMetalSupportCrossBeamBoundBoxLengths[
+            crossBeamIndex];
+    PaintSessionAddFirstPersonPhysicalBox(
+        session,
+        FirstPersonPaintPhysicalPrimitiveKind::supportBeam,
+        { low.x, low.y, z - 1 },
+        { low.x + length.x,
+          low.y + length.y,
+          z + 2 },
+        image);
+}
+
 constexpr const int32_t kMetalSupportBaseHeight = 6;
 constexpr const int32_t kMetalSupportMaxSectionHeight = 16;
 constexpr const int32_t kMetalSupportJointInterval = 4;
@@ -377,6 +438,7 @@ static bool MetalSupportsPaintSetupCommon(
         imageTemplate = ImageId(0).WithTransparency(FilterPaletteID::paletteDarken1);
     }
 
+    FirstPersonSupportRoleScope firstPersonRole(session);
     int32_t currentHeight = height;
     const uint32_t supportType = EnumValue(supportTypeMember);
 
@@ -415,15 +477,24 @@ static bool MetalSupportsPaintSetupCommon(
                 return false;
         }
 
+        const auto crossBeamImage =
+            imageTemplate.WithIndex(
+                kMetalSupportTypeToCrossbeamImages[
+                    supportType][crossBeamIndex]);
         PaintAddImageAsParent(
-            session, imageTemplate.WithIndex(kMetalSupportTypeToCrossbeamImages[supportType][crossBeamIndex]),
+            session, crossBeamImage,
             { kMetalSupportBoundBoxOffsets[segment] + kMetalSupportCrossBeamBoundBoxOffsets[crossBeamIndex], currentHeight },
             { kMetalSupportCrossBeamBoundBoxLengths[crossBeamIndex], 1 });
+        PublishFirstPersonMetalSupportCrossBeam(
+            session, segment, crossBeamIndex,
+            currentHeight, crossBeamImage);
 
         segment = EnumValue(newPlacement.place);
     }
 
     const int16_t crossbeamHeight = currentHeight;
+    const int32_t firstPersonColumnBase =
+        supportSegments[segment].height;
 
     // Draw support bases
     if (supportSegments[segment].slope & kTileSlopeAboveTrackOrScenery
@@ -478,6 +549,11 @@ static bool MetalSupportsPaintSetupCommon(
         currentHeight += beamLength;
     }
 
+    PublishFirstPersonMetalSupportColumn(
+        session, segment,
+        firstPersonColumnBase, crossbeamHeight,
+        imageTemplate);
+
     supportSegments[segment].height = segmentHeight;
     supportSegments[segment].slope = kTileSlopeAboveTrackOrScenery;
 
@@ -486,6 +562,7 @@ static bool MetalSupportsPaintSetupCommon(
     const auto extraSupportBeamImageIndex = heightExtra >= 0 ? kSupportBasesAndBeams[supportType].beamUncapped
                                                              : kSupportBasesAndBeams[supportType].beamCapped;
     const auto totalHeightExtra = heightExtra < 0 ? currentHeight + (-heightExtra) : currentHeight + heightExtra;
+    const int32_t firstPersonExtraBase = currentHeight;
     const CoordsXYZ boundBoxOffset = CoordsXYZ(kMetalSupportBoundBoxOffsets[originalSegment], currentHeight);
     while (true)
     {
@@ -499,6 +576,11 @@ static bool MetalSupportsPaintSetupCommon(
 
         currentHeight += beamLength;
     }
+
+    PublishFirstPersonMetalSupportColumn(
+        session, originalSegment,
+        firstPersonExtraBase, totalHeightExtra,
+        imageTemplate);
 
     return true;
 }
