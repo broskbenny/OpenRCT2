@@ -38,6 +38,8 @@ namespace OpenRCT2::Paint
         int32_t highZ = 0;
         int16_t boundBoxZOffset = 0;
         uint8_t boundBoxLength = 0;
+        uint8_t paintRotation = 0;
+        bool nativeLeft = false;
     };
 
     [[nodiscard]] constexpr FirstPersonTunnelEdge
@@ -57,7 +59,9 @@ namespace OpenRCT2::Paint
     [[nodiscard]] inline FirstPersonTunnelPortal
         BuildFirstPersonTunnelPortal(
             CoordsXY tile, FirstPersonTunnelEdge edge,
-            const TunnelEntry& entry)
+            const TunnelEntry& entry,
+            uint8_t paintRotation = 0,
+            bool nativeLeft = false)
     {
         const auto& descriptor =
             GetTunnelDescriptor(entry.type);
@@ -73,6 +77,8 @@ namespace OpenRCT2::Paint
                     * kCoordsZPerTinyZ,
             descriptor.boundBoxZOffset,
             descriptor.boundBoxLength,
+            uint8_t(paintRotation & 3u),
+            nativeLeft,
         };
     }
 
@@ -231,16 +237,34 @@ namespace OpenRCT2::Paint
                 break;
         }
 
+        const auto cornerHeight =
+            [](const auto& heights, uint8_t corner) {
+                switch (corner & 3u)
+                {
+                    case 0: return float(heights.south);
+                    case 1: return float(heights.east);
+                    case 2: return float(heights.north);
+                    default: return float(heights.west);
+                }
+            };
+        const uint8_t selfCorner =
+            uint8_t(
+                (portal.nativeLeft ? 1u : 3u)
+                + portal.paintRotation)
+            & 3u;
+        const float selfClearance =
+            cornerHeight(self, selfCorner);
+        const float neighbourClearance =
+            neighbour != nullptr
+            ? cornerHeight(
+                neighbourHeights,
+                portal.paintRotation)
+            : selfClearance;
+
         const auto& requested =
             GetTunnelDescriptor(portal.type);
         const float clearance =
-            std::min({
-                upperA, upperB,
-                neighbour != nullptr ? lowerA
-                    : upperA,
-                neighbour != nullptr ? lowerB
-                    : upperB,
-            });
+            std::min(selfClearance, neighbourClearance);
         if (float(portal.lowZ)
                 + float(requested.height
                     * kCoordsZPerTinyZ)
@@ -394,13 +418,16 @@ namespace OpenRCT2::Paint
     inline void AppendFirstPersonTunnelPortals(
         std::vector<FirstPersonTunnelPortal>& output,
         CoordsXY tile, FirstPersonTunnelEdge edge,
-        const TunnelContainer& tunnels)
+        const TunnelContainer& tunnels,
+        uint8_t paintRotation = 0,
+        bool nativeLeft = false)
     {
         for (const auto& tunnel : tunnels)
         {
             const auto portal =
                 BuildFirstPersonTunnelPortal(
-                    tile, edge, tunnel);
+                    tile, edge, tunnel,
+                    paintRotation, nativeLeft);
             const bool duplicate = std::any_of(
                 output.begin(), output.end(),
                 [&](const auto& existing) {
