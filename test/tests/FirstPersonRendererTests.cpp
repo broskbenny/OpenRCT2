@@ -14,6 +14,7 @@
 #include <openrct2/paint/FirstPersonPeriodicPassengerMotion.h>
 #include <openrct2/paint/FirstPersonPhysicalProxy.h>
 #include <openrct2/paint/FirstPersonTrackTrajectory.h>
+#include <openrct2/paint/FirstPersonTunnelGeometry.h>
 #include <openrct2/paint/FirstPersonTrackProfileCalibration.h>
 #include <openrct2/paint/FirstPersonSmallSceneryCollision.h>
 #include <openrct2/paint/FirstPersonVehicleBodyHull.h>
@@ -748,6 +749,80 @@ TEST(FirstPersonTerrainTextureTest, ChosenSourceViewKeepsKnownDegenerateSlopesTw
     }
 }
 
+TEST(FirstPersonTunnelGeometryTest, NativeLeftAndRightEdgesRotateIntoWorldEdges)
+{
+    EXPECT_EQ(
+        FirstPersonLeftTunnelWorldEdge(0),
+        FirstPersonTunnelEdge::xMax);
+    EXPECT_EQ(
+        FirstPersonLeftTunnelWorldEdge(1),
+        FirstPersonTunnelEdge::yMax);
+    EXPECT_EQ(
+        FirstPersonLeftTunnelWorldEdge(2),
+        FirstPersonTunnelEdge::xMin);
+    EXPECT_EQ(
+        FirstPersonLeftTunnelWorldEdge(3),
+        FirstPersonTunnelEdge::yMin);
+
+    EXPECT_EQ(
+        FirstPersonRightTunnelWorldEdge(0),
+        FirstPersonTunnelEdge::yMax);
+    EXPECT_EQ(
+        FirstPersonRightTunnelWorldEdge(1),
+        FirstPersonTunnelEdge::xMin);
+    EXPECT_EQ(
+        FirstPersonRightTunnelWorldEdge(2),
+        FirstPersonTunnelEdge::yMin);
+    EXPECT_EQ(
+        FirstPersonRightTunnelWorldEdge(3),
+        FirstPersonTunnelEdge::xMax);
+}
+
+TEST(FirstPersonTunnelGeometryTest, PortalUsesSharedNativeDescriptorHeight)
+{
+    const TunnelEntry entry{
+        5, TunnelType::pathAndMiniGolf
+    };
+    const auto portal =
+        BuildFirstPersonTunnelPortal(
+            { 64, 96 },
+            FirstPersonTunnelEdge::xMin,
+            entry);
+    const auto& descriptor =
+        GetTunnelDescriptor(
+            TunnelType::pathAndMiniGolf);
+    EXPECT_EQ(portal.lowZ, 5 * kCoordsZPerTinyZ);
+    EXPECT_EQ(
+        portal.highZ - portal.lowZ,
+        int32_t(descriptor.height)
+            * kCoordsZPerTinyZ);
+    EXPECT_EQ(
+        portal.boundBoxZOffset,
+        descriptor.boundBoxZOffset);
+    EXPECT_EQ(
+        portal.boundBoxLength,
+        descriptor.boundBoxLength);
+}
+
+TEST(FirstPersonTunnelGeometryTest, TerrainWallLeavesPortalApertureEmpty)
+{
+    FirstPersonTunnelPortal portal{};
+    portal.tile = { 0, 0 };
+    portal.edge = FirstPersonTunnelEdge::xMin;
+    portal.lowZ = 16;
+    portal.highZ = 48;
+
+    const auto quads =
+        BuildFirstPersonTunnelPortalWall(
+            portal, 0.0f, 0.0f,
+            64.0f, 64.0f);
+    ASSERT_EQ(quads.size(), 2u);
+    for (const auto& corner : quads[0].corners)
+        EXPECT_LE(corner.z, 16.0f);
+    for (const auto& corner : quads[1].corners)
+        EXPECT_GE(corner.z, 48.0f);
+}
+
 TEST(FirstPersonTunnelTest, VerticalTunnelMarkerCutsMatchingTerrainOnly)
 {
     EXPECT_TRUE(FirstPersonVerticalTunnelCutsTerrain(80, 5));
@@ -1180,6 +1255,52 @@ TEST(FirstPersonVehiclePoseTest, MissingSeatPivotKeepsPassengerPositionNeutral)
     EXPECT_GT(
         std::hypot(rotated.x - expected.x, rotated.z - expected.z),
         1.0f);
+}
+
+TEST(FirstPersonVehiclePoseTest, NativePassengerAnchorOwnsPositionWithoutRideName)
+{
+    Vehicle vehicle{};
+    vehicle.num_seats = 2;
+
+    PassengerPaintAnchor anchor{};
+    anchor.Entity = &vehicle;
+    anchor.seatMask = 1u;
+    anchor.x = 100.0f;
+    anchor.y = 200.0f;
+    anchor.z = 300.0f;
+    anchor.hasEyeOffset = true;
+    anchor.eyeForward = 2.0f;
+    anchor.eyeRight = -3.0f;
+    anchor.eyeUp = 10.0f;
+
+    FirstPersonCamera camera{};
+    const auto pose =
+        BuildFirstPersonPassengerPose(
+            vehicle,
+            { 1.0f, 2.0f, 3.0f },
+            GetFirstPersonBasis(camera),
+            &anchor, 0);
+
+    ASSERT_TRUE(pose.supported);
+    EXPECT_TRUE(pose.rideSpecificTransform);
+    EXPECT_FLOAT_EQ(pose.position.x, 102.0f);
+    EXPECT_FLOAT_EQ(pose.position.y, 197.0f);
+    EXPECT_FLOAT_EQ(pose.position.z, 310.0f);
+}
+
+TEST(FirstPersonVehiclePoseTest, MissingAnchorAndSeatCalibrationIsUnsupported)
+{
+    Vehicle vehicle{};
+    vehicle.num_seats = 1;
+    FirstPersonCamera camera{};
+
+    const auto pose =
+        BuildFirstPersonPassengerPose(
+            vehicle,
+            { 1.0f, 2.0f, 3.0f },
+            GetFirstPersonBasis(camera),
+            nullptr, 0);
+    EXPECT_FALSE(pose.supported);
 }
 
 TEST(FirstPersonVehiclePoseTest, RideSpecificTranslationSurvivesCarriageFallback)
