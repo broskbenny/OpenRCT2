@@ -2195,9 +2195,37 @@ namespace OpenRCT2::Paint
             if (hiddenPolicy
                 == FirstPersonHiddenComponentDisposition::suppressSelfContinueChain)
             {
-                // Children is a paint-chain link, not ownership of this one
-                // rider component. Skip the selected passenger artwork while
-                // still traversing later gondolas and the final support.
+                // Shared rider sprites can own a pair of seats. Remove only
+                // the selected rider's remap pixels and preserve the adjacent
+                // passenger, then continue the native paint chain.
+                const auto riderVisibility =
+                    GetPaintStructVisibility(&ps, viewFlags);
+                if (riderVisibility != VisibilityKind::hidden
+                    && ps.image_id.HasValue())
+                {
+                    auto riderImage = ps.image_id;
+                    if (riderVisibility
+                        == VisibilityKind::partial)
+                    {
+                        riderImage =
+                            riderImage.WithTransparency(
+                                Drawing::FilterPaletteID::
+                                    paletteDarken1);
+                    }
+                    const auto surfaceStart =
+                        scene.surfaces.size();
+                    AppendLayer(
+                        scene, anchor, basis, isoAnchor,
+                        riderImage, ps.ScreenPos);
+                    if (scene.surfaces.size() > surfaceStart
+                        && !ApplyAdjacentRiderMask(
+                            scene.surfaces.back(),
+                            ps.image_id,
+                            (hiddenSeatIndex & 1u) != 0))
+                    {
+                        scene.surfaces.pop_back();
+                    }
+                }
                 if (ps.Children != nullptr)
                 {
                     AppendRoot(
