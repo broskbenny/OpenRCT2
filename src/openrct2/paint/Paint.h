@@ -20,6 +20,7 @@
 #include "tile_element/Paint.Tunnel.h"
 
 #include <optional>
+#include <vector>
 #include <sfl/segmented_vector.hpp>
 #include <sfl/static_vector.hpp>
 
@@ -62,6 +63,57 @@ enum class PaintStructSource : uint8_t
     entity,
 };
 
+enum class FirstPersonPaintSemanticRole : uint8_t
+{
+    none,
+    support,
+};
+
+enum class FirstPersonPaintPhysicalPrimitiveKind : uint8_t
+{
+    supportColumn,
+    supportBeam,
+};
+
+struct PassengerPaintAnchor
+{
+    OpenRCT2::EntityBase* Entity = nullptr;
+    uint32_t seatMask = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    bool hasEyeOffset = false;
+    float eyeForward = 0.0f;
+    float eyeRight = 0.0f;
+    float eyeUp = 0.0f;
+    bool hasLocalPitch = false;
+    float localPitch = 0.0f;
+};
+
+struct FirstPersonPassengerPaintInterpolation
+{
+    bool enabled = false;
+    uint8_t primaryBefore = 0;
+    uint8_t primaryAfter = 0;
+    uint8_t secondaryBefore = 0;
+    uint8_t secondaryAfter = 0;
+    float alpha = 0.0f;
+};
+
+struct FirstPersonPaintPhysicalPrimitive
+{
+    FirstPersonPaintPhysicalPrimitiveKind kind =
+        FirstPersonPaintPhysicalPrimitiveKind::supportColumn;
+    CoordsXY mapPosition{};
+    float lowX = 0.0f;
+    float lowY = 0.0f;
+    float lowZ = 0.0f;
+    float highX = 0.0f;
+    float highY = 0.0f;
+    float highZ = 0.0f;
+    ImageId image{};
+};
+
 struct PaintStruct
 {
     PaintStructBoundBox Bounds;
@@ -73,6 +125,9 @@ struct PaintStruct
     // Which native painter produced this artwork. Entity remains interaction
     // ownership and is not evidence that the entity painter produced the art.
     PaintStructSource Source = PaintStructSource::unknown;
+    FirstPersonPaintSemanticRole FirstPersonSemanticRole =
+        FirstPersonPaintSemanticRole::none;
+    uint32_t FirstPersonPassengerSeatMask = 0;
     ImageId image_id;
     ScreenCoordsXY ScreenPos;
     CoordsXY MapPos;
@@ -154,6 +209,15 @@ struct PaintSessionCore
     OpenRCT2::EntityBase* CurrentlyDrawnEntity;
     OpenRCT2::TileElement* CurrentlyDrawnTileElement;
     PaintStructSource CurrentSource = PaintStructSource::unknown;
+    FirstPersonPaintSemanticRole FirstPersonSemanticRole =
+        FirstPersonPaintSemanticRole::none;
+    uint32_t FirstPersonPassengerSeatMask = 0;
+    PassengerPaintAnchor* FirstPersonPassengerAnchorSink = nullptr;
+    OpenRCT2::EntityBase* FirstPersonPassengerAnchorEntity = nullptr;
+    uint8_t FirstPersonPassengerAnchorSeatIndex = 0xFF;
+    FirstPersonPassengerPaintInterpolation FirstPersonPassengerInterpolation{};
+    std::vector<FirstPersonPaintPhysicalPrimitive>*
+        FirstPersonPhysicalPrimitiveSink = nullptr;
     const OpenRCT2::TileElement* PathElementOnSameHeight;
     const OpenRCT2::TileElement* TrackElementOnSameHeight;
     const OpenRCT2::TileElement* SelectedElement;
@@ -245,6 +309,19 @@ struct PaintSession : public PaintSessionCore
 };
 
 extern PaintSession gPaintSession;
+
+void PaintSessionPublishFirstPersonPassengerAnchor(
+    PaintSession& session, OpenRCT2::EntityBase& entity,
+    uint32_t seatMask, float worldX, float worldY, float worldZ,
+    bool hasEyeOffset = false, float eyeForward = 0.0f,
+    float eyeRight = 0.0f, float eyeUp = 0.0f,
+    bool hasLocalPitch = false, float localPitch = 0.0f);
+
+void PaintSessionAddFirstPersonPhysicalBox(
+    PaintSession& session,
+    FirstPersonPaintPhysicalPrimitiveKind kind,
+    const CoordsXYZ& localLow, const CoordsXYZ& localHigh,
+    ImageId image);
 
 // Globals for paint clipping
 extern uint8_t gClipHeight;
