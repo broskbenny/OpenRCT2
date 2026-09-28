@@ -5129,6 +5129,96 @@ namespace OpenRCT2::Paint
                 }
             };
 
+            const auto addPhysicalPrimitive =
+                [&](const FirstPersonPaintPhysicalPrimitive& primitive) {
+                    const int32_t tileX =
+                        primitive.mapPosition.x / kCoordsXYStep;
+                    const int32_t tileY =
+                        primitive.mapPosition.y / kCoordsXYStep;
+                    const uint64_t primitiveRegion =
+                        FirstPersonGpuRegionKey(tileX, tileY);
+                    if (primitiveRegion != regionKey)
+                        return;
+
+                    uint8_t sideColour = static_cast<uint8_t>(
+                        Drawing::PaletteIndex::trackRails1);
+                    uint8_t topColour = static_cast<uint8_t>(
+                        Drawing::PaletteIndex::trackRails2);
+                    if (primitive.image.HasPrimary())
+                    {
+                        const auto colour =
+                            primitive.image.GetPrimary();
+                        if (Drawing::colourIsValid(colour))
+                        {
+                            const auto shades =
+                                Drawing::getColourMap(colour);
+                            sideColour = static_cast<uint8_t>(
+                                shades.midDark);
+                            topColour = static_cast<uint8_t>(
+                                shades.midLight);
+                        }
+                    }
+
+                    const FirstPersonVec3 low{
+                        primitive.lowX,
+                        primitive.lowY,
+                        primitive.lowZ,
+                    };
+                    const FirstPersonVec3 high{
+                        primitive.highX,
+                        primitive.highY,
+                        primitive.highZ,
+                    };
+                    const auto emitFace =
+                        [&](const std::array<
+                                FirstPersonVec3, 4>& points,
+                            uint8_t colour) {
+                            FirstPersonSurface surface{};
+                            surface.solidColour =
+                                colour != 0 ? colour : 1;
+                            surface.gpuRegion =
+                                primitiveRegion;
+                            std::array<FirstPersonVertex, 4>
+                                vertices{};
+                            for (size_t i = 0;
+                                 i < points.size(); ++i)
+                                vertices[i].world = points[i];
+                            EmitQuad(surface, vertices);
+                            addSurface(surface);
+                        };
+
+                    emitFace({ {
+                        { low.x, low.y, low.z },
+                        { high.x, low.y, low.z },
+                        { high.x, low.y, high.z },
+                        { low.x, low.y, high.z },
+                    } }, sideColour);
+                    emitFace({ {
+                        { high.x, low.y, low.z },
+                        { high.x, high.y, low.z },
+                        { high.x, high.y, high.z },
+                        { high.x, low.y, high.z },
+                    } }, sideColour);
+                    emitFace({ {
+                        { high.x, high.y, low.z },
+                        { low.x, high.y, low.z },
+                        { low.x, high.y, high.z },
+                        { high.x, high.y, high.z },
+                    } }, sideColour);
+                    emitFace({ {
+                        { low.x, high.y, low.z },
+                        { low.x, low.y, low.z },
+                        { low.x, low.y, high.z },
+                        { low.x, high.y, high.z },
+                    } }, sideColour);
+                    emitFace({ {
+                        { low.x, low.y, high.z },
+                        { high.x, low.y, high.z },
+                        { high.x, high.y, high.z },
+                        { low.x, high.y, high.z },
+                    } }, topColour);
+                };
+
             for (int32_t ty = y0; ty < y1; ++ty)
             for (int32_t tx = x0; tx < x1; ++tx)
             {
@@ -5141,6 +5231,17 @@ namespace OpenRCT2::Paint
                         addSurface(terrain.ground);
                     if (terrain.water.has_value()) addSurface(*terrain.water);
                     if (terrain.waterOverlay.has_value()) addSurface(*terrain.waterOverlay);
+                }
+
+                if (const auto supportIt =
+                        _staticPaintCache.find(tileKey);
+                    supportIt != _staticPaintCache.end()
+                    && supportIt->second.valid
+                    && !supportIt->second.dirty)
+                {
+                    for (const auto& primitive :
+                         supportIt->second.physicalPrimitives)
+                        addPhysicalPrimitive(primitive);
                 }
 
                 const auto cacheIt = _staticPaintCache.find(tileKey);
