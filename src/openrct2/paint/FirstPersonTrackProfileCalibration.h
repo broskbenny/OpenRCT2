@@ -1218,7 +1218,6 @@ namespace OpenRCT2::Paint
     }
 
     [[nodiscard]] inline FirstPersonTrackProfileFit
-        ValidateFirstPersonTrackRailProfileAgainstArtwork(    [[nodiscard]] inline FirstPersonTrackProfileFit
         ValidateFirstPersonTrackRailProfileAgainstArtwork(
             const FirstPersonTrackArtworkObservation& observation,
             const FirstPersonTrackTrajectory& trajectory,

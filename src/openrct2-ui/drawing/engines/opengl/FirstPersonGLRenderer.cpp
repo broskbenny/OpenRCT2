@@ -919,7 +919,7 @@ void main() {
                         std::max(maximum, 0));
                 };
 
-            auto& front = output.GetFinalFramebuffer();            auto& front = output.GetFinalFramebuffer();
+            auto& front = output.GetFinalFramebuffer();
             if (!_background || _background->GetWidth()!=GLuint(screenWidth) || _background->GetHeight()!=GLuint(screenHeight))
             {
                 _background = std::make_unique<OpenGLFramebuffer>(screenWidth,screenHeight,false,true,false);

@@ -4055,7 +4055,7 @@ namespace OpenRCT2::Paint
             state.holdoutCategorySupported = false;
         }
 
-        void ApplyFirstPersonTrackRailArtworkMask(        void ApplyFirstPersonTrackRailArtworkMask(
+        void ApplyFirstPersonTrackRailArtworkMask(
             FirstPersonSurface& surface, uint8_t rotation,
             TrackTrajectoryCacheEntry& trajectory)
         {
@@ -4693,7 +4693,6 @@ namespace OpenRCT2::Paint
         }
 
         struct TileSemanticSnapshot
-        {        struct TileSemanticSnapshot
         {
             uint64_t signature = 0;
             int32_t minZ = 0;
