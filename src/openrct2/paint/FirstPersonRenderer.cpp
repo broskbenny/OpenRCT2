@@ -1053,52 +1053,75 @@ namespace OpenRCT2::Paint
                             int32_t(std::lround(point.z)),
                         });
                 };
+            std::vector<int16_t> owners(
+                hull.occupied.size(), int16_t(-1));
+            for (int32_t up = 0; up < hull.sizeUp; ++up)
+            for (int32_t right = 0; right < hull.sizeRight; ++right)
+            for (int32_t forward = 0; forward < hull.sizeForward; ++forward)
+            {
+                if (!hull.contains(forward, right, up))
+                    continue;
+                const auto point =
+                    hull.centre(forward, right, up);
+                std::array<ScreenCoordsXY, 4> projected{};
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                    projected[rotation] =
+                        projectedPoint(rotation, point);
+
+                int32_t bestSequence = -1;
+                int32_t bestScore = -1;
+                for (const auto& cell : cells)
+                {
+                    if (!LargeSceneryCellContainsPoint(cell, point))
+                        continue;
+                    int32_t score = 0;
+                    for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                    {
+                        bool supported = false;
+                        for (int32_t dy = -1; dy <= 1
+                             && !supported; ++dy)
+                        for (int32_t dx = -1; dx <= 1; ++dx)
+                        {
+                            if (observed.bySequence[
+                                    cell.sequence][rotation]
+                                    .contains(
+                                        projected[rotation].x + dx,
+                                        projected[rotation].y + dy))
+                            {
+                                supported = true;
+                                break;
+                            }
+                        }
+                        if (supported)
+                            ++score;
+                    }
+                    if (score > bestScore
+                        || (score == bestScore
+                            && (bestSequence < 0
+                                || cell.sequence < bestSequence)))
+                    {
+                        bestScore = score;
+                        bestSequence = cell.sequence;
+                    }
+                }
+                const size_t index =
+                    (size_t(up) * size_t(hull.sizeRight)
+                        + size_t(right))
+                        * size_t(hull.sizeForward)
+                        + size_t(forward);
+                owners[index] = int16_t(bestSequence);
+            }
             const auto ownerAt =
                 [&](int32_t forward, int32_t right,
                     int32_t up) -> int32_t {
                     if (!hull.contains(forward, right, up))
                         return -1;
-                    const auto point =
-                        hull.centre(forward, right, up);
-                    int32_t bestSequence = -1;
-                    int32_t bestScore = -1;
-                    for (const auto& cell : cells)
-                    {
-                        if (!LargeSceneryCellContainsPoint(cell, point))
-                            continue;
-                        int32_t score = 0;
-                        for (uint8_t rotation = 0; rotation < 4; ++rotation)
-                        {
-                            const auto projected =
-                                projectedPoint(rotation, point);
-                            bool supported = false;
-                            for (int32_t dy = -1; dy <= 1
-                                 && !supported; ++dy)
-                            for (int32_t dx = -1; dx <= 1; ++dx)
-                            {
-                                if (observed.bySequence[
-                                        cell.sequence][rotation]
-                                        .contains(
-                                            projected.x + dx,
-                                            projected.y + dy))
-                                {
-                                    supported = true;
-                                    break;
-                                }
-                            }
-                            if (supported)
-                                ++score;
-                        }
-                        if (score > bestScore
-                            || (score == bestScore
-                                && (bestSequence < 0
-                                    || cell.sequence < bestSequence)))
-                        {
-                            bestScore = score;
-                            bestSequence = cell.sequence;
-                        }
-                    }
-                    return bestSequence;
+                    const size_t index =
+                        (size_t(up) * size_t(hull.sizeRight)
+                            + size_t(right))
+                            * size_t(hull.sizeForward)
+                            + size_t(forward);
+                    return owners[index];
                 };
             const auto coord =
                 [&](float base, int32_t cell) {
