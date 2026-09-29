@@ -364,10 +364,7 @@ namespace OpenRCT2::Paint
         {
             SpriteReconstructionFrame frame{ fallbackAnchor, 0 };
 
-            // Connected native sprite fragments remain one visual impostor:
-            // they share the canonical object/track origin and source rotation.
-            // This preserves their relative native-image placement without
-            // pretending the 2-D artwork lies on an arbitrary world-fixed plane.
+            // Grouped fragments share one canonical native source frame.
             if (ps.Element != nullptr)
             {
                 if (const auto group = GetReconstructionGroup(ps.MapPos, ps.Element); group.has_value())
@@ -447,11 +444,7 @@ namespace OpenRCT2::Paint
             scene.surfaces.emplace_back(std::move(surface));
         }
 
-        // Some native paint helpers expose more than sorting bounds: their boxes
-        // are the authored physical geometry itself. This is deliberately
-        // restricted to element families whose painters use exact slabs/strips:
-        // walls/surfaces, station floors/fences, and path railings/fixtures.
-        // Generic track/scenery paint bounds remain sorting evidence only.
+        // Only painter bounds that encode authored slabs/strips qualify.
         bool AppendPhysicalPlane(
             FirstPersonScene& scene, const PaintStruct& ps, ImageId image,
             const ScreenCoordsXY& spritePos, uint8_t rotation, ImageId mask = {})
@@ -546,6 +539,7 @@ namespace OpenRCT2::Paint
             FirstPersonSurface surface{};
             surface.image = image;
             surface.mask = mask;
+            surface.physicalCoverage = legacyPlanar || stationSlab;
             if (stationSlab)
                 surface.depthBias = true;
             std::array<FirstPersonVertex, 4> vertices{};
@@ -569,13 +563,7 @@ namespace OpenRCT2::Paint
             scene.surfaces.emplace_back(std::move(surface));
             return true;
         }
-        // Native walls have a REAL footprint, side, base elevation and physical
-        // height. A paint sorting bound is not an authoritative world surface:
-        // e.g. the bounding box can change with painter rotation or animation.
-        // Reconstruct the plane from the placed wall element and its object
-        // definition; retain the native selected image, colour and glass child.
-        // Doors deliberately take the existing split-panel fallback: a solid
-        // full-wall quad would seal an open doorway and misrepresent the game.
+        // Native wall placement, slope and object height define the plane.
         bool AppendSemanticWallPlane(
             FirstPersonScene& scene, const PaintStruct& ps, ImageId image,
             const ScreenCoordsXY& spritePos, uint8_t rotation, ImageId mask = {})
@@ -595,6 +583,7 @@ namespace OpenRCT2::Paint
             FirstPersonSurface surface{};
             surface.image = image;
             surface.mask = mask;
+            surface.physicalCoverage = true;
             std::array<FirstPersonVertex, 4> vertices{};
             for (size_t i = 0; i < physical.corners.size(); ++i)
             {
@@ -879,7 +868,7 @@ namespace OpenRCT2::Paint
             const std::vector<LargeSceneryAssetCell>& cells,
             const LargeSceneryObservedViews& observed)
         {
-            if (cells.empty() || !observed.valid)
+            if (cells.empty())
                 return {};
 
             FirstPersonVisualHullBounds bounds{};
@@ -904,16 +893,6 @@ namespace OpenRCT2::Paint
                     bounds.minUp, float(cell.lowZ));
                 bounds.maxUp = std::max(
                     bounds.maxUp, float(cell.highZ));
-            }
-
-            std::vector<FirstPersonVisualHullView> views;
-            views.reserve(4);
-            for (uint8_t rotation = 0; rotation < 4; ++rotation)
-            {
-                FirstPersonVisualHullView view{};
-                view.imageDirection = rotation;
-                view.observed = observed.combined[rotation];
-                views.push_back(std::move(view));
             }
 
             FirstPersonVisualHullConfig config{};
@@ -967,10 +946,26 @@ namespace OpenRCT2::Paint
                     return false;
                 };
 
-            return BuildFirstPersonVisualHull(
-                views, bounds, config,
-                projectPoint, occupancyPredicate,
-                pointSupported);
+            if (observed.valid)
+            {
+                std::vector<FirstPersonVisualHullView> views;
+                views.reserve(4);
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                {
+                    FirstPersonVisualHullView view{};
+                    view.imageDirection = rotation;
+                    view.observed = observed.combined[rotation];
+                    views.push_back(std::move(view));
+                }
+                auto carved = BuildFirstPersonVisualHull(
+                    views, bounds, config,
+                    projectPoint, occupancyPredicate,
+                    pointSupported);
+                if (carved.valid)
+                    return carved;
+            }
+            return BuildFirstPersonOccupancyHull(
+                bounds, config, {}, occupancyPredicate);
         }
 
         template<typename SampleFace, typename BuildCorners>
@@ -1359,9 +1354,6 @@ namespace OpenRCT2::Paint
                 return model;
 
             const auto observed = CollectLargeSceneryObservedViews(entry);
-            if (!observed.valid)
-                return model;
-
             const auto hull = BuildLargeSceneryAssetHull(*cells, observed);
             if (!hull.valid)
                 return model;
@@ -1376,19 +1368,25 @@ namespace OpenRCT2::Paint
 
             const auto depthOwners =
                 BuildLargeSceneryAssetDepthOwners(faces);
-            float minimumFaceCoverage = 1.0f;
             float minimumFaceOwnership = 1.0f;
             for (size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex)
             {
                 auto& face = faces[faceIndex];
                 float bestFaceScore = -1.0f;
-                float bestCoverage = 0.0f;
                 float bestOwnership = 0.0f;
                 uint8_t bestDirection = 0;
                 for (uint8_t direction = 0; direction < 4; ++direction)
                 {
                     if (!LargeSceneryFaceVisibleFromDirection(
                             face.kind, direction))
+                        continue;
+                    const ImageIndex sourceImage =
+                        entry.image + 4
+                        + (ImageIndex(face.sequence) << 2)
+                        + direction;
+                    const auto* g1 = GfxGetG1Element(sourceImage);
+                    if (g1 == nullptr || g1->width <= 0
+                        || g1->height <= 0)
                         continue;
                     const auto projectedFace =
                         RasterizeLargeSceneryAssetFace(face, direction);
@@ -1399,30 +1397,43 @@ namespace OpenRCT2::Paint
                         FirstPersonDepthOwnerCoverage(
                             depthOwners[direction], uint32_t(faceIndex),
                             projectedFace);
-                    if (ownership < 0.90f)
-                        continue;
-
                     const auto& source =
                         observed.bySequence[face.sequence][direction];
                     const auto fit =
                         CompareFirstPersonSilhouettes(
                             source, projectedFace);
-                    if (!fit.valid)
-                        continue;
+                    const float coverage =
+                        fit.valid ? fit.candidateCoverage : 0.0f;
                     const float score =
-                        std::min(fit.candidateCoverage, ownership);
+                        (fit.valid ? 2.0f : 0.0f)
+                        + std::min(coverage, ownership);
                     if (score <= bestFaceScore)
                         continue;
                     bestFaceScore = score;
-                    bestCoverage = fit.candidateCoverage;
                     bestOwnership = ownership;
                     bestDirection = direction;
                 }
                 if (bestFaceScore < 0.0f)
+                {
+                    for (uint8_t direction = 0; direction < 4; ++direction)
+                    {
+                        const ImageIndex sourceImage =
+                            entry.image + 4
+                            + (ImageIndex(face.sequence) << 2)
+                            + direction;
+                        const auto* g1 = GfxGetG1Element(sourceImage);
+                        if (g1 != nullptr && g1->width > 0
+                            && g1->height > 0)
+                        {
+                            bestDirection = direction;
+                            bestFaceScore = 0.0f;
+                            break;
+                        }
+                    }
+                }
+                if (bestFaceScore < 0.0f)
                     return model;
                 face.sourceDirection = bestDirection;
-                minimumFaceCoverage =
-                    std::min(minimumFaceCoverage, bestCoverage);
                 minimumFaceOwnership =
                     std::min(minimumFaceOwnership, bestOwnership);
             }
@@ -1430,10 +1441,6 @@ namespace OpenRCT2::Paint
             model.minimumCandidateCoverage =
                 hull.minimumCandidateCoverage;
             model.minimumFaceOwnership = minimumFaceOwnership;
-            if (minimumFaceCoverage < 0.55f
-                || minimumFaceOwnership < 0.90f)
-                return model;
-
             model.faces = std::move(faces);
             model.reliable = true;
             return model;
@@ -1511,6 +1518,7 @@ namespace OpenRCT2::Paint
             FirstPersonSurface surface{};
             surface.image = image;
             surface.depthBias = true;
+            surface.physicalCoverage = true;
             std::array<FirstPersonVertex, 4> v{};
             for (size_t i = 0; i < v.size(); ++i)
             {
@@ -2155,8 +2163,6 @@ namespace OpenRCT2::Paint
                             score =
                                 normal.x * float(viewDirection.x)
                                 + normal.y * float(viewDirection.y);
-                            if (score <= 0.0f)
-                                continue;
                         }
                         if (!best.has_value()
                             || score > bestScore)
@@ -2193,6 +2199,7 @@ namespace OpenRCT2::Paint
 
                     FirstPersonSurface surface{};
                     surface.image = source->image;
+                    surface.physicalCoverage = true;
                     std::array<FirstPersonVertex, 4> vertices{};
                     for (size_t i = 0; i < vertices.size(); ++i)
                     {
@@ -3118,6 +3125,7 @@ namespace OpenRCT2::Paint
 
                 FirstPersonSurface surface{};
                 surface.image = image;
+                surface.physicalCoverage = true;
                 surface.reconstructionGroup = group.key;
                 std::array<FirstPersonVertex, 4> vertices{};
                 FirstPersonVec3 faceCenter{};
@@ -3459,7 +3467,7 @@ namespace OpenRCT2::Paint
                 ExtendStableKey(
                     fingerprint, surface.depthBias ? 1 : 0);
                 ExtendStableKey(
-                    fingerprint, surface.edgeCoverage ? 1 : 0);
+                    fingerprint, surface.physicalCoverage ? 1 : 0);
                 ExtendStableKey(
                     fingerprint, surface.reconstructionGroup);
                 ExtendStableKey(
@@ -5243,7 +5251,7 @@ namespace OpenRCT2::Paint
                         }
                         cache.ground = {};
                         cache.ground.image = image;
-                        cache.ground.edgeCoverage = true;
+                        cache.ground.physicalCoverage = true;
                         cache.ground.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
                         EmitQuad(cache.ground, v, UsesOppositeTerrainDiagonal(slope));
                         cache.water.reset();
@@ -6727,13 +6735,20 @@ namespace OpenRCT2::Paint
     {
         InvalidateFirstPersonSceneRegion(world,world);
     }
-    void RenderFirstPerson(Drawing::RenderTarget& rt, const FirstPersonRenderOptions& opt)
+    void RenderFirstPerson(
+        Drawing::RenderTarget& rt, const FirstPersonRenderOptions& opt,
+        const ScreenRect& viewport)
     {
         PROFILED_FUNCTION();
-        const ScreenSize dimensions{ rt.width, rt.height };
+        const ScreenSize dimensions{
+            viewport.getWidth(), viewport.getHeight()
+        };
         if (dimensions.width <= 0 || dimensions.height <= 0 || rt.DrawingEngine == nullptr) return;
         const auto start = std::chrono::steady_clock::now();
         auto scene = CollectFirstPersonScene(opt, dimensions);
+        scene.screenOrigin = {
+            viewport.getLeft(), viewport.getTop()
+        };
         const auto paintStart=std::chrono::steady_clock::now();
         CollectPaintSprites(scene, rt);
         const auto submitStart=std::chrono::steady_clock::now();

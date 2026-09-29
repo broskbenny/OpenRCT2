@@ -18,6 +18,7 @@
 #include <openrct2/paint/FirstPersonTrackProfileCalibration.h>
 #include <openrct2/paint/FirstPersonSmallSceneryCollision.h>
 #include <openrct2/paint/FirstPersonVehicleBodyHull.h>
+#include <openrct2/paint/FirstPersonVisualHull.h>
 #include <openrct2/paint/FirstPersonWalkingSemantics.h>
 #include <openrct2/paint/Paint.h>
 #include <openrct2/entity/EntityBase.h>
@@ -109,6 +110,36 @@ TEST(FirstPersonSmallSceneryCollisionTest, PartialWalkingMaskCannotReplaceTallAr
     EXPECT_FALSE(
         FirstPersonSmallSceneryVisualReconstructionCoversHeight(
             64, 20));
+}
+
+TEST(FirstPersonVisualHullTest, AuthoritativeOccupancySurvivesMissingSilhouetteEvidence)
+{
+    FirstPersonVisualHullBounds bounds{};
+    bounds.maxForward = 32.0f;
+    bounds.maxRight = 32.0f;
+    bounds.maxUp = 24.0f;
+    bounds.step = 4.0f;
+    FirstPersonVisualHullConfig config{};
+    config.maximumAxisCells = 16;
+    config.maximumGridCells = 4096;
+    config.maximumOccupiedCells = 4096;
+
+    const std::vector<FirstPersonVisualHullTextureView> views{
+        { 0, 100 }, { 1, 101 }, { 2, 102 }, { 3, 103 }
+    };
+    const auto hull = BuildFirstPersonOccupancyHull(
+        bounds, config, views,
+        [](FirstPersonVec3 point) {
+            return point.x < 16.0f
+                && point.y < 16.0f;
+        });
+
+    ASSERT_TRUE(hull.valid);
+    EXPECT_EQ(hull.textureViews.size(), 4u);
+    EXPECT_TRUE(hull.containsPoint({ 4.0f, 4.0f, 4.0f }));
+    EXPECT_TRUE(hull.containsPoint({ 12.0f, 12.0f, 20.0f }));
+    EXPECT_FALSE(hull.containsPoint({ 20.0f, 4.0f, 4.0f }));
+    EXPECT_FALSE(hull.containsPoint({ 4.0f, 20.0f, 4.0f }));
 }
 
 TEST(FirstPersonSmallSceneryCollisionTest, QuarterMappingMatchesNativeConstructionQuadrants)

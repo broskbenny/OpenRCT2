@@ -108,24 +108,36 @@ void main() {
         // indexed palette colour without fabricating a sprite texture.
         col = uint(fPalettes.w);
     } else {
-        // A texture sample outside the original sprite is EMPTY, not a stretched
-        // border pixel. This matters when an isometric sprite is mapped to a
-        // physical wall: the artwork often covers less than the entire wall plane.
-        if (any(lessThan(fUV,vec2(0.0))) || any(greaterThanEqual(fUV,fSize))) discard;
-        vec2 pixel = floor(fUV);
-        vec2 uv = (fAtlas.xy + pixel + vec2(0.5)) / fAtlas.zw;
+        bool physicalCoverage = (fFlags & 8) != 0;
+        bool outside =
+            any(lessThan(fUV, vec2(0.0)))
+            || any(greaterThanEqual(fUV, fSize));
+        if (outside && !physicalCoverage) discard;
+        vec2 samplePixel = physicalCoverage
+            ? clamp(fUV, vec2(0.0), max(fSize - vec2(1.0), vec2(0.0)))
+            : fUV;
+        ivec2 p = ivec2(floor(samplePixel));
+        vec2 uv = (fAtlas.xy + vec2(p) + vec2(0.5)) / fAtlas.zw;
         col = texture(uSprites, vec3(uv, float(fAtlasLayer))).r;
-        if (col == 0u && (fFlags & 8) != 0) {
-            const ivec2 neighbours[4] = ivec2[4](
-                ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
-            ivec2 p = ivec2(pixel);
+        if (col == 0u && physicalCoverage) {
             ivec2 limit = ivec2(fSize);
-            for (int i = 0; i < 4 && col == 0u; ++i) {
-                ivec2 q = p + neighbours[i];
-                if (q.x < 0 || q.y < 0 || q.x >= limit.x || q.y >= limit.y) continue;
-                vec2 neighbourUv = (fAtlas.xy + vec2(q) + vec2(0.5)) / fAtlas.zw;
-                col = texture(uSprites, vec3(neighbourUv, float(fAtlasLayer))).r;
+            for (int radius = 1; radius <= 4 && col == 0u; ++radius) {
+                for (int dy = -radius; dy <= radius && col == 0u; ++dy) {
+                    for (int dx = -radius; dx <= radius; ++dx) {
+                        if (abs(dx) != radius && abs(dy) != radius) continue;
+                        ivec2 q = p + ivec2(dx, dy);
+                        if (q.x < 0 || q.y < 0 || q.x >= limit.x || q.y >= limit.y) continue;
+                        vec2 neighbourUv =
+                            (fAtlas.xy + vec2(q) + vec2(0.5)) / fAtlas.zw;
+                        col = texture(
+                            uSprites,
+                            vec3(neighbourUv, float(fAtlasLayer))).r;
+                        if (col != 0u) break;
+                    }
+                }
             }
+            if (col == 0u)
+                col = uint((fFlags >> 8) & 255);
         }
         if (col == 0u) discard;
         if (fMaskLayer >= 0) {
@@ -286,6 +298,43 @@ void main() {
         {
             return glCall(glGetUniformLocation, shader, name);
         }
+        uint8_t RepresentativeSpritePixel(const G1Element& g1)
+        {
+            if (g1.offset == nullptr || g1.width <= 0 || g1.height <= 0
+                || g1.flags.has(G1Flag::isPalette))
+                return 1;
+            if (g1.flags.has(G1Flag::hasRLECompression))
+            {
+                for (int32_t y = 0; y < g1.height; ++y)
+                {
+                    const uint16_t lineOffset =
+                        uint16_t(g1.offset[y * 2])
+                        | (uint16_t(g1.offset[y * 2 + 1]) << 8);
+                    const uint8_t* run = g1.offset + lineOffset;
+                    bool end = false;
+                    size_t guard = 0;
+                    while (!end && guard++ < 256)
+                    {
+                        uint8_t length = *run++;
+                        run++;
+                        end = (length & 0x80u) != 0;
+                        length &= 0x7fu;
+                        for (uint8_t i = 0; i < length; ++i)
+                            if (run[i] != 0)
+                                return run[i];
+                        run += length;
+                    }
+                }
+                return 1;
+            }
+            const size_t count =
+                size_t(g1.width) * size_t(g1.height);
+            for (size_t i = 0; i < count; ++i)
+                if (g1.offset[i] != 0)
+                    return g1.offset[i];
+            return 1;
+        }
+
         int32_t PaletteY(Drawing::FilterPaletteID id)
         {
             return TextureCache::PaletteToY(id);
@@ -346,12 +395,29 @@ void main() {
         glCall(glDeleteQueries,GLsizei(_peelCoverageQueries.size()),_peelCoverageQueries.data());
     }
     void FirstPersonGLRenderer::Draw(
-        const Paint::FirstPersonScene& scene, TextureCache& textures, SwapFramebuffer& output,
-        int32_t screenWidth, int32_t screenHeight, int32_t left, int32_t top)
+        const Paint::FirstPersonScene& scene, TextureCache& textures,
+        SwapFramebuffer& output, int32_t screenWidth, int32_t screenHeight,
+        const ScreenRect& dirtyClip)
     {
         PROFILED_FUNCTION();
-        if (scene.dimensions.width <= 0 || scene.dimensions.height <= 0) return;
+        const int32_t left = scene.screenOrigin.x;
+        const int32_t top = scene.screenOrigin.y;
+        const int32_t width = scene.dimensions.width;
+        const int32_t height = scene.dimensions.height;
+        if (width <= 0 || height <= 0) return;
         textures.ClearFirstPersonTransientBitmaps();
+        const int32_t clipLeft =
+            std::max(left, dirtyClip.getLeft());
+        const int32_t clipTop =
+            std::max(top, dirtyClip.getTop());
+        const int32_t clipRight =
+            std::min(left + width, dirtyClip.getRight());
+        const int32_t clipBottom =
+            std::min(top + height, dirtyClip.getBottom());
+        if (clipRight <= clipLeft || clipBottom <= clipTop)
+            return;
+        const int32_t clipWidth = clipRight - clipLeft;
+        const int32_t clipHeight = clipBottom - clipTop;
         // GPU timing remains diagnostic only. Queries are polled, never waited
         // on, so diagnostics cannot force a CPU/GPU synchronisation every frame.
         for (size_t i=0;i<_timerQueries.size();++i)
@@ -408,10 +474,10 @@ void main() {
 
         // We are inside an OpenRCT2 onDraw callback. Earlier 2-D commands have been flushed.
         output.BindOpaque();
-        const int32_t width = scene.dimensions.width;
-        const int32_t height = scene.dimensions.height;
         glCall(glEnable, GL_SCISSOR_TEST);
-        glCall(glScissor, left, screenHeight - top - height, width, height);
+        glCall(glScissor(
+            clipLeft, screenHeight - clipBottom,
+            clipWidth, clipHeight));
         // The existing 2-D transparency pass may have changed depth state.
         // Depth clears obey the depth write mask: enable it BEFORE clearing.
         glCall(glDepthMask, GL_TRUE);
@@ -533,6 +599,10 @@ void main() {
                 imageWidth = float(g1->width);
                 imageHeight = float(g1->height);
             }
+            const int32_t coverageFallback =
+                surface.physicalCoverage && g1 != nullptr
+                ? int32_t(RepresentativeSpritePixel(*g1))
+                : 0;
             BasicTextureInfo maskTex{};
             const auto* maskG1=surface.mask.HasValue()?GfxGetG1Element(surface.mask):nullptr;
             if(maskG1!=nullptr) maskTex=textures.GetOrLoadImageTexture(surface.mask);
@@ -560,8 +630,9 @@ void main() {
                         ? (image.GetRemap()==static_cast<uint8_t>(Drawing::FilterPaletteID::paletteWater)?3:1)
                         : 0)
                         | (surface.depthBias ? 4 : 0)
-                        | (surface.edgeCoverage ? 8 : 0)
-                        | (surface.solidColour != 0 ? 16 : 0),
+                        | (surface.physicalCoverage ? 8 : 0)
+                        | (surface.solidColour != 0 ? 16 : 0)
+                        | (coverageFallback << 8),
                     {maskTex.coords.x,maskTex.coords.y,maskTex.coords.z,maskTex.coords.w},
                     {maskG1?float(maskG1->width):0.0f,maskG1?float(maskG1->height):0.0f},
                     maskG1?int32_t(maskTex.index):-1,
@@ -975,12 +1046,21 @@ void main() {
                    0,0,screenWidth,screenHeight,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,GL_NEAREST);
 
             const int32_t viewportBottom = screenHeight - top - height;
+            const auto tileClip =
+                [&](const TransparentScreenTile& tile) {
+                    return ScreenRect{
+                        std::max(clipLeft, left + tile.x0),
+                        std::max(clipTop, top + tile.y0),
+                        std::min(clipRight, left + tile.x1),
+                        std::min(clipBottom, top + tile.y1)
+                    };
+                };
             auto setTileScissor = [&](const TransparentScreenTile& tile) {
-                glCall(glScissor,
-                    left + tile.x0,
-                    screenHeight - top - tile.y1,
-                    tile.x1 - tile.x0,
-                    tile.y1 - tile.y0);
+                const auto clip = tileClip(tile);
+                glCall(glScissor(
+                    clip.getLeft(),
+                    screenHeight - clip.getBottom(),
+                    clip.getWidth(), clip.getHeight()));
             };
             auto composeLayer = [&](OpenGLFramebuffer& layer, const TransparentScreenTile& tile) {
                 _background->Bind();
@@ -998,10 +1078,13 @@ void main() {
 
                 front.BindDraw();
                 _background->BindRead();
-                const int32_t x0 = left + tile.x0;
-                const int32_t x1 = left + tile.x1;
-                const int32_t y0 = screenHeight - top - tile.y1;
-                const int32_t y1 = screenHeight - top - tile.y0;
+                const auto clip = tileClip(tile);
+                const int32_t x0 = clip.getLeft();
+                const int32_t x1 = clip.getRight();
+                const int32_t y0 =
+                    screenHeight - clip.getBottom();
+                const int32_t y1 =
+                    screenHeight - clip.getTop();
                 glCall(glBlitFramebuffer,x0,y0,x1,y1,x0,y0,x1,y1,GL_COLOR_BUFFER_BIT,GL_NEAREST);
             };
 
@@ -1009,7 +1092,10 @@ void main() {
             glCall(glBindBuffer,GL_ARRAY_BUFFER,_vbo);
             for (const auto& tile : transparencyTiles)
             {
-                if (tile.candidates.empty())
+                const auto dirtyTileClip = tileClip(tile);
+                if (tile.candidates.empty()
+                    || dirtyTileClip.getWidth() <= 0
+                    || dirtyTileClip.getHeight() <= 0)
                     continue;
 
                 std::vector<GPUVertex> tileVertices;
@@ -1168,7 +1254,9 @@ void main() {
             // Restore the physical viewport/scissor for the final depth clear.
             front.Bind();
             glCall(glViewport,left,viewportBottom,width,height);
-            glCall(glScissor,left,viewportBottom,width,height);
+            glCall(glScissor(
+                clipLeft, screenHeight - clipBottom,
+                clipWidth, clipHeight));
             glCall(glUseProgram,_program);
             glCall(glUniform1i,Uniform(_program,"uPeelStage"),0);
             glCall(glUniform1i,Uniform(_program,"uPeeling"),0);

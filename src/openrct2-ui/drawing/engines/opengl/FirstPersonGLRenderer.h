@@ -24,8 +24,10 @@ namespace OpenRCT2::Ui
         ~FirstPersonGLRenderer();
         FirstPersonGLRenderer(const FirstPersonGLRenderer&) = delete;
         FirstPersonGLRenderer& operator=(const FirstPersonGLRenderer&) = delete;
-        void Draw(const Paint::FirstPersonScene& scene, TextureCache& textures, SwapFramebuffer& output,
-                  int32_t screenWidth, int32_t screenHeight, int32_t left, int32_t top);
+        void Draw(
+            const Paint::FirstPersonScene& scene, TextureCache& textures,
+            SwapFramebuffer& output, int32_t screenWidth, int32_t screenHeight,
+            const ScreenRect& dirtyClip);
         [[nodiscard]] float LastGpuTimeMs() const { return _lastGpuTimeMs; }
     private:
         GLuint _program{}, _composeProgram{}, _vao{}, _vbo{};

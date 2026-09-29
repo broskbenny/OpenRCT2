@@ -278,13 +278,11 @@ namespace OpenRCT2::Paint
             const SmallSceneryEntry& entry,
             const SmallSceneryElement& element)
     {
-        // Preserve the established visual eligibility: the old collision-derived
-        // renderer only replaced objects whose complete declared height fit
-        // inside the 20-unit reconstruction envelope. The new visual hull is
-        // independent of collision, but does not broaden that policy implicitly.
-        if (!FirstPersonSmallSceneryVisualReconstructionCoversHeight(
-                entry.height, entry.height)
-            || entry.flags.hasAny(
+        // Irregular foliage and stateful/special-effect artwork may remain
+        // sprite-based. Other static scenery keeps its declared occupancy even
+        // when silhouette carving cannot be trusted.
+        if (entry.flags.hasAny(
+                SmallSceneryFlag::isTree,
                 SmallSceneryFlag::isAnimated,
                 SmallSceneryFlag::hasGlass,
                 SmallSceneryFlag::isFountain,
@@ -316,7 +314,7 @@ namespace OpenRCT2::Paint
                 || size_t(g1->width)
                         * size_t(g1->height)
                     > kMaxSourcePixels)
-                return {};
+                continue;
 
             FirstPersonVisualHullView view{};
             view.imageDirection = rotation;
@@ -333,10 +331,11 @@ namespace OpenRCT2::Paint
                         g1->yOffset + y);
                 }
             }
-            if (view.observed.empty())
-                return {};
-            views.push_back(std::move(view));
+            if (!view.observed.empty())
+                views.push_back(std::move(view));
         }
+        if (views.empty())
+            return {};
 
         FirstPersonVisualHullBounds bounds{};
         bounds.minForward = 0.0f;
@@ -350,22 +349,33 @@ namespace OpenRCT2::Paint
         FirstPersonVisualHullConfig config{};
         config.minimumViews = 4;
         config.minimumOccupiedCells = 4;
-        config.maximumOccupiedCells = 4096;
-        config.maximumAxisCells = 20;
+        config.maximumOccupiedCells = 32768;
+        config.maximumGridCells = 131072;
+        config.maximumAxisCells = 128;
         config.minimumCandidateCoverage = 0.55f;
         config.minimumObservedCoverage = 0.30f;
         config.maximumEdgeError = 8;
 
-        return BuildFirstPersonVisualHull(
+        const auto occupancyPredicate =
+            [occupied](FirstPersonVec3 point) {
+                const int32_t x = std::clamp(
+                    int32_t(std::floor(point.x)),
+                    0, kCoordsXYStep - 1);
+                const int32_t y = std::clamp(
+                    int32_t(std::floor(point.y)),
+                    0, kCoordsXYStep - 1);
+                const uint8_t quarter =
+                    FirstPersonSmallSceneryQuarterForPoint(x, y);
+                return (occupied & (1u << quarter)) != 0;
+            };
+        auto carved = BuildFirstPersonVisualHull(
             views, bounds, config,
-            [&](uint8_t rotation,
-                FirstPersonVec3 point) {
+            [&](uint8_t rotation, FirstPersonVec3 point) {
                 const auto offset =
                     FirstPersonSmallSceneryPaintOffset(
                         entry, element, rotation);
                 const auto spriteOrigin =
-                    Translate3DTo2DWithZ(
-                        rotation, { offset, 0 });
+                    Translate3DTo2DWithZ(rotation, { offset, 0 });
                 const auto projected =
                     Translate3DTo2DWithZ(
                         rotation,
@@ -379,22 +389,17 @@ namespace OpenRCT2::Paint
                     float(projected.y - spriteOrigin.y),
                 };
             },
-            [occupied](FirstPersonVec3 point) {
-                const int32_t x =
-                    std::clamp(
-                        int32_t(std::floor(point.x)),
-                        0, kCoordsXYStep - 1);
-                const int32_t y =
-                    std::clamp(
-                        int32_t(std::floor(point.y)),
-                        0, kCoordsXYStep - 1);
-                const uint8_t quarter =
-                    FirstPersonSmallSceneryQuarterForPoint(
-                        x, y);
-                return (occupied
-                        & (1u << quarter))
-                    != 0;
-            });
+            occupancyPredicate);
+        if (carved.valid)
+            return carved;
+
+        std::vector<FirstPersonVisualHullTextureView> textureViews;
+        textureViews.reserve(views.size());
+        for (const auto& view : views)
+            textureViews.push_back(
+                { view.imageDirection, view.image });
+        return BuildFirstPersonOccupancyHull(
+            bounds, config, textureViews, occupancyPredicate);
     }
 
     [[nodiscard]] inline const FirstPersonVisualHull*

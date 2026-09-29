@@ -92,10 +92,9 @@ namespace OpenRCT2::Paint
         // Semantic decks stay at their true physical height. A small depth-only
         // bias resolves coplanar terrain without moving collision/ground geometry.
         bool depthBias = false;
-        // Terrain source sprites are diamonds with transparent pixels outside
-        // their silhouette. Permit a one-pixel inward coverage fallback at tile
-        // edges so exact shared world vertices cannot expose background seams.
-        bool edgeCoverage = false;
+        // Physical surfaces take coverage from world geometry. Sprite
+        // transparency supplies appearance only; explicit masks still cut holes.
+        bool physicalCoverage = false;
         // Some native sprite IDs (notably scrolling text) reference mutable
         // bitmap slots. When present, these bytes are the immutable content
         // captured when the native PaintStruct was created.
@@ -139,6 +138,7 @@ namespace OpenRCT2::Paint
         FirstPersonRenderOptions options{};
         FirstPersonResolvedView resolvedView{};
         ScreenSize dimensions{};
+        ScreenCoordsXY screenOrigin{};
         // Dynamic, camera-facing, transparent and animated surfaces only.
         std::vector<FirstPersonSurface> surfaces;
         // Persistent fixed opaque geometry is submitted by region descriptor;
@@ -209,6 +209,8 @@ namespace OpenRCT2::Paint
     // Both APIs are no-ops when POV is inactive and no cache exists.
     void InvalidateFirstPersonSceneTile(CoordsXY position);
     void InvalidateFirstPersonSceneRegion(CoordsXY minPosition, CoordsXY maxPosition);
-    void RenderFirstPerson(Drawing::RenderTarget& rt, const FirstPersonRenderOptions& options);
+    void RenderFirstPerson(
+        Drawing::RenderTarget& rt, const FirstPersonRenderOptions& options,
+        const ScreenRect& viewport);
 } // namespace OpenRCT2::Paint
 

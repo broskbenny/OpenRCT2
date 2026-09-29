@@ -694,8 +694,9 @@ bool OpenGLDrawingContext::DrawFirstPersonScene(RenderTarget& rt, const Paint::F
         _firstPerson = std::make_unique<FirstPersonGLRenderer>();
     const auto clip = CalculateClipping(rt);
     auto& framebuffer = _swapFramebuffer->GetFinalFramebuffer();
-    _firstPerson->Draw(scene, *_textureCache, *_swapFramebuffer, framebuffer.GetWidth(), framebuffer.GetHeight(),
-                       clip.getLeft(), clip.getTop());
+    _firstPerson->Draw(
+        scene, *_textureCache, *_swapFramebuffer,
+        framebuffer.GetWidth(), framebuffer.GetHeight(), clip);
     return true;
 }
 

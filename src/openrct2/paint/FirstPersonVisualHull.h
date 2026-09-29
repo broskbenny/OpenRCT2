@@ -111,6 +111,73 @@ namespace OpenRCT2::Paint
         int32_t maximumEdgeError = 6;
     };
 
+    template<typename OccupancyPredicate>
+    [[nodiscard]] FirstPersonVisualHull BuildFirstPersonOccupancyHull(
+        const FirstPersonVisualHullBounds& bounds,
+        const FirstPersonVisualHullConfig& config,
+        const std::vector<FirstPersonVisualHullTextureView>& textureViews,
+        OccupancyPredicate&& occupancyPredicate)
+    {
+        FirstPersonVisualHull result{};
+        if (!(bounds.step > 0.0f)
+            || bounds.maxForward <= bounds.minForward
+            || bounds.maxRight <= bounds.minRight
+            || bounds.maxUp <= bounds.minUp)
+            return result;
+
+        const int32_t nForward = int32_t(std::ceil(
+            (bounds.maxForward - bounds.minForward) / bounds.step));
+        const int32_t nRight = int32_t(std::ceil(
+            (bounds.maxRight - bounds.minRight) / bounds.step));
+        const int32_t nUp = int32_t(std::ceil(
+            (bounds.maxUp - bounds.minUp) / bounds.step));
+        if (nForward <= 0 || nRight <= 0 || nUp <= 0
+            || nForward > config.maximumAxisCells
+            || nRight > config.maximumAxisCells
+            || nUp > config.maximumAxisCells
+            || nForward > 255 || nRight > 255 || nUp > 255)
+            return result;
+
+        const size_t gridCells =
+            size_t(nForward) * size_t(nRight) * size_t(nUp);
+        if (gridCells > config.maximumGridCells)
+            return result;
+
+        result.step = bounds.step;
+        result.minForward = bounds.minForward;
+        result.minRight = bounds.minRight;
+        result.minUp = bounds.minUp;
+        result.sizeForward = uint8_t(nForward);
+        result.sizeRight = uint8_t(nRight);
+        result.sizeUp = uint8_t(nUp);
+        result.occupied.assign(gridCells, 0);
+        result.textureViews = textureViews;
+
+        size_t occupiedCount = 0;
+        for (int32_t up = 0; up < nUp; ++up)
+        for (int32_t right = 0; right < nRight; ++right)
+        for (int32_t forward = 0; forward < nForward; ++forward)
+        {
+            const auto point = result.centre(forward, right, up);
+            if (!occupancyPredicate(point))
+                continue;
+            const size_t index =
+                (size_t(up) * size_t(nRight) + size_t(right))
+                    * size_t(nForward) + size_t(forward);
+            result.occupied[index] = 1;
+            ++occupiedCount;
+        }
+        if (occupiedCount == 0
+            || occupiedCount > config.maximumOccupiedCells)
+            return {};
+
+        result.minimumCandidateCoverage = 1.0f;
+        result.minimumObservedCoverage = 1.0f;
+        result.maximumEdgeError = 0;
+        result.valid = true;
+        return result;
+    }
+
     [[nodiscard]] inline bool
         FirstPersonVisualHullPixelOpaque(
             const G1Element& g1, int32_t x, int32_t y)

@@ -1298,10 +1298,24 @@ namespace OpenRCT2::Ui::FirstPerson
                 _state.camera.explicitBasis = headBasis;
             }
         }
-        // Publish the presentation-rate first-person frustum for interpolation
-        // admission on the next simulation tick. This is independent of the
-        // overhead viewport's bounds and zoom.
-        PublishTweenView(rt.width, rt.height);
+        ScreenRect renderViewport{
+            { 0, 0 }, { rt.width, rt.height }
+        };
+        auto* mainWindow = WindowGetMain();
+        if (mainWindow != nullptr && mainWindow->viewport != nullptr)
+        {
+            const auto* viewport = mainWindow->viewport;
+            renderViewport = {
+                viewport->pos,
+                viewport->pos
+                    + ScreenSize{ viewport->width, viewport->height }
+            };
+        }
+
+        // A clipped/dirty RenderTarget is only a redraw constraint. Camera
+        // projection always uses the complete main viewport.
+        PublishTweenView(
+            renderViewport.getWidth(), renderViewport.getHeight());
 
         // Ride audio intentionally remains in simulation time. The renderer may
         // temporarily tween Vehicle::position for presentation, but the audio
@@ -1312,9 +1326,9 @@ namespace OpenRCT2::Ui::FirstPerson
         options.hiddenEntity = _state.mode == Mode::rideAttached ? _state.attachedVehicle : EntityId::GetNull();
         options.hiddenSeatIndex = _state.mode == Mode::rideAttached ? _state.attachedSeat : 0xFF;
         options.radiusTiles = 64;
-        if (auto* mainWindow = WindowGetMain(); mainWindow != nullptr && mainWindow->viewport != nullptr)
+        if (mainWindow != nullptr && mainWindow->viewport != nullptr)
             options.viewFlags = mainWindow->viewport->flags;
-        Paint::RenderFirstPerson(rt, options);
+        Paint::RenderFirstPerson(rt, options, renderViewport);
     }
 } // namespace OpenRCT2::Ui::FirstPerson
 
