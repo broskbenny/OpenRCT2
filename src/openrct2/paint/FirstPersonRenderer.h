@@ -179,6 +179,21 @@ namespace OpenRCT2::Paint
         return wasDirty || geometryChanged;
     }
 
+    [[nodiscard]] constexpr ScreenRect
+        IntersectFirstPersonScreenRects(
+            const ScreenRect& viewport, const ScreenRect& dirty)
+    {
+        const int32_t left = viewport.getLeft() > dirty.getLeft()
+            ? viewport.getLeft() : dirty.getLeft();
+        const int32_t top = viewport.getTop() > dirty.getTop()
+            ? viewport.getTop() : dirty.getTop();
+        const int32_t right = viewport.getRight() < dirty.getRight()
+            ? viewport.getRight() : dirty.getRight();
+        const int32_t bottom = viewport.getBottom() < dirty.getBottom()
+            ? viewport.getBottom() : dirty.getBottom();
+        return { left, top, right, bottom };
+    }
+
     // Authoritative full-tile wall geometry shared by rendering and walking
     // collision. Wall slope values are the native EDGE_SLOPE values stored in
     // WallElement (0, upwards, downwards).

@@ -59,6 +59,20 @@ TEST(FirstPersonSourceRotationTest, CameraRelativePointOwnsNativeQuadrant)
     EXPECT_EQ(FirstPersonSourceRotationForPoint(camera, { 1.0f, 31.0f, 0.0f }), 1);
 }
 
+TEST(FirstPersonViewportClipTest, DirtyStripDoesNotReplaceFullProjectionViewport)
+{
+    const ScreenRect viewport{ 100, 50, 1100, 650 };
+    const ScreenRect dirtyStrip{ 420, 50, 440, 650 };
+    const auto clip =
+        IntersectFirstPersonScreenRects(viewport, dirtyStrip);
+
+    EXPECT_EQ(viewport.getWidth(), 1000);
+    EXPECT_EQ(viewport.getHeight(), 600);
+    EXPECT_EQ(clip.getLeft(), 420);
+    EXPECT_EQ(clip.getWidth(), 20);
+    EXPECT_EQ(clip.getHeight(), 600);
+}
+
 TEST(FirstPersonSourceRotationTest, HysteresisBelongsToTheTrackedPoint)
 {
     FirstPersonCamera camera{};

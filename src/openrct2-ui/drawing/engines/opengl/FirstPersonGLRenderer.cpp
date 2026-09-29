@@ -406,18 +406,17 @@ void main() {
         const int32_t height = scene.dimensions.height;
         if (width <= 0 || height <= 0) return;
         textures.ClearFirstPersonTransientBitmaps();
-        const int32_t clipLeft =
-            std::max(left, dirtyClip.getLeft());
-        const int32_t clipTop =
-            std::max(top, dirtyClip.getTop());
-        const int32_t clipRight =
-            std::min(left + width, dirtyClip.getRight());
-        const int32_t clipBottom =
-            std::min(top + height, dirtyClip.getBottom());
-        if (clipRight <= clipLeft || clipBottom <= clipTop)
+        const auto clip = Paint::IntersectFirstPersonScreenRects(
+            ScreenRect{ left, top, left + width, top + height },
+            dirtyClip);
+        if (clip.getWidth() <= 0 || clip.getHeight() <= 0)
             return;
-        const int32_t clipWidth = clipRight - clipLeft;
-        const int32_t clipHeight = clipBottom - clipTop;
+        const int32_t clipLeft = clip.getLeft();
+        const int32_t clipTop = clip.getTop();
+        const int32_t clipRight = clip.getRight();
+        const int32_t clipBottom = clip.getBottom();
+        const int32_t clipWidth = clip.getWidth();
+        const int32_t clipHeight = clip.getHeight();
         // GPU timing remains diagnostic only. Queries are polled, never waited
         // on, so diagnostics cannot force a CPU/GPU synchronisation every frame.
         for (size_t i=0;i<_timerQueries.size();++i)
@@ -565,6 +564,8 @@ void main() {
         }
         std::unordered_map<uint64_t, BasicTextureInfo> immutableTextures;
         immutableTextures.reserve(scene.surfaces.size() / 16 + 1);
+        std::unordered_map<uint32_t, uint8_t> coverageFallbacks;
+        coverageFallbacks.reserve(64);
         auto appendVertices = [&](std::vector<GPUVertex>& vertices, const Paint::FirstPersonSurface& surface) {
             const auto image=surface.image;
             const auto* g1=surface.solidColour == 0 ? GfxGetG1Element(image) : nullptr;
@@ -599,10 +600,15 @@ void main() {
                 imageWidth = float(g1->width);
                 imageHeight = float(g1->height);
             }
-            const int32_t coverageFallback =
-                surface.physicalCoverage && g1 != nullptr
-                ? int32_t(RepresentativeSpritePixel(*g1))
-                : 0;
+            int32_t coverageFallback = 0;
+            if (surface.physicalCoverage && g1 != nullptr)
+            {
+                auto [it, inserted] =
+                    coverageFallbacks.try_emplace(image.GetIndex(), 0);
+                if (inserted)
+                    it->second = RepresentativeSpritePixel(*g1);
+                coverageFallback = int32_t(it->second);
+            }
             BasicTextureInfo maskTex{};
             const auto* maskG1=surface.mask.HasValue()?GfxGetG1Element(surface.mask):nullptr;
             if(maskG1!=nullptr) maskTex=textures.GetOrLoadImageTexture(surface.mask);

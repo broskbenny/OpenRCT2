@@ -171,8 +171,10 @@ namespace OpenRCT2::Paint
             || occupiedCount > config.maximumOccupiedCells)
             return {};
 
-        result.minimumCandidateCoverage = 1.0f;
-        result.minimumObservedCoverage = 1.0f;
+        // No silhouette evidence was used: valid geometry does not imply
+        // confidence in a sprite-derived fit.
+        result.minimumCandidateCoverage = 0.0f;
+        result.minimumObservedCoverage = 0.0f;
         result.maximumEdgeError = 0;
         result.valid = true;
         return result;

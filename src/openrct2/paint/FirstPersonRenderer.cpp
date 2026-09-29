@@ -583,7 +583,9 @@ namespace OpenRCT2::Paint
             FirstPersonSurface surface{};
             surface.image = image;
             surface.mask = mask;
-            surface.physicalCoverage = true;
+            surface.physicalCoverage =
+                !entry->flags.has(WallSceneryFlag::hasGlass)
+                && !entry->flags2.has(WallSceneryFlag2::isTransparent);
             std::array<FirstPersonVertex, 4> vertices{};
             for (size_t i = 0; i < physical.corners.size(); ++i)
             {
@@ -687,7 +689,7 @@ namespace OpenRCT2::Paint
         struct LargeSceneryAssetModel
         {
             bool attempted = false;
-            bool reliable = false;
+            bool usable = false;
             uint32_t bodyImageFirst = 0;
             uint32_t bodyImageLast = 0;
             float minimumCandidateCoverage = 0.0f;
@@ -1442,7 +1444,7 @@ namespace OpenRCT2::Paint
                 hull.minimumCandidateCoverage;
             model.minimumFaceOwnership = minimumFaceOwnership;
             model.faces = std::move(faces);
-            model.reliable = true;
+            model.usable = true;
             return model;
         }
 
@@ -3307,7 +3309,7 @@ namespace OpenRCT2::Paint
                         GetLargeSceneryAssetModel(*entry, allowBuild);
                     if (!alreadyAttempted && model != nullptr)
                         --assetFitBudget;
-                    if (model == nullptr || !model->reliable)
+                    if (model == nullptr || !model->usable)
                         continue;
 
                     uint64_t signature = group.key;
@@ -6518,7 +6520,7 @@ namespace OpenRCT2::Paint
 
         const auto* model =
             GetLargeSceneryAssetModel(*entry, true);
-        if (model == nullptr || !model->reliable)
+        if (model == nullptr || !model->usable)
             return std::nullopt;
 
         const uint8_t direction =
