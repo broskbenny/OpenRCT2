@@ -688,10 +688,7 @@ namespace OpenRCT2::Paint
 
         [[nodiscard]] bool LargeSceneryAssetEligible(const LargeSceneryEntry& entry)
         {
-            return !entry.flags.hasAny(
-                       LargeSceneryFlag::isTree,
-                       LargeSceneryFlag::isAnimated,
-                       LargeSceneryFlag::is3DText)
+            return !entry.flags.has(LargeSceneryFlag::isTree)
                 && !entry.tiles.empty() && entry.tiles.size() <= 256;
         }
 
