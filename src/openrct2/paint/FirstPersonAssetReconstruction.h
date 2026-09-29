@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -77,6 +78,69 @@ namespace OpenRCT2::Paint
             });
     }
 
+    enum class FirstPersonOccupancyFaceKind : uint8_t
+    {
+        minX,
+        maxX,
+        minY,
+        maxY,
+        top,
+    };
+
+    struct FirstPersonOccupancyFace
+    {
+        std::array<CoordsXYZ, 4> corners{};
+        uint16_t sequence{};
+        FirstPersonOccupancyFaceKind kind{};
+        uint8_t sourceDirection{};
+    };
+
+    template<typename TCell>
+    [[nodiscard]] std::vector<FirstPersonOccupancyFace>
+        BuildFirstPersonQuarterCellOccupancyFaces(
+            const std::vector<TCell>& cells)
+    {
+        std::vector<FirstPersonOccupancyFace> result;
+        result.reserve(cells.size() * 5);
+        for (const auto& cell : cells)
+        {
+            const int32_t x0 = cell.qx * 16;
+            const int32_t y0 = cell.qy * 16;
+            const int32_t x1 = x0 + 16;
+            const int32_t y1 = y0 + 16;
+            const int32_t z0 = cell.lowZ;
+            const int32_t z1 = cell.highZ;
+            const auto append =
+                [&](FirstPersonOccupancyFaceKind kind,
+                    std::array<CoordsXYZ, 4> corners) {
+                    result.push_back({
+                        corners, uint16_t(cell.sequence), kind, 0
+                    });
+                };
+            append(FirstPersonOccupancyFaceKind::minX, { {
+                { x0, y0, z0 }, { x0, y1, z0 },
+                { x0, y1, z1 }, { x0, y0, z1 },
+            } });
+            append(FirstPersonOccupancyFaceKind::maxX, { {
+                { x1, y1, z0 }, { x1, y0, z0 },
+                { x1, y0, z1 }, { x1, y1, z1 },
+            } });
+            append(FirstPersonOccupancyFaceKind::minY, { {
+                { x1, y0, z0 }, { x0, y0, z0 },
+                { x0, y0, z1 }, { x1, y0, z1 },
+            } });
+            append(FirstPersonOccupancyFaceKind::maxY, { {
+                { x0, y1, z0 }, { x1, y1, z0 },
+                { x1, y1, z1 }, { x0, y1, z1 },
+            } });
+            append(FirstPersonOccupancyFaceKind::top, { {
+                { x0, y0, z1 }, { x1, y0, z1 },
+                { x1, y1, z1 }, { x0, y1, z1 },
+            } });
+        }
+        return result;
+    }
+
     [[nodiscard]] constexpr CoordsXY FirstPersonLargeSceneryPlacedPoint(
         CoordsXY tileOffset, CoordsXY assetPoint, uint8_t objectDirection)
     {
@@ -104,6 +168,34 @@ namespace OpenRCT2::Paint
     {
         const auto view = FirstPersonNativeViewDirection(rotation);
         return outwardNormal.x * view.x + outwardNormal.y * view.y > 0;
+    }
+
+    template<typename TAvailable>
+    [[nodiscard]] std::optional<uint8_t>
+        ChooseFirstPersonOccupancyFaceSourceDirection(
+            FirstPersonOccupancyFaceKind kind, TAvailable&& available)
+    {
+        CoordsXY normal{};
+        switch (kind)
+        {
+            case FirstPersonOccupancyFaceKind::minX: normal = { -1, 0 }; break;
+            case FirstPersonOccupancyFaceKind::maxX: normal = { 1, 0 }; break;
+            case FirstPersonOccupancyFaceKind::minY: normal = { 0, -1 }; break;
+            case FirstPersonOccupancyFaceKind::maxY: normal = { 0, 1 }; break;
+            case FirstPersonOccupancyFaceKind::top: break;
+        }
+        for (uint8_t direction = 0; direction < 4; ++direction)
+        {
+            const bool visible =
+                kind == FirstPersonOccupancyFaceKind::top
+                || FirstPersonFaceVisibleFromNativeView(normal, direction);
+            if (visible && available(direction))
+                return direction;
+        }
+        for (uint8_t direction = 0; direction < 4; ++direction)
+            if (available(direction))
+                return direction;
+        return std::nullopt;
     }
 
     // Large-scenery body images are indexed by

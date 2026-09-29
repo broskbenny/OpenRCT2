@@ -207,6 +207,37 @@ TEST(FirstPersonVehicleBodyHullTest, NativeYawProjectionUsesCarLocalForwardAndRi
     EXPECT_FALSE(hull.containsPoint({ -2.0f, -2.0f, 2.0f }));
 }
 
+TEST(FirstPersonAssetReconstructionTest, QuarterCellFallbackKeepsExactOccupancyFaces)
+{
+    struct Cell
+    {
+        int32_t qx{}, qy{}, lowZ{}, highZ{};
+        uint16_t sequence{};
+    };
+    const std::vector<Cell> cells{
+        { 2, 3, 8, 28, 7 }
+    };
+    const auto faces =
+        BuildFirstPersonQuarterCellOccupancyFaces(cells);
+
+    ASSERT_EQ(faces.size(), 5u);
+    EXPECT_EQ(faces[0].sequence, 7u);
+    EXPECT_EQ(faces[0].corners[0].x, 32);
+    EXPECT_EQ(faces[0].corners[0].y, 48);
+    EXPECT_EQ(faces[0].corners[0].z, 8);
+    EXPECT_EQ(faces.back().kind, FirstPersonOccupancyFaceKind::top);
+    EXPECT_EQ(faces.back().corners[0].z, 28);
+
+    const auto source =
+        ChooseFirstPersonOccupancyFaceSourceDirection(
+            FirstPersonOccupancyFaceKind::minX,
+            [](uint8_t direction) {
+                return direction == 1 || direction == 3;
+            });
+    ASSERT_TRUE(source.has_value());
+    EXPECT_EQ(*source, 1);
+}
+
 TEST(FirstPersonAssetReconstructionTest, NativeViewRotationInvertsPainterDirection)
 {
     for (uint8_t objectDirection = 0; objectDirection < 4; ++objectDirection)

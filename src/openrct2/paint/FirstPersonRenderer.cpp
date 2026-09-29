@@ -659,14 +659,8 @@ namespace OpenRCT2::Paint
             const float hx=0.5f*(high.x-low.x),hy=0.5f*(high.y-low.y),hz=0.5f*(high.z-low.z);
             return FirstPersonSemanticSphere{center,std::sqrt(hx*hx+hy*hy+hz*hz)+2.0f};
         }
-        enum class LargeSceneryAssetFaceKind : uint8_t
-        {
-            minX,
-            maxX,
-            minY,
-            maxY,
-            top,
-        };
+        using LargeSceneryAssetFaceKind =
+            FirstPersonOccupancyFaceKind;
 
         struct LargeSceneryAssetCell
         {
@@ -677,14 +671,8 @@ namespace OpenRCT2::Paint
             uint16_t sequence{};
         };
 
-        struct LargeSceneryAssetFace
-        {
-            std::array<CoordsXYZ, 4> corners{};
-            uint16_t sequence{};
-            LargeSceneryAssetFaceKind kind{};
-            // Native large-scenery image direction, not world viewport rotation.
-            uint8_t sourceDirection{};
-        };
+        using LargeSceneryAssetFace =
+            FirstPersonOccupancyFace;
 
         struct LargeSceneryAssetModel
         {
@@ -870,7 +858,7 @@ namespace OpenRCT2::Paint
             const std::vector<LargeSceneryAssetCell>& cells,
             const LargeSceneryObservedViews& observed)
         {
-            if (cells.empty())
+            if (cells.empty() || !observed.valid)
                 return {};
 
             FirstPersonVisualHullBounds bounds{};
@@ -948,26 +936,19 @@ namespace OpenRCT2::Paint
                     return false;
                 };
 
-            if (observed.valid)
+            std::vector<FirstPersonVisualHullView> views;
+            views.reserve(4);
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
             {
-                std::vector<FirstPersonVisualHullView> views;
-                views.reserve(4);
-                for (uint8_t rotation = 0; rotation < 4; ++rotation)
-                {
-                    FirstPersonVisualHullView view{};
-                    view.imageDirection = rotation;
-                    view.observed = observed.combined[rotation];
-                    views.push_back(std::move(view));
-                }
-                auto carved = BuildFirstPersonVisualHull(
-                    views, bounds, config,
-                    projectPoint, occupancyPredicate,
-                    pointSupported);
-                if (carved.valid)
-                    return carved;
+                FirstPersonVisualHullView view{};
+                view.imageDirection = rotation;
+                view.observed = observed.combined[rotation];
+                views.push_back(std::move(view));
             }
-            return BuildFirstPersonOccupancyHull(
-                bounds, config, {}, occupancyPredicate);
+            return BuildFirstPersonVisualHull(
+                views, bounds, config,
+                projectPoint, occupancyPredicate,
+                pointSupported);
         }
 
         template<typename SampleFace, typename BuildCorners>
@@ -1350,23 +1331,61 @@ namespace OpenRCT2::Paint
                 return model;
 
             const auto cells = BuildLargeSceneryAssetCells(entry);
-            constexpr size_t kMaxReconstructionCells = 48;
-            if (!cells.has_value()
-                || cells->size() > kMaxReconstructionCells)
+            if (!cells.has_value())
                 return model;
 
-            const auto observed = CollectLargeSceneryObservedViews(entry);
-            const auto hull = BuildLargeSceneryAssetHull(*cells, observed);
-            if (!hull.valid)
-                return model;
+            constexpr size_t kMaxCarvedCells = 48;
+            LargeSceneryObservedViews observed{};
+            FirstPersonVisualHull hull{};
+            std::vector<LargeSceneryAssetFace> faces;
+            if (cells->size() <= kMaxCarvedCells)
+            {
+                observed = CollectLargeSceneryObservedViews(entry);
+                hull = BuildLargeSceneryAssetHull(*cells, observed);
+                if (hull.valid)
+                    faces = BuildLargeSceneryAssetFaces(
+                        hull, *cells, observed);
+            }
 
-            auto faces =
-                BuildLargeSceneryAssetFaces(hull, *cells, observed);
-            constexpr size_t kMaxReconstructionFaces = 1024;
-            if (faces.empty()
-                || faces.size() > kMaxReconstructionFaces
-                || !EstimateLargeSceneryAssetRasterWork(faces).has_value())
+            constexpr size_t kMaxCarvedFaces = 1024;
+            const bool carved =
+                !faces.empty()
+                && faces.size() <= kMaxCarvedFaces
+                && EstimateLargeSceneryAssetRasterWork(faces)
+                    .has_value();
+            if (!carved)
+            {
+                faces =
+                    BuildFirstPersonQuarterCellOccupancyFaces(
+                        *cells);
+                if (faces.empty())
+                    return model;
+                for (auto& face : faces)
+                {
+                    const auto source =
+                        ChooseFirstPersonOccupancyFaceSourceDirection(
+                            face.kind,
+                            [&](uint8_t direction) {
+                                const ImageIndex image =
+                                    entry.image + 4
+                                    + (ImageIndex(face.sequence) << 2)
+                                    + direction;
+                                const auto* g1 =
+                                    GfxGetG1Element(image);
+                                return g1 != nullptr
+                                    && g1->width > 0
+                                    && g1->height > 0;
+                            });
+                    if (!source.has_value())
+                        return model;
+                    face.sourceDirection = *source;
+                }
+                model.minimumCandidateCoverage = 0.0f;
+                model.minimumFaceOwnership = 0.0f;
+                model.faces = std::move(faces);
+                model.usable = true;
                 return model;
+            }
 
             const auto depthOwners =
                 BuildLargeSceneryAssetDepthOwners(faces);
@@ -1406,9 +1425,9 @@ namespace OpenRCT2::Paint
                             source, projectedFace);
                     const float coverage =
                         fit.valid ? fit.candidateCoverage : 0.0f;
-                    const float score =
-                        (fit.valid ? 2.0f : 0.0f)
-                        + std::min(coverage, ownership);
+                    const float score = fit.valid
+                        ? 2.0f + std::min(coverage, ownership)
+                        : ownership;
                     if (score <= bestFaceScore)
                         continue;
                     bestFaceScore = score;
@@ -1474,10 +1493,7 @@ namespace OpenRCT2::Paint
             return std::max(result,element.getBaseZ()+std::max(0,entry->tiles[sequence].zClearance));
         }
 
-        // Culling on the raw PaintStruct's SORTING bounds is unsafe: its
-        // geometry may be far smaller (or in another location) than the art
-        // derived from its source. Test the final physical surface, and cache
-        // ALL static surfaces even when their present view does not show them.
+        // Cull the final physical surface, not painter sorting bounds.
         bool SurfaceMayBeVisible(const FirstPersonSurface& surface, const FirstPersonFrustum& view)
         {
             if (surface.hasSemanticBounds && view.visible(surface.semanticCenter,surface.semanticRadius))
@@ -2532,10 +2548,7 @@ namespace OpenRCT2::Paint
             }
         }
 
-        // Terrain is static between edits, but changes in grass length, custom
-        // terrain images, terraforming and water level are authoritative game
-        // state. Validate a cheap semantic signature on EVERY visible tile,
-        // rather than maintain an unrelated list of all map mutation hooks.
+        // Terrain cache keys include authoritative visible state.
         struct TerrainCacheEntry
         {
             ImageId source{};
@@ -2558,9 +2571,7 @@ namespace OpenRCT2::Paint
         };
         static TerrainCache _terrainCache;
         static uint64_t _sceneEpoch = 1;
-        // Persistent NATIVE PAINT results, separated from dynamic entity sprites.
-        // A cached surface never retains a PaintStruct/TileElement pointer: all
-        // native session pointers expire immediately after PaintSessionFree.
+        // Persistent native paint results never retain session pointers.
         struct StaticPaintRotationCache
         {
             uint64_t lastPainted{};
