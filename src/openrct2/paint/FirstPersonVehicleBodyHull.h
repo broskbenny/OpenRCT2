@@ -148,8 +148,6 @@ namespace OpenRCT2::Paint
 
         FirstPersonVisualHullConfig config{};
         config.minimumViews = 16;
-        config.minimumConstructionViews = 8;
-        config.minimumValidationViews = 8;
         config.minimumOccupiedCells = 8;
         config.maximumOccupiedCells = 2048;
         config.maximumAxisCells = 20;

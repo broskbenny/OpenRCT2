@@ -699,22 +699,13 @@ namespace OpenRCT2::Paint
         {
             bool attempted = false;
             bool reliable = false;
-            int32_t heightTrim = 0;
             uint32_t bodyImageFirst = 0;
             uint32_t bodyImageLast = 0;
-            FirstPersonMultiViewFit fit{};
-            float minimumFaceSourceCoverage = 0.0f;
+            float minimumCandidateCoverage = 0.0f;
             float minimumFaceOwnership = 0.0f;
-            FirstPersonVec3 low{};
-            FirstPersonVec3 high{};
             std::vector<LargeSceneryAssetFace> faces;
         };
         static std::unordered_map<const LargeSceneryEntry*, LargeSceneryAssetModel> _largeSceneryAssetModels;
-
-        [[nodiscard]] uint64_t LargeSceneryQuarterCellKey(int32_t qx, int32_t qy)
-        {
-            return (uint64_t(uint32_t(qx)) << 32) | uint32_t(qy);
-        }
 
         [[nodiscard]] bool LargeSceneryAssetEligible(const LargeSceneryEntry& entry)
         {
@@ -873,176 +864,349 @@ namespace OpenRCT2::Paint
             return cells;
         }
 
-        [[nodiscard]] std::vector<LargeSceneryAssetFace> BuildLargeSceneryAssetFaces(
-            const std::vector<LargeSceneryAssetCell>& cells, int32_t heightTrim)
+        [[nodiscard]] bool LargeSceneryCellContainsPoint(
+            const LargeSceneryAssetCell& cell, FirstPersonVec3 point)
         {
-            std::unordered_map<
-                uint64_t, std::vector<const LargeSceneryAssetCell*>> lookup;
-            lookup.reserve(cells.size());
+            const float x0 = float(cell.qx * 16);
+            const float y0 = float(cell.qy * 16);
+            return point.x >= x0 && point.x < x0 + 16.0f
+                && point.y >= y0 && point.y < y0 + 16.0f
+                && point.z >= float(cell.lowZ)
+                && point.z < float(cell.highZ);
+        }
+
+        [[nodiscard]] FirstPersonVisualHull BuildLargeSceneryAssetHull(
+            const std::vector<LargeSceneryAssetCell>& cells,
+            const LargeSceneryObservedViews& observed)
+        {
+            if (cells.empty() || !observed.valid)
+                return {};
+
+            FirstPersonVisualHullBounds bounds{};
+            bounds.minForward = float(cells.front().qx * 16);
+            bounds.maxForward = bounds.minForward + 16.0f;
+            bounds.minRight = float(cells.front().qy * 16);
+            bounds.maxRight = bounds.minRight + 16.0f;
+            bounds.minUp = float(cells.front().lowZ);
+            bounds.maxUp = float(cells.front().highZ);
+            bounds.step = 4.0f;
             for (const auto& cell : cells)
             {
-                lookup[LargeSceneryQuarterCellKey(cell.qx, cell.qy)]
-                    .push_back(&cell);
+                bounds.minForward = std::min(
+                    bounds.minForward, float(cell.qx * 16));
+                bounds.maxForward = std::max(
+                    bounds.maxForward, float((cell.qx + 1) * 16));
+                bounds.minRight = std::min(
+                    bounds.minRight, float(cell.qy * 16));
+                bounds.maxRight = std::max(
+                    bounds.maxRight, float((cell.qy + 1) * 16));
+                bounds.minUp = std::min(
+                    bounds.minUp, float(cell.lowZ));
+                bounds.maxUp = std::max(
+                    bounds.maxUp, float(cell.highZ));
             }
 
-            const auto effectiveHigh =
-                [heightTrim](const LargeSceneryAssetCell& cell) {
-                    return std::max(
-                        cell.lowZ + 1, cell.highZ - heightTrim);
-                };
-            const auto coverageAt =
-                [&](int32_t qx, int32_t qy) {
-                    std::vector<FirstPersonVerticalInterval> intervals;
-                    const auto found = lookup.find(
-                        LargeSceneryQuarterCellKey(qx, qy));
-                    if (found == lookup.end())
-                        return intervals;
-                    intervals.reserve(found->second.size());
-                    for (const auto* cell : found->second)
-                    {
-                        const int32_t high = effectiveHigh(*cell);
-                        if (high > cell->lowZ)
-                            intervals.push_back(
-                                { cell->lowZ, high });
-                    }
-                    return intervals;
-                };
-
-            std::vector<LargeSceneryAssetFace> faces;
-            faces.reserve(cells.size() * 5);
-            std::unordered_map<
-                uint64_t, std::vector<FirstPersonVerticalInterval>> claimed;
-
-            const auto appendSideStrip =
-                [&](const LargeSceneryAssetCell& cell,
-                    FirstPersonVerticalInterval strip,
-                    LargeSceneryAssetFaceKind kind) {
-                    if (strip.high <= strip.low)
-                        return;
-                    const int32_t x0 = cell.qx * 16;
-                    const int32_t y0 = cell.qy * 16;
-                    const int32_t x1 = x0 + 16;
-                    const int32_t y1 = y0 + 16;
-                    LargeSceneryAssetFace face{};
-                    face.sequence = cell.sequence;
-                    face.kind = kind;
-                    switch (kind)
-                    {
-                        case LargeSceneryAssetFaceKind::minX:
-                            face.corners = { {
-                                { x0, y0, strip.low },
-                                { x0, y1, strip.low },
-                                { x0, y1, strip.high },
-                                { x0, y0, strip.high },
-                            } };
-                            break;
-                        case LargeSceneryAssetFaceKind::maxX:
-                            face.corners = { {
-                                { x1, y1, strip.low },
-                                { x1, y0, strip.low },
-                                { x1, y0, strip.high },
-                                { x1, y1, strip.high },
-                            } };
-                            break;
-                        case LargeSceneryAssetFaceKind::minY:
-                            face.corners = { {
-                                { x1, y0, strip.low },
-                                { x0, y0, strip.low },
-                                { x0, y0, strip.high },
-                                { x1, y0, strip.high },
-                            } };
-                            break;
-                        case LargeSceneryAssetFaceKind::maxY:
-                            face.corners = { {
-                                { x0, y1, strip.low },
-                                { x1, y1, strip.low },
-                                { x1, y1, strip.high },
-                                { x0, y1, strip.high },
-                            } };
-                            break;
-                        case LargeSceneryAssetFaceKind::top:
-                            return;
-                    }
-                    faces.push_back(std::move(face));
-                };
-
-            for (const auto& cell : cells)
+            std::vector<FirstPersonVisualHullView> views;
+            views.reserve(4);
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
             {
-                const int32_t highZ = effectiveHigh(cell);
-                if (highZ <= cell.lowZ)
-                    continue;
+                FirstPersonVisualHullView view{};
+                view.imageDirection = rotation;
+                view.observed = observed.combined[rotation];
+                views.push_back(std::move(view));
+            }
 
-                const uint64_t key =
-                    LargeSceneryQuarterCellKey(cell.qx, cell.qy);
-                auto& alreadyClaimed = claimed[key];
-                const auto ownedFragments =
-                    SubtractFirstPersonVerticalCoverage(
-                        { cell.lowZ, highZ }, alreadyClaimed);
-                alreadyClaimed.push_back({ cell.lowZ, highZ });
+            FirstPersonVisualHullConfig config{};
+            config.minimumViews = 4;
+            config.minimumOccupiedCells = 4;
+            config.maximumOccupiedCells = 8192;
+            config.maximumGridCells = 131072;
+            config.maximumAxisCells = 96;
+            config.minimumCandidateCoverage = 0.70f;
+            config.minimumObservedCoverage = 0.50f;
+            config.maximumEdgeError = 8;
 
-                for (const auto fragment : ownedFragments)
-                {
-                    const auto appendExposedSides =
-                        [&](int32_t dx, int32_t dy,
-                            LargeSceneryAssetFaceKind kind) {
-                            const auto exposed =
-                                SubtractFirstPersonVerticalCoverage(
-                                    fragment,
-                                    coverageAt(
-                                        cell.qx + dx,
-                                        cell.qy + dy));
-                            for (const auto strip : exposed)
-                                appendSideStrip(cell, strip, kind);
-                        };
-
-                    appendExposedSides(
-                        -1, 0,
-                        LargeSceneryAssetFaceKind::minX);
-                    appendExposedSides(
-                        1, 0,
-                        LargeSceneryAssetFaceKind::maxX);
-                    appendExposedSides(
-                        0, -1,
-                        LargeSceneryAssetFaceKind::minY);
-                    appendExposedSides(
-                        0, 1,
-                        LargeSceneryAssetFaceKind::maxY);
-
-                    // Only the actual upper end of this source interval can
-                    // own a roof. Internal fragment boundaries created by
-                    // overlapping cells are solid union boundaries, not roofs.
-                    if (fragment.high != highZ)
-                        continue;
-
-                    auto sameColumn = coverageAt(cell.qx, cell.qy);
-                    bool coveredAbove = false;
-                    for (const auto interval : sameColumn)
+            const auto projectPoint =
+                [](uint8_t rotation, FirstPersonVec3 point) {
+                    const auto projected =
+                        Translate3DTo2DWithZ(
+                            rotation,
+                            {
+                                int32_t(std::lround(point.x)),
+                                int32_t(std::lround(point.y)),
+                                int32_t(std::lround(point.z)),
+                            });
+                    return std::array<float, 2>{
+                        float(projected.x), float(projected.y)
+                    };
+                };
+            const auto occupancyPredicate =
+                [&](FirstPersonVec3 point) {
+                    return std::any_of(
+                        cells.begin(), cells.end(),
+                        [&](const auto& cell) {
+                            return LargeSceneryCellContainsPoint(
+                                cell, point);
+                        });
+                };
+            const auto pointSupported =
+                [&](const FirstPersonVisualHullView& view,
+                    FirstPersonVec3 point) {
+                    const auto projected =
+                        projectPoint(view.imageDirection, point);
+                    const int32_t x =
+                        int32_t(std::lround(projected[0]));
+                    const int32_t y =
+                        int32_t(std::lround(projected[1]));
+                    for (int32_t dy = -1; dy <= 1; ++dy)
+                    for (int32_t dx = -1; dx <= 1; ++dx)
                     {
-                        if (interval.low <= highZ
-                            && interval.high > highZ)
-                        {
-                            coveredAbove = true;
-                            break;
-                        }
+                        if (view.observed.contains(x + dx, y + dy))
+                            return true;
                     }
-                    if (coveredAbove)
+                    return false;
+                };
+
+            return BuildFirstPersonVisualHull(
+                views, bounds, config,
+                projectPoint, occupancyPredicate,
+                pointSupported);
+        }
+
+        template<typename SampleFace, typename BuildCorners>
+        void AppendLargeSceneryGreedyFaceSlices(
+            std::vector<LargeSceneryAssetFace>& result,
+            int32_t sliceCount, int32_t axisACount,
+            int32_t axisBCount, LargeSceneryAssetFaceKind kind,
+            SampleFace&& sampleFace, BuildCorners&& buildCorners)
+        {
+            std::vector<int32_t> mask(
+                size_t(axisACount) * size_t(axisBCount), -1);
+            for (int32_t slice = 0; slice < sliceCount; ++slice)
+            {
+                std::fill(mask.begin(), mask.end(), -1);
+                for (int32_t b = 0; b < axisBCount; ++b)
+                for (int32_t a = 0; a < axisACount; ++a)
+                    mask[size_t(b) * size_t(axisACount) + size_t(a)] =
+                        sampleFace(slice, a, b);
+
+                for (int32_t b = 0; b < axisBCount; ++b)
+                for (int32_t a = 0; a < axisACount; ++a)
+                {
+                    const size_t index =
+                        size_t(b) * size_t(axisACount) + size_t(a);
+                    const int32_t owner = mask[index];
+                    if (owner < 0)
                         continue;
 
-                    const int32_t x0 = cell.qx * 16;
-                    const int32_t y0 = cell.qy * 16;
-                    LargeSceneryAssetFace roof{};
-                    roof.sequence = cell.sequence;
-                    roof.kind = LargeSceneryAssetFaceKind::top;
-                    roof.corners = { {
-                        { x0, y0, highZ },
-                        { x0 + 16, y0, highZ },
-                        { x0 + 16, y0 + 16, highZ },
-                        { x0, y0 + 16, highZ },
-                    } };
-                    faces.push_back(std::move(roof));
+                    int32_t width = 1;
+                    while (a + width < axisACount
+                        && mask[size_t(b) * size_t(axisACount)
+                            + size_t(a + width)] == owner)
+                        ++width;
+
+                    int32_t height = 1;
+                    for (; b + height < axisBCount; ++height)
+                    {
+                        bool same = true;
+                        for (int32_t x = 0; x < width; ++x)
+                        {
+                            if (mask[
+                                    size_t(b + height)
+                                        * size_t(axisACount)
+                                    + size_t(a + x)] != owner)
+                            {
+                                same = false;
+                                break;
+                            }
+                        }
+                        if (!same)
+                            break;
+                    }
+
+                    for (int32_t y = 0; y < height; ++y)
+                    for (int32_t x = 0; x < width; ++x)
+                        mask[size_t(b + y) * size_t(axisACount)
+                            + size_t(a + x)] = -2;
+                    result.push_back({
+                        buildCorners(slice, a, b, width, height),
+                        uint16_t(owner), kind, 0
+                    });
                 }
             }
-            return faces;
+        }
+
+        [[nodiscard]] std::vector<LargeSceneryAssetFace>
+            BuildLargeSceneryAssetFaces(
+                const FirstPersonVisualHull& hull,
+                const std::vector<LargeSceneryAssetCell>& cells,
+                const LargeSceneryObservedViews& observed)
+        {
+            std::vector<LargeSceneryAssetFace> result;
+            const auto projectedPoint =
+                [](uint8_t rotation, FirstPersonVec3 point) {
+                    return Translate3DTo2DWithZ(
+                        rotation,
+                        {
+                            int32_t(std::lround(point.x)),
+                            int32_t(std::lround(point.y)),
+                            int32_t(std::lround(point.z)),
+                        });
+                };
+            const auto ownerAt =
+                [&](int32_t forward, int32_t right,
+                    int32_t up) -> int32_t {
+                    if (!hull.contains(forward, right, up))
+                        return -1;
+                    const auto point =
+                        hull.centre(forward, right, up);
+                    int32_t bestSequence = -1;
+                    int32_t bestScore = -1;
+                    for (const auto& cell : cells)
+                    {
+                        if (!LargeSceneryCellContainsPoint(cell, point))
+                            continue;
+                        int32_t score = 0;
+                        for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                        {
+                            const auto projected =
+                                projectedPoint(rotation, point);
+                            bool supported = false;
+                            for (int32_t dy = -1; dy <= 1
+                                 && !supported; ++dy)
+                            for (int32_t dx = -1; dx <= 1; ++dx)
+                            {
+                                if (observed.bySequence[
+                                        cell.sequence][rotation]
+                                        .contains(
+                                            projected.x + dx,
+                                            projected.y + dy))
+                                {
+                                    supported = true;
+                                    break;
+                                }
+                            }
+                            if (supported)
+                                ++score;
+                        }
+                        if (score > bestScore
+                            || (score == bestScore
+                                && (bestSequence < 0
+                                    || cell.sequence < bestSequence)))
+                        {
+                            bestScore = score;
+                            bestSequence = cell.sequence;
+                        }
+                    }
+                    return bestSequence;
+                };
+            const auto coord =
+                [&](float base, int32_t cell) {
+                    return int32_t(std::lround(
+                        base + float(cell) * hull.step));
+                };
+
+            AppendLargeSceneryGreedyFaceSlices(
+                result, hull.sizeForward, hull.sizeRight, hull.sizeUp,
+                LargeSceneryAssetFaceKind::minX,
+                [&](int32_t f, int32_t r, int32_t u) {
+                    const int32_t owner = ownerAt(f, r, u);
+                    return owner >= 0 && !hull.contains(f - 1, r, u)
+                        ? owner : -1;
+                },
+                [&](int32_t f, int32_t r, int32_t u,
+                    int32_t width, int32_t height) {
+                    const int32_t x = coord(hull.minForward, f);
+                    const int32_t y0 = coord(hull.minRight, r);
+                    const int32_t y1 = coord(hull.minRight, r + width);
+                    const int32_t z0 = coord(hull.minUp, u);
+                    const int32_t z1 = coord(hull.minUp, u + height);
+                    return std::array<CoordsXYZ, 4>{ {
+                        { x, y0, z0 }, { x, y1, z0 },
+                        { x, y1, z1 }, { x, y0, z1 },
+                    } };
+                });
+            AppendLargeSceneryGreedyFaceSlices(
+                result, hull.sizeForward, hull.sizeRight, hull.sizeUp,
+                LargeSceneryAssetFaceKind::maxX,
+                [&](int32_t f, int32_t r, int32_t u) {
+                    const int32_t owner = ownerAt(f, r, u);
+                    return owner >= 0 && !hull.contains(f + 1, r, u)
+                        ? owner : -1;
+                },
+                [&](int32_t f, int32_t r, int32_t u,
+                    int32_t width, int32_t height) {
+                    const int32_t x = coord(hull.minForward, f + 1);
+                    const int32_t y0 = coord(hull.minRight, r);
+                    const int32_t y1 = coord(hull.minRight, r + width);
+                    const int32_t z0 = coord(hull.minUp, u);
+                    const int32_t z1 = coord(hull.minUp, u + height);
+                    return std::array<CoordsXYZ, 4>{ {
+                        { x, y1, z0 }, { x, y0, z0 },
+                        { x, y0, z1 }, { x, y1, z1 },
+                    } };
+                });
+            AppendLargeSceneryGreedyFaceSlices(
+                result, hull.sizeRight, hull.sizeForward, hull.sizeUp,
+                LargeSceneryAssetFaceKind::minY,
+                [&](int32_t r, int32_t f, int32_t u) {
+                    const int32_t owner = ownerAt(f, r, u);
+                    return owner >= 0 && !hull.contains(f, r - 1, u)
+                        ? owner : -1;
+                },
+                [&](int32_t r, int32_t f, int32_t u,
+                    int32_t width, int32_t height) {
+                    const int32_t y = coord(hull.minRight, r);
+                    const int32_t x0 = coord(hull.minForward, f);
+                    const int32_t x1 = coord(hull.minForward, f + width);
+                    const int32_t z0 = coord(hull.minUp, u);
+                    const int32_t z1 = coord(hull.minUp, u + height);
+                    return std::array<CoordsXYZ, 4>{ {
+                        { x1, y, z0 }, { x0, y, z0 },
+                        { x0, y, z1 }, { x1, y, z1 },
+                    } };
+                });
+            AppendLargeSceneryGreedyFaceSlices(
+                result, hull.sizeRight, hull.sizeForward, hull.sizeUp,
+                LargeSceneryAssetFaceKind::maxY,
+                [&](int32_t r, int32_t f, int32_t u) {
+                    const int32_t owner = ownerAt(f, r, u);
+                    return owner >= 0 && !hull.contains(f, r + 1, u)
+                        ? owner : -1;
+                },
+                [&](int32_t r, int32_t f, int32_t u,
+                    int32_t width, int32_t height) {
+                    const int32_t y = coord(hull.minRight, r + 1);
+                    const int32_t x0 = coord(hull.minForward, f);
+                    const int32_t x1 = coord(hull.minForward, f + width);
+                    const int32_t z0 = coord(hull.minUp, u);
+                    const int32_t z1 = coord(hull.minUp, u + height);
+                    return std::array<CoordsXYZ, 4>{ {
+                        { x0, y, z0 }, { x1, y, z0 },
+                        { x1, y, z1 }, { x0, y, z1 },
+                    } };
+                });
+            AppendLargeSceneryGreedyFaceSlices(
+                result, hull.sizeUp, hull.sizeForward, hull.sizeRight,
+                LargeSceneryAssetFaceKind::top,
+                [&](int32_t u, int32_t f, int32_t r) {
+                    const int32_t owner = ownerAt(f, r, u);
+                    return owner >= 0 && !hull.contains(f, r, u + 1)
+                        ? owner : -1;
+                },
+                [&](int32_t u, int32_t f, int32_t r,
+                    int32_t width, int32_t height) {
+                    const int32_t z = coord(hull.minUp, u + 1);
+                    const int32_t x0 = coord(hull.minForward, f);
+                    const int32_t x1 = coord(hull.minForward, f + width);
+                    const int32_t y0 = coord(hull.minRight, r);
+                    const int32_t y1 = coord(hull.minRight, r + height);
+                    return std::array<CoordsXYZ, 4>{ {
+                        { x0, y0, z }, { x1, y0, z },
+                        { x1, y1, z }, { x0, y1, z },
+                    } };
+                });
+            return result;
         }
 
         [[nodiscard]] bool LargeSceneryFaceVisibleFromDirection(
@@ -1121,25 +1285,6 @@ namespace OpenRCT2::Paint
             return work;
         }
 
-        [[nodiscard]] std::array<FirstPersonSilhouette, 4> RasterizeLargeSceneryAssetViews(
-            const std::vector<LargeSceneryAssetFace>& faces)
-        {
-            std::array<FirstPersonSilhouette, 4> result{};
-            for (uint8_t rotation = 0; rotation < 4; ++rotation)
-            {
-                for (const auto& face : faces)
-                {
-                    if (!LargeSceneryFaceVisibleFromDirection(face.kind, rotation))
-                        continue;
-                    std::array<ScreenCoordsXY, 4> projected{};
-                    for (size_t i = 0; i < face.corners.size(); ++i)
-                        projected[i] = Translate3DTo2DWithZ(rotation, face.corners[i]);
-                    AddFirstPersonSilhouetteQuad(result[rotation], projected);
-                }
-            }
-            return result;
-        }
-
         [[nodiscard]] std::array<FirstPersonDepthOwnerMap, 4>
             BuildLargeSceneryAssetDepthOwners(
                 const std::vector<LargeSceneryAssetFace>& faces)
@@ -1178,86 +1323,67 @@ namespace OpenRCT2::Paint
         {
             LargeSceneryAssetModel model{};
             model.bodyImageFirst = entry.image + 4;
-            model.bodyImageLast = model.bodyImageFirst + uint32_t(entry.tiles.size() * 4);
+            model.bodyImageLast =
+                model.bodyImageFirst + uint32_t(entry.tiles.size() * 4);
             model.attempted = true;
             if (!LargeSceneryAssetEligible(entry))
                 return model;
 
             const auto cells = BuildLargeSceneryAssetCells(entry);
             constexpr size_t kMaxReconstructionCells = 48;
-            if (!cells.has_value() || cells->size() > kMaxReconstructionCells)
+            if (!cells.has_value()
+                || cells->size() > kMaxReconstructionCells)
                 return model;
 
             const auto observed = CollectLargeSceneryObservedViews(entry);
             if (!observed.valid)
                 return model;
 
-            static constexpr std::array<int32_t, 7> kHeightTrims{ { 0, 2, 4, 6, 8, 12, 16 } };
-            float bestScore = -std::numeric_limits<float>::infinity();
-            std::vector<LargeSceneryAssetFace> bestFaces;
-            for (const int32_t trim : kHeightTrims)
-            {
-                const auto faces = BuildLargeSceneryAssetFaces(*cells, trim);
-                constexpr size_t kMaxReconstructionFaces = 144;
-                if (faces.empty() || faces.size() > kMaxReconstructionFaces
-                    || !EstimateLargeSceneryAssetRasterWork(faces).has_value())
-                    continue;
-                const auto candidate = RasterizeLargeSceneryAssetViews(faces);
-                size_t candidatePixels = 0;
-                for (const auto& view : candidate)
-                    candidatePixels += view.size();
-                constexpr size_t kMaxCandidatePixels = 393216;
-                if (candidatePixels > kMaxCandidatePixels)
-                    continue;
-                const auto fit = CompareFirstPersonMultiViewSilhouettes(
-                    observed.combined, candidate);
-                if (!fit.valid)
-                    continue;
-                const float score = fit.averageIntersectionOverUnion
-                    - 0.0025f * float(fit.maximumEdgeError);
-                if (score <= bestScore)
-                    continue;
-                bestScore = score;
-                model.heightTrim = trim;
-                model.fit = fit;
-                bestFaces = faces;
-            }
-            if (bestFaces.empty() || !IsFirstPersonMultiViewFitReliable(model.fit))
+            const auto hull = BuildLargeSceneryAssetHull(*cells, observed);
+            if (!hull.valid)
+                return model;
+
+            auto faces =
+                BuildLargeSceneryAssetFaces(hull, *cells, observed);
+            constexpr size_t kMaxReconstructionFaces = 1024;
+            if (faces.empty()
+                || faces.size() > kMaxReconstructionFaces
+                || !EstimateLargeSceneryAssetRasterWork(faces).has_value())
                 return model;
 
             const auto depthOwners =
-                BuildLargeSceneryAssetDepthOwners(bestFaces);
+                BuildLargeSceneryAssetDepthOwners(faces);
             float minimumFaceCoverage = 1.0f;
             float minimumFaceOwnership = 1.0f;
-            for (size_t faceIndex = 0; faceIndex < bestFaces.size(); ++faceIndex)
+            for (size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex)
             {
-                auto& face = bestFaces[faceIndex];
+                auto& face = faces[faceIndex];
                 float bestFaceScore = -1.0f;
                 float bestCoverage = 0.0f;
                 float bestOwnership = 0.0f;
                 uint8_t bestDirection = 0;
                 for (uint8_t direction = 0; direction < 4; ++direction)
                 {
-                    if (!LargeSceneryFaceVisibleFromDirection(face.kind, direction))
+                    if (!LargeSceneryFaceVisibleFromDirection(
+                            face.kind, direction))
                         continue;
                     const auto projectedFace =
                         RasterizeLargeSceneryAssetFace(face, direction);
                     if (projectedFace.empty())
                         continue;
 
-                    const float ownership = FirstPersonDepthOwnerCoverage(
-                        depthOwners[direction], uint32_t(faceIndex), projectedFace);
-                    // Silhouette agreement says "something is opaque here";
-                    // the depth-owner map additionally says THIS face owns it.
-                    // Reject source views where another candidate surface is in
-                    // front rather than baking foreground pixels onto a recess.
-                    if (ownership < 0.97f)
+                    const float ownership =
+                        FirstPersonDepthOwnerCoverage(
+                            depthOwners[direction], uint32_t(faceIndex),
+                            projectedFace);
+                    if (ownership < 0.90f)
                         continue;
 
                     const auto& source =
                         observed.bySequence[face.sequence][direction];
                     const auto fit =
-                        CompareFirstPersonSilhouettes(source, projectedFace);
+                        CompareFirstPersonSilhouettes(
+                            source, projectedFace);
                     if (!fit.valid)
                         continue;
                     const float score =
@@ -1277,28 +1403,15 @@ namespace OpenRCT2::Paint
                 minimumFaceOwnership =
                     std::min(minimumFaceOwnership, bestOwnership);
             }
-            model.minimumFaceSourceCoverage = minimumFaceCoverage;
+
+            model.minimumCandidateCoverage =
+                hull.minimumCandidateCoverage;
             model.minimumFaceOwnership = minimumFaceOwnership;
-            if (minimumFaceCoverage < 0.55f || minimumFaceOwnership < 0.97f)
+            if (minimumFaceCoverage < 0.55f
+                || minimumFaceOwnership < 0.90f)
                 return model;
 
-            model.low = {
-                float((*cells)[0].qx * 16),
-                float((*cells)[0].qy * 16),
-                float((*cells)[0].lowZ),
-            };
-            model.high = model.low;
-            for (const auto& face : bestFaces)
-            for (const auto& corner : face.corners)
-            {
-                model.low.x = std::min(model.low.x, float(corner.x));
-                model.low.y = std::min(model.low.y, float(corner.y));
-                model.low.z = std::min(model.low.z, float(corner.z));
-                model.high.x = std::max(model.high.x, float(corner.x));
-                model.high.y = std::max(model.high.y, float(corner.y));
-                model.high.z = std::max(model.high.z, float(corner.z));
-            }
-            model.faces = std::move(bestFaces);
+            model.faces = std::move(faces);
             model.reliable = true;
             return model;
         }
@@ -2866,47 +2979,14 @@ namespace OpenRCT2::Paint
                 uint8_t objectDirection)
         {
             std::vector<FirstPersonPhysicalBoxProxy> result;
+            result.reserve(model.faces.size());
             constexpr float kCollisionSkin = 0.5f;
-            constexpr float kCellSize = 2.0f;
-            constexpr size_t kMaxCollisionCells = 2048;
 
             for (const auto& face : model.faces)
             {
                 if (face.sequence >= entry.tiles.size())
                     continue;
                 const auto& tile = entry.tiles[face.sequence];
-                const uint8_t sourceRotation =
-                    FirstPersonViewportRotationForNativeView(
-                        objectDirection, face.sourceDirection);
-                const ImageIndex imageIndex =
-                    entry.image + 4
-                    + (ImageIndex(face.sequence) << 2)
-                    + face.sourceDirection;
-                const auto* g1 = GfxGetG1Element(imageIndex);
-                if (g1 == nullptr || g1->width <= 0
-                    || g1->height <= 0)
-                    return {};
-
-                const CoordsXY tileOffset =
-                    CoordsXY{
-                        tile.offset.x, tile.offset.y
-                    }.rotate(objectDirection);
-                const CoordsXY tileWorld{
-                    int32_t(std::lround(group.anchor.x))
-                        + tileOffset.x,
-                    int32_t(std::lround(group.anchor.y))
-                        + tileOffset.y,
-                };
-                const int32_t tileBaseZ =
-                    int32_t(std::lround(group.anchor.z))
-                    + tile.offset.z;
-                const auto spriteOrigin =
-                    GetTileElementPaintSpritePosition(
-                        tileWorld, sourceRotation);
-                const auto spritePos =
-                    Translate3DTo2DWithZ(
-                        sourceRotation,
-                        { spriteOrigin, tileBaseZ });
 
                 bool havePoint = false;
                 FirstPersonVec3 low{}, high{};
@@ -2918,12 +2998,9 @@ namespace OpenRCT2::Paint
                             { corner.x, corner.y },
                             objectDirection);
                     const FirstPersonVec3 world{
-                        group.anchor.x
-                            + float(localXY.x),
-                        group.anchor.y
-                            + float(localXY.y),
-                        group.anchor.z
-                            + float(corner.z),
+                        group.anchor.x + float(localXY.x),
+                        group.anchor.y + float(localXY.y),
+                        group.anchor.z + float(corner.z),
                     };
                     if (!havePoint)
                     {
@@ -2943,117 +3020,29 @@ namespace OpenRCT2::Paint
                 if (!havePoint)
                     continue;
 
-                const int normalAxis =
-                    high.x - low.x < 0.01f ? 0
-                    : (high.y - low.y < 0.01f ? 1 : 2);
-                const std::array<float, 3> lo{
-                    low.x, low.y, low.z
-                };
-                const std::array<float, 3> hi{
-                    high.x, high.y, high.z
-                };
-                const int axisA =
-                    normalAxis == 0 ? 1 : 0;
-                const int axisB =
-                    normalAxis == 2 ? 1 : 2;
-
-                const auto worldPoint =
-                    [](const std::array<float, 3>& p) {
-                        return FirstPersonVec3{
-                            p[0], p[1], p[2]
-                        };
-                    };
-                const auto opaqueAt =
-                    [&](const std::array<float, 3>& point) {
-                        const auto p = worldPoint(point);
-                        const auto source =
-                            Translate3DTo2DWithZ(
-                                sourceRotation,
-                                {
-                                    int32_t(std::lround(p.x)),
-                                    int32_t(std::lround(p.y)),
-                                    int32_t(std::lround(p.z)),
-                                });
-                        return FirstPersonG1PixelOpaque(
-                            *g1,
-                            source.x - spritePos.x
-                                - g1->xOffset,
-                            source.y - spritePos.y
-                                - g1->yOffset);
-                    };
-
-                for (float a = lo[axisA];
-                     a < hi[axisA] - 0.01f;
-                     a += kCellSize)
-                for (float b = lo[axisB];
-                     b < hi[axisB] - 0.01f;
-                     b += kCellSize)
+                if (high.x - low.x < 0.01f)
                 {
-                    const float a1 =
-                        std::min(a + kCellSize, hi[axisA]);
-                    const float b1 =
-                        std::min(b + kCellSize, hi[axisB]);
-                    std::array<float, 3> centre{
-                        0.5f * (lo[0] + hi[0]),
-                        0.5f * (lo[1] + hi[1]),
-                        0.5f * (lo[2] + hi[2]),
-                    };
-                    centre[axisA] = 0.5f * (a + a1);
-                    centre[axisB] = 0.5f * (b + b1);
-
-                    // Sample the centre plus four quarter-cell points. A cell
-                    // becomes physical only when the native face texture
-                    // contains opacity there; transparent arch/door pixels do
-                    // not acquire collision merely because their enclosing face
-                    // was geometrically validated.
-                    size_t opaqueSamples = 0;
-                    for (const float u :
-                        { 0.25f, 0.75f })
-                    for (const float v :
-                        { 0.25f, 0.75f })
-                    {
-                        auto sample = centre;
-                        sample[axisA] =
-                            a + (a1 - a) * u;
-                        sample[axisB] =
-                            b + (b1 - b) * v;
-                        if (opaqueAt(sample))
-                            ++opaqueSamples;
-                    }
-                    if (opaqueAt(centre))
-                        ++opaqueSamples;
-                    if (opaqueSamples == 0)
-                        continue;
-
-                    std::array<float, 3> cellLow = centre;
-                    std::array<float, 3> cellHigh = centre;
-                    cellLow[axisA] = a;
-                    cellHigh[axisA] = a1;
-                    cellLow[axisB] = b;
-                    cellHigh[axisB] = b1;
-                    cellLow[normalAxis] =
-                        lo[normalAxis] - kCollisionSkin;
-                    cellHigh[normalAxis] =
-                        hi[normalAxis] + kCollisionSkin;
-
-                    result.push_back({
-                        worldPoint(cellLow),
-                        worldPoint(cellHigh),
-                        FirstPersonPhysicalProxyProvenance::
-                            calibratedLargeSceneryArtwork,
-                        static_cast<uint8_t>(
-                            FirstPersonPhysicalProxyCapability::
-                                collide),
-                        group.key,
-                    });
-                    if (result.size()
-                        > kMaxCollisionCells)
-                    {
-                        // Complexity is not evidence. Fail open rather than
-                        // replacing a detailed/hollow asset with a coarse box.
-                        return {};
-                    }
+                    low.x -= kCollisionSkin;
+                    high.x += kCollisionSkin;
                 }
+                else if (high.y - low.y < 0.01f)
+                {
+                    low.y -= kCollisionSkin;
+                    high.y += kCollisionSkin;
+                }
+                else
+                {
+                    low.z -= kCollisionSkin;
+                    high.z += kCollisionSkin;
+                }
+                result.push_back({
+                    low, high,
+                    FirstPersonPhysicalProxyProvenance::
+                        calibratedLargeSceneryArtwork,
+                    static_cast<uint8_t>(
+                        FirstPersonPhysicalProxyCapability::collide),
+                    group.key,
+                });
             }
             return result;
         }
@@ -3300,8 +3289,11 @@ namespace OpenRCT2::Paint
                     ExtendStableKey(
                         signature,
                         static_cast<uint8_t>(large->getTertiaryColour()));
-                    ExtendStableKey(signature, uint32_t(model->heightTrim));
                     ExtendStableKey(signature, model->faces.size());
+                    ExtendStableKey(
+                        signature,
+                        uint32_t(std::lround(
+                            model->minimumCandidateCoverage * 1000.0f)));
                     ExtendStableKey(
                         signature,
                         uint32_t(std::lround(

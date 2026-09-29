@@ -192,6 +192,58 @@ TEST(FirstPersonAssetReconstructionTest, FourMatchingViewsPassReliabilityGate)
     EXPECT_TRUE(IsFirstPersonMultiViewFitReliable(fit));
 }
 
+TEST(FirstPersonVisualHullTest, EveryAdmittedViewCarvesAuthoritativeOccupancy)
+{
+    std::vector<FirstPersonVisualHullView> views(4);
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        views[direction].imageDirection = direction;
+        views[direction].observed =
+            MakeSilhouetteRect(-4, -4, 9, 9);
+    }
+
+    FirstPersonVisualHullBounds bounds{};
+    bounds.minForward = 0.0f;
+    bounds.maxForward = 4.0f;
+    bounds.minRight = 0.0f;
+    bounds.maxRight = 4.0f;
+    bounds.minUp = 0.0f;
+    bounds.maxUp = 4.0f;
+    bounds.step = 2.0f;
+
+    FirstPersonVisualHullConfig config{};
+    config.minimumViews = 4;
+    config.minimumOccupiedCells = 1;
+    config.maximumOccupiedCells = 8;
+    config.maximumGridCells = 8;
+    config.maximumAxisCells = 2;
+    config.minimumCandidateCoverage = 0.0f;
+    config.minimumObservedCoverage = 0.0f;
+    config.maximumEdgeError = 20;
+
+    const auto hull = BuildFirstPersonVisualHull(
+        views, bounds, config,
+        [](uint8_t, FirstPersonVec3 point) {
+            return std::array<float, 2>{
+                point.x, point.z
+            };
+        },
+        [](FirstPersonVec3 point) {
+            return point.y < 2.0f;
+        },
+        [](const FirstPersonVisualHullView& view,
+            FirstPersonVec3 point) {
+            return view.imageDirection != 3
+                || point.x < 2.0f;
+        });
+
+    ASSERT_TRUE(hull.valid);
+    EXPECT_TRUE(hull.contains(0, 0, 0));
+    EXPECT_TRUE(hull.contains(0, 0, 1));
+    EXPECT_FALSE(hull.contains(1, 0, 0));
+    EXPECT_FALSE(hull.contains(0, 1, 0));
+}
+
 TEST(FirstPersonAssetReconstructionTest, OneContradictoryViewForcesFallback)
 {
     std::array<FirstPersonSilhouette, 4> observed{};
