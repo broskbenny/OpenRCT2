@@ -692,8 +692,7 @@ namespace OpenRCT2::Paint
                        LargeSceneryFlag::isTree,
                        LargeSceneryFlag::isAnimated,
                        LargeSceneryFlag::is3DText)
-                && entry.scrolling_mode == kScrollingModeNone
-                && !entry.tiles.empty() && entry.tiles.size() <= 64;
+                && !entry.tiles.empty() && entry.tiles.size() <= 256;
         }
 
         template<typename TCallback>
