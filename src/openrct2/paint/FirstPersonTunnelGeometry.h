@@ -87,6 +87,16 @@ namespace OpenRCT2::Paint
         std::array<FirstPersonVec3, 4> corners{};
     };
 
+    [[nodiscard]] constexpr FirstPersonTunnelQuad
+        MakeFirstPersonTunnelQuad(
+            FirstPersonVec3 a, FirstPersonVec3 b,
+            FirstPersonVec3 c, FirstPersonVec3 d)
+    {
+        FirstPersonTunnelQuad result{};
+        result.corners = { a, b, c, d };
+        return result;
+    }
+
     [[nodiscard]] inline std::vector<FirstPersonTunnelQuad>
         BuildFirstPersonTunnelPortalWall(
             const FirstPersonTunnelPortal& portal,
@@ -128,26 +138,20 @@ namespace OpenRCT2::Paint
         if (low > lowerA + 0.01f
             || low > lowerB + 0.01f)
         {
-            result.push_back({ {
+            result.push_back(MakeFirstPersonTunnelQuad(
                 { a.x, a.y, lowerA },
                 { b.x, b.y, lowerB },
-                { b.x, b.y,
-                  std::min(low, upperB) },
-                { a.x, a.y,
-                  std::min(low, upperA) },
-            } });
+                { b.x, b.y, std::min(low, upperB) },
+                { a.x, a.y, std::min(low, upperA) }));
         }
         if (upperA > high + 0.01f
             || upperB > high + 0.01f)
         {
-            result.push_back({ {
-                { a.x, a.y,
-                  std::max(high, lowerA) },
-                { b.x, b.y,
-                  std::max(high, lowerB) },
+            result.push_back(MakeFirstPersonTunnelQuad(
+                { a.x, a.y, std::max(high, lowerA) },
+                { b.x, b.y, std::max(high, lowerB) },
                 { b.x, b.y, upperB },
-                { a.x, a.y, upperA },
-            } });
+                { a.x, a.y, upperA }));
         }
         return result;
     }
@@ -347,11 +351,11 @@ namespace OpenRCT2::Paint
         const FirstPersonVec3 brt{
             br.x, br.y, b.z + ceilingOffset
         };
-        return { {
-            { { al, bl, blt, alt } },
-            { { br, ar, art, brt } },
-            { { alt, blt, brt, art } },
-        } };
+        return {
+            MakeFirstPersonTunnelQuad(al, bl, blt, alt),
+            MakeFirstPersonTunnelQuad(br, ar, art, brt),
+            MakeFirstPersonTunnelQuad(alt, blt, brt, art),
+        };
     }
 
     struct FirstPersonTunnelRouteQuad

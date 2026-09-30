@@ -474,9 +474,7 @@ void main() {
         // We are inside an OpenRCT2 onDraw callback. Earlier 2-D commands have been flushed.
         output.BindOpaque();
         glCall(glEnable, GL_SCISSOR_TEST);
-        glCall(glScissor(
-            clipLeft, screenHeight - clipBottom,
-            clipWidth, clipHeight));
+        glCall(glScissor, clipLeft, screenHeight - clipBottom, clipWidth, clipHeight);
         // The existing 2-D transparency pass may have changed depth state.
         // Depth clears obey the depth write mask: enable it BEFORE clearing.
         glCall(glDepthMask, GL_TRUE);
@@ -1063,10 +1061,7 @@ void main() {
                 };
             auto setTileScissor = [&](const TransparentScreenTile& tile) {
                 const auto clip = tileClip(tile);
-                glCall(glScissor(
-                    clip.getLeft(),
-                    screenHeight - clip.getBottom(),
-                    clip.getWidth(), clip.getHeight()));
+                glCall(glScissor, clip.getLeft(), screenHeight - clip.getBottom(), clip.getWidth(), clip.getHeight());
             };
             auto composeLayer = [&](OpenGLFramebuffer& layer, const TransparentScreenTile& tile) {
                 _background->Bind();
@@ -1260,9 +1255,7 @@ void main() {
             // Restore the physical viewport/scissor for the final depth clear.
             front.Bind();
             glCall(glViewport,left,viewportBottom,width,height);
-            glCall(glScissor(
-                clipLeft, screenHeight - clipBottom,
-                clipWidth, clipHeight));
+            glCall(glScissor, clipLeft, screenHeight - clipBottom, clipWidth, clipHeight);
             glCall(glUseProgram,_program);
             glCall(glUniform1i,Uniform(_program,"uPeelStage"),0);
             glCall(glUniform1i,Uniform(_program,"uPeeling"),0);

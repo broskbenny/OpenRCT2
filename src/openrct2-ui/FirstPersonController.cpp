@@ -1248,7 +1248,7 @@ namespace OpenRCT2::Ui::FirstPerson
                 const auto presentation =
                     Paint::BuildFirstPersonVehiclePresentationState(
                         *car, tracked);
-                Paint::FirstPersonPassengerPaintInterpolation
+                ::FirstPersonPassengerPaintInterpolation
                     interpolation{};
                 if (tracked.has_value())
                 {

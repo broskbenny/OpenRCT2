@@ -35,6 +35,7 @@
 #include "../ride/RideData.h"
 #include "../ride/RideEntry.h"
 #include "../ride/TrackData.h"
+#include "../ride/TrackDesign.h"
 #include "../ride/TrackPaint.h"
 #include "../ride/TrackIteration.h"
 #include "../ride/Vehicle.h"
