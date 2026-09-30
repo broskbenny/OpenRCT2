@@ -6,6 +6,7 @@
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonLargeSceneryReconstruction.h"
 #include "FirstPersonPhysicalProxy.h"
+#include "FirstPersonPathGeometry.h"
 #include "FirstPersonTrackTrajectory.h"
 #include "FirstPersonTunnelGeometry.h"
 #include "FirstPersonTrackProfileCalibration.h"
@@ -541,7 +542,18 @@ namespace OpenRCT2::Paint
             FirstPersonSurface surface{};
             surface.image = image;
             surface.mask = mask;
-            surface.physicalCoverage = legacyPlanar || stationSlab;
+            const auto* wall = ps.Element->asWall();
+            const auto* wallEntry =
+                wall != nullptr ? wall->getEntry() : nullptr;
+            const bool solidWall =
+                wallEntry != nullptr
+                && !wallEntry->flags.has(WallSceneryFlag::isDoor)
+                && !wallEntry->flags.has(WallSceneryFlag::hasGlass)
+                && !wallEntry->flags2.has(WallSceneryFlag2::isTransparent);
+            surface.physicalCoverage =
+                stationSlab
+                || type == TileElementType::surface
+                || (type == TileElementType::wall && solidWall);
             if (stationSlab)
                 surface.depthBias = true;
             std::array<FirstPersonVertex, 4> vertices{};
@@ -704,28 +716,61 @@ namespace OpenRCT2::Paint
             const auto spritePos = Translate3DTo2DWithZ(rotation, { spriteOrigin, baseZ });
             const auto slope = path->isSloped() ? kPathSlopeToLandSlope[path->getSlopeDirection()] : kTileSlopeFlat;
             const auto heights = GetSlopeCornerHeights(baseZ, slope);
-            // Geometry is the REAL walking plane. Do not raise it to solve
-            // z-fighting; depth separation is a rendering concern.
             const std::array<CoordsXYZ, 4> world = { {
                 { origin.x, origin.y, heights.south },
                 { origin.x + kCoordsXYStep, origin.y, heights.east },
                 { origin.x + kCoordsXYStep, origin.y + kCoordsXYStep, heights.north },
                 { origin.x, origin.y + kCoordsXYStep, heights.west },
             } };
-            FirstPersonSurface surface{};
-            surface.image = image;
-            surface.depthBias = true;
-            surface.physicalCoverage = true;
-            std::array<FirstPersonVertex, 4> v{};
-            for (size_t i = 0; i < v.size(); ++i)
+            const auto heightAt = [&](float localX, float localY) {
+                const float tx = std::clamp(
+                    localX / float(kCoordsXYStep), 0.0f, 1.0f);
+                const float ty = std::clamp(
+                    localY / float(kCoordsXYStep), 0.0f, 1.0f);
+                const float z0 =
+                    float(heights.south)
+                    + (float(heights.east) - float(heights.south)) * tx;
+                const float z1 =
+                    float(heights.west)
+                    + (float(heights.north) - float(heights.west)) * tx;
+                return z0 + (z1 - z0) * ty;
+            };
+            const auto footprint = BuildFirstPersonPathFootprint(
+                path->getEdges(), path->getCorners(), path->isQueue());
+            for (const auto& cell : footprint)
             {
-                const auto iso = Translate3DTo2DWithZ(rotation, world[i]);
-                v[i] = { { float(world[i].x), float(world[i].y), float(world[i].z) },
-                         float(iso.x - spritePos.x - g1->xOffset),
-                         float(iso.y - spritePos.y - g1->yOffset) };
+                const std::array<FirstPersonVec3, 4> physical{ {
+                    { float(origin.x + cell.x0), float(origin.y + cell.y0),
+                      heightAt(float(cell.x0), float(cell.y0)) },
+                    { float(origin.x + cell.x1), float(origin.y + cell.y0),
+                      heightAt(float(cell.x1), float(cell.y0)) },
+                    { float(origin.x + cell.x1), float(origin.y + cell.y1),
+                      heightAt(float(cell.x1), float(cell.y1)) },
+                    { float(origin.x + cell.x0), float(origin.y + cell.y1),
+                      heightAt(float(cell.x0), float(cell.y1)) },
+                } };
+                FirstPersonSurface surface{};
+                surface.image = image;
+                surface.depthBias = true;
+                surface.physicalCoverage = true;
+                std::array<FirstPersonVertex, 4> vertices{};
+                for (size_t i = 0; i < vertices.size(); ++i)
+                {
+                    const auto& point = physical[i];
+                    const auto iso = Translate3DTo2DWithZ(
+                        rotation,
+                        { int32_t(std::lround(point.x)),
+                          int32_t(std::lround(point.y)),
+                          int32_t(std::lround(point.z)) });
+                    vertices[i] = {
+                        point,
+                        float(iso.x - spritePos.x - g1->xOffset),
+                        float(iso.y - spritePos.y - g1->yOffset),
+                    };
+                }
+                EmitQuad(surface, vertices);
+                scene.surfaces.emplace_back(std::move(surface));
             }
-            EmitQuad(surface, v, UsesOppositeTerrainDiagonal(slope));
-            scene.surfaces.emplace_back(std::move(surface));
 
             const uint8_t edges = path->getEdges();
             if (edges != 0)

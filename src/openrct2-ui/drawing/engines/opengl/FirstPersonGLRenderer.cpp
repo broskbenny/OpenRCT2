@@ -109,35 +109,42 @@ void main() {
         col = uint(fPalettes.w);
     } else {
         bool physicalCoverage = (fFlags & 8) != 0;
+        bool materialFallbackOnly = (fFlags & 32) != 0;
+        uint materialFallback = uint((fFlags >> 8) & 255);
         bool outside =
             any(lessThan(fUV, vec2(0.0)))
             || any(greaterThanEqual(fUV, fSize));
         if (outside && !physicalCoverage) discard;
-        vec2 samplePixel = physicalCoverage
-            ? clamp(fUV, vec2(0.0), max(fSize - vec2(1.0), vec2(0.0)))
-            : fUV;
-        ivec2 p = ivec2(floor(samplePixel));
-        vec2 uv = (fAtlas.xy + vec2(p) + vec2(0.5)) / fAtlas.zw;
-        col = texture(uSprites, vec3(uv, float(fAtlasLayer))).r;
-        if (col == 0u && physicalCoverage) {
-            ivec2 limit = ivec2(fSize);
-            for (int radius = 1; radius <= 4 && col == 0u; ++radius) {
-                for (int dy = -radius; dy <= radius && col == 0u; ++dy) {
-                    for (int dx = -radius; dx <= radius; ++dx) {
-                        if (abs(dx) != radius && abs(dy) != radius) continue;
-                        ivec2 q = p + ivec2(dx, dy);
-                        if (q.x < 0 || q.y < 0 || q.x >= limit.x || q.y >= limit.y) continue;
-                        vec2 neighbourUv =
-                            (fAtlas.xy + vec2(q) + vec2(0.5)) / fAtlas.zw;
-                        col = texture(
-                            uSprites,
-                            vec3(neighbourUv, float(fAtlasLayer))).r;
-                        if (col != 0u) break;
+
+        // Never turn an out-of-range projective sample into stretched border
+        // artwork. Geometry remains solid, but unowned regions use a stable
+        // material index derived from the source sprite.
+        if (physicalCoverage && (outside || materialFallbackOnly)) {
+            col = materialFallback;
+        } else {
+            ivec2 p = ivec2(floor(fUV));
+            vec2 uv = (fAtlas.xy + vec2(p) + vec2(0.5)) / fAtlas.zw;
+            col = texture(uSprites, vec3(uv, float(fAtlasLayer))).r;
+            if (col == 0u && physicalCoverage) {
+                ivec2 limit = ivec2(fSize);
+                for (int radius = 1; radius <= 2 && col == 0u; ++radius) {
+                    for (int dy = -radius; dy <= radius && col == 0u; ++dy) {
+                        for (int dx = -radius; dx <= radius; ++dx) {
+                            if (abs(dx) != radius && abs(dy) != radius) continue;
+                            ivec2 q = p + ivec2(dx, dy);
+                            if (q.x < 0 || q.y < 0 || q.x >= limit.x || q.y >= limit.y) continue;
+                            vec2 neighbourUv =
+                                (fAtlas.xy + vec2(q) + vec2(0.5)) / fAtlas.zw;
+                            col = texture(
+                                uSprites,
+                                vec3(neighbourUv, float(fAtlasLayer))).r;
+                            if (col != 0u) break;
+                        }
                     }
                 }
+                if (col == 0u)
+                    col = materialFallback;
             }
-            if (col == 0u)
-                col = uint((fFlags >> 8) & 255);
         }
         if (col == 0u) discard;
         if (fMaskLayer >= 0) {
@@ -298,11 +305,17 @@ void main() {
         {
             return glCall(glGetUniformLocation, shader, name);
         }
-        uint8_t RepresentativeSpritePixel(const G1Element& g1)
+        uint8_t DominantOpaqueSpritePixel(const G1Element& g1)
         {
             if (g1.offset == nullptr || g1.width <= 0 || g1.height <= 0
                 || g1.flags.has(G1Flag::isPalette))
                 return 1;
+
+            std::array<uint32_t, 256> counts{};
+            const auto countPixel = [&](uint8_t pixel) {
+                if (pixel != 0)
+                    ++counts[pixel];
+            };
             if (g1.flags.has(G1Flag::hasRLECompression))
             {
                 for (int32_t y = 0; y < g1.height; ++y)
@@ -320,19 +333,30 @@ void main() {
                         end = (length & 0x80u) != 0;
                         length &= 0x7fu;
                         for (uint8_t i = 0; i < length; ++i)
-                            if (run[i] != 0)
-                                return run[i];
+                            countPixel(run[i]);
                         run += length;
                     }
                 }
-                return 1;
             }
-            const size_t count =
-                size_t(g1.width) * size_t(g1.height);
-            for (size_t i = 0; i < count; ++i)
-                if (g1.offset[i] != 0)
-                    return g1.offset[i];
-            return 1;
+            else
+            {
+                const size_t count =
+                    size_t(g1.width) * size_t(g1.height);
+                for (size_t i = 0; i < count; ++i)
+                    countPixel(g1.offset[i]);
+            }
+
+            uint8_t best = 1;
+            uint32_t bestCount = 0;
+            for (uint16_t pixel = 1; pixel < counts.size(); ++pixel)
+            {
+                if (counts[pixel] > bestCount)
+                {
+                    bestCount = counts[pixel];
+                    best = uint8_t(pixel);
+                }
+            }
+            return best;
         }
 
         int32_t PaletteY(Drawing::FilterPaletteID id)
@@ -604,7 +628,7 @@ void main() {
                 auto [it, inserted] =
                     coverageFallbacks.try_emplace(image.GetIndex(), 0);
                 if (inserted)
-                    it->second = RepresentativeSpritePixel(*g1);
+                    it->second = DominantOpaqueSpritePixel(*g1);
                 coverageFallback = int32_t(it->second);
             }
             BasicTextureInfo maskTex{};
@@ -636,6 +660,7 @@ void main() {
                         | (surface.depthBias ? 4 : 0)
                         | (surface.physicalCoverage ? 8 : 0)
                         | (surface.solidColour != 0 ? 16 : 0)
+                        | (surface.textureFallbackOnly ? 32 : 0)
                         | (coverageFallback << 8),
                     {maskTex.coords.x,maskTex.coords.y,maskTex.coords.z,maskTex.coords.w},
                     {maskG1?float(maskG1->width):0.0f,maskG1?float(maskG1->height):0.0f},

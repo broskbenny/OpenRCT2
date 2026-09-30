@@ -95,6 +95,9 @@ namespace OpenRCT2::Paint
         // Physical surfaces take coverage from world geometry. Sprite
         // transparency supplies appearance only; explicit masks still cut holes.
         bool physicalCoverage = false;
+        // When a face has no trustworthy projective source, retain physical
+        // geometry but use only a deliberate material fallback from the sprite.
+        bool textureFallbackOnly = false;
         // Some native sprite IDs (notably scrolling text) reference mutable
         // bitmap slots. When present, these bytes are the immutable content
         // captured when the native PaintStruct was created.
