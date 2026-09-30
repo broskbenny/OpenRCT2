@@ -159,31 +159,127 @@ static void PaintRideEntranceExit(PaintSession& session, uint8_t direction, int3
 
     auto isExit = entranceEl.getEntranceType() == EntranceType::rideExit;
 
-    // Back
+    // The native painter knows this is a gate, not a pair of sorting slabs.
+    // Publish that structure before its directional artwork is flattened into
+    // PaintStructs. The opening remains physically open between the two posts.
+    FirstPersonPaintSemanticTransform structureTransform{};
+    structureTransform.origin = {
+        float(session.MapPosition.x + 16),
+        float(session.MapPosition.y + 16),
+        0.0f,
+    };
+    switch (direction & 3)
+    {
+        case 1:
+            structureTransform.axisX = { 0.0f, 1.0f, 0.0f };
+            structureTransform.axisY = { -1.0f, 0.0f, 0.0f };
+            break;
+        case 2:
+            structureTransform.axisX = { -1.0f, 0.0f, 0.0f };
+            structureTransform.axisY = { 0.0f, -1.0f, 0.0f };
+            break;
+        case 3:
+            structureTransform.axisX = { 0.0f, -1.0f, 0.0f };
+            structureTransform.axisY = { 1.0f, 0.0f, 0.0f };
+            break;
+        default:
+            break;
+    }
+
+    // Back artwork owns the stable frame body.
     ImageIndex backImageIndex = (isExit ? stationObj->exitBackIndex : stationObj->entranceBackIndex) + direction;
-    PaintAddImageAsParentRotated(
-        session, direction, imageTemplate.WithIndex(backImageIndex), { 0, 0, height }, { { 2, 2, height }, { 28, 8, 30 } });
+    const auto backImage = imageTemplate.WithIndex(backImageIndex);
+    const uint32_t bodyGroup = PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+    for (const auto& bounds : std::array{
+             std::pair{ FirstPersonPaintSemanticVec3{ -14.0f, -4.0f, float(height) },
+                        FirstPersonPaintSemanticVec3{ -9.0f, 4.0f, float(height + 30) } },
+             std::pair{ FirstPersonPaintSemanticVec3{ 9.0f, -4.0f, float(height) },
+                        FirstPersonPaintSemanticVec3{ 14.0f, 4.0f, float(height + 30) } },
+             std::pair{ FirstPersonPaintSemanticVec3{ -9.0f, -4.0f, float(height + 22) },
+                        FirstPersonPaintSemanticVec3{ 9.0f, 4.0f, float(height + 30) } },
+         })
+    {
+        PaintSessionAddFirstPersonSemanticOrientedBox(
+            session, FirstPersonPaintSemanticRole::structureBody,
+            structureTransform, bounds.first, bounds.second,
+            backImage, { 0, 0, height }, bodyGroup);
+    }
+    {
+        FirstPersonPaintSemanticScope bodyScope(
+            session, FirstPersonPaintSemanticRole::structureBody, bodyGroup);
+        PaintAddImageAsParentRotated(
+            session, direction, backImage, { 0, 0, height },
+            { { 2, 2, height }, { 28, 8, 30 } });
+    }
+
     if (hasGlass)
     {
         ImageIndex backGlassImageIndex = (isExit ? stationObj->exitBackGlassIndex : stationObj->entranceBackGlassIndex)
             + direction;
+        const auto backGlass = glassImageTemplate.WithIndex(backGlassImageIndex);
+        const uint32_t glassGroup = PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+        PaintSessionAddFirstPersonSemanticOrientedQuad(
+            session, FirstPersonPaintSemanticRole::structureBody,
+            FirstPersonPaintSemanticPrimitiveKind::plane,
+            structureTransform,
+            { {
+                { -14.0f, -4.05f, float(height) },
+                { 14.0f, -4.05f, float(height) },
+                { 14.0f, -4.05f, float(height + 30) },
+                { -14.0f, -4.05f, float(height + 30) },
+            } },
+            backGlass, { 0, 0, height }, glassGroup, true, false);
+        FirstPersonPaintSemanticScope glassScope(
+            session, FirstPersonPaintSemanticRole::structureBody, glassGroup);
         PaintAddImageAsChildRotated(
-            session, direction, glassImageTemplate.WithIndex(backGlassImageIndex), { 0, 0, height },
+            session, direction, backGlass, { 0, 0, height },
             { { 2, 2, height }, { 28, 8, 30 } });
     }
 
-    // Front
+    // Front layers are appearance attached to the frame, not another solid.
     const auto frontBoundBoxZ = isExit ? 1 : 17;
     ImageIndex frontImageIndex = (isExit ? stationObj->exitFrontIndex : stationObj->entranceFrontIndex) + direction;
-    PaintAddImageAsParent(
-        session, imageTemplate.WithIndex(frontImageIndex), { 0, 0, height },
-        { { 2, 2, height + 30 }, { 28, 28, frontBoundBoxZ } });
+    const auto frontImage = imageTemplate.WithIndex(frontImageIndex);
+    const uint32_t frontGroup = PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+    PaintSessionAddFirstPersonSemanticOrientedQuad(
+        session, FirstPersonPaintSemanticRole::structureBody,
+        FirstPersonPaintSemanticPrimitiveKind::plane,
+        structureTransform,
+        { {
+            { -14.0f, 4.05f, float(height) },
+            { 14.0f, 4.05f, float(height) },
+            { 14.0f, 4.05f, float(height + 30) },
+            { -14.0f, 4.05f, float(height + 30) },
+        } },
+        frontImage, { 0, 0, height }, frontGroup, true, false);
+    {
+        FirstPersonPaintSemanticScope frontScope(
+            session, FirstPersonPaintSemanticRole::structureBody, frontGroup);
+        PaintAddImageAsParent(
+            session, frontImage, { 0, 0, height },
+            { { 2, 2, height + 30 }, { 28, 28, frontBoundBoxZ } });
+    }
     if (hasGlass)
     {
         ImageIndex frontGlassImageIndex = (isExit ? stationObj->exitFrontGlassIndex : stationObj->entranceFrontGlassIndex)
             + direction;
+        const auto frontGlass = glassImageTemplate.WithIndex(frontGlassImageIndex);
+        const uint32_t frontGlassGroup = PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+        PaintSessionAddFirstPersonSemanticOrientedQuad(
+            session, FirstPersonPaintSemanticRole::structureBody,
+            FirstPersonPaintSemanticPrimitiveKind::plane,
+            structureTransform,
+            { {
+                { -14.0f, 4.10f, float(height) },
+                { 14.0f, 4.10f, float(height) },
+                { 14.0f, 4.10f, float(height + 30) },
+                { -14.0f, 4.10f, float(height + 30) },
+            } },
+            frontGlass, { 0, 0, height }, frontGlassGroup, true, false);
+        FirstPersonPaintSemanticScope glassScope(
+            session, FirstPersonPaintSemanticRole::structureBody, frontGlassGroup);
         PaintAddImageAsChild(
-            session, glassImageTemplate.WithIndex(frontGlassImageIndex), { 0, 0, height },
+            session, frontGlass, { 0, 0, height },
             { { 2, 2, height + 30 }, { 28, 28, frontBoundBoxZ } });
     }
 
