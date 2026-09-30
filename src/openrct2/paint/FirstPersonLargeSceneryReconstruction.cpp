@@ -535,6 +535,26 @@ namespace OpenRCT2::Paint
                 });
             AppendLargeSceneryGreedyFaceSlices(
                 result, hull.sizeUp, hull.sizeForward, hull.sizeRight,
+                LargeSceneryAssetFaceKind::bottom,
+                [&](int32_t u, int32_t f, int32_t r) {
+                    const int32_t owner = ownerAt(f, r, u);
+                    return owner >= 0 && !hull.contains(f, r, u - 1)
+                        ? owner : -1;
+                },
+                [&](int32_t u, int32_t f, int32_t r,
+                    int32_t width, int32_t height) {
+                    const int32_t z = coord(hull.minUp, u);
+                    const int32_t x0 = coord(hull.minForward, f);
+                    const int32_t x1 = coord(hull.minForward, f + width);
+                    const int32_t y0 = coord(hull.minRight, r);
+                    const int32_t y1 = coord(hull.minRight, r + height);
+                    return std::array<CoordsXYZ, 4>{ {
+                        { x0, y1, z }, { x1, y1, z },
+                        { x1, y0, z }, { x0, y0, z },
+                    } };
+                });
+            AppendLargeSceneryGreedyFaceSlices(
+                result, hull.sizeUp, hull.sizeForward, hull.sizeRight,
                 LargeSceneryAssetFaceKind::top,
                 [&](int32_t u, int32_t f, int32_t r) {
                     const int32_t owner = ownerAt(f, r, u);
@@ -561,6 +581,8 @@ namespace OpenRCT2::Paint
         {
             if (kind == LargeSceneryAssetFaceKind::top)
                 return true;
+            if (kind == LargeSceneryAssetFaceKind::bottom)
+                return false;
             CoordsXY normal{};
             switch (kind)
             {
@@ -569,6 +591,7 @@ namespace OpenRCT2::Paint
                 case LargeSceneryAssetFaceKind::minY: normal = { 0, -1 }; break;
                 case LargeSceneryAssetFaceKind::maxY: normal = { 0, 1 }; break;
                 case LargeSceneryAssetFaceKind::top: return true;
+                case LargeSceneryAssetFaceKind::bottom: return false;
             }
             return FirstPersonFaceVisibleFromNativeView(normal, direction);
         }
@@ -706,28 +729,82 @@ namespace OpenRCT2::Paint
                         *cells);
                 if (faces.empty())
                     return model;
-                for (auto& face : faces)
+
+                const auto depthOwners =
+                    BuildLargeSceneryAssetDepthOwners(faces);
+                float minimumOwnership = 1.0f;
+                for (size_t faceIndex = 0;
+                     faceIndex < faces.size(); ++faceIndex)
                 {
-                    const auto source =
-                        ChooseFirstPersonOccupancyFaceSourceDirection(
-                            face.kind,
-                            [&](uint8_t direction) {
-                                const ImageIndex image =
-                                    entry.image + 4
-                                    + (ImageIndex(face.sequence) << 2)
-                                    + direction;
-                                const auto* g1 =
-                                    GfxGetG1Element(image);
-                                return g1 != nullptr
-                                    && g1->width > 0
-                                    && g1->height > 0;
-                            });
-                    if (!source.has_value())
+                    auto& face = faces[faceIndex];
+                    float bestOwnership = -1.0f;
+                    std::optional<uint8_t> bestDirection;
+                    for (uint8_t direction = 0;
+                         direction < 4; ++direction)
+                    {
+                        if (!LargeSceneryFaceVisibleFromDirection(
+                                face.kind, direction))
+                            continue;
+                        const ImageIndex sourceImage =
+                            entry.image + 4
+                            + (ImageIndex(face.sequence) << 2)
+                            + direction;
+                        const auto* g1 =
+                            GfxGetG1Element(sourceImage);
+                        if (g1 == nullptr
+                            || g1->width <= 0
+                            || g1->height <= 0)
+                            continue;
+                        const auto projected =
+                            RasterizeLargeSceneryAssetFace(
+                                face, direction);
+                        const float ownership =
+                            FirstPersonDepthOwnerCoverage(
+                                depthOwners[direction],
+                                uint32_t(faceIndex),
+                                projected);
+                        if (!bestDirection.has_value()
+                            || ownership > bestOwnership)
+                        {
+                            bestDirection = direction;
+                            bestOwnership = ownership;
+                        }
+                    }
+                    if (!bestDirection.has_value())
+                    {
+                        bestDirection =
+                            ChooseFirstPersonOccupancyFaceSourceDirection(
+                                face.kind,
+                                [&](uint8_t direction) {
+                                    const ImageIndex sourceImage =
+                                        entry.image + 4
+                                        + (ImageIndex(face.sequence) << 2)
+                                        + direction;
+                                    const auto* g1 =
+                                        GfxGetG1Element(sourceImage);
+                                    return g1 != nullptr
+                                        && g1->width > 0
+                                        && g1->height > 0;
+                                });
+                        bestOwnership = 0.0f;
+                    }
+                    if (!bestDirection.has_value())
                         return model;
-                    face.sourceDirection = *source;
+
+                    face.sourceDirection = *bestDirection;
+                    face.textureFallbackOnly =
+                        face.kind == LargeSceneryAssetFaceKind::bottom
+                        || bestOwnership < 0.90f;
+                    if (face.kind != LargeSceneryAssetFaceKind::bottom)
+                    {
+                        minimumOwnership =
+                            std::min(
+                                minimumOwnership,
+                                std::max(0.0f, bestOwnership));
+                    }
                 }
                 model.minimumCandidateCoverage = 0.0f;
-                model.minimumFaceOwnership = 0.0f;
+                model.minimumFaceOwnership = minimumOwnership;
                 model.faces = std::move(faces);
                 model.usable = true;
                 return model;
@@ -771,9 +848,9 @@ namespace OpenRCT2::Paint
                             source, projectedFace);
                     const float coverage =
                         fit.valid ? fit.candidateCoverage : 0.0f;
-                    const float score = fit.valid
-                        ? 2.0f + std::min(coverage, ownership)
-                        : ownership;
+                    const float score =
+                        ownership * 4.0f
+                        + (fit.valid ? coverage : 0.0f);
                     if (score <= bestFaceScore)
                         continue;
                     bestFaceScore = score;
@@ -801,8 +878,16 @@ namespace OpenRCT2::Paint
                 if (bestFaceScore < 0.0f)
                     return model;
                 face.sourceDirection = bestDirection;
-                minimumFaceOwnership =
-                    std::min(minimumFaceOwnership, bestOwnership);
+                face.textureFallbackOnly =
+                    face.kind == LargeSceneryAssetFaceKind::bottom
+                    || bestOwnership < 0.90f;
+                if (face.kind != LargeSceneryAssetFaceKind::bottom)
+                {
+                    minimumFaceOwnership =
+                        std::min(
+                            minimumFaceOwnership,
+                            bestOwnership);
+                }
             }
 
             model.minimumCandidateCoverage =
