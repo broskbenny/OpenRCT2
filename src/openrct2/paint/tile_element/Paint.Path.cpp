@@ -266,14 +266,76 @@ static void PathPaintQueueBanner(
     // Draw pole in the back
     PaintPathSemanticSignAsParent(session, imageId, { 0, 0, height }, { boundBoxOffsets, { 1, 1, 21 } });
 
-    // Draw pole in the front and banner
-    boundBoxOffsets.x = kBannerBoundBoxes[direction][1].x;
-    boundBoxOffsets.y = kBannerBoundBoxes[direction][1].y;
+    // Draw pole in the front and banner. The native image contains both
+    // the front pole and signboard, so publish them as separate components
+    // sharing one artwork group before the sprite is flattened.
+    const auto backPole =
+        kBannerBoundBoxes[direction][0];
+    const auto frontPole =
+        kBannerBoundBoxes[direction][1];
+    boundBoxOffsets.x = frontPole.x;
+    boundBoxOffsets.y = frontPole.y;
     imageId = imageId.WithIndexOffset(1);
-    PaintPathSemanticSignAsParent(session, imageId, { 0, 0, height }, { boundBoxOffsets, { 1, 1, 21 } });
+    const uint32_t signArtworkGroup =
+        PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+    PaintSessionAddFirstPersonSemanticBox(
+        session, FirstPersonPaintSemanticRole::sign,
+        { boundBoxOffsets.x, boundBoxOffsets.y, height + 2 },
+        { boundBoxOffsets.x + 1, boundBoxOffsets.y + 1,
+          height + 23 },
+        imageId, { 0, 0, height }, signArtworkGroup);
+
+    constexpr int32_t kBoardLowZ = 9;
+    constexpr int32_t kBoardHighZ = 18;
+    std::array<CoordsXYZ, 4> signBoard{};
+    if (std::abs(frontPole.x - backPole.x)
+        >= std::abs(frontPole.y - backPole.y))
+    {
+        const int32_t x0 =
+            std::min(frontPole.x, backPole.x);
+        const int32_t x1 =
+            std::max(frontPole.x, backPole.x) + 1;
+        const int32_t y =
+            (frontPole.y + backPole.y) / 2;
+        signBoard = { {
+            { x0, y, height + kBoardLowZ },
+            { x1, y, height + kBoardLowZ },
+            { x1, y, height + kBoardHighZ },
+            { x0, y, height + kBoardHighZ },
+        } };
+    }
+    else
+    {
+        const int32_t y0 =
+            std::min(frontPole.y, backPole.y);
+        const int32_t y1 =
+            std::max(frontPole.y, backPole.y) + 1;
+        const int32_t x =
+            (frontPole.x + backPole.x) / 2;
+        signBoard = { {
+            { x, y0, height + kBoardLowZ },
+            { x, y1, height + kBoardLowZ },
+            { x, y1, height + kBoardHighZ },
+            { x, y0, height + kBoardHighZ },
+        } };
+    }
+    PaintSessionAddFirstPersonSemanticQuad(
+        session, FirstPersonPaintSemanticRole::sign,
+        FirstPersonPaintSemanticPrimitiveKind::plane,
+        signBoard, imageId, { 0, 0, height },
+        signArtworkGroup, false, true);
+    {
+        FirstPersonPaintSemanticScope scope(
+            session, FirstPersonPaintSemanticRole::sign,
+            signArtworkGroup);
+        PaintAddImageAsParent(
+            session, imageId, { 0, 0, height },
+            { boundBoxOffsets, { 1, 1, 21 } });
+    }
 
     direction--;
-    // If text shown
+    // If text shown, bind the scrolling bitmap as a decal on the signboard
+    // rather than emitting another physical billboard.
     auto ride = GetRide(pathElement.getRideIndex());
     if (direction < 2 && ride != nullptr && !imageTemplate.IsRemap())
     {
@@ -290,8 +352,20 @@ static void PathPaintQueueBanner(
             bannerText = LanguageGetString(STR_RIDE_ENTRANCE_CLOSED);
         }
 
+        const auto textImage =
+            ScrollingText::setup(
+                session, bannerText, scrollingMode,
+                PaletteIndex::transparent);
+        PaintSessionAddFirstPersonSemanticQuad(
+            session, FirstPersonPaintSemanticRole::sign,
+            FirstPersonPaintSemanticPrimitiveKind::plane,
+            signBoard, textImage, { 0, 0, height + 7 },
+            signArtworkGroup, true, false);
+        FirstPersonPaintSemanticScope scope(
+            session, FirstPersonPaintSemanticRole::sign,
+            signArtworkGroup);
         PaintAddImageAsChild(
-            session, ScrollingText::setup(session, bannerText, scrollingMode, PaletteIndex::transparent), { 0, 0, height + 7 },
+            session, textImage, { 0, 0, height + 7 },
             { boundBoxOffsets, { 1, 1, 21 } });
     }
 

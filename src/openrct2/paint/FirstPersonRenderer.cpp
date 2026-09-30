@@ -4613,6 +4613,8 @@ namespace OpenRCT2::Paint
                             vertices[i].world = points[i];
                     }
                     EmitQuad(surface, vertices);
+                    ApplyImmutablePaintSnapshot(
+                        surface, component.artwork.snapshot);
                     result.emplace_back(std::move(surface));
                 };
 
@@ -5756,8 +5758,12 @@ namespace OpenRCT2::Paint
                 if (session == nullptr)
                     return std::nullopt;
                 PassengerPaintAnchor anchor{};
+                std::vector<FirstPersonPaintSemanticComponent>
+                    semanticComponents;
                 session->CurrentSource =
                     PaintStructSource::tile;
+                session->FirstPersonSemanticComponentSink =
+                    &semanticComponents;
                 session->FirstPersonPassengerAnchorSink =
                     &anchor;
                 session->FirstPersonPassengerAnchorEntity =

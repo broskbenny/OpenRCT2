@@ -1032,6 +1032,8 @@ static FirstPersonPaintSemanticArtwork
     artwork.screenPos =
         FirstPersonSemanticArtworkScreenPos(
             session, artworkOffset);
+    artwork.snapshot =
+        Drawing::ScrollingText::CaptureFirstPersonSnapshot(image);
     artwork.group = artworkGroup != 0
         ? artworkGroup
         : session.FirstPersonSemanticArtworkGroup;

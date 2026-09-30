@@ -123,6 +123,7 @@ struct FirstPersonPaintSemanticArtwork
     ImageId mask{};
     ScreenCoordsXY screenPos{};
     uint32_t group = 0;
+    uint32_t snapshot = 0;
     uint8_t sourceRotation = 0;
     bool decal = false;
 };
