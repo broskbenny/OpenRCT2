@@ -83,6 +83,21 @@ enum class FirstPersonPaintSemanticRole : uint8_t
     sign,
 };
 
+[[nodiscard]] constexpr bool
+    FirstPersonSemanticRoleOwnsCoplanarSurface(
+        FirstPersonPaintSemanticRole role)
+{
+    switch (role)
+    {
+        case FirstPersonPaintSemanticRole::pathDeck:
+        case FirstPersonPaintSemanticRole::stationFloor:
+        case FirstPersonPaintSemanticRole::structureFloor:
+            return true;
+        default:
+            return false;
+    }
+}
+
 enum class FirstPersonPaintSemanticPrimitiveKind : uint8_t
 {
     plane,
