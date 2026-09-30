@@ -5065,8 +5065,24 @@ namespace OpenRCT2::Paint
                             selected =
                                 group->second.selectedRotation;
                         }
-                        if (selected == rotation)
-                            addSurface(surface);
+                        if (selected != rotation)
+                            continue;
+                        if (surface.reconstructionGroup != 0)
+                        {
+                            const auto trajectory =
+                                _trackTrajectoryCache.find(
+                                    surface.reconstructionGroup);
+                            if (trajectory != _trackTrajectoryCache.end()
+                                && !trajectory->second.dirty
+                                && !trajectory->second.surfaces.empty())
+                            {
+                                // Track PaintStructs are texture evidence once
+                                // trajectory geometry exists, never a second
+                                // physical representation of the same track.
+                                continue;
+                            }
+                        }
+                        addSurface(surface);
                     }
                 }
             }
