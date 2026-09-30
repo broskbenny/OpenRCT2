@@ -29,6 +29,9 @@
 #include "Paint.TileElement.h"
 #include "Segment.h"
 
+#include <array>
+#include <utility>
+
 using namespace OpenRCT2;
 using namespace OpenRCT2::Drawing;
 
