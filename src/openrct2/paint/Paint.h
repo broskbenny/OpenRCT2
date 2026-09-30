@@ -74,6 +74,8 @@ enum class FirstPersonPaintSemanticRole : uint8_t
     stationFloor,
     stationFence,
     stationCover,
+    structureBody,
+    structureFloor,
     pier,
     towerSection,
     movingMachinery,
