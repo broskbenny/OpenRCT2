@@ -614,6 +614,25 @@ TEST(FirstPersonAssetReconstructionTest, NativeFacingAndDepthOwnershipAgreeForAs
     }
 }
 
+TEST(FirstPersonSemanticGeometryTest, CoplanarSurfaceOwnershipIsExplicit)
+{
+    EXPECT_TRUE(
+        FirstPersonSemanticRoleOwnsCoplanarSurface(
+            FirstPersonPaintSemanticRole::pathDeck));
+    EXPECT_TRUE(
+        FirstPersonSemanticRoleOwnsCoplanarSurface(
+            FirstPersonPaintSemanticRole::stationFloor));
+    EXPECT_TRUE(
+        FirstPersonSemanticRoleOwnsCoplanarSurface(
+            FirstPersonPaintSemanticRole::structureFloor));
+    EXPECT_FALSE(
+        FirstPersonSemanticRoleOwnsCoplanarSurface(
+            FirstPersonPaintSemanticRole::structureBody));
+    EXPECT_FALSE(
+        FirstPersonSemanticRoleOwnsCoplanarSurface(
+            FirstPersonPaintSemanticRole::support));
+}
+
 TEST(FirstPersonTrackTrajectoryTest, MotionTemplateIsCachedButDoesNotClaimRailProfile)
 {
     const auto* a = GetFirstPersonTrackTrajectoryTemplate(
