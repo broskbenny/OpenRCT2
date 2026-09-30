@@ -4109,11 +4109,9 @@ namespace OpenRCT2::Paint
                 {
                     if (gap > 0.05f)
                     {
-                        for (const float gaugeSide :
-                            { -profile.halfGauge, profile.halfGauge })
-                        {
-                            const auto& a = trajectory.points.back();
-                            const auto& b = next->points.front();
+                        const auto& a = trajectory.points.back();
+                        const auto& b = next->points.front();
+                        const auto appendBridge = [&](float gaugeSide) {
                             const FirstPersonRailProxySegment bridge{
                                 FirstPersonRailProxyCentre(
                                     a, profile, gaugeSide),
@@ -4123,12 +4121,24 @@ namespace OpenRCT2::Paint
                                 b.basis,
                                 profile.halfWidth,
                                 profile.halfHeight,
-                                FirstPersonPhysicalProxyProvenance::
-                                    verifiedTrackArtwork,
+                                profile.verified
+                                    ? FirstPersonPhysicalProxyProvenance::
+                                        verifiedTrackArtwork
+                                    : FirstPersonPhysicalProxyProvenance::
+                                        authoritativeTrackTrajectory,
                             };
                             AppendTrajectoryRailSegment(
                                 result, groupKey, bridge,
                                 topColour, sideColour);
+                        };
+                        if (profile.railCount == 1)
+                        {
+                            appendBridge(0.0f);
+                        }
+                        else
+                        {
+                            appendBridge(-profile.halfGauge);
+                            appendBridge(profile.halfGauge);
                         }
                     }
                 }
@@ -6105,9 +6115,19 @@ namespace OpenRCT2::Paint
         // This remains an explicitly identified compatibility bridge for complex sprite selection.
         return scene;
     }
+    void ResetFirstPersonPresentationCache()
+    {
+        _preparedFrame.active = false;
+        _preparedFrame.valid = false;
+        _preparedFrame.scene = {};
+        _entityRotations.clear();
+        _passengerAnchorSourceTiles.clear();
+        _dynamicEntitySpatialCache = {};
+    }
+
     void ClearFirstPersonSceneCache()
     {
-        _preparedFrame.valid = false;
+        ResetFirstPersonPresentationCache();
         _preparedFrame.scene = {};
         ++_sceneEpoch;
         if (_sceneEpoch == 0)
