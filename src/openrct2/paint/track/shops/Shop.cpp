@@ -40,17 +40,53 @@ static void PaintShop(
 
     auto imageFlags = session.TrackColours.WithoutSecondary();
     auto imageIndex = firstCarEntry->baseImageId + direction;
+    const auto bodyImageId = imageFlags.WithIndex(imageIndex);
+    const float bodyTop = float(trackElement.getClearanceZ() - trackElement.getBaseZ() - 3 + height);
+    FirstPersonPaintSemanticTransform semanticTransform{};
+    semanticTransform.origin = {
+        float(session.MapPosition.x), float(session.MapPosition.y), 0.0f
+    };
+    const uint32_t bodyGroup = PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+    PaintSessionAddFirstPersonSemanticOrientedBox(
+        session, FirstPersonPaintSemanticRole::structureBody,
+        semanticTransform,
+        { 2.0f, 2.0f, float(height) },
+        { 30.0f, 30.0f, bodyTop },
+        bodyImageId, offset, bodyGroup);
+
     if (hasSupports)
     {
         auto foundationImageTemplate = GetShopSupportColourScheme(session, trackElement);
         auto foundationImageIndex = (direction & 1) ? SPR_FLOOR_PLANKS_90_DEG : SPR_FLOOR_PLANKS;
         auto foundationImageId = foundationImageTemplate.WithIndex(foundationImageIndex);
-        PaintAddImageAsParent(session, foundationImageId, offset, bb);
-        PaintAddImageAsChild(session, imageFlags.WithIndex(imageIndex), offset, bb);
+        const uint32_t floorGroup = PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+        PaintSessionAddFirstPersonSemanticOrientedQuad(
+            session, FirstPersonPaintSemanticRole::structureFloor,
+            FirstPersonPaintSemanticPrimitiveKind::footprint,
+            semanticTransform,
+            { {
+                { 2.0f, 2.0f, float(height) },
+                { 30.0f, 2.0f, float(height) },
+                { 30.0f, 30.0f, float(height) },
+                { 2.0f, 30.0f, float(height) },
+            } },
+            foundationImageId, offset, floorGroup, false, true);
+        {
+            FirstPersonPaintSemanticScope floorScope(
+                session, FirstPersonPaintSemanticRole::structureFloor, floorGroup);
+            PaintAddImageAsParent(session, foundationImageId, offset, bb);
+        }
+        {
+            FirstPersonPaintSemanticScope bodyScope(
+                session, FirstPersonPaintSemanticRole::structureBody, bodyGroup);
+            PaintAddImageAsChild(session, bodyImageId, offset, bb);
+        }
     }
     else
     {
-        PaintAddImageAsParent(session, imageFlags.WithIndex(imageIndex), offset, bb);
+        FirstPersonPaintSemanticScope bodyScope(
+            session, FirstPersonPaintSemanticRole::structureBody, bodyGroup);
+        PaintAddImageAsParent(session, bodyImageId, offset, bb);
     }
 
     PaintUtilSetSegmentSupportHeight(session, kSegmentsAll, 0xFFFF, 0);
