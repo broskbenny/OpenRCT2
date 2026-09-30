@@ -633,7 +633,7 @@ TEST(FirstPersonSemanticGeometryTest, CoplanarSurfaceOwnershipIsExplicit)
             FirstPersonPaintSemanticRole::support));
 }
 
-TEST(FirstPersonTrackTrajectoryTest, MotionTemplateIsCachedButDoesNotClaimRailProfile)
+TEST(FirstPersonTrackTrajectoryTest, MotionTemplateDoesNotClaimArtworkVerifiedProfile)
 {
     const auto* a = GetFirstPersonTrackTrajectoryTemplate(
         OpenRCT2::TrackElemType::flat, 0);
@@ -648,6 +648,7 @@ TEST(FirstPersonTrackTrajectoryTest, MotionTemplateIsCachedButDoesNotClaimRailPr
 
     const FirstPersonTrackRailProfile profile{};
     EXPECT_FALSE(profile.verified);
+    EXPECT_EQ(profile.railCount, 2);
     EXPECT_FLOAT_EQ(profile.halfGauge, 0.0f);
     EXPECT_FLOAT_EQ(profile.halfWidth, 0.0f);
     EXPECT_FLOAT_EQ(profile.halfHeight, 0.0f);
