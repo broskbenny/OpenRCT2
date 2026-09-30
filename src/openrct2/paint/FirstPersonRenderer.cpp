@@ -4260,6 +4260,7 @@ namespace OpenRCT2::Paint
                         && it->second.signature
                             == signature)
                     {
+                        ++scene.trackGeometryCacheHits;
                         it->second.lastSeen = frame;
                         if (it->second.dirty)
                         {
@@ -4303,6 +4304,7 @@ namespace OpenRCT2::Paint
                             group->key, it->second);
                     }
 
+                    ++scene.trackGeometryBuilds;
                     auto rebuilt =
                         BuildTrackTrajectoryGeometry(
                             *ride, *track, originElement,
@@ -6125,9 +6127,12 @@ namespace OpenRCT2::Paint
         const auto terrainStart=std::chrono::steady_clock::now();
         scene.visibilityCpuMs=std::chrono::duration<float,std::milli>(terrainStart-visibilityStart).count();
         CollectTerrain(scene);
-        CollectTrackTrajectories(scene);
+        const auto trackStart=std::chrono::steady_clock::now();
         scene.terrainCpuMs=std::chrono::duration<float,std::milli>(
-            std::chrono::steady_clock::now()-terrainStart).count();
+            trackStart-terrainStart).count();
+        CollectTrackTrajectories(scene);
+        scene.trackCpuMs=std::chrono::duration<float,std::milli>(
+            std::chrono::steady_clock::now()-trackStart).count();
         // This remains an explicitly identified compatibility bridge for complex sprite selection.
         return scene;
     }
