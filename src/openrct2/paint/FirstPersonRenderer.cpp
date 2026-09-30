@@ -3279,7 +3279,7 @@ namespace OpenRCT2::Paint
                 instance.style);
         }
 
-        [[nodiscard]] bool
+        [[maybe_unused]] [[nodiscard]] bool
             FirstPersonTrackGroupNeedsCalibrationViews(
                 const ReconstructionGroupInfo& group)
         {
@@ -3297,7 +3297,7 @@ namespace OpenRCT2::Paint
                 != FirstPersonTrackProfileCalibrationState::Phase::complete;
         }
 
-        void UpdateFirstPersonTrackProfileCalibration(
+        [[maybe_unused]] void UpdateFirstPersonTrackProfileCalibration(
             const ReconstructionGroupInfo& group)
         {
             const auto instance =
