@@ -2022,6 +2022,16 @@ namespace OpenRCT2::Paint
 
         struct TrackTrajectoryCacheEntry
         {
+            struct ArtworkProjection
+            {
+                ImageId image{};
+                ImageId mask{};
+                FirstPersonVec3 anchor{};
+                float left = 0.0f;
+                float top = 0.0f;
+                uint8_t rotation = 0;
+            };
+
             struct MaskedArtwork
             {
                 ImageIndex image = kImageIndexUndefined;
@@ -2044,7 +2054,9 @@ namespace OpenRCT2::Paint
             bool hasBounds = false;
             int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
             uint8_t sourceChannelMask = 0;
+            uint8_t artworkRotation = 0xFF;
             std::array<FirstPersonSilhouette, 4> railSilhouettes{};
+            std::array<std::vector<ArtworkProjection>, 4> artworkProjections{};
             std::unordered_map<uint64_t, MaskedArtwork> maskedArtwork;
             std::unordered_map<uint64_t, std::vector<size_t>>
                 regionSurfaceIndices;
@@ -3486,6 +3498,168 @@ namespace OpenRCT2::Paint
             state.holdoutCategorySupported = false;
         }
 
+        void CaptureFirstPersonTrackArtworkProjection(
+            const FirstPersonSurface& surface, uint8_t rotation)
+        {
+            if (surface.reconstructionGroup == 0
+                || rotation >= 4
+                || !surface.viewFacing
+                || !surface.image.HasValue()
+                || surface.image.IsBlended())
+                return;
+
+            const auto found = _trackTrajectoryCache.find(
+                surface.reconstructionGroup);
+            if (found == _trackTrajectoryCache.end()
+                || found->second.dirty
+                || found->second.surfaces.empty())
+                return;
+
+            auto& trajectory = found->second;
+            auto& projections =
+                trajectory.artworkProjections[rotation];
+            const auto duplicate = std::find_if(
+                projections.begin(), projections.end(),
+                [&](const TrackTrajectoryCacheEntry::ArtworkProjection& p) {
+                    return p.image == surface.image
+                        && p.mask == surface.mask
+                        && std::abs(p.left - surface.billboardLeft) < 0.01f
+                        && std::abs(p.top - surface.billboardTop) < 0.01f;
+                });
+            if (duplicate != projections.end())
+                return;
+
+            constexpr size_t kMaximumProjectionLayers = 16;
+            if (projections.size() >= kMaximumProjectionLayers)
+                return;
+
+            projections.push_back({
+                surface.image,
+                surface.mask,
+                surface.billboardAnchor,
+                surface.billboardLeft,
+                surface.billboardTop,
+                rotation,
+            });
+            if (trajectory.artworkRotation == 0xFF)
+                trajectory.artworkRotation = rotation;
+
+            // Geometry stays unchanged; only the resident rail material packet
+            // needs to pick up the newly captured native artwork.
+            MarkTrackTrajectoryRegionsDirty(trajectory);
+        }
+
+        void ApplyFirstPersonTrackArtworkProjection(
+            FirstPersonSurface& surface,
+            const TrackTrajectoryCacheEntry& trajectory)
+        {
+            if (trajectory.artworkRotation >= 4)
+                return;
+            const auto& projections =
+                trajectory.artworkProjections[
+                    trajectory.artworkRotation];
+            if (projections.empty())
+                return;
+
+            const TrackTrajectoryCacheEntry::ArtworkProjection*
+                best = nullptr;
+            float bestPenalty =
+                std::numeric_limits<float>::infinity();
+
+            FirstPersonVec3 centre{};
+            for (const auto& vertex : surface.triangles)
+                centre = Add(centre, vertex.world);
+            centre = Mul(
+                centre,
+                1.0f / float(surface.triangles.size()));
+
+            for (const auto& projection : projections)
+            {
+                const auto* g1 =
+                    GfxGetG1Element(projection.image);
+                if (g1 == nullptr
+                    || g1->width <= 0
+                    || g1->height <= 0)
+                    continue;
+
+                const CoordsXYZ anchorPoint{
+                    int32_t(std::lround(projection.anchor.x)),
+                    int32_t(std::lround(projection.anchor.y)),
+                    int32_t(std::lround(projection.anchor.z)),
+                };
+                const auto isoAnchor =
+                    Translate3DTo2DWithZ(
+                        projection.rotation, anchorPoint);
+                const CoordsXYZ centrePoint{
+                    int32_t(std::lround(centre.x)),
+                    int32_t(std::lround(centre.y)),
+                    int32_t(std::lround(centre.z)),
+                };
+                const auto isoCentre =
+                    Translate3DTo2DWithZ(
+                        projection.rotation, centrePoint);
+                const float u =
+                    float(isoCentre.x - isoAnchor.x)
+                    - projection.left;
+                const float v =
+                    float(isoCentre.y - isoAnchor.y)
+                    - projection.top;
+                const float dx =
+                    u < 0.0f ? -u
+                    : (u >= g1->width
+                        ? u - float(g1->width - 1) : 0.0f);
+                const float dy =
+                    v < 0.0f ? -v
+                    : (v >= g1->height
+                        ? v - float(g1->height - 1) : 0.0f);
+                const float penalty = dx * dx + dy * dy;
+                if (penalty < bestPenalty)
+                {
+                    bestPenalty = penalty;
+                    best = &projection;
+                    if (penalty == 0.0f)
+                        break;
+                }
+            }
+
+            if (best == nullptr)
+                return;
+            const auto* g1 = GfxGetG1Element(best->image);
+            if (g1 == nullptr)
+                return;
+
+            const CoordsXYZ anchorPoint{
+                int32_t(std::lround(best->anchor.x)),
+                int32_t(std::lround(best->anchor.y)),
+                int32_t(std::lround(best->anchor.z)),
+            };
+            const auto isoAnchor =
+                Translate3DTo2DWithZ(
+                    best->rotation, anchorPoint);
+
+            surface.image = best->image;
+            surface.mask = best->mask;
+            surface.solidColour = 0;
+            surface.physicalCoverage = true;
+            for (auto& vertex : surface.triangles)
+            {
+                const CoordsXYZ worldPoint{
+                    int32_t(std::lround(vertex.world.x)),
+                    int32_t(std::lround(vertex.world.y)),
+                    int32_t(std::lround(vertex.world.z)),
+                };
+                const auto iso =
+                    Translate3DTo2DWithZ(
+                        best->rotation, worldPoint);
+                vertex.u =
+                    float(iso.x - isoAnchor.x)
+                    - best->left;
+                vertex.v =
+                    float(iso.y - isoAnchor.y)
+                    - best->top;
+            }
+        }
+
         void ApplyFirstPersonTrackRailArtworkMask(
             FirstPersonSurface& surface, uint8_t rotation,
             TrackTrajectoryCacheEntry& trajectory)
@@ -3739,6 +3913,7 @@ namespace OpenRCT2::Paint
                     uint8_t colour) {
                     FirstPersonSurface surface{};
                     surface.solidColour = colour;
+                    surface.physicalCoverage = true;
                     surface.gpuRegion = gpuRegion;
                     surface.reconstructionGroup = groupKey;
                     EmitQuad(surface, { {
@@ -4917,9 +5092,12 @@ namespace OpenRCT2::Paint
                             < trajectory->second
                                 .surfaces.size())
                         {
-                            addSurface(
+                            auto surface =
                                 trajectory->second
-                                    .surfaces[index]);
+                                    .surfaces[index];
+                            ApplyFirstPersonTrackArtworkProjection(
+                                surface, trajectory->second);
+                            addSurface(surface);
                         }
                     }
                 }
@@ -5444,6 +5622,13 @@ namespace OpenRCT2::Paint
                             for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
                             {
                                 scene.surfaces[i].reconstructionGroup = reconstruction.groupKey;
+                                if (root->Element != nullptr
+                                    && root->Element->getType()
+                                        == TileElementType::track)
+                                {
+                                    CaptureFirstPersonTrackArtworkProjection(
+                                        scene.surfaces[i], rotation);
+                                }
                                 if (!scene.surfaces[i].immutablePixels.empty())
                                 {
                                     scene.surfaces[i].gpuRegion = 0;
@@ -5549,6 +5734,22 @@ namespace OpenRCT2::Paint
                         {
                             if (IsReconstructedLargeSceneryBody(staticSurface, frame))
                                 continue;
+                            if (staticSurface.reconstructionGroup != 0)
+                            {
+                                const auto trajectory =
+                                    _trackTrajectoryCache.find(
+                                        staticSurface.reconstructionGroup);
+                                if (trajectory != _trackTrajectoryCache.end()
+                                    && !trajectory->second.dirty
+                                    && !trajectory->second.surfaces.empty())
+                                {
+                                    // Native track sprites are retained only
+                                    // as texture evidence. Rendering them as
+                                    // view-facing geometry would reintroduce
+                                    // the morphing impostor track.
+                                    continue;
+                                }
+                            }
                             uint8_t selected = cached.selectedRotation;
                             if (staticSurface.reconstructionGroup != 0)
                             {
