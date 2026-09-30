@@ -35,12 +35,15 @@ namespace OpenRCT2::Paint
         std::vector<FirstPersonTrackTrajectoryPoint> points;
     };
 
-    // A vehicle trajectory proves a reference curve, not a visible rail shape.
-    // Profiles remain separate evidence and must be explicitly verified before
-    // any generated running surface may replace native track artwork.
+    // A vehicle trajectory proves the stable reference curve. Track style
+    // supplies a deterministic baseline cross-section; artwork verification may
+    // refine that baseline but never gates whether physical track exists.
     struct FirstPersonTrackRailProfile
     {
+        // True only when artwork has verified/refined the dimensions/material.
+        // Geometry generation must not depend on this flag.
         bool verified = false;
+        uint8_t railCount = 2;
         float halfGauge = 0.0f;
         float halfWidth = 0.0f;
         float halfHeight = 0.0f;
