@@ -44,27 +44,77 @@ static void PaintFacility(
     auto imageTemplate = session.TrackColours;
     auto imageIndex = firstCarEntry->baseImageId + ((direction + 2) & 3);
     auto imageId = imageTemplate.WithIndex(imageIndex);
+
+    FirstPersonPaintSemanticTransform semanticTransform{};
+    semanticTransform.origin = {
+        float(session.MapPosition.x), float(session.MapPosition.y), 0.0f
+    };
+    const uint32_t bodyGroup = PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+    PaintSessionAddFirstPersonSemanticOrientedBox(
+        session, FirstPersonPaintSemanticRole::structureBody,
+        semanticTransform,
+        { 2.0f, 2.0f, float(height) },
+        { 30.0f, 30.0f, float(height + lengthZ) },
+        imageId, offset, bodyGroup);
+
     if (hasSupports)
     {
         auto foundationImageTemplate = GetShopSupportColourScheme(session, trackElement);
         auto foundationImageIndex = (direction & 1) ? SPR_FLOOR_PLANKS_90_DEG : SPR_FLOOR_PLANKS;
         auto foundationImageId = foundationImageTemplate.WithIndex(foundationImageIndex);
-        PaintAddImageAsParent(session, foundationImageId, offset, bb);
-        PaintAddImageAsChildRotated(session, direction, imageId, offset, bb);
+        const uint32_t floorGroup = PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+        PaintSessionAddFirstPersonSemanticOrientedQuad(
+            session, FirstPersonPaintSemanticRole::structureFloor,
+            FirstPersonPaintSemanticPrimitiveKind::footprint,
+            semanticTransform,
+            { {
+                { 2.0f, 2.0f, float(height) },
+                { 30.0f, 2.0f, float(height) },
+                { 30.0f, 30.0f, float(height) },
+                { 2.0f, 30.0f, float(height) },
+            } },
+            foundationImageId, offset, floorGroup, false, true);
+        {
+            FirstPersonPaintSemanticScope floorScope(
+                session, FirstPersonPaintSemanticRole::structureFloor, floorGroup);
+            PaintAddImageAsParent(session, foundationImageId, offset, bb);
+        }
+        {
+            FirstPersonPaintSemanticScope bodyScope(
+                session, FirstPersonPaintSemanticRole::structureBody, bodyGroup);
+            PaintAddImageAsChildRotated(session, direction, imageId, offset, bb);
+        }
     }
     else
     {
+        FirstPersonPaintSemanticScope bodyScope(
+            session, FirstPersonPaintSemanticRole::structureBody, bodyGroup);
         PaintAddImageAsParentRotated(session, direction, imageId, offset, bb);
     }
 
-    // Base image if door was drawn
-    if (direction == 1)
+    // The additional door image is a horizontal top surface in the native
+    // painter. Keep it as artwork on the authoritative roof plane instead of
+    // allowing its 2-D sorting slab to become physical geometry.
+    if (direction == 1 || direction == 2)
     {
-        PaintAddImageAsParent(session, imageId.WithIndexOffset(2), offset, { { 2, 2, height + lengthZ }, { 28, 28, 1 } });
-    }
-    else if (direction == 2)
-    {
-        PaintAddImageAsParent(session, imageId.WithIndexOffset(4), offset, { { 2, 2, height + lengthZ }, { 28, 28, 1 } });
+        const auto roofImage = imageId.WithIndexOffset(direction == 1 ? 2 : 4);
+        const uint32_t roofGroup = PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+        PaintSessionAddFirstPersonSemanticOrientedQuad(
+            session, FirstPersonPaintSemanticRole::structureFloor,
+            FirstPersonPaintSemanticPrimitiveKind::plane,
+            semanticTransform,
+            { {
+                { 2.0f, 2.0f, float(height + lengthZ) },
+                { 30.0f, 2.0f, float(height + lengthZ) },
+                { 30.0f, 30.0f, float(height + lengthZ) },
+                { 2.0f, 30.0f, float(height + lengthZ) },
+            } },
+            roofImage, offset, roofGroup, false, false);
+        FirstPersonPaintSemanticScope roofScope(
+            session, FirstPersonPaintSemanticRole::structureFloor, roofGroup);
+        PaintAddImageAsParent(
+            session, roofImage, offset,
+            { { 2, 2, height + lengthZ }, { 28, 28, 1 } });
     }
 
     PaintUtilSetSegmentSupportHeight(session, kSegmentsAll, 0xFFFF, 0);
