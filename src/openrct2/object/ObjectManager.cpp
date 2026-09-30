@@ -17,6 +17,7 @@
 #include "../core/EnumUtils.hpp"
 #include "../core/JobPool.h"
 #include "../localisation/StringIds.h"
+#include "../paint/FirstPersonRenderer.h"
 #include "../ride/Ride.h"
 #include "../ride/RideAudio.h"
 #include "BannerSceneryEntry.h"
@@ -271,6 +272,11 @@ namespace OpenRCT2
             }
             UpdateSceneryGroupIndexes();
             ResetTypeToRideEntryIndexMap();
+
+            // Object addresses can remain stable while their sprite allocation
+            // and artwork are replaced. Drop all derived first-person geometry
+            // and texture-source decisions after the reload.
+            Paint::ClearFirstPersonSceneCache();
 
             // We will need to replay the title music if the title music object got reloaded
             Audio::StopTitleMusic();

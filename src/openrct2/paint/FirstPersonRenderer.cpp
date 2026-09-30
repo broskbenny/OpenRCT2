@@ -5981,6 +5981,7 @@ namespace OpenRCT2::Paint
         }
         ClearFirstPersonVerifiedTrackProfiles();
         ClearLargeSceneryAssetModelCache();
+        ClearFirstPersonSmallSceneryReconstructionCache();
         _largeSceneryGeometryCache.clear();
         ClearFirstPersonLargeSceneryPhysicalProxies();
         _largeSceneryGroupsByRegion.clear();

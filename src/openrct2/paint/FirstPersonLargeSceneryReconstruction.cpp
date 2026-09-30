@@ -794,7 +794,7 @@ namespace OpenRCT2::Paint
                     face.sourceDirection = *bestDirection;
                     face.textureFallbackOnly =
                         face.kind == LargeSceneryAssetFaceKind::bottom
-                        || bestOwnership < 0.90f;
+                        || bestOwnership < 0.98f;
                     if (face.kind != LargeSceneryAssetFaceKind::bottom)
                     {
                         minimumOwnership =
@@ -880,7 +880,7 @@ namespace OpenRCT2::Paint
                 face.sourceDirection = bestDirection;
                 face.textureFallbackOnly =
                     face.kind == LargeSceneryAssetFaceKind::bottom
-                    || bestOwnership < 0.90f;
+                    || bestOwnership < 0.98f;
                 if (face.kind != LargeSceneryAssetFaceKind::bottom)
                 {
                     minimumFaceOwnership =
