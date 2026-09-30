@@ -154,6 +154,8 @@ namespace OpenRCT2::Paint
         // Diagnostics count native tile-paint work, not merely submitted quads.
         uint32_t staticTilePaints = 0;
         uint32_t staticTileCacheHits = 0;
+        uint32_t trackGeometryBuilds = 0;
+        uint32_t trackGeometryCacheHits = 0;
         uint32_t dynamicTileQueries = 0; // Dynamic entity candidates tested independently of terrain admission.
         uint32_t dynamicTilesPainted = 0; // Dynamic entities admitted by their own visual bounds.
         // Component timings from the application process, never synthetic FPS.
@@ -161,6 +163,7 @@ namespace OpenRCT2::Paint
         // source-art collection; they do not drive a hidden quality approximation.
         float visibilityCpuMs = 0.0f;
         float terrainCpuMs = 0.0f;
+        float trackCpuMs = 0.0f;
         float paintCpuMs = 0.0f;
         float prepareCpuMs = 0.0f;
     };
