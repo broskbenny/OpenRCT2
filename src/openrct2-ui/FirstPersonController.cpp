@@ -707,10 +707,9 @@ namespace OpenRCT2::Ui::FirstPerson
                             *ride))
                         continue;
                     const auto profile =
-                        Paint::FirstPersonVerifiedTrackRailProfile(
+                        Paint::FirstPersonTrackRailProfileFor(
                             *ride, *track);
-                    if (!profile.has_value()
-                        || !profile->verified)
+                    if (!profile.has_value())
                         continue;
 
                     const auto sampleOrigin =
@@ -1083,7 +1082,10 @@ namespace OpenRCT2::Ui::FirstPerson
         ReleaseMouse();
         EntityTweener::get().clearFirstPersonView();
         EntityTweener::get().setTrackedVehicle(EntityId::GetNull());
-        Paint::ClearFirstPersonSceneCache();
+        // Ending a camera session must not invalidate the static park.
+        // Re-entering first person can reuse terrain, semantic structures and
+        // trajectory rails; native map invalidation still dirties changed areas.
+        Paint::ResetFirstPersonPresentationCache();
         _state = State{};
 
         if (wasActive)
