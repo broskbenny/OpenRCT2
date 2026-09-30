@@ -4701,12 +4701,8 @@ namespace OpenRCT2::Paint
                     // height. These authored top surfaces remain coplanar with
                     // terrain, but win the depth tie where they cover it.
                     surface.depthBias =
-                        component.role
-                            == FirstPersonPaintSemanticRole::pathDeck
-                        || component.role
-                            == FirstPersonPaintSemanticRole::stationFloor
-                        || component.role
-                            == FirstPersonPaintSemanticRole::structureFloor;
+                        FirstPersonSemanticRoleOwnsCoplanarSurface(
+                            component.role);
                     const auto image =
                         component.artwork.image;
                     const bool projectArtwork =
