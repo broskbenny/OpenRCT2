@@ -634,6 +634,44 @@ TEST(FirstPersonTrackTrajectoryTest, MotionTemplateIsCachedButDoesNotClaimRailPr
     EXPECT_FLOAT_EQ(profile.halfHeight, 0.0f);
 }
 
+TEST(FirstPersonTrackTrajectoryTest, StyleBaselineGeneratesGeometryWithoutArtworkVerification)
+{
+    FirstPersonTrackTrajectory trajectory{};
+    FirstPersonBasis basis{};
+    basis.forward = { 1.0f, 0.0f, 0.0f };
+    basis.right = { 0.0f, 1.0f, 0.0f };
+    basis.up = { 0.0f, 0.0f, 1.0f };
+    trajectory.points = {
+        { { 0.0f, 0.0f, 0.0f }, basis, 0 },
+        { { 12.0f, 0.0f, 0.0f }, basis, 1 },
+    };
+
+    const auto twin =
+        FirstPersonDefaultTrackRailProfile(
+            TrackStyle::corkscrewRollerCoaster);
+    EXPECT_FALSE(twin.verified);
+    EXPECT_EQ(twin.railCount, 2);
+    EXPECT_EQ(
+        BuildFirstPersonRailProxySegments(
+            trajectory, twin).size(),
+        2u);
+
+    const auto single =
+        FirstPersonDefaultTrackRailProfile(
+            TrackStyle::singleRailRollerCoaster);
+    EXPECT_FALSE(single.verified);
+    EXPECT_EQ(single.railCount, 1);
+    const auto singleRail =
+        BuildFirstPersonRailProxySegments(
+            trajectory, single);
+    ASSERT_EQ(singleRail.size(), 1u);
+    EXPECT_FLOAT_EQ(singleRail[0].a.y, 0.0f);
+    EXPECT_EQ(
+        singleRail[0].provenance,
+        FirstPersonPhysicalProxyProvenance::
+            authoritativeTrackTrajectory);
+}
+
 TEST(FirstPersonTrackProfileCalibrationTest, IncrementalSearchHonoursCandidateBudget)
 {
     const auto* trajectory =
