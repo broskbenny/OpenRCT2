@@ -171,7 +171,9 @@ static void PaintRideEntranceExit(PaintSession& session, uint8_t direction, int3
         float(session.MapPosition.y + 16),
         0.0f,
     };
-    switch (direction & 3)
+    const auto worldDirection =
+        static_cast<uint8_t>(entranceEl.getDirection()) & 3u;
+    switch (worldDirection)
     {
         case 1:
             structureTransform.axisX = { 0.0f, 1.0f, 0.0f };
