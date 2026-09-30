@@ -6199,6 +6199,16 @@ namespace OpenRCT2::Paint
         }
         else
         {
+            // A second, genuinely different scene inside the same presentation
+            // frame must not alias the GPU's cached first scene.
+            if (_preparedFrame.active
+                && _preparedFrame.valid)
+            {
+                ++_preparedFrame.serial;
+                if (_preparedFrame.serial == 0)
+                    ++_preparedFrame.serial;
+            }
+
             const auto start =
                 std::chrono::steady_clock::now();
             localScene =
