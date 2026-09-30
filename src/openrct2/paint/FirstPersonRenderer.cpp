@@ -1344,6 +1344,7 @@ namespace OpenRCT2::Paint
             ImageId image, const ScreenCoordsXY& spritePos,
             uint8_t rotation, ImageId mask = {})
         {
+            (void)spritePos;
             const auto* small =
                 ps.Element != nullptr
                 ? ps.Element->asSmallScenery()
@@ -1358,8 +1359,10 @@ namespace OpenRCT2::Paint
                 small->getDirectionWithOffset(rotation) & 3u;
             const ImageIndex expectedBodyImage =
                 entry->image + direction
-                + uint32_t(FirstPersonSmallSceneryWitherStage(
-                    *entry, *small)) * 4u;
+                + uint32_t(
+                    FirstPersonSmallSceneryWitherStage(
+                        *entry, *small))
+                    * 4u;
             if (image.GetIndex() != expectedBodyImage)
                 return false;
 
@@ -1368,17 +1371,88 @@ namespace OpenRCT2::Paint
                     *entry, *small);
             if (hull == nullptr)
                 return false;
+            const auto faces =
+                BuildFirstPersonVisualHullBoundaryFaces(*hull);
+            if (faces.empty())
+                return false;
+
+            const auto faceVisible =
+                [](FirstPersonVec3 normal,
+                    uint8_t sourceRotation) {
+                    if (normal.z > 0.5f)
+                        return true;
+                    if (normal.z < -0.5f)
+                        return false;
+                    return FirstPersonFaceVisibleFromNativeView(
+                        {
+                            int32_t(std::lround(normal.x)),
+                            int32_t(std::lround(normal.y)),
+                        },
+                        sourceRotation);
+                };
+
+            // Ownership is computed independently of texture fit. A projective
+            // source is trustworthy only when this physical face is actually
+            // frontmost in that native isometric view.
+            std::array<FirstPersonDepthOwnerMap, 4>
+                depthOwners{};
+            for (uint8_t sourceRotation = 0;
+                 sourceRotation < 4; ++sourceRotation)
+            {
+                for (size_t faceIndex = 0;
+                     faceIndex < faces.size(); ++faceIndex)
+                {
+                    const auto& face = faces[faceIndex];
+                    if (!faceVisible(
+                            face.normal, sourceRotation))
+                        continue;
+                    std::array<ScreenCoordsXY, 4> screen{};
+                    std::array<float, 4> depth{};
+                    for (size_t i = 0;
+                         i < face.corners.size(); ++i)
+                    {
+                        const CoordsXYZ point{
+                            int32_t(std::lround(
+                                face.corners[i].x)),
+                            int32_t(std::lround(
+                                face.corners[i].y)),
+                            int32_t(std::lround(
+                                face.corners[i].z)),
+                        };
+                        screen[i] =
+                            Translate3DTo2DWithZ(
+                                sourceRotation, point);
+                        depth[i] =
+                            FirstPersonIsoDepth(
+                                sourceRotation, point);
+                    }
+                    AddFirstPersonDepthTriangle(
+                        depthOwners[sourceRotation],
+                        uint32_t(faceIndex),
+                        { screen[0], screen[1], screen[2] },
+                        { depth[0], depth[1], depth[2] });
+                    AddFirstPersonDepthTriangle(
+                        depthOwners[sourceRotation],
+                        uint32_t(faceIndex),
+                        { screen[0], screen[2], screen[3] },
+                        { depth[0], depth[2], depth[3] });
+                }
+            }
 
             struct SmallSceneryFaceSource
             {
                 ImageId image{};
                 const G1Element* g1 = nullptr;
                 uint8_t rotation = 0;
+                float ownership = 0.0f;
+                bool fallbackOnly = true;
             };
             const auto sourceForFace =
-                [&](FirstPersonVec3 normal)
+                [&](size_t faceIndex)
                     -> std::optional<SmallSceneryFaceSource> {
-                    float bestScore =
+                    const auto& face = faces[faceIndex];
+                    float bestOwnership = -1.0f;
+                    float bestOrientation =
                         -std::numeric_limits<float>::infinity();
                     std::optional<SmallSceneryFaceSource> best;
                     for (const auto& view : hull->textureViews)
@@ -1387,141 +1461,163 @@ namespace OpenRCT2::Paint
                             image.WithIndex(view.image);
                         const auto* g1 =
                             GfxGetG1Element(sourceImage);
-                        if (g1 == nullptr)
+                        if (g1 == nullptr
+                            || g1->width <= 0
+                            || g1->height <= 0
+                            || !faceVisible(
+                                face.normal,
+                                view.imageDirection))
                             continue;
 
-                        float score = 0.0f;
-                        if (normal.z > 0.5f)
+                        std::array<ScreenCoordsXY, 4> projected{};
+                        for (size_t i = 0;
+                             i < face.corners.size(); ++i)
                         {
-                            score =
+                            projected[i] =
+                                Translate3DTo2DWithZ(
+                                    view.imageDirection,
+                                    {
+                                        int32_t(std::lround(
+                                            face.corners[i].x)),
+                                        int32_t(std::lround(
+                                            face.corners[i].y)),
+                                        int32_t(std::lround(
+                                            face.corners[i].z)),
+                                    });
+                        }
+                        FirstPersonSilhouette silhouette{};
+                        AddFirstPersonSilhouetteQuad(
+                            silhouette, projected);
+                        const float ownership =
+                            FirstPersonDepthOwnerCoverage(
+                                depthOwners[
+                                    view.imageDirection],
+                                uint32_t(faceIndex),
+                                silhouette);
+
+                        float orientation = 0.0f;
+                        if (face.normal.z > 0.5f)
+                        {
+                            orientation =
                                 view.imageDirection == rotation
-                                ? 2.0f : 1.0f;
+                                ? 1.0f : 0.0f;
                         }
                         else
                         {
                             const auto viewDirection =
                                 FirstPersonNativeViewDirection(
                                     view.imageDirection);
-                            score =
-                                normal.x * float(viewDirection.x)
-                                + normal.y * float(viewDirection.y);
+                            orientation =
+                                face.normal.x
+                                    * float(viewDirection.x)
+                                + face.normal.y
+                                    * float(viewDirection.y);
                         }
+
                         if (!best.has_value()
-                            || score > bestScore)
+                            || ownership > bestOwnership + 1e-5f
+                            || (std::abs(
+                                    ownership
+                                    - bestOwnership)
+                                    <= 1e-5f
+                                && orientation
+                                    > bestOrientation))
                         {
-                            bestScore = score;
+                            bestOwnership = ownership;
+                            bestOrientation = orientation;
                             best = SmallSceneryFaceSource{
                                 sourceImage, g1,
                                 view.imageDirection,
+                                ownership,
+                                ownership < 0.98f,
                             };
                         }
                     }
-                    return best;
+                    if (best.has_value())
+                        return best;
+
+                    // Native isometric art has no underside view. Preserve the
+                    // physical face but use available art only to derive a
+                    // stable remapped material colour.
+                    for (const auto& view : hull->textureViews)
+                    {
+                        const auto sourceImage =
+                            image.WithIndex(view.image);
+                        const auto* g1 =
+                            GfxGetG1Element(sourceImage);
+                        if (g1 != nullptr
+                            && g1->width > 0
+                            && g1->height > 0)
+                        {
+                            return SmallSceneryFaceSource{
+                                sourceImage, g1,
+                                view.imageDirection,
+                                0.0f, true
+                            };
+                        }
+                    }
+                    return std::nullopt;
                 };
 
-            const float half = hull->step * 0.5f;
             const float tileX = float(ps.MapPos.x);
             const float tileY = float(ps.MapPos.y);
             const float baseZ = float(small->getBaseZ());
-            const auto appendFace =
-                [&](const std::array<FirstPersonVec3, 4>& local,
-                    FirstPersonVec3 normal) {
-                    const auto source =
-                        sourceForFace(normal);
-                    if (!source.has_value())
-                        return;
+            for (size_t faceIndex = 0;
+                 faceIndex < faces.size(); ++faceIndex)
+            {
+                const auto source =
+                    sourceForFace(faceIndex);
+                if (!source.has_value())
+                    return false;
 
-                    const auto paintOffset =
-                        FirstPersonSmallSceneryPaintOffset(
-                            *entry, *small, source->rotation);
-                    const auto spriteOrigin =
+                const auto& face = faces[faceIndex];
+                const auto paintOffset =
+                    FirstPersonSmallSceneryPaintOffset(
+                        *entry, *small, source->rotation);
+                const auto spriteOrigin =
+                    Translate3DTo2DWithZ(
+                        source->rotation, { paintOffset, 0 });
+
+                FirstPersonSurface surface{};
+                surface.image = source->image;
+                surface.physicalCoverage = true;
+                surface.textureFallbackOnly =
+                    source->fallbackOnly;
+                std::array<FirstPersonVertex, 4> vertices{};
+                for (size_t i = 0;
+                     i < vertices.size(); ++i)
+                {
+                    const auto& point = face.corners[i];
+                    vertices[i].world = {
+                        tileX + point.x,
+                        tileY + point.y,
+                        baseZ + point.z,
+                    };
+                    const auto projected =
                         Translate3DTo2DWithZ(
                             source->rotation,
-                            { paintOffset, 0 });
-
-                    FirstPersonSurface surface{};
-                    surface.image = source->image;
-                    surface.physicalCoverage = true;
-                    std::array<FirstPersonVertex, 4> vertices{};
-                    for (size_t i = 0; i < vertices.size(); ++i)
-                    {
-                        const auto& p = local[i];
-                        vertices[i].world = {
-                            tileX + p.x,
-                            tileY + p.y,
-                            baseZ + p.z,
-                        };
-                        const auto projected =
-                            Translate3DTo2DWithZ(
-                                source->rotation,
-                                {
-                                    int32_t(std::lround(p.x)),
-                                    int32_t(std::lround(p.y)),
-                                    int32_t(std::lround(p.z)),
-                                });
-                        vertices[i].u =
-                            float(projected.x
-                                - spriteOrigin.x
-                                - source->g1->xOffset);
-                        vertices[i].v =
-                            float(projected.y
-                                - spriteOrigin.y
-                                - source->g1->yOffset);
-                    }
-                    EmitQuad(surface, vertices);
-                    scene.surfaces.emplace_back(
-                        std::move(surface));
-                };
-
-            for (int32_t up = 0;
-                 up < hull->sizeUp; ++up)
-            for (int32_t right = 0;
-                 right < hull->sizeRight; ++right)
-            for (int32_t forward = 0;
-                 forward < hull->sizeForward; ++forward)
-            {
-                if (!hull->contains(
-                        forward, right, up))
-                    continue;
-                const auto centre =
-                    hull->centre(forward, right, up);
-                const float f0 = centre.x - half;
-                const float f1 = centre.x + half;
-                const float r0 = centre.y - half;
-                const float r1 = centre.y + half;
-                const float u0 = centre.z - half;
-                const float u1 = centre.z + half;
-
-                if (!hull->contains(
-                        forward - 1, right, up))
-                    appendFace({ {
-                        { f0, r1, u0 }, { f0, r0, u0 },
-                        { f0, r0, u1 }, { f0, r1, u1 },
-                    } }, { -1.0f, 0.0f, 0.0f });
-                if (!hull->contains(
-                        forward + 1, right, up))
-                    appendFace({ {
-                        { f1, r0, u0 }, { f1, r1, u0 },
-                        { f1, r1, u1 }, { f1, r0, u1 },
-                    } }, { 1.0f, 0.0f, 0.0f });
-                if (!hull->contains(
-                        forward, right - 1, up))
-                    appendFace({ {
-                        { f0, r0, u0 }, { f1, r0, u0 },
-                        { f1, r0, u1 }, { f0, r0, u1 },
-                    } }, { 0.0f, -1.0f, 0.0f });
-                if (!hull->contains(
-                        forward, right + 1, up))
-                    appendFace({ {
-                        { f1, r1, u0 }, { f0, r1, u0 },
-                        { f0, r1, u1 }, { f1, r1, u1 },
-                    } }, { 0.0f, 1.0f, 0.0f });
-                if (!hull->contains(
-                        forward, right, up + 1))
-                    appendFace({ {
-                        { f0, r1, u1 }, { f0, r0, u1 },
-                        { f1, r0, u1 }, { f1, r1, u1 },
-                    } }, { 0.0f, 0.0f, 1.0f });
+                            {
+                                int32_t(std::lround(
+                                    point.x)),
+                                int32_t(std::lround(
+                                    point.y)),
+                                int32_t(std::lround(
+                                    point.z)),
+                            });
+                    vertices[i].u =
+                        float(
+                            projected.x
+                            - spriteOrigin.x
+                            - source->g1->xOffset);
+                    vertices[i].v =
+                        float(
+                            projected.y
+                            - spriteOrigin.y
+                            - source->g1->yOffset);
+                }
+                EmitQuad(surface, vertices);
+                scene.surfaces.emplace_back(
+                    std::move(surface));
             }
             return true;
         }
@@ -2363,6 +2459,8 @@ namespace OpenRCT2::Paint
                 FirstPersonSurface surface{};
                 surface.image = image;
                 surface.physicalCoverage = true;
+                surface.textureFallbackOnly =
+                    face.textureFallbackOnly;
                 surface.reconstructionGroup = group.key;
                 std::array<FirstPersonVertex, 4> vertices{};
                 FirstPersonVec3 faceCenter{};
@@ -2702,6 +2800,8 @@ namespace OpenRCT2::Paint
                     fingerprint, surface.depthBias ? 1 : 0);
                 ExtendStableKey(
                     fingerprint, surface.physicalCoverage ? 1 : 0);
+                ExtendStableKey(
+                    fingerprint, surface.textureFallbackOnly ? 1 : 0);
                 ExtendStableKey(
                     fingerprint, surface.reconstructionGroup);
                 ExtendStableKey(
