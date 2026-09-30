@@ -217,6 +217,7 @@ namespace OpenRCT2
             // Update indices.
             UpdateSceneryGroupIndexes();
             ResetTypeToRideEntryIndexMap();
+            Paint::ClearFirstPersonSceneCache();
         }
 
         void UnloadObjects(const std::vector<ObjectEntryDescriptor>& entries) override
@@ -244,6 +245,7 @@ namespace OpenRCT2
             {
                 UpdateSceneryGroupIndexes();
                 ResetTypeToRideEntryIndexMap();
+                Paint::ClearFirstPersonSceneCache();
             }
         }
 
@@ -355,6 +357,7 @@ namespace OpenRCT2
             }
             UpdateSceneryGroupIndexes();
             ResetTypeToRideEntryIndexMap();
+            Paint::ClearFirstPersonSceneCache();
         }
 
         Object* LoadObject(ObjectEntryIndex slot, std::string_view identifier)
@@ -401,6 +404,7 @@ namespace OpenRCT2
                     UpdateSceneryGroupIndexes();
                     if (objectType == ObjectType::ride)
                         ResetTypeToRideEntryIndexMap();
+                    Paint::ClearFirstPersonSceneCache();
                 }
             }
             return loadedObject;

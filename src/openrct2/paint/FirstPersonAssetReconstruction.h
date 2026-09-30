@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -335,6 +336,50 @@ namespace OpenRCT2::Paint
             return pixels.size();
         }
     };
+
+    [[nodiscard]] constexpr int32_t
+        FirstPersonSilhouettePixelX(uint64_t pixel)
+    {
+        return std::bit_cast<int32_t>(
+            uint32_t(pixel >> 32));
+    }
+
+    [[nodiscard]] constexpr int32_t
+        FirstPersonSilhouettePixelY(uint64_t pixel)
+    {
+        return std::bit_cast<int32_t>(
+            uint32_t(pixel));
+    }
+
+    template<typename TPredicate>
+    [[nodiscard]] float
+        FirstPersonSilhouettePredicateCoverage(
+            const FirstPersonSilhouette& silhouette,
+            TPredicate&& predicate,
+            size_t maximumPixels = 16384)
+    {
+        if (silhouette.empty()
+            || silhouette.size() > maximumPixels)
+            return 0.0f;
+        size_t covered = 0;
+        for (const auto pixel : silhouette.pixels)
+        {
+            if (predicate(
+                    FirstPersonSilhouettePixelX(pixel),
+                    FirstPersonSilhouettePixelY(pixel)))
+                ++covered;
+        }
+        return float(covered)
+            / float(silhouette.size());
+    }
+
+    [[nodiscard]] constexpr bool
+        FirstPersonTextureReprojectionIsReliable(
+            float ownership, float sourceCoverage)
+    {
+        return ownership >= 0.98f
+            && sourceCoverage >= 0.90f;
+    }
 
     [[nodiscard]] constexpr float FirstPersonIsoDepth(
         uint8_t rotation, const CoordsXYZ& point)

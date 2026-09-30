@@ -51,6 +51,37 @@ namespace
     }
 }
 
+TEST(FirstPersonAssetReconstructionTest, TextureReprojectionRequiresOwnershipAndSourceCoverage)
+{
+    EXPECT_TRUE(
+        FirstPersonTextureReprojectionIsReliable(
+            0.99f, 0.95f));
+    EXPECT_FALSE(
+        FirstPersonTextureReprojectionIsReliable(
+            0.97f, 1.00f));
+    EXPECT_FALSE(
+        FirstPersonTextureReprojectionIsReliable(
+            1.00f, 0.89f));
+
+    const auto silhouette =
+        MakeSilhouetteRect(0, 0, 4, 4);
+    EXPECT_FLOAT_EQ(
+        FirstPersonSilhouettePredicateCoverage(
+            silhouette,
+            [](int32_t x, int32_t) {
+                return x < 2;
+            }),
+        0.5f);
+    EXPECT_FLOAT_EQ(
+        FirstPersonSilhouettePredicateCoverage(
+            silhouette,
+            [](int32_t, int32_t) {
+                return true;
+            },
+            8),
+        0.0f);
+}
+
 TEST(FirstPersonPathGeometryTest, FootprintPreservesMarginsEdgesAndCorners)
 {
     const auto isolated =

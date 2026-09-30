@@ -705,11 +705,14 @@ namespace OpenRCT2::Paint
 
             constexpr size_t kMaxCarvedCells = 48;
             LargeSceneryObservedViews observed{};
+            bool observedAttempted = false;
             FirstPersonVisualHull hull{};
             std::vector<LargeSceneryAssetFace> faces;
             if (cells->size() <= kMaxCarvedCells)
             {
-                observed = CollectLargeSceneryObservedViews(entry);
+                observed =
+                    CollectLargeSceneryObservedViews(entry);
+                observedAttempted = true;
                 hull = BuildLargeSceneryAssetHull(*cells, observed);
                 if (hull.valid)
                     faces = BuildLargeSceneryAssetFaces(
@@ -730,6 +733,14 @@ namespace OpenRCT2::Paint
                 if (faces.empty())
                     return model;
 
+                if (!observedAttempted)
+                {
+                    observed =
+                        CollectLargeSceneryObservedViews(
+                            entry);
+                    observedAttempted = true;
+                }
+
                 const auto depthOwners =
                     BuildLargeSceneryAssetDepthOwners(faces);
                 float minimumOwnership = 1.0f;
@@ -738,6 +749,7 @@ namespace OpenRCT2::Paint
                 {
                     auto& face = faces[faceIndex];
                     float bestOwnership = -1.0f;
+                    float bestCoverage = 0.0f;
                     std::optional<uint8_t> bestDirection;
                     for (uint8_t direction = 0;
                          direction < 4; ++direction)
@@ -763,11 +775,36 @@ namespace OpenRCT2::Paint
                                 depthOwners[direction],
                                 uint32_t(faceIndex),
                                 projected);
+                        float sourceCoverage = 0.0f;
+                        if (face.sequence
+                                < observed.bySequence.size())
+                        {
+                            const auto& source =
+                                observed.bySequence[
+                                    face.sequence][direction];
+                            if (!source.empty())
+                            {
+                                const auto fit =
+                                    CompareFirstPersonSilhouettes(
+                                        source, projected);
+                                if (fit.valid)
+                                    sourceCoverage =
+                                        fit.candidateCoverage;
+                            }
+                        }
+                        const float score =
+                            ownership * 4.0f
+                            + sourceCoverage;
+                        const float bestScore =
+                            bestOwnership * 4.0f
+                            + bestCoverage;
                         if (!bestDirection.has_value()
-                            || ownership > bestOwnership)
+                            || score > bestScore)
                         {
                             bestDirection = direction;
                             bestOwnership = ownership;
+                            bestCoverage =
+                                sourceCoverage;
                         }
                     }
                     if (!bestDirection.has_value())
@@ -787,14 +824,17 @@ namespace OpenRCT2::Paint
                                         && g1->height > 0;
                                 });
                         bestOwnership = 0.0f;
+                        bestCoverage = 0.0f;
                     }
                     if (!bestDirection.has_value())
                         return model;
 
                     face.sourceDirection = *bestDirection;
                     face.textureFallbackOnly =
-                        face.kind == LargeSceneryAssetFaceKind::bottom
-                        || bestOwnership < 0.98f;
+                        face.kind
+                            == LargeSceneryAssetFaceKind::bottom
+                        || !FirstPersonTextureReprojectionIsReliable(
+                            bestOwnership, bestCoverage);
                     if (face.kind != LargeSceneryAssetFaceKind::bottom)
                     {
                         minimumOwnership =
@@ -818,6 +858,7 @@ namespace OpenRCT2::Paint
                 auto& face = faces[faceIndex];
                 float bestFaceScore = -1.0f;
                 float bestOwnership = 0.0f;
+                float bestCoverage = 0.0f;
                 uint8_t bestDirection = 0;
                 for (uint8_t direction = 0; direction < 4; ++direction)
                 {
@@ -855,6 +896,7 @@ namespace OpenRCT2::Paint
                         continue;
                     bestFaceScore = score;
                     bestOwnership = ownership;
+                    bestCoverage = coverage;
                     bestDirection = direction;
                 }
                 if (bestFaceScore < 0.0f)
@@ -871,6 +913,7 @@ namespace OpenRCT2::Paint
                         {
                             bestDirection = direction;
                             bestFaceScore = 0.0f;
+                            bestCoverage = 0.0f;
                             break;
                         }
                     }
@@ -879,8 +922,10 @@ namespace OpenRCT2::Paint
                     return model;
                 face.sourceDirection = bestDirection;
                 face.textureFallbackOnly =
-                    face.kind == LargeSceneryAssetFaceKind::bottom
-                    || bestOwnership < 0.98f;
+                    face.kind
+                        == LargeSceneryAssetFaceKind::bottom
+                    || !FirstPersonTextureReprojectionIsReliable(
+                        bestOwnership, bestCoverage);
                 if (face.kind != LargeSceneryAssetFaceKind::bottom)
                 {
                     minimumFaceOwnership =

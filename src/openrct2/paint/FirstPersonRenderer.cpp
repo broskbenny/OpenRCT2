@@ -1466,6 +1466,7 @@ namespace OpenRCT2::Paint
                 const G1Element* g1 = nullptr;
                 uint8_t rotation = 0;
                 float ownership = 0.0f;
+                float sourceCoverage = 0.0f;
                 bool fallbackOnly = true;
             };
             const auto sourceForFace =
@@ -1515,6 +1516,25 @@ namespace OpenRCT2::Paint
                                     view.imageDirection],
                                 uint32_t(faceIndex),
                                 silhouette);
+                        const auto paintOffset =
+                            FirstPersonSmallSceneryPaintOffset(
+                                *entry, *small,
+                                view.imageDirection);
+                        const auto sourceOrigin =
+                            Translate3DTo2DWithZ(
+                                view.imageDirection,
+                                { paintOffset, 0 });
+                        const float sourceCoverage =
+                            FirstPersonSilhouettePredicateCoverage(
+                                silhouette,
+                                [&](int32_t x, int32_t y) {
+                                    return FirstPersonVisualHullPixelOpaque(
+                                        *g1,
+                                        x - sourceOrigin.x
+                                            - g1->xOffset,
+                                        y - sourceOrigin.y
+                                            - g1->yOffset);
+                                });
 
                         float orientation = 0.0f;
                         if (face.normal.z > 0.5f)
@@ -1535,14 +1555,25 @@ namespace OpenRCT2::Paint
                                     * float(viewDirection.y);
                         }
 
+                        const bool reliable =
+                            FirstPersonTextureReprojectionIsReliable(
+                                ownership, sourceCoverage);
+                        const float score =
+                            (reliable ? 1000.0f : 0.0f)
+                            + ownership * 4.0f
+                            + sourceCoverage
+                            + orientation * 0.1f;
+                        const float bestScore =
+                            best.has_value()
+                            ? ((!best->fallbackOnly
+                                    ? 1000.0f : 0.0f)
+                                + best->ownership * 4.0f
+                                + best->sourceCoverage
+                                + bestOrientation * 0.1f)
+                            : -std::numeric_limits<float>::
+                                infinity();
                         if (!best.has_value()
-                            || ownership > bestOwnership + 1e-5f
-                            || (std::abs(
-                                    ownership
-                                    - bestOwnership)
-                                    <= 1e-5f
-                                && orientation
-                                    > bestOrientation))
+                            || score > bestScore)
                         {
                             bestOwnership = ownership;
                             bestOrientation = orientation;
@@ -1550,7 +1581,8 @@ namespace OpenRCT2::Paint
                                 sourceImage, g1,
                                 view.imageDirection,
                                 ownership,
-                                ownership < 0.98f,
+                                sourceCoverage,
+                                !reliable,
                             };
                         }
                     }
@@ -1573,7 +1605,7 @@ namespace OpenRCT2::Paint
                             return SmallSceneryFaceSource{
                                 sourceImage, g1,
                                 view.imageDirection,
-                                0.0f, true
+                                0.0f, 0.0f, true
                             };
                         }
                     }
