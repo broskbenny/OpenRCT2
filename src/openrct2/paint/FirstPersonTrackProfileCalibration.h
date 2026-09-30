@@ -306,7 +306,9 @@ namespace OpenRCT2::Paint
             const FirstPersonTrackRailProfile& profile)
     {
         std::array<FirstPersonSilhouette, 4> result{};
-        if (trajectory.points.size() < 2 || profile.halfGauge <= 0.0f
+        if (trajectory.points.size() < 2
+            || profile.railCount == 0
+            || (profile.railCount > 1 && profile.halfGauge <= 0.0f)
             || profile.halfWidth <= 0.0f || profile.halfHeight <= 0.0f)
             return result;
 
@@ -330,12 +332,21 @@ namespace OpenRCT2::Paint
             {
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
-                    AddFirstPersonTrackProfileSegmentSilhouette(
-                        result[rotation], rotation, anchor, a, b, profile,
-                        -profile.halfGauge);
-                    AddFirstPersonTrackProfileSegmentSilhouette(
-                        result[rotation], rotation, anchor, a, b, profile,
-                        profile.halfGauge);
+                    if (profile.railCount == 1)
+                    {
+                        AddFirstPersonTrackProfileSegmentSilhouette(
+                            result[rotation], rotation, anchor, a, b, profile,
+                            0.0f);
+                    }
+                    else
+                    {
+                        AddFirstPersonTrackProfileSegmentSilhouette(
+                            result[rotation], rotation, anchor, a, b, profile,
+                            -profile.halfGauge);
+                        AddFirstPersonTrackProfileSegmentSilhouette(
+                            result[rotation], rotation, anchor, a, b, profile,
+                            profile.halfGauge);
+                    }
                 }
             }
             previous = i;
