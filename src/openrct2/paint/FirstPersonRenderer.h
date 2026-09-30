@@ -142,6 +142,9 @@ namespace OpenRCT2::Paint
         FirstPersonResolvedView resolvedView{};
         ScreenSize dimensions{};
         ScreenCoordsXY screenOrigin{};
+        // Nonzero only while the drawing engine is presenting one frame.
+        // Every dirty clip for that presentation observes the same scene.
+        uint64_t presentationFrameSerial = 0;
         // Dynamic, camera-facing, transparent and animated surfaces only.
         std::vector<FirstPersonSurface> surfaces;
         // Persistent fixed opaque geometry is submitted by region descriptor;
@@ -218,6 +221,11 @@ namespace OpenRCT2::Paint
     // A single authoritative park-state -> perspective-scene collector.
     FirstPersonScene CollectFirstPersonScene(
         const FirstPersonRenderOptions& options, const ScreenSize& dimensions);
+    // One immutable prepared scene is shared by all dirty redraw clips in an
+    // OpenGL presentation frame.
+    void BeginFirstPersonPresentationFrame();
+    void EndFirstPersonPresentationFrame();
+
     // Release derived terrain geometry on exiting POV or closing/reloading a park.
     [[nodiscard]] std::optional<uint64_t>
         EnsureFirstPersonLargeSceneryPhysicalProxy(

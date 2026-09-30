@@ -336,11 +336,13 @@ public:
         assert(_screenFramebuffer != nullptr);
 
         _drawingContext->StartNewDraw();
+        Paint::BeginFirstPersonPresentationFrame();
     }
 
     void EndDraw() override
     {
         _drawingContext->FlushCommandBuffers();
+        Paint::EndFirstPersonPresentationFrame();
 
         glDisable(GL_DEPTH_TEST);
         if (_scaleFramebuffer != nullptr)

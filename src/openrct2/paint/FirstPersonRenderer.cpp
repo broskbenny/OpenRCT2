@@ -1891,6 +1891,60 @@ namespace OpenRCT2::Paint
         };
         static TerrainCache _terrainCache;
         static uint64_t _sceneEpoch = 1;
+
+        struct FirstPersonPreparedFrameCache
+        {
+            bool active = false;
+            bool valid = false;
+            uint64_t serial = 0;
+            FirstPersonRenderOptions options{};
+            ScreenSize dimensions{};
+            ScreenCoordsXY screenOrigin{};
+            Drawing::IDrawingEngine* drawingEngine = nullptr;
+            FirstPersonScene scene{};
+        };
+        static FirstPersonPreparedFrameCache _preparedFrame;
+
+        [[nodiscard]] bool SameFirstPersonVec3(
+            const FirstPersonVec3& a, const FirstPersonVec3& b)
+        {
+            return a.x == b.x && a.y == b.y && a.z == b.z;
+        }
+
+        [[nodiscard]] bool SameFirstPersonBasis(
+            const FirstPersonBasis& a, const FirstPersonBasis& b)
+        {
+            return SameFirstPersonVec3(a.forward, b.forward)
+                && SameFirstPersonVec3(a.right, b.right)
+                && SameFirstPersonVec3(a.up, b.up);
+        }
+
+        [[nodiscard]] bool SameFirstPersonCamera(
+            const FirstPersonCamera& a, const FirstPersonCamera& b)
+        {
+            return SameFirstPersonVec3(a.position, b.position)
+                && a.yaw == b.yaw
+                && a.pitch == b.pitch
+                && a.roll == b.roll
+                && a.hasExplicitBasis == b.hasExplicitBasis
+                && (!a.hasExplicitBasis
+                    || SameFirstPersonBasis(
+                        a.explicitBasis, b.explicitBasis));
+        }
+
+        [[nodiscard]] bool SameFirstPersonRenderOptions(
+            const FirstPersonRenderOptions& a,
+            const FirstPersonRenderOptions& b)
+        {
+            return SameFirstPersonCamera(a.camera, b.camera)
+                && a.hiddenEntity == b.hiddenEntity
+                && a.hiddenSeatIndex == b.hiddenSeatIndex
+                && a.viewFlags == b.viewFlags
+                && a.radiusTiles == b.radiusTiles
+                && a.fieldOfViewDegrees == b.fieldOfViewDegrees
+                && a.nearClip == b.nearClip
+                && a.farClip == b.farClip;
+        }
         // Persistent native paint results never retain session pointers.
         struct StaticPaintRotationCache
         {
@@ -5950,6 +6004,8 @@ namespace OpenRCT2::Paint
     }
     void ClearFirstPersonSceneCache()
     {
+        _preparedFrame.valid = false;
+        _preparedFrame.scene = {};
         ++_sceneEpoch;
         if (_sceneEpoch == 0)
             _sceneEpoch = 1;
@@ -6070,6 +6126,24 @@ namespace OpenRCT2::Paint
     {
         InvalidateFirstPersonSceneRegion(world,world);
     }
+    void BeginFirstPersonPresentationFrame()
+    {
+        _preparedFrame.active = true;
+        _preparedFrame.valid = false;
+        _preparedFrame.scene = {};
+        ++_preparedFrame.serial;
+        if (_preparedFrame.serial == 0)
+            ++_preparedFrame.serial;
+    }
+
+    void EndFirstPersonPresentationFrame()
+    {
+        _preparedFrame.active = false;
+        _preparedFrame.valid = false;
+        _preparedFrame.drawingEngine = nullptr;
+        _preparedFrame.scene = {};
+    }
+
     void RenderFirstPerson(
         Drawing::RenderTarget& rt, const FirstPersonRenderOptions& opt,
         const ScreenRect& viewport)
@@ -6078,22 +6152,74 @@ namespace OpenRCT2::Paint
         const ScreenSize dimensions{
             viewport.getWidth(), viewport.getHeight()
         };
-        if (dimensions.width <= 0 || dimensions.height <= 0 || rt.DrawingEngine == nullptr) return;
-        const auto start = std::chrono::steady_clock::now();
-        auto scene = CollectFirstPersonScene(opt, dimensions);
-        scene.screenOrigin = {
+        if (dimensions.width <= 0 || dimensions.height <= 0
+            || rt.DrawingEngine == nullptr)
+            return;
+
+        const ScreenCoordsXY screenOrigin{
             viewport.getLeft(), viewport.getTop()
         };
-        const auto paintStart=std::chrono::steady_clock::now();
-        CollectPaintSprites(scene, rt);
-        const auto submitStart=std::chrono::steady_clock::now();
-        scene.paintCpuMs=std::chrono::duration<float,std::milli>(submitStart-paintStart).count();
-        scene.prepareCpuMs=std::chrono::duration<float,std::milli>(submitStart-start).count();
-        auto* context = rt.DrawingEngine->GetDrawingContext();
-        if (context != nullptr)
+        const bool reusePrepared =
+            _preparedFrame.active
+            && _preparedFrame.valid
+            && _preparedFrame.drawingEngine == rt.DrawingEngine
+            && _preparedFrame.dimensions.width == dimensions.width
+            && _preparedFrame.dimensions.height == dimensions.height
+            && _preparedFrame.screenOrigin.x == screenOrigin.x
+            && _preparedFrame.screenOrigin.y == screenOrigin.y
+            && SameFirstPersonRenderOptions(
+                _preparedFrame.options, opt);
+
+        FirstPersonScene localScene{};
+        FirstPersonScene* scene = nullptr;
+        if (reusePrepared)
         {
-            context->DrawFirstPersonScene(rt, scene);
+            scene = &_preparedFrame.scene;
         }
+        else
+        {
+            const auto start =
+                std::chrono::steady_clock::now();
+            localScene =
+                CollectFirstPersonScene(opt, dimensions);
+            localScene.screenOrigin = screenOrigin;
+            localScene.presentationFrameSerial =
+                _preparedFrame.active
+                    ? _preparedFrame.serial : 0;
+            const auto paintStart =
+                std::chrono::steady_clock::now();
+            CollectPaintSprites(localScene, rt);
+            const auto submitStart =
+                std::chrono::steady_clock::now();
+            localScene.paintCpuMs =
+                std::chrono::duration<float, std::milli>(
+                    submitStart - paintStart).count();
+            localScene.prepareCpuMs =
+                std::chrono::duration<float, std::milli>(
+                    submitStart - start).count();
+
+            if (_preparedFrame.active)
+            {
+                _preparedFrame.options = opt;
+                _preparedFrame.dimensions = dimensions;
+                _preparedFrame.screenOrigin = screenOrigin;
+                _preparedFrame.drawingEngine =
+                    rt.DrawingEngine;
+                _preparedFrame.scene =
+                    std::move(localScene);
+                _preparedFrame.valid = true;
+                scene = &_preparedFrame.scene;
+            }
+            else
+            {
+                scene = &localScene;
+            }
+        }
+
+        auto* context =
+            rt.DrawingEngine->GetDrawingContext();
+        if (context != nullptr)
+            context->DrawFirstPersonScene(rt, *scene);
     }
 } // namespace OpenRCT2::Paint
 
