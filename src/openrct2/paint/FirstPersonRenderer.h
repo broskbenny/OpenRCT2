@@ -226,7 +226,9 @@ namespace OpenRCT2::Paint
     void BeginFirstPersonPresentationFrame();
     void EndFirstPersonPresentationFrame();
 
-    // Release derived terrain geometry on exiting POV or closing/reloading a park.
+    // End one POV presentation session without discarding the park-bounded
+    // static world caches. Full clearing remains for park reload/teardown.
+    void ResetFirstPersonPresentationCache();
     [[nodiscard]] std::optional<uint64_t>
         EnsureFirstPersonLargeSceneryPhysicalProxy(
             CoordsXY tile, const LargeSceneryElement& large);
