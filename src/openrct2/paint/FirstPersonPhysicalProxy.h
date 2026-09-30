@@ -39,6 +39,7 @@ namespace OpenRCT2::Paint
 {
     enum class FirstPersonPhysicalProxyProvenance : uint8_t
     {
+        authoritativeTrackTrajectory,
         verifiedTrackArtwork,
         nativeStationGeometry,
         nativePathGeometry,
@@ -541,6 +542,88 @@ namespace OpenRCT2::Paint
         return painter.trackStyle;
     }
 
+    [[nodiscard]] inline FirstPersonTrackRailProfile
+        FirstPersonDefaultTrackRailProfile(TrackStyle style)
+    {
+        // These are deterministic structural baselines in RCT world units.
+        // They deliberately favour a stable continuous guideway over allowing
+        // isometric artwork to define geometry. Artwork calibration may refine
+        // the dimensions/material later.
+        FirstPersonTrackRailProfile profile{};
+        profile.railCount = 2;
+        profile.halfGauge = 6.0f;
+        profile.halfWidth = 1.0f;
+        profile.halfHeight = 1.0f;
+        profile.verticalOffset = 0.0f;
+        // Until a style-specific artwork channel is verified, remove only
+        // plausible rail/remap pixels close to the generated rail silhouette.
+        profile.sourceChannelMask = 0x0Fu;
+
+        switch (style)
+        {
+            case TrackStyle::singleRailRollerCoaster:
+                profile.railCount = 1;
+                profile.halfGauge = 0.0f;
+                profile.halfWidth = 2.5f;
+                profile.halfHeight = 1.75f;
+                break;
+
+            case TrackStyle::monorail:
+            case TrackStyle::suspendedMonorail:
+                profile.railCount = 1;
+                profile.halfGauge = 0.0f;
+                profile.halfWidth = 2.75f;
+                profile.halfHeight = 2.0f;
+                break;
+
+            case TrackStyle::bobsleighCoaster:
+            case TrackStyle::dinghySlide:
+            case TrackStyle::dinghySlideCovered:
+            case TrackStyle::logFlume:
+            case TrackStyle::riverRapids:
+            case TrackStyle::splashBoats:
+            case TrackStyle::submarineRide:
+                profile.railCount = 1;
+                profile.halfGauge = 0.0f;
+                profile.halfWidth = 3.0f;
+                profile.halfHeight = 1.5f;
+                break;
+
+            case TrackStyle::miniatureRailway:
+                profile.halfGauge = 5.0f;
+                profile.halfWidth = 0.75f;
+                profile.halfHeight = 0.75f;
+                break;
+
+            default:
+                break;
+        }
+        return profile;
+    }
+
+    [[nodiscard]] inline std::optional<FirstPersonTrackRailProfile>
+        FirstPersonTrackRailProfileFor(
+            const Ride& ride, const TrackElement& track)
+    {
+        const auto style = FirstPersonTrackStyleFor(ride, track);
+        if (!style.has_value())
+            return std::nullopt;
+
+        auto profile = FirstPersonDefaultTrackRailProfile(*style);
+        const auto found = gFirstPersonVerifiedTrackProfiles.find(
+            static_cast<uint8_t>(*style));
+        if (found != gFirstPersonVerifiedTrackProfiles.end()
+            && found->second.profile.verified)
+        {
+            const uint8_t authoritativeRailCount = profile.railCount;
+            profile = found->second.profile;
+            // Artwork can refine dimensions and material, but the style owns
+            // the basic guideway topology.
+            profile.railCount = authoritativeRailCount;
+        }
+        return profile;
+    }
+
     inline void PublishFirstPersonVerifiedTrackProfile(
         TrackStyle style, const FirstPersonTrackRailProfile& profile,
         uint64_t sourceFingerprint, uint8_t holdoutKinds,
@@ -659,7 +742,10 @@ namespace OpenRCT2::Paint
         const FirstPersonTrackTrajectory& trajectory,
         const FirstPersonTrackRailProfile& profile)
     {
-        if (!profile.verified || trajectory.points.size() < 2)
+        if (trajectory.points.size() < 2
+            || profile.railCount == 0
+            || profile.halfWidth <= 0.0f
+            || profile.halfHeight <= 0.0f)
             return;
 
         size_t previous = 0;
@@ -686,9 +772,7 @@ namespace OpenRCT2::Paint
 
             if (distance > 0.05f)
             {
-                for (const float gaugeSide :
-                    { -profile.halfGauge, profile.halfGauge })
-                {
+                const auto appendRail = [&](float gaugeSide) {
                     result.push_back({
                         FirstPersonRailProxyCentre(
                             a, profile, gaugeSide),
@@ -698,9 +782,21 @@ namespace OpenRCT2::Paint
                         b.basis,
                         profile.halfWidth,
                         profile.halfHeight,
-                        FirstPersonPhysicalProxyProvenance::
-                            verifiedTrackArtwork,
+                        profile.verified
+                            ? FirstPersonPhysicalProxyProvenance::
+                                verifiedTrackArtwork
+                            : FirstPersonPhysicalProxyProvenance::
+                                authoritativeTrackTrajectory,
                     });
+                };
+                if (profile.railCount == 1)
+                {
+                    appendRail(0.0f);
+                }
+                else
+                {
+                    appendRail(-profile.halfGauge);
+                    appendRail(profile.halfGauge);
                 }
             }
             previous = i;
@@ -713,7 +809,9 @@ namespace OpenRCT2::Paint
             const FirstPersonTrackRailProfile& profile)
     {
         std::vector<FirstPersonRailProxySegment> result;
-        result.reserve(trajectory.points.size() * 2);
+        result.reserve(
+            trajectory.points.size()
+            * std::max<uint8_t>(profile.railCount, 1));
         AppendFirstPersonRailProxySegments(
             result, trajectory, profile);
         return result;
