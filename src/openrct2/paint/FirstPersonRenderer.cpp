@@ -1473,7 +1473,6 @@ namespace OpenRCT2::Paint
                 [&](size_t faceIndex)
                     -> std::optional<SmallSceneryFaceSource> {
                     const auto& face = faces[faceIndex];
-                    float bestOwnership = -1.0f;
                     float bestOrientation =
                         -std::numeric_limits<float>::infinity();
                     std::optional<SmallSceneryFaceSource> best;
@@ -1575,7 +1574,6 @@ namespace OpenRCT2::Paint
                         if (!best.has_value()
                             || score > bestScore)
                         {
-                            bestOwnership = ownership;
                             bestOrientation = orientation;
                             best = SmallSceneryFaceSource{
                                 sourceImage, g1,
