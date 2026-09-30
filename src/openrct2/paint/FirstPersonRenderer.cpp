@@ -2584,24 +2584,9 @@ namespace OpenRCT2::Paint
                 }
             }
 
-            // Expiry is maintenance cadence, not presentation cadence. Region
-            // membership lets packet rebuilds avoid a full geometry-cache scan.
-            if (frame % 120 == 0)
-            {
-                for (auto it = _largeSceneryGeometryCache.begin();
-                     it != _largeSceneryGeometryCache.end();)
-                {
-                    if (frame - it->second.lastSeen <= 240)
-                    {
-                        ++it;
-                        continue;
-                    }
-                    MarkLargeSceneryGeometryRegionsDirty(it->second);
-                    UnregisterLargeSceneryRegionMembership(
-                        it->first, it->second);
-                    it = _largeSceneryGeometryCache.erase(it);
-                }
-            }
+            // World-fixed large-scenery geometry is retained until native
+            // invalidation or park/POV teardown. Camera direction is not an
+            // invalidation source.
         }
 
         [[nodiscard]] bool IsReconstructedLargeSceneryBody(
@@ -2797,11 +2782,12 @@ namespace OpenRCT2::Paint
             const Ride& ride, const TrackElement& track)
         {
             const auto profile =
-                FirstPersonVerifiedTrackRailProfile(ride, track);
+                FirstPersonTrackRailProfileFor(ride, track);
             if (!profile.has_value())
                 return 0;
             uint64_t result = 14695981039346656037ull;
-            ExtendStableKey(result, 1);
+            ExtendStableKey(result, profile->verified ? 1 : 0);
+            ExtendStableKey(result, profile->railCount);
             ExtendStableKey(
                 result, uint32_t(std::lround(profile->halfGauge * 100.0f)));
             ExtendStableKey(
@@ -3865,11 +3851,11 @@ namespace OpenRCT2::Paint
             TrackTrajectoryCacheEntry result{};
             result.signature = signature;
             result.lastSeen = frame;
-            const auto verifiedProfile =
-                FirstPersonVerifiedTrackRailProfile(ride, track);
-            if (!verifiedProfile.has_value() || !verifiedProfile->verified)
+            const auto resolvedProfile =
+                FirstPersonTrackRailProfileFor(ride, track);
+            if (!resolvedProfile.has_value())
                 return result;
-            const auto& profile = *verifiedProfile;
+            const auto& profile = *resolvedProfile;
             result.sourceChannelMask = profile.sourceChannelMask;
             result.railSilhouettes = BuildFirstPersonTrackRailSilhouettes(
                 trajectory, groupAnchor, profile);
@@ -3997,23 +3983,6 @@ namespace OpenRCT2::Paint
                         groupKey, old->second);
                     _trackTrajectoryCache.erase(old);
                 };
-
-            if (!FirstPersonHasVerifiedTrackProfiles())
-            {
-                if (!_trackTrajectoryCache.empty())
-                {
-                    for (const auto& [groupKey, cached] :
-                         _trackTrajectoryCache)
-                    {
-                        (void)groupKey;
-                        MarkTrackTrajectoryRegionsDirty(
-                            cached);
-                    }
-                    _trackTrajectoryCache.clear();
-                    _trackTrajectoryGroupsByRegion.clear();
-                }
-                return;
-            }
 
             std::unordered_set<uint64_t> seenGroups;
             seenGroups.reserve(
@@ -4167,25 +4136,9 @@ namespace OpenRCT2::Paint
                 } while (!(element++)->isLastForTile());
             }
 
-            if (frame % 120 == 0)
-            {
-                for (auto it =
-                         _trackTrajectoryCache.begin();
-                     it != _trackTrajectoryCache.end();)
-                {
-                    if (frame - it->second.lastSeen
-                        <= 240)
-                    {
-                        ++it;
-                        continue;
-                    }
-                    MarkTrackTrajectoryRegionsDirty(
-                        it->second);
-                    UnregisterTrackTrajectoryRegionMembership(
-                        it->first, it->second);
-                    it = _trackTrajectoryCache.erase(it);
-                }
-            }
+            // Stable trajectory geometry remains cached until the track is
+            // authoritatively invalidated. Looking away must not make rails
+            // expensive to rediscover when the player turns back.
         }
 
         struct TileSemanticSnapshot
@@ -4526,18 +4479,9 @@ namespace OpenRCT2::Paint
                     if (cache.waterOverlay.has_value() && !IsResidentStaticSurface(*cache.waterOverlay))
                         scene.surfaces.emplace_back(*cache.waterOverlay);
             }
-            // Bound memory after travelling across multiple distant park regions.
-            // Never retain a permanently growing copy of an explored park.
-            if ((frame % 120) == 0)
-            {
-                std::erase_if(_terrainCache.entries, [frame](const auto& kv) {
-                    const bool expired = frame - kv.second.lastSeen > 240;
-                    if (expired)
-                        MarkStaticRegionDirtyForTile(
-                            int32_t(kv.first >> 32), int32_t(kv.first & 0xffffffffu));
-                    return expired;
-                });
-            }
+            // Terrain is bounded by the park and changes only through native
+            // invalidation. Retaining it makes a turn a visibility operation,
+            // not a terrain reconstruction operation.
         }
         [[nodiscard]] std::vector<FirstPersonSurface>
             BuildFirstPersonSemanticComponentSurfaces(
@@ -4566,6 +4510,16 @@ namespace OpenRCT2::Paint
                     surface.gpuRegion = gpuRegion;
                     surface.physicalCoverage =
                         !component.artwork.decal;
+                    // Semantic surface ownership is distinct from physical
+                    // height. These authored top surfaces remain coplanar with
+                    // terrain, but win the depth tie where they cover it.
+                    surface.depthBias =
+                        component.role
+                            == FirstPersonPaintSemanticRole::pathDeck
+                        || component.role
+                            == FirstPersonPaintSemanticRole::stationFloor
+                        || component.role
+                            == FirstPersonPaintSemanticRole::structureFloor;
                     const auto image =
                         component.artwork.image;
                     const bool projectArtwork =
@@ -5102,7 +5056,6 @@ namespace OpenRCT2::Paint
             std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
             for (auto& misses : missesByRotation)
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
-            size_t trackCalibrationPaintBudget = 1;
             const auto& view = scene.resolvedView;
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
@@ -5206,12 +5159,6 @@ namespace OpenRCT2::Paint
                     state.lastSeen = frame;
                     rotationMask |= uint8_t(1u << selected);
 
-                    if (trackCalibrationPaintBudget > 0
-                        && FirstPersonTrackGroupNeedsCalibrationViews(group))
-                    {
-                        UpdateFirstPersonTrackProfileCalibration(group);
-                        --trackCalibrationPaintBudget;
-                    }
                 }
 
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
@@ -5681,21 +5628,10 @@ namespace OpenRCT2::Paint
                     surface.nativePaintOrdinal = transparentOrdinal++;
             }
 
+            // Static tile/region/reconstruction caches are park-bounded and
+            // survive camera motion. Dynamic entity rotation state may expire.
             if (frame % 120 == 0)
             {
-                std::erase_if(_staticPaintCache, [frame](const auto& kv) {
-                    const bool expired = frame - kv.second.lastSeen > 240;
-                    if (expired)
-                        MarkStaticRegionDirtyForTile(
-                            int32_t(kv.first >> 32), int32_t(kv.first & 0xffffffffu));
-                    return expired;
-                });
-                std::erase_if(_reconstructionRotations, [frame](const auto& kv) {
-                    return frame - kv.second.lastSeen > 240;
-                });
-                std::erase_if(_staticRegionPackets, [frame](const auto& kv) {
-                    return frame - kv.second.lastSeen > 240;
-                });
                 std::erase_if(_entityRotations, [frame](const auto& kv) {
                     return frame - kv.second.lastSeen > 240;
                 });
