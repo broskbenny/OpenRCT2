@@ -344,26 +344,6 @@ static WoodenSupportSubType rotatedWoodenSupportSubTypes[kNumWoodenSupportSubTyp
     },
 };
 
-struct FirstPersonWoodenSupportRoleScope
-{
-    PaintSession& session;
-    FirstPersonPaintSemanticRole previous;
-
-    explicit FirstPersonWoodenSupportRoleScope(
-        PaintSession& s)
-        : session(s)
-        , previous(s.FirstPersonSemanticRole)
-    {
-        session.FirstPersonSemanticRole =
-            FirstPersonPaintSemanticRole::support;
-    }
-
-    ~FirstPersonWoodenSupportRoleScope()
-    {
-        session.FirstPersonSemanticRole = previous;
-    }
-};
-
 static std::array<CoordsXY, 2>
     FirstPersonWoodenSupportPosts(
         WoodenSupportSubType subType)
@@ -404,9 +384,8 @@ static void PublishFirstPersonWoodenSupportGeometry(
         FirstPersonWoodenSupportPosts(subType);
     for (const auto point : posts)
     {
-        PaintSessionAddFirstPersonPhysicalBox(
-            session,
-            FirstPersonPaintPhysicalPrimitiveKind::supportColumn,
+        PaintSessionAddFirstPersonSemanticBox(
+            session, FirstPersonPaintSemanticRole::support,
             { point.x - 2, point.y - 2, lowZ },
             { point.x + 2, point.y + 2, highZ },
             image);
@@ -418,21 +397,18 @@ static void PublishFirstPersonWoodenSupportGeometry(
     {
         const int32_t sectionHigh =
             std::min(sectionLow + 16, highZ);
-        PaintSessionAddFirstPersonPhysicalSegment(
-            session,
-            FirstPersonPaintPhysicalPrimitiveKind::supportBeam,
+        PaintSessionAddFirstPersonSemanticBeam(
+            session, FirstPersonPaintSemanticRole::support,
             { posts[0].x, posts[0].y, sectionHigh },
             { posts[1].x, posts[1].y, sectionHigh },
             1, image);
-        PaintSessionAddFirstPersonPhysicalSegment(
-            session,
-            FirstPersonPaintPhysicalPrimitiveKind::supportBeam,
+        PaintSessionAddFirstPersonSemanticBeam(
+            session, FirstPersonPaintSemanticRole::support,
             { posts[0].x, posts[0].y, sectionLow },
             { posts[1].x, posts[1].y, sectionHigh },
             1, image);
-        PaintSessionAddFirstPersonPhysicalSegment(
-            session,
-            FirstPersonPaintPhysicalPrimitiveKind::supportBeam,
+        PaintSessionAddFirstPersonSemanticBeam(
+            session, FirstPersonPaintSemanticRole::support,
             { posts[1].x, posts[1].y, sectionLow },
             { posts[0].x, posts[0].y, sectionHigh },
             1, image);

@@ -19,6 +19,7 @@
 #include "Boundbox.h"
 #include "tile_element/Paint.Tunnel.h"
 
+#include <array>
 #include <optional>
 #include <vector>
 #include <sfl/segmented_vector.hpp>
@@ -67,12 +68,76 @@ enum class FirstPersonPaintSemanticRole : uint8_t
 {
     none,
     support,
+    pathDeck,
+    railing,
+    pathFixture,
+    stationFloor,
+    stationFence,
+    stationCover,
+    pier,
+    towerSection,
+    movingMachinery,
+    seat,
+    sign,
 };
 
-enum class FirstPersonPaintPhysicalPrimitiveKind : uint8_t
+enum class FirstPersonPaintSemanticPrimitiveKind : uint8_t
 {
-    supportColumn,
-    supportBeam,
+    plane,
+    box,
+    beam,
+    footprint,
+    opening,
+    localHull,
+};
+
+struct FirstPersonPaintSemanticVec3
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+};
+
+struct FirstPersonPaintSemanticGeometry
+{
+    FirstPersonPaintSemanticPrimitiveKind kind =
+        FirstPersonPaintSemanticPrimitiveKind::box;
+    std::array<FirstPersonPaintSemanticVec3, 4> points{};
+    uint8_t pointCount = 0;
+    float halfWidth = 0.0f;
+    float halfHeight = 0.0f;
+    uint64_t localHullKey = 0;
+};
+
+struct FirstPersonPaintSemanticTransform
+{
+    FirstPersonPaintSemanticVec3 origin{};
+    FirstPersonPaintSemanticVec3 axisX{ 1.0f, 0.0f, 0.0f };
+    FirstPersonPaintSemanticVec3 axisY{ 0.0f, 1.0f, 0.0f };
+    FirstPersonPaintSemanticVec3 axisZ{ 0.0f, 0.0f, 1.0f };
+};
+
+struct FirstPersonPaintSemanticArtwork
+{
+    ImageId image{};
+    ImageId mask{};
+    ScreenCoordsXY screenPos{};
+    uint32_t group = 0;
+    uint8_t sourceRotation = 0;
+    bool decal = false;
+};
+
+struct FirstPersonPaintSemanticComponent
+{
+    uint32_t id = 0;
+    FirstPersonPaintSemanticRole role =
+        FirstPersonPaintSemanticRole::none;
+    CoordsXY mapPosition{};
+    FirstPersonPaintSemanticGeometry geometry{};
+    FirstPersonPaintSemanticTransform transform{};
+    FirstPersonPaintSemanticArtwork artwork{};
+    uint16_t repetitionIndex = 0;
+    bool collidable = true;
 };
 
 struct PassengerPaintAnchor
@@ -88,6 +153,8 @@ struct PassengerPaintAnchor
     float eyeUp = 0.0f;
     bool hasLocalPitch = false;
     float localPitch = 0.0f;
+    uint32_t semanticComponentId = 0;
+    FirstPersonPaintSemanticVec3 componentLocalAnchor{};
 };
 
 struct FirstPersonPassengerPaintInterpolation
@@ -98,20 +165,6 @@ struct FirstPersonPassengerPaintInterpolation
     uint8_t secondaryBefore = 0;
     uint8_t secondaryAfter = 0;
     float alpha = 0.0f;
-};
-
-struct FirstPersonPaintPhysicalPrimitive
-{
-    FirstPersonPaintPhysicalPrimitiveKind kind =
-        FirstPersonPaintPhysicalPrimitiveKind::supportColumn;
-    CoordsXY mapPosition{};
-    float lowX = 0.0f;
-    float lowY = 0.0f;
-    float lowZ = 0.0f;
-    float highX = 0.0f;
-    float highY = 0.0f;
-    float highZ = 0.0f;
-    ImageId image{};
 };
 
 struct PaintStruct
@@ -128,6 +181,7 @@ struct PaintStruct
     FirstPersonPaintSemanticRole FirstPersonSemanticRole =
         FirstPersonPaintSemanticRole::none;
     uint32_t FirstPersonPassengerSeatMask = 0;
+    uint32_t FirstPersonSemanticArtworkGroup = 0;
     ImageId image_id;
     ScreenCoordsXY ScreenPos;
     CoordsXY MapPos;
@@ -216,8 +270,11 @@ struct PaintSessionCore
     OpenRCT2::EntityBase* FirstPersonPassengerAnchorEntity = nullptr;
     uint8_t FirstPersonPassengerAnchorSeatIndex = 0xFF;
     FirstPersonPassengerPaintInterpolation FirstPersonPassengerInterpolation{};
-    std::vector<FirstPersonPaintPhysicalPrimitive>*
-        FirstPersonPhysicalPrimitiveSink = nullptr;
+    uint32_t FirstPersonSemanticArtworkGroup = 0;
+    uint32_t FirstPersonSemanticNextArtworkGroup = 1;
+    uint32_t FirstPersonSemanticNextComponentId = 1;
+    std::vector<FirstPersonPaintSemanticComponent>*
+        FirstPersonSemanticComponentSink = nullptr;
     const OpenRCT2::TileElement* PathElementOnSameHeight;
     const OpenRCT2::TileElement* TrackElementOnSameHeight;
     const OpenRCT2::TileElement* SelectedElement;
@@ -324,16 +381,87 @@ void PaintSessionPublishFirstPersonPassengerLocalAnchor(
     float eyeRight = 0.0f, float eyeUp = 0.0f,
     bool hasLocalPitch = false, float localPitch = 0.0f);
 
-void PaintSessionAddFirstPersonPhysicalBox(
-    PaintSession& session,
-    FirstPersonPaintPhysicalPrimitiveKind kind,
+uint32_t PaintSessionBeginFirstPersonSemanticArtworkGroup(
+    PaintSession& session);
+
+FirstPersonPaintSemanticTransform
+    PaintSessionMakeFirstPersonSemanticTransform(
+        const PaintSession& session,
+        FirstPersonPaintSemanticVec3 localOrigin = {});
+
+uint32_t PaintSessionAddFirstPersonSemanticBox(
+    PaintSession& session, FirstPersonPaintSemanticRole role,
     const CoordsXYZ& localLow, const CoordsXYZ& localHigh,
-    ImageId image);
-void PaintSessionAddFirstPersonPhysicalSegment(
-    PaintSession& session,
-    FirstPersonPaintPhysicalPrimitiveKind kind,
+    ImageId image = {}, const CoordsXYZ& artworkOffset = {},
+    uint32_t artworkGroup = 0, uint64_t localHullKey = 0,
+    uint16_t repetitionIndex = 0, bool collidable = true);
+
+uint32_t PaintSessionAddFirstPersonSemanticBeam(
+    PaintSession& session, FirstPersonPaintSemanticRole role,
     const CoordsXYZ& localA, const CoordsXYZ& localB,
-    int32_t halfWidth, ImageId image);
+    int32_t halfWidth, ImageId image = {},
+    const CoordsXYZ& artworkOffset = {},
+    uint32_t artworkGroup = 0, bool collidable = true);
+
+uint32_t PaintSessionAddFirstPersonSemanticQuad(
+    PaintSession& session, FirstPersonPaintSemanticRole role,
+    FirstPersonPaintSemanticPrimitiveKind kind,
+    const std::array<CoordsXYZ, 4>& localCorners,
+    ImageId image = {}, const CoordsXYZ& artworkOffset = {},
+    uint32_t artworkGroup = 0, bool decal = false,
+    bool collidable = true);
+
+uint32_t PaintSessionAddFirstPersonSemanticOrientedQuad(
+    PaintSession& session, FirstPersonPaintSemanticRole role,
+    FirstPersonPaintSemanticPrimitiveKind kind,
+    const FirstPersonPaintSemanticTransform& transform,
+    const std::array<FirstPersonPaintSemanticVec3, 4>& localCorners,
+    ImageId image = {}, const CoordsXYZ& artworkOffset = {},
+    uint32_t artworkGroup = 0, bool decal = false,
+    bool collidable = true);
+
+uint32_t PaintSessionAddFirstPersonSemanticOrientedBox(
+    PaintSession& session, FirstPersonPaintSemanticRole role,
+    const FirstPersonPaintSemanticTransform& transform,
+    FirstPersonPaintSemanticVec3 localLow,
+    FirstPersonPaintSemanticVec3 localHigh,
+    ImageId image = {}, const CoordsXYZ& artworkOffset = {},
+    uint32_t artworkGroup = 0, uint64_t localHullKey = 0,
+    uint16_t repetitionIndex = 0, bool collidable = true);
+
+void PaintSessionPublishFirstPersonPassengerComponentAnchor(
+    PaintSession& session, OpenRCT2::EntityBase& entity,
+    uint32_t seatMask, uint32_t componentId,
+    const FirstPersonPaintSemanticTransform& transform,
+    FirstPersonPaintSemanticVec3 localAnchor = {},
+    bool hasEyeOffset = false, float eyeForward = 0.0f,
+    float eyeRight = 0.0f, float eyeUp = 0.0f,
+    bool hasLocalPitch = false, float localPitch = 0.0f);
+
+struct FirstPersonPaintSemanticScope
+{
+    PaintSession& session;
+    FirstPersonPaintSemanticRole previousRole;
+    uint32_t previousArtworkGroup;
+
+    FirstPersonPaintSemanticScope(
+        PaintSession& s, FirstPersonPaintSemanticRole role,
+        uint32_t artworkGroup = 0)
+        : session(s)
+        , previousRole(s.FirstPersonSemanticRole)
+        , previousArtworkGroup(s.FirstPersonSemanticArtworkGroup)
+    {
+        session.FirstPersonSemanticRole = role;
+        session.FirstPersonSemanticArtworkGroup = artworkGroup;
+    }
+
+    ~FirstPersonPaintSemanticScope()
+    {
+        session.FirstPersonSemanticRole = previousRole;
+        session.FirstPersonSemanticArtworkGroup =
+            previousArtworkGroup;
+    }
+};
 
 // Globals for paint clipping
 extern uint8_t gClipHeight;

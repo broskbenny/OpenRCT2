@@ -6,7 +6,6 @@
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonLargeSceneryReconstruction.h"
 #include "FirstPersonPhysicalProxy.h"
-#include "FirstPersonPathGeometry.h"
 #include "FirstPersonTrackTrajectory.h"
 #include "FirstPersonTunnelGeometry.h"
 #include "FirstPersonTrackProfileCalibration.h"
@@ -393,26 +392,6 @@ namespace OpenRCT2::Paint
             return frame;
         }
 
-        [[nodiscard]] bool IsPathDeckCarrier(const PaintStruct& ps)
-        {
-            const auto* path = ps.Element != nullptr ? ps.Element->asPath() : nullptr;
-            const auto* surface = path != nullptr ? path->getSurfaceDescriptor() : nullptr;
-            const auto* railings = path != nullptr ? path->getRailingsDescriptor() : nullptr;
-            if (surface == nullptr || railings == nullptr || !ps.image_id.HasValue())
-                return false;
-
-            const auto image = ps.image_id.GetIndex();
-            if (image >= surface->image && image < surface->image + 51)
-                return true;
-
-            // Supported paths may omit the separate surface sprite. In that
-            // case the bridge parent still carries the path image template
-            // (ghost/highlight remap included), so it is the authoritative
-            // source from which to synthesize the missing semantic deck.
-            if (railings->supportType == RailingEntrySupportType::pole)
-                return image >= railings->bridgeImage && image < railings->bridgeImage + 20;
-            return image >= railings->bridgeImage + 49 && image < railings->bridgeImage + 55;
-        }
         void AppendLayer(
             FirstPersonScene& scene, const FirstPersonVec3& anchor, const FirstPersonBasis& basis,
             const ScreenCoordsXY& isoAnchor, ImageId image, const ScreenCoordsXY& spritePos,
@@ -700,192 +679,6 @@ namespace OpenRCT2::Paint
             const FirstPersonVec3 center{(low.x+high.x)*0.5f,(low.y+high.y)*0.5f,(low.z+high.z)*0.5f};
             const float x=(high.x-low.x)*0.5f,y=(high.y-low.y)*0.5f,z=(high.z-low.z)*0.5f;
             return view.visible(center,std::sqrt(x*x+y*y+z*z)+2.0f);
-        }
-        void AppendSemanticPathDeck(
-            FirstPersonScene& scene, const PaintStruct& ps, ImageId image, uint8_t rotation)
-        {
-            const auto* g1 = image.HasValue() ? GfxGetG1Element(image) : nullptr;
-            const auto* path = ps.Element != nullptr ? ps.Element->asPath() : nullptr;
-            if (g1 == nullptr || path == nullptr) return;
-            const auto origin = ps.MapPos;
-            const int32_t baseZ = path->getBaseZ();
-            // The semantic deck may be synthesized from a bridge/support root.
-            // Its UV origin must still match the native {0,0,baseZ} surface
-            // sprite placement, not whichever root happened to expose PathElement.
-            const auto spriteOrigin = GetTileElementPaintSpritePosition(origin, rotation);
-            const auto spritePos = Translate3DTo2DWithZ(rotation, { spriteOrigin, baseZ });
-            const auto slope = path->isSloped() ? kPathSlopeToLandSlope[path->getSlopeDirection()] : kTileSlopeFlat;
-            const auto heights = GetSlopeCornerHeights(baseZ, slope);
-            const std::array<CoordsXYZ, 4> world = { {
-                { origin.x, origin.y, heights.south },
-                { origin.x + kCoordsXYStep, origin.y, heights.east },
-                { origin.x + kCoordsXYStep, origin.y + kCoordsXYStep, heights.north },
-                { origin.x, origin.y + kCoordsXYStep, heights.west },
-            } };
-            const bool oppositeDiagonal =
-                UsesOppositeTerrainDiagonal(slope);
-            const auto heightAt = [&](float localX, float localY) {
-                const float x = std::clamp(
-                    localX / float(kCoordsXYStep), 0.0f, 1.0f);
-                const float y = std::clamp(
-                    localY / float(kCoordsXYStep), 0.0f, 1.0f);
-                const float south = float(heights.south);
-                const float east = float(heights.east);
-                const float north = float(heights.north);
-                const float west = float(heights.west);
-
-                if (!oppositeDiagonal)
-                {
-                    // Same 0--2 diagonal as EmitQuad(): triangle 0,1,2
-                    // occupies x >= y; triangle 0,2,3 occupies y >= x.
-                    if (x >= y)
-                        return (1.0f - x) * south
-                            + (x - y) * east
-                            + y * north;
-                    return (1.0f - y) * south
-                        + x * north
-                        + (y - x) * west;
-                }
-
-                // Same 1--3 diagonal as EmitQuad(otherDiagonal=true).
-                if (x + y <= 1.0f)
-                    return (1.0f - x - y) * south
-                        + x * east + y * west;
-                return (1.0f - y) * east
-                    + (x + y - 1.0f) * north
-                    + (1.0f - x) * west;
-            };
-            const auto footprint = BuildFirstPersonPathFootprint(
-                path->getEdges(), path->getCorners(), path->isQueue());
-            for (const auto& cell : footprint)
-            {
-                const std::array<FirstPersonVec3, 4> physical{ {
-                    { float(origin.x + cell.x0), float(origin.y + cell.y0),
-                      heightAt(float(cell.x0), float(cell.y0)) },
-                    { float(origin.x + cell.x1), float(origin.y + cell.y0),
-                      heightAt(float(cell.x1), float(cell.y0)) },
-                    { float(origin.x + cell.x1), float(origin.y + cell.y1),
-                      heightAt(float(cell.x1), float(cell.y1)) },
-                    { float(origin.x + cell.x0), float(origin.y + cell.y1),
-                      heightAt(float(cell.x0), float(cell.y1)) },
-                } };
-                FirstPersonSurface surface{};
-                surface.image = image;
-                surface.depthBias = true;
-                surface.physicalCoverage = true;
-                std::array<FirstPersonVertex, 4> vertices{};
-                for (size_t i = 0; i < vertices.size(); ++i)
-                {
-                    const auto& point = physical[i];
-                    const auto iso = Translate3DTo2DWithZ(
-                        rotation,
-                        { int32_t(std::lround(point.x)),
-                          int32_t(std::lround(point.y)),
-                          int32_t(std::lround(point.z)) });
-                    vertices[i] = {
-                        point,
-                        float(iso.x - spritePos.x - g1->xOffset),
-                        float(iso.y - spritePos.y - g1->yOffset),
-                    };
-                }
-                EmitQuad(
-                    surface, vertices, oppositeDiagonal);
-                scene.surfaces.emplace_back(std::move(surface));
-            }
-
-            const uint8_t edges = path->getEdges();
-            if (edges != 0)
-            {
-                const FirstPersonVec3 centre{
-                    float(origin.x + kCoordsXYHalfTile),
-                    float(origin.y + kCoordsXYHalfTile),
-                    0.25f * float(
-                        world[0].z + world[1].z
-                        + world[2].z + world[3].z),
-                };
-                const float tunnelHeight = float(
-                    GetTunnelDescriptor(
-                        TunnelType::pathAndMiniGolf).height
-                    * kCoordsZPerTinyZ);
-                uint8_t tunnelColour =
-                    static_cast<uint8_t>(
-                        Drawing::getColourMap(
-                            Drawing::Colour::darkBrown).midDark);
-                if (tunnelColour == 0)
-                    tunnelColour = static_cast<uint8_t>(
-                        Drawing::PaletteIndex::trackRails1);
-
-                static constexpr std::array<
-                    std::array<size_t, 2>, 4>
-                    kEdgeCorners{ {
-                        { 0, 3 }, { 3, 2 },
-                        { 1, 2 }, { 0, 1 },
-                    } };
-                static constexpr std::array<
-                    CoordsXY, 4> kEdgeMidpoints{ {
-                        { 0, kCoordsXYHalfTile },
-                        { kCoordsXYHalfTile, kCoordsXYStep },
-                        { kCoordsXYStep, kCoordsXYHalfTile },
-                        { kCoordsXYHalfTile, 0 },
-                    } };
-                static constexpr std::array<
-                    FirstPersonVec3, 4> kRouteRight{ {
-                        { 0.0f, -1.0f, 0.0f },
-                        { 1.0f, 0.0f, 0.0f },
-                        { 0.0f, 1.0f, 0.0f },
-                        { -1.0f, 0.0f, 0.0f },
-                    } };
-
-                for (uint8_t edge = 0; edge < 4; ++edge)
-                {
-                    if ((edges & (1u << edge)) == 0)
-                        continue;
-                    const auto corners =
-                        kEdgeCorners[edge];
-                    const FirstPersonVec3 edgePoint{
-                        float(origin.x
-                            + kEdgeMidpoints[edge].x),
-                        float(origin.y
-                            + kEdgeMidpoints[edge].y),
-                        0.5f * float(
-                            world[corners[0]].z
-                            + world[corners[1]].z),
-                    };
-                    const FirstPersonVec3 midpoint{
-                        0.5f * (centre.x + edgePoint.x),
-                        0.5f * (centre.y + edgePoint.y),
-                        0.5f * (centre.z + edgePoint.z),
-                    };
-                    if (!FirstPersonTunnelClearanceUnderTerrain(
-                            midpoint, tunnelHeight))
-                        continue;
-
-                    const auto quads =
-                        BuildFirstPersonTunnelSweepSegment(
-                            centre, edgePoint,
-                            kRouteRight[edge],
-                            kRouteRight[edge],
-                            float(kCoordsXYHalfTile) * 0.5f,
-                            0.0f, tunnelHeight);
-                    for (const auto& quad : quads)
-                    {
-                        FirstPersonSurface tunnel{};
-                        tunnel.solidColour = tunnelColour;
-                        tunnel.gpuRegion =
-                            FirstPersonGpuRegionKey(
-                                origin.x / kCoordsXYStep,
-                                origin.y / kCoordsXYStep);
-                        std::array<FirstPersonVertex, 4>
-                            tunnelVertices{};
-                        for (size_t i = 0; i < 4; ++i)
-                            tunnelVertices[i].world =
-                                quad.corners[i];
-                        EmitQuad(tunnel, tunnelVertices);
-                        scene.surfaces.emplace_back(
-                            std::move(tunnel));
-                    }
-                }
-            }
         }
         enum class AttachedVehicleComponentRole : uint8_t
         {
@@ -1691,7 +1484,7 @@ namespace OpenRCT2::Paint
             FirstPersonScene& scene, const PaintStruct& ps, const FirstPersonVec3& anchor,
             const FirstPersonBasis& basis, const ScreenCoordsXY& isoAnchor,
             uint32_t viewFlags, EntityId hidden, uint8_t hiddenSeatIndex,
-            uint8_t rotation, bool emitPathDeck)
+            uint8_t rotation)
         {
             const bool matchesHiddenEntity =
                 ps.Entity != nullptr && !hidden.IsNull()
@@ -1762,7 +1555,7 @@ namespace OpenRCT2::Paint
                 {
                     AppendRoot(
                         scene, *ps.Children, anchor, basis, isoAnchor,
-                        viewFlags, hidden, hiddenSeatIndex, rotation, false);
+                        viewFlags, hidden, hiddenSeatIndex, rotation);
                 }
                 return;
             }
@@ -1785,24 +1578,9 @@ namespace OpenRCT2::Paint
                     || (physicalTrack != nullptr
                         && trackTypeIsStation(
                             physicalTrack->getTrackType())));
-            const auto* path = ps.Element != nullptr ? ps.Element->asPath() : nullptr;
-            const auto* pathSurface = path != nullptr ? path->getSurfaceDescriptor() : nullptr;
-            const auto spriteIndex = ps.image_id.GetIndex();
-            const bool groundPathArtwork = pathSurface != nullptr && ps.image_id.HasValue()
-                && spriteIndex >= pathSurface->image && spriteIndex < pathSurface->image + 51;
-
-            // Emit one semantic walking deck per path element, regardless of
-            // whether native bridge painting omitted the separate surface sprite.
-            if (emitPathDeck && pathSurface != nullptr && ps.image_id.HasValue())
-            {
-                auto deckImage = ps.image_id.WithIndex(
-                    pathSurface->image + GetPathSurfaceImageOffset(*path, rotation));
-                AppendSemanticPathDeck(scene, ps, colourify(deckImage), rotation);
-            }
-
             bool suppressCurrentImage =
                 ps.FirstPersonSemanticRole
-                    == FirstPersonPaintSemanticRole::support;
+                    != FirstPersonPaintSemanticRole::none;
             if (reconstructVehicleBody)
             {
                 const auto component =
@@ -1861,10 +1639,7 @@ namespace OpenRCT2::Paint
                 }
             }
 
-            // Native path surface sprites are represented by the semantic deck
-            // above. Bridge/support sprites remain artwork and are never
-            // flattened into the walking plane.
-            if (!groundPathArtwork && !suppressCurrentImage)
+            if (!suppressCurrentImage)
             {
                 const auto surfaceStart = scene.surfaces.size();
                 const bool smallPhysical =
@@ -1896,7 +1671,7 @@ namespace OpenRCT2::Paint
             {
                 AppendRoot(
                     scene, *ps.Children, anchor, basis, isoAnchor,
-                    viewFlags, hidden, hiddenSeatIndex, rotation, false);
+                    viewFlags, hidden, hiddenSeatIndex, rotation);
             }
             else
             {
@@ -2029,8 +1804,8 @@ namespace OpenRCT2::Paint
             int32_t visibilityMaxZ = 0;
             uint32_t lastVisibilityGeneration = 0;
             std::vector<ReconstructionGroupInfo> reconstructionGroups;
-            std::vector<FirstPersonPaintPhysicalPrimitive>
-                physicalPrimitives;
+            std::vector<FirstPersonPaintSemanticComponent>
+                semanticComponents;
             // Keep all four native quarter-turn variants. Crossing a viewpoint
             // boundary can paint a variant once without destroying the previous
             // one, so moving back and forth does not thrash the whole park.
@@ -4764,6 +4539,209 @@ namespace OpenRCT2::Paint
                 });
             }
         }
+        [[nodiscard]] std::vector<FirstPersonSurface>
+            BuildFirstPersonSemanticComponentSurfaces(
+                const FirstPersonPaintSemanticComponent& component,
+                uint64_t gpuRegion)
+        {
+            std::vector<FirstPersonSurface> result;
+            if (component.geometry.kind
+                == FirstPersonPaintSemanticPrimitiveKind::opening)
+                return result;
+
+            uint8_t fallbackColour = static_cast<uint8_t>(
+                Drawing::PaletteIndex::trackRails1);
+            if (component.artwork.image.HasPrimary())
+            {
+                const auto colour =
+                    component.artwork.image.GetPrimary();
+                if (Drawing::colourIsValid(colour))
+                    fallbackColour = static_cast<uint8_t>(
+                        Drawing::getColourMap(colour).midDark);
+            }
+
+            const auto emitFace =
+                [&](const std::array<FirstPersonVec3, 4>& points) {
+                    FirstPersonSurface surface{};
+                    surface.gpuRegion = gpuRegion;
+                    surface.physicalCoverage =
+                        !component.artwork.decal;
+                    const auto image =
+                        component.artwork.image;
+                    const bool projectArtwork =
+                        component.role
+                            != FirstPersonPaintSemanticRole::support;
+                    const auto* g1 =
+                        projectArtwork && image.HasValue()
+                        ? GfxGetG1Element(image) : nullptr;
+                    std::array<FirstPersonVertex, 4> vertices{};
+                    if (g1 != nullptr
+                        && g1->width > 0
+                        && g1->height > 0)
+                    {
+                        surface.image = image;
+                        surface.mask = component.artwork.mask;
+                        for (size_t i = 0; i < points.size(); ++i)
+                        {
+                            const auto& p = points[i];
+                            const auto iso = Translate3DTo2DWithZ(
+                                component.artwork.sourceRotation,
+                                {
+                                    int32_t(std::lround(p.x)),
+                                    int32_t(std::lround(p.y)),
+                                    int32_t(std::lround(p.z)),
+                                });
+                            vertices[i] = {
+                                p,
+                                float(
+                                    iso.x
+                                    - component.artwork.screenPos.x
+                                    - g1->xOffset),
+                                float(
+                                    iso.y
+                                    - component.artwork.screenPos.y
+                                    - g1->yOffset),
+                            };
+                        }
+                    }
+                    else
+                    {
+                        surface.solidColour =
+                            fallbackColour != 0
+                            ? fallbackColour : 1;
+                        for (size_t i = 0; i < points.size(); ++i)
+                            vertices[i].world = points[i];
+                    }
+                    EmitQuad(surface, vertices);
+                    result.emplace_back(std::move(surface));
+                };
+
+            const auto worldPoint =
+                [&](FirstPersonPaintSemanticVec3 p) {
+                    return FirstPersonSemanticWorldPoint(
+                        component.transform, p);
+                };
+            const auto& geometry = component.geometry;
+
+            if (geometry.kind
+                    == FirstPersonPaintSemanticPrimitiveKind::plane
+                || geometry.kind
+                    == FirstPersonPaintSemanticPrimitiveKind::footprint)
+            {
+                if (geometry.pointCount >= 4)
+                {
+                    emitFace({ {
+                        worldPoint(geometry.points[0]),
+                        worldPoint(geometry.points[1]),
+                        worldPoint(geometry.points[2]),
+                        worldPoint(geometry.points[3]),
+                    } });
+                }
+                return result;
+            }
+
+            if (geometry.kind
+                == FirstPersonPaintSemanticPrimitiveKind::beam)
+            {
+                if (geometry.pointCount < 2)
+                    return result;
+                const auto a = worldPoint(geometry.points[0]);
+                const auto b = worldPoint(geometry.points[1]);
+                FirstPersonVec3 d{
+                    b.x - a.x, b.y - a.y, b.z - a.z
+                };
+                const float length = std::sqrt(
+                    d.x * d.x + d.y * d.y + d.z * d.z);
+                if (!(length > 1e-5f))
+                    return result;
+                d = {
+                    d.x / length, d.y / length, d.z / length
+                };
+                FirstPersonVec3 side{ d.y, -d.x, 0.0f };
+                float sideLength = std::sqrt(
+                    side.x * side.x + side.y * side.y);
+                if (!(sideLength > 1e-5f))
+                {
+                    side = { 1.0f, 0.0f, 0.0f };
+                    sideLength = 1.0f;
+                }
+                side = {
+                    side.x / sideLength,
+                    side.y / sideLength,
+                    side.z / sideLength,
+                };
+                const FirstPersonVec3 up{
+                    side.y * d.z - side.z * d.y,
+                    side.z * d.x - side.x * d.z,
+                    side.x * d.y - side.y * d.x,
+                };
+                const float halfWidth =
+                    std::max(0.5f, geometry.halfWidth);
+                const float halfHeight =
+                    std::max(0.5f, geometry.halfHeight);
+                const auto corner =
+                    [&](FirstPersonVec3 p,
+                        float sideSign, float upSign) {
+                        return FirstPersonVec3{
+                            p.x + side.x * halfWidth * sideSign
+                                + up.x * halfHeight * upSign,
+                            p.y + side.y * halfWidth * sideSign
+                                + up.y * halfHeight * upSign,
+                            p.z + side.z * halfWidth * sideSign
+                                + up.z * halfHeight * upSign,
+                        };
+                    };
+                const std::array<FirstPersonVec3, 8> p{ {
+                    corner(a, -1.0f, -1.0f),
+                    corner(a,  1.0f, -1.0f),
+                    corner(a,  1.0f,  1.0f),
+                    corner(a, -1.0f,  1.0f),
+                    corner(b, -1.0f, -1.0f),
+                    corner(b,  1.0f, -1.0f),
+                    corner(b,  1.0f,  1.0f),
+                    corner(b, -1.0f,  1.0f),
+                } };
+                emitFace({ { p[0], p[1], p[2], p[3] } });
+                emitFace({ { p[4], p[7], p[6], p[5] } });
+                emitFace({ { p[0], p[4], p[5], p[1] } });
+                emitFace({ { p[1], p[5], p[6], p[2] } });
+                emitFace({ { p[2], p[6], p[7], p[3] } });
+                emitFace({ { p[3], p[7], p[4], p[0] } });
+                return result;
+            }
+
+            if ((geometry.kind
+                    == FirstPersonPaintSemanticPrimitiveKind::box
+                 || geometry.kind
+                    == FirstPersonPaintSemanticPrimitiveKind::localHull)
+                && geometry.pointCount >= 2)
+            {
+                const auto low = geometry.points[0];
+                const auto high = geometry.points[1];
+                const std::array<
+                    FirstPersonPaintSemanticVec3, 8> local{ {
+                    { low.x, low.y, low.z },
+                    { high.x, low.y, low.z },
+                    { high.x, high.y, low.z },
+                    { low.x, high.y, low.z },
+                    { low.x, low.y, high.z },
+                    { high.x, low.y, high.z },
+                    { high.x, high.y, high.z },
+                    { low.x, high.y, high.z },
+                } };
+                std::array<FirstPersonVec3, 8> p{};
+                for (size_t i = 0; i < p.size(); ++i)
+                    p[i] = worldPoint(local[i]);
+                emitFace({ { p[0], p[1], p[5], p[4] } });
+                emitFace({ { p[1], p[2], p[6], p[5] } });
+                emitFace({ { p[2], p[3], p[7], p[6] } });
+                emitFace({ { p[3], p[0], p[4], p[7] } });
+                emitFace({ { p[4], p[5], p[6], p[7] } });
+                emitFace({ { p[3], p[2], p[1], p[0] } });
+            }
+            return result;
+        }
+
         void RebuildStaticRegionPacket(uint64_t regionKey, uint64_t frame)
         {
             auto& packet = _staticRegionPackets[regionKey];
@@ -4831,94 +4809,28 @@ namespace OpenRCT2::Paint
                 }
             };
 
-            const auto addPhysicalPrimitive =
-                [&](const FirstPersonPaintPhysicalPrimitive& primitive) {
-                    const int32_t tileX =
-                        primitive.mapPosition.x / kCoordsXYStep;
-                    const int32_t tileY =
-                        primitive.mapPosition.y / kCoordsXYStep;
-                    const uint64_t primitiveRegion =
-                        FirstPersonGpuRegionKey(tileX, tileY);
-                    if (primitiveRegion != regionKey)
+            const auto addSemanticComponent =
+                [&](const FirstPersonPaintSemanticComponent& component) {
+                    const bool moving =
+                        component.role
+                            == FirstPersonPaintSemanticRole::movingMachinery
+                        || component.role
+                            == FirstPersonPaintSemanticRole::seat;
+                    if (moving)
                         return;
-
-                    uint8_t sideColour = static_cast<uint8_t>(
-                        Drawing::PaletteIndex::trackRails1);
-                    uint8_t topColour = static_cast<uint8_t>(
-                        Drawing::PaletteIndex::trackRails2);
-                    if (primitive.image.HasPrimary())
-                    {
-                        const auto colour =
-                            primitive.image.GetPrimary();
-                        if (Drawing::colourIsValid(colour))
-                        {
-                            const auto shades =
-                                Drawing::getColourMap(colour);
-                            sideColour = static_cast<uint8_t>(
-                                shades.midDark);
-                            topColour = static_cast<uint8_t>(
-                                shades.midLight);
-                        }
-                    }
-
-                    const FirstPersonVec3 low{
-                        primitive.lowX,
-                        primitive.lowY,
-                        primitive.lowZ,
-                    };
-                    const FirstPersonVec3 high{
-                        primitive.highX,
-                        primitive.highY,
-                        primitive.highZ,
-                    };
-                    const auto emitFace =
-                        [&](const std::array<
-                                FirstPersonVec3, 4>& points,
-                            uint8_t colour) {
-                            FirstPersonSurface surface{};
-                            surface.solidColour =
-                                colour != 0 ? colour : 1;
-                            surface.gpuRegion =
-                                primitiveRegion;
-                            std::array<FirstPersonVertex, 4>
-                                vertices{};
-                            for (size_t i = 0;
-                                 i < points.size(); ++i)
-                                vertices[i].world = points[i];
-                            EmitQuad(surface, vertices);
-                            addSurface(surface);
-                        };
-
-                    emitFace({ {
-                        { low.x, low.y, low.z },
-                        { high.x, low.y, low.z },
-                        { high.x, low.y, high.z },
-                        { low.x, low.y, high.z },
-                    } }, sideColour);
-                    emitFace({ {
-                        { high.x, low.y, low.z },
-                        { high.x, high.y, low.z },
-                        { high.x, high.y, high.z },
-                        { high.x, low.y, high.z },
-                    } }, sideColour);
-                    emitFace({ {
-                        { high.x, high.y, low.z },
-                        { low.x, high.y, low.z },
-                        { low.x, high.y, high.z },
-                        { high.x, high.y, high.z },
-                    } }, sideColour);
-                    emitFace({ {
-                        { low.x, high.y, low.z },
-                        { low.x, low.y, low.z },
-                        { low.x, low.y, high.z },
-                        { low.x, high.y, high.z },
-                    } }, sideColour);
-                    emitFace({ {
-                        { low.x, low.y, high.z },
-                        { high.x, low.y, high.z },
-                        { high.x, high.y, high.z },
-                        { low.x, high.y, high.z },
-                    } }, topColour);
+                    const int32_t tileX =
+                        component.mapPosition.x / kCoordsXYStep;
+                    const int32_t tileY =
+                        component.mapPosition.y / kCoordsXYStep;
+                    const uint64_t componentRegion =
+                        FirstPersonGpuRegionKey(tileX, tileY);
+                    if (componentRegion != regionKey)
+                        return;
+                    auto surfaces =
+                        BuildFirstPersonSemanticComponentSurfaces(
+                            component, componentRegion);
+                    for (const auto& surface : surfaces)
+                        addSurface(surface);
                 };
 
             for (int32_t ty = y0; ty < y1; ++ty)
@@ -4941,9 +4853,9 @@ namespace OpenRCT2::Paint
                     && supportIt->second.valid
                     && !supportIt->second.dirty)
                 {
-                    for (const auto& primitive :
-                         supportIt->second.physicalPrimitives)
-                        addPhysicalPrimitive(primitive);
+                    for (const auto& component :
+                         supportIt->second.semanticComponents)
+                        addSemanticComponent(component);
                 }
 
                 if (const auto portalCache =
@@ -5228,8 +5140,8 @@ namespace OpenRCT2::Paint
                     cached.valid = true;
                     cached.dirty = false;
                     cached.reconstructionGroups.clear();
-                    cached.physicalPrimitives.clear();
-                    WithdrawFirstPersonSemanticSupportProxies(tile);
+                    cached.semanticComponents.clear();
+                    WithdrawFirstPersonSemanticComponents(tile);
                     cached.hasUngroupedResident = false;
 
                     auto* element = MapGetFirstElementAt(tile);
@@ -5454,54 +5366,25 @@ namespace OpenRCT2::Paint
                         session->CurrentlyDrawnTileElement = nullptr;
                         if (item.staticMiss)
                         {
-                            std::vector<FirstPersonPaintPhysicalPrimitive>
-                                physicalPrimitives;
+                            std::vector<FirstPersonPaintSemanticComponent>
+                                semanticComponents;
                             session->CurrentSource = PaintStructSource::tile;
-                            session->FirstPersonPhysicalPrimitiveSink =
-                                &physicalPrimitives;
+                            session->FirstPersonSemanticComponentSink =
+                                &semanticComponents;
                             TileElementPaintSetup(*session, item.position);
-                            session->FirstPersonPhysicalPrimitiveSink =
+                            session->FirstPersonSemanticComponentSink =
                                 nullptr;
 
-                            // Tunnel data and physical support primitives are
-                            // transient session state. Preserve them while the
-                            // native generator's placement is authoritative.
+                            // Native painters publish semantic geometry while
+                            // exact placement and animation transforms are known.
                             auto cacheIt = _staticPaintCache.find(item.key);
                             if (cacheIt != _staticPaintCache.end())
                             {
-                                cacheIt->second.physicalPrimitives =
-                                    std::move(physicalPrimitives);
-                                std::vector<FirstPersonPhysicalBoxProxy>
-                                    supportProxies;
-                                supportProxies.reserve(
-                                    cacheIt->second.physicalPrimitives.size());
-                                for (const auto& primitive :
-                                     cacheIt->second.physicalPrimitives)
-                                {
-                                    FirstPersonPhysicalBoxProxy proxy{};
-                                    proxy.low = {
-                                        primitive.lowX,
-                                        primitive.lowY,
-                                        primitive.lowZ,
-                                    };
-                                    proxy.high = {
-                                        primitive.highX,
-                                        primitive.highY,
-                                        primitive.highZ,
-                                    };
-                                    proxy.provenance =
-                                        FirstPersonPhysicalProxyProvenance::
-                                            semanticSupportGeometry;
-                                    proxy.capabilities =
-                                        static_cast<uint8_t>(
-                                            FirstPersonPhysicalProxyCapability::render)
-                                        | static_cast<uint8_t>(
-                                            FirstPersonPhysicalProxyCapability::collide);
-                                    supportProxies.push_back(proxy);
-                                }
-                                PublishFirstPersonSemanticSupportProxies(
+                                cacheIt->second.semanticComponents =
+                                    std::move(semanticComponents);
+                                PublishFirstPersonSemanticComponents(
                                     item.position,
-                                    std::move(supportProxies));
+                                    cacheIt->second.semanticComponents);
                                 auto& variant = cacheIt->second.rotations[rotation];
                                 variant.verticalTunnelHeight = session->VerticalTunnelHeight;
                                 variant.leftTunnels.assign(
@@ -5552,7 +5435,6 @@ namespace OpenRCT2::Paint
                     }
 
                     PaintSessionArrange(*session);
-                    std::unordered_set<const TileElement*> emittedPathDecks;
                     for (auto* root = session->PaintHead; root; root = root->NextQuadrantEntry)
                     {
                         const bool dynamic = IsFirstPersonEntityPaintRoot(*root);
@@ -5581,14 +5463,10 @@ namespace OpenRCT2::Paint
                         };
                         const auto isoAnchor = Translate3DTo2DWithZ(rotation, point);
                         const auto startSurface = scene.surfaces.size();
-                        const bool emitPathDeck = root->Element != nullptr &&
-                            root->Element->getType() == TileElementType::path &&
-                            IsPathDeckCarrier(*root) &&
-                            emittedPathDecks.insert(root->Element).second;
                         AppendRoot(
                             scene, *root, anchor, basis, isoAnchor,
                             opt.viewFlags, opt.hiddenEntity, opt.hiddenSeatIndex,
-                            rotation, emitPathDeck);
+                            rotation);
                         if (const auto semantic = LargeScenerySemanticBounds(*root); semantic.has_value())
                         {
                             for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
@@ -5755,6 +5633,37 @@ namespace OpenRCT2::Paint
                     appendSelected(variant.streamedSurfaces);
                     if (cached.animated)
                         appendSelected(variant.residentSurfaces);
+                }
+            }
+
+            // Moving semantic components reuse stable local geometry but
+            // stream their current native transform every presentation frame.
+            for (const auto tile : scene.visibleTiles)
+            {
+                const auto key = TerrainKey(
+                    tile.x / kCoordsXYStep,
+                    tile.y / kCoordsXYStep);
+                const auto cacheIt = _staticPaintCache.find(key);
+                if (cacheIt == _staticPaintCache.end())
+                    continue;
+                for (const auto& component :
+                     cacheIt->second.semanticComponents)
+                {
+                    if (component.role
+                            != FirstPersonPaintSemanticRole::movingMachinery
+                        && component.role
+                            != FirstPersonPaintSemanticRole::seat)
+                        continue;
+                    auto surfaces =
+                        BuildFirstPersonSemanticComponentSurfaces(
+                            component, 0);
+                    for (auto& surface : surfaces)
+                    {
+                        if (SurfaceMayBeVisible(
+                                surface, worldFrustum))
+                            scene.surfaces.emplace_back(
+                                std::move(surface));
+                    }
                 }
             }
 
@@ -6094,7 +6003,7 @@ namespace OpenRCT2::Paint
         _largeSceneryGroupsByRegion.clear();
         _activeLargeSceneryRegions.clear();
         _largeSceneryGeometryEnabled = false;
-        ClearFirstPersonSemanticSupportProxies();
+        ClearFirstPersonSemanticComponents();
         _staticRegionPackets.clear();
     }
     void InvalidateFirstPersonSceneRegion(CoordsXY low, CoordsXY high)
@@ -6122,7 +6031,7 @@ namespace OpenRCT2::Paint
         for (int32_t ty = y0; ty <= y1; ++ty)
         for (int32_t tx = x0; tx <= x1; ++tx)
         {
-            WithdrawFirstPersonSemanticSupportProxies(
+            WithdrawFirstPersonSemanticComponents(
                 { tx * kCoordsXYStep,
                   ty * kCoordsXYStep });
         }

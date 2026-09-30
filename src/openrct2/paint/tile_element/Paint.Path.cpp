@@ -25,6 +25,7 @@
 #include "../../world/tile_element/TileElement.h"
 #include "../../world/tile_element/TrackElement.h"
 #include "../Boundbox.h"
+#include "../FirstPersonPathGeometry.h"
 #include "../Paint.SessionFlags.h"
 #include "../Paint.h"
 #include "../support/MetalSupports.h"
@@ -103,6 +104,137 @@ static constexpr WoodenSupportSubType PathSupportOrientation[] = {
 };
 // clang-format on
 
+static FirstPersonPaintSemanticTransform
+    FirstPersonWorldTileTransform(const PaintSession& session)
+{
+    FirstPersonPaintSemanticTransform transform{};
+    transform.origin = {
+        float(session.MapPosition.x),
+        float(session.MapPosition.y),
+        0.0f,
+    };
+    return transform;
+}
+
+static void PublishFirstPersonPathDeckGeometry(
+    PaintSession& session, const PathElement& pathElement,
+    int32_t height, ImageId image)
+{
+    if (session.FirstPersonSemanticComponentSink == nullptr
+        || !image.HasValue())
+        return;
+
+    const uint8_t slope = pathElement.isSloped()
+        ? kPathSlopeToLandSlope[pathElement.getSlopeDirection()]
+        : kTileSlopeFlat;
+    const auto heights = GetSlopeCornerHeights(height, slope);
+    const auto heightAt = [&](float localX, float localY) {
+        const float x = std::clamp(
+            localX / float(kCoordsXYStep), 0.0f, 1.0f);
+        const float y = std::clamp(
+            localY / float(kCoordsXYStep), 0.0f, 1.0f);
+        return float(heights.south)
+            * (1.0f - x) * (1.0f - y)
+            + float(heights.east) * x * (1.0f - y)
+            + float(heights.north) * x * y
+            + float(heights.west) * (1.0f - x) * y;
+    };
+
+    const auto footprint =
+        OpenRCT2::Paint::BuildFirstPersonPathFootprint(
+            pathElement.getEdges(), pathElement.getCorners(),
+            pathElement.isQueue());
+    const auto transform =
+        FirstPersonWorldTileTransform(session);
+    const uint32_t artworkGroup =
+        PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+    for (const auto& cell : footprint)
+    {
+        const std::array<FirstPersonPaintSemanticVec3, 4>
+            corners{ {
+            { float(cell.x0), float(cell.y0),
+              heightAt(float(cell.x0), float(cell.y0)) },
+            { float(cell.x1), float(cell.y0),
+              heightAt(float(cell.x1), float(cell.y0)) },
+            { float(cell.x1), float(cell.y1),
+              heightAt(float(cell.x1), float(cell.y1)) },
+            { float(cell.x0), float(cell.y1),
+              heightAt(float(cell.x0), float(cell.y1)) },
+        } };
+        PaintSessionAddFirstPersonSemanticOrientedQuad(
+            session, FirstPersonPaintSemanticRole::pathDeck,
+            FirstPersonPaintSemanticPrimitiveKind::footprint,
+            transform, corners, image, { 0, 0, height },
+            artworkGroup, false, false);
+    }
+    session.FirstPersonSemanticArtworkGroup = 0;
+}
+
+static PaintStruct* PaintPathSemanticBoxAsParent(
+    PaintSession& session, FirstPersonPaintSemanticRole role,
+    ImageId image, const CoordsXYZ& offset,
+    const BoundBoxXYZ& physicalBox)
+{
+    auto low = physicalBox.offset;
+    auto high = physicalBox.offset + physicalBox.length;
+    if (physicalBox.length.x == 0)
+        high.x = low.x + 1;
+    if (physicalBox.length.y == 0)
+        high.y = low.y + 1;
+    if (physicalBox.length.z == 0)
+        high.z = low.z + 1;
+
+    const uint32_t group =
+        PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+    PaintSessionAddFirstPersonSemanticBox(
+        session, role, low, high, image, offset, group);
+    FirstPersonPaintSemanticScope scope(
+        session, role, group);
+    auto* result =
+        PaintAddImageAsParent(
+            session, image, offset, physicalBox);
+    session.FirstPersonSemanticArtworkGroup = 0;
+    return result;
+}
+
+static PaintStruct* PaintPathSemanticRailingAsParent(
+    PaintSession& session, ImageId image,
+    const CoordsXYZ& offset, const BoundBoxXYZ& physicalBox)
+{
+    return PaintPathSemanticBoxAsParent(
+        session, FirstPersonPaintSemanticRole::railing,
+        image, offset, physicalBox);
+}
+
+static PaintStruct* PaintPathSemanticSignAsParent(
+    PaintSession& session, ImageId image,
+    const CoordsXYZ& offset, const BoundBoxXYZ& physicalBox)
+{
+    return PaintPathSemanticBoxAsParent(
+        session, FirstPersonPaintSemanticRole::sign,
+        image, offset, physicalBox);
+}
+
+static PaintStruct* PaintPathDeckImageAsParent(
+    PaintSession& session, ImageId image,
+    const CoordsXYZ& offset, const BoundBoxXYZ& boundBox)
+{
+    FirstPersonPaintSemanticScope scope(
+        session, FirstPersonPaintSemanticRole::pathDeck);
+    return PaintAddImageAsParent(
+        session, image, offset, boundBox);
+}
+
+static PaintStruct* PaintPathDeckImageAsChild(
+    PaintSession& session, ImageId image,
+    const CoordsXYZ& offset, const BoundBoxXYZ& boundBox)
+{
+    FirstPersonPaintSemanticScope scope(
+        session, FirstPersonPaintSemanticRole::pathDeck);
+    return PaintAddImageAsChild(
+        session, image, offset, boundBox);
+}
+
 static void PathPaintBoxSupport(
     PaintSession& session, const PathElement& pathElement, int32_t height, const FootpathPaintInfo& pathPaintInfo,
     bool hasSupports, ImageId imageTemplate, ImageId sceneryImageTemplate);
@@ -132,13 +264,13 @@ static void PathPaintQueueBanner(
     imageId = imageId.WithIndexOffset(28 + (direction << 1));
 
     // Draw pole in the back
-    PaintAddImageAsParent(session, imageId, { 0, 0, height }, { boundBoxOffsets, { 1, 1, 21 } });
+    PaintPathSemanticSignAsParent(session, imageId, { 0, 0, height }, { boundBoxOffsets, { 1, 1, 21 } });
 
     // Draw pole in the front and banner
     boundBoxOffsets.x = kBannerBoundBoxes[direction][1].x;
     boundBoxOffsets.y = kBannerBoundBoxes[direction][1].y;
     imageId = imageId.WithIndexOffset(1);
-    PaintAddImageAsParent(session, imageId, { 0, 0, height }, { boundBoxOffsets, { 1, 1, 21 } });
+    PaintPathSemanticSignAsParent(session, imageId, { 0, 0, height }, { boundBoxOffsets, { 1, 1, 21 } });
 
     direction--;
     // If text shown
@@ -177,27 +309,27 @@ static void PathPaintSlopedFences(
     switch ((pathElement.getSlopeDirection() + session.CurrentRotation) % kNumOrthogonalDirections)
     {
         case 0:
-            PaintAddImageAsParent(
+            PaintPathSemanticRailingAsParent(
                 session, imageId.WithIndexOffset(8 + queueOffset), { 0, 4, height }, { { 0, 4, height + 2 }, { 32, 1, 23 } });
-            PaintAddImageAsParent(
+            PaintPathSemanticRailingAsParent(
                 session, imageId.WithIndexOffset(8 + queueOffset), { 0, 28, height }, { { 0, 27, height + 2 }, { 32, 1, 23 } });
             break;
         case 1:
-            PaintAddImageAsParent(
+            PaintPathSemanticRailingAsParent(
                 session, imageId.WithIndexOffset(7 + queueOffset), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 32, 23 } });
-            PaintAddImageAsParent(
+            PaintPathSemanticRailingAsParent(
                 session, imageId.WithIndexOffset(7 + queueOffset), { 28, 0, height }, { { 27, 0, height + 2 }, { 1, 32, 23 } });
             break;
         case 2:
-            PaintAddImageAsParent(
+            PaintPathSemanticRailingAsParent(
                 session, imageId.WithIndexOffset(9 + queueOffset), { 0, 4, height }, { { 0, 4, height + 2 }, { 32, 1, 23 } });
-            PaintAddImageAsParent(
+            PaintPathSemanticRailingAsParent(
                 session, imageId.WithIndexOffset(9 + queueOffset), { 0, 28, height }, { { 0, 27, height + 2 }, { 32, 1, 23 } });
             break;
         case 3:
-            PaintAddImageAsParent(
+            PaintPathSemanticRailingAsParent(
                 session, imageId.WithIndexOffset(6 + queueOffset), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 32, 23 } });
-            PaintAddImageAsParent(
+            PaintPathSemanticRailingAsParent(
                 session, imageId.WithIndexOffset(6 + queueOffset), { 28, 0, height }, { { 27, 0, height + 2 }, { 1, 32, 23 } });
             break;
     }
@@ -219,127 +351,127 @@ static void PathPaintFencesAndQueueBannersQueue(
         switch (pathEdges)
         {
             case 0b0001:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(17), { 0, 4, height }, { { 0, 4, height + 2 }, { 27, 1, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(17), { 0, 28, height }, { { 0, 27, height + 2 }, { 27, 1, 7 } });
                 break;
             case 0b0010:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(18), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 27, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(18), { 28, 0, height }, { { 27, 0, height + 2 }, { 1, 27, 7 } });
                 break;
             case 0b0011:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(17), { 0, 4, height }, { { 0, 4, height + 2 }, { 26, 1, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(18), { 28, 0, height }, { { 27, 4, height + 2 }, { 1, 27, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(25), { 0, 0, height }, { { 0, 27, height + 2 }, { 4, 4, 7 } });
                 break;
             case 0b0100:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(19), { 0, 4, height }, { { 0, 4, height + 2 }, { 27, 1, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(19), { 0, 28, height }, { { 0, 27, height + 2 }, { 27, 1, 7 } });
                 break;
             case 0b0101:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(15), { 0, 4, height }, { { 0, 4, height + 2 }, { 32, 1, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(15), { 0, 28, height }, { { 0, 27, height + 2 }, { 32, 1, 7 } });
                 break;
             case 0b0110:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(18), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 27, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(19), { 0, 4, height }, { { 0, 4, height + 2 }, { 27, 1, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(26), { 0, 0, height }, { { 27, 27, height + 2 }, { 4, 4, 7 } });
                 break;
             case 0b0111:
                 if (pathElement.hasJunctionRailings())
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(15), { 0, 4, height }, { { 0, 4, height + 2 }, { 32, 1, 7 } });
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(25), { 0, 0, height }, { { 0, 27, height + 2 }, { 4, 4, 7 } });
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(26), { 0, 0, height }, { { 27, 27, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
             case 0b1000:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(16), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 27, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(16), { 28, 0, height }, { { 27, 0, height + 2 }, { 1, 27, 7 } });
                 break;
             case 0b1001:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(16), { 28, 0, height }, { { 27, 0, height + 2 }, { 1, 27, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(17), { 0, 28, height }, { { 0, 27, height + 2 }, { 27, 1, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(24), { 0, 0, height }, { { 0, 0, height + 2 }, { 4, 4, 7 } });
                 break;
             case 0b1010:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(14), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 32, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(14), { 28, 0, height }, { { 27, 0, height + 2 }, { 1, 32, 7 } });
                 break;
             case 0b1011:
                 if (pathElement.hasJunctionRailings())
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(14), { 28, 0, height }, { { 27, 0, height + 2 }, { 1, 32, 7 } });
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(24), { 0, 0, height }, { { 0, 0, height + 2 }, { 4, 4, 7 } });
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(25), { 0, 0, height }, { { 0, 27, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
             case 0b1100:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(16), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 26, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(19), { 0, 28, height }, { { 4, 27, height + 2 }, { 27, 1, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(27), { 0, 0, height }, { { 27, 0, height + 2 }, { 4, 4, 7 } });
                 break;
             case 0b1101:
                 if (pathElement.hasJunctionRailings())
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(15), { 0, 28, height }, { { 0, 27, height + 2 }, { 32, 1, 7 } });
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(24), { 0, 0, height }, { { 0, 0, height + 2 }, { 4, 4, 7 } });
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(27), { 0, 0, height }, { { 27, 0, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
             case 0b1110:
                 if (pathElement.hasJunctionRailings())
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(14), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 32, 7 } });
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(26), { 0, 0, height }, { { 27, 27, height + 2 }, { 4, 4, 7 } });
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(27), { 0, 0, height }, { { 27, 0, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
             case 0b1111:
                 if (pathElement.hasJunctionRailings())
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(24), { 0, 0, height }, { { 0, 0, height + 2 }, { 4, 4, 7 } });
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(25), { 0, 0, height }, { { 0, 27, height + 2 }, { 4, 4, 7 } });
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(26), { 0, 0, height }, { { 27, 27, height + 2 }, { 4, 4, 7 } });
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(27), { 0, 0, height }, { { 27, 0, height + 2 }, { 4, 4, 7 } });
                 }
         }
@@ -383,140 +515,140 @@ static void PathPaintFencesAndQueueBannersNonQueue(
                 // purposely left empty
                 break;
             case 1:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(3), { 0, 4, height }, { { 0, 4, height + 2 }, { 27, 1, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(3), { 0, 28, height }, { { 0, 27, height + 2 }, { 27, 1, 7 } });
                 break;
             case 2:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(4), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 27, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(4), { 28, 0, height }, { { 27, 0, height + 2 }, { 1, 27, 7 } });
                 break;
             case 4:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(5), { 0, 4, height }, { { 0, 4, height + 2 }, { 27, 1, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(5), { 0, 28, height }, { { 0, 27, height + 2 }, { 27, 1, 7 } });
                 break;
             case 5:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(1), { 0, 4, height }, { { 0, 4, height + 2 }, { 32, 1, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(1), { 0, 28, height }, { { 0, 27, height + 2 }, { 32, 1, 7 } });
                 break;
             case 8:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(2), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 27, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(2), { 28, 0, height }, { { 27, 0, height + 2 }, { 1, 27, 7 } });
                 break;
             case 10:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(0), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 32, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(0), { 28, 0, height }, { { 27, 0, height + 2 }, { 1, 32, 7 } });
                 break;
 
             case 3:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(3), { 0, 4, height }, { { 0, 4, height + 2 }, { 26, 1, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(4), { 28, 0, height }, { { 27, 4, height + 2 }, { 1, 27, 7 } });
                 if (!(drawnCorners & FOOTPATH_CORNER_0))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(11), { 0, 0, height }, { { 0, 27, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
             case 6:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(4), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 27, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(5), { 0, 4, height }, { { 0, 4, height + 2 }, { 27, 1, 7 } });
                 if (!(drawnCorners & FOOTPATH_CORNER_1))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(12), { 0, 0, height }, { { 27, 27, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
             case 9:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(2), { 28, 0, height }, { { 27, 0, height + 2 }, { 1, 27, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(3), { 0, 28, height }, { { 0, 27, height + 2 }, { 27, 1, 7 } });
                 if (!(drawnCorners & FOOTPATH_CORNER_3))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(10), { 0, 0, height }, { { 0, 0, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
             case 12:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(2), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 26, 7 } });
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(5), { 0, 28, height }, { { 4, 27, height + 2 }, { 27, 1, 7 } });
                 if (!(drawnCorners & FOOTPATH_CORNER_2))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(13), { 0, 0, height }, { { 27, 0, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
 
             case 7:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(1), { 0, 4, height }, { { 0, 4, height + 2 }, { 32, 1, 7 } });
                 if (!(drawnCorners & FOOTPATH_CORNER_0))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(11), { 0, 0, height }, { { 0, 27, height + 2 }, { 4, 4, 7 } });
                 }
                 if (!(drawnCorners & FOOTPATH_CORNER_1))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(12), { 0, 0, height }, { { 27, 27, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
             case 13:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(1), { 0, 28, height }, { { 0, 27, height + 2 }, { 32, 1, 7 } });
                 if (!(drawnCorners & FOOTPATH_CORNER_2))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(13), { 0, 0, height }, { { 27, 0, height + 2 }, { 4, 4, 7 } });
                 }
                 if (!(drawnCorners & FOOTPATH_CORNER_3))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(10), { 0, 0, height }, { { 0, 0, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
             case 14:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(0), { 4, 0, height }, { { 4, 0, height + 2 }, { 1, 32, 7 } });
                 if (!(drawnCorners & FOOTPATH_CORNER_1))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(12), { 0, 0, height }, { { 27, 27, height + 2 }, { 4, 4, 7 } });
                 }
                 if (!(drawnCorners & FOOTPATH_CORNER_2))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(13), { 0, 0, height }, { { 27, 0, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
             case 11:
-                PaintAddImageAsParent(
+                PaintPathSemanticRailingAsParent(
                     session, imageId.WithIndexOffset(0), { 28, 0, height }, { { 27, 0, height + 2 }, { 1, 32, 7 } });
                 if (!(drawnCorners & FOOTPATH_CORNER_0))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(11), { 0, 0, height }, { { 0, 27, height + 2 }, { 4, 4, 7 } });
                 }
                 if (!(drawnCorners & FOOTPATH_CORNER_3))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(10), { 0, 0, height }, { { 0, 0, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
@@ -524,22 +656,22 @@ static void PathPaintFencesAndQueueBannersNonQueue(
             case 15:
                 if (!(drawnCorners & FOOTPATH_CORNER_0))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(11), { 0, 0, height }, { { 0, 27, height + 2 }, { 4, 4, 7 } });
                 }
                 if (!(drawnCorners & FOOTPATH_CORNER_1))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(12), { 0, 0, height }, { { 27, 27, height + 2 }, { 4, 4, 7 } });
                 }
                 if (!(drawnCorners & FOOTPATH_CORNER_2))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(13), { 0, 0, height }, { { 27, 0, height + 2 }, { 4, 4, 7 } });
                 }
                 if (!(drawnCorners & FOOTPATH_CORNER_3))
                 {
-                    PaintAddImageAsParent(
+                    PaintPathSemanticRailingAsParent(
                         session, imageId.WithIndexOffset(10), { 0, 0, height }, { { 0, 0, height + 2 }, { 4, 4, 7 } });
                 }
                 break;
@@ -927,12 +1059,16 @@ static void PathPaintBoxSupport(
     const uint8_t edgesAndCorners = pathElement.isQueue() ? edges : edges | (corners << 4);
 
     const auto surfaceBaseImageIndex = PathPaintGetBaseImage(session, pathElement, pathPaintInfo);
+    const auto surfaceImage =
+        imageTemplate.WithIndex(surfaceBaseImageIndex);
+    PublishFirstPersonPathDeckGeometry(
+        session, pathElement, height, surfaceImage);
     auto boundbox = PathPaintGetBoundbox(session, height, edges);
 
     const bool hasPassedSurface = (session.Flags & PaintSessionFlags::PassedSurface) != 0;
     if (!hasSupports || !hasPassedSurface)
     {
-        PaintAddImageAsParent(session, imageTemplate.WithIndex(surfaceBaseImageIndex), { 0, 0, height }, boundbox);
+        PaintPathDeckImageAsParent(session, surfaceImage, { 0, 0, height }, boundbox);
     }
     else
     {
@@ -951,7 +1087,7 @@ static void PathPaintBoxSupport(
 
         if (pathElement.isQueue() || (pathPaintInfo.railings.flags & RAILING_ENTRY_FLAG_DRAW_PATH_OVER_SUPPORTS))
         {
-            PaintAddImageAsChild(session, imageTemplate.WithIndex(surfaceBaseImageIndex), { 0, 0, height }, boundbox);
+            PaintPathDeckImageAsChild(session, surfaceImage, { 0, 0, height }, boundbox);
         }
     }
 
@@ -981,13 +1117,17 @@ static void PathPaintPoleSupport(
     const uint8_t edgesAndCorners = pathElement.isQueue() ? edges : edges | (corners << 4);
 
     const auto surfaceBaseImageIndex = PathPaintGetBaseImage(session, pathElement, pathPaintInfo);
+    const auto surfaceImage =
+        imageTemplate.WithIndex(surfaceBaseImageIndex);
+    PublishFirstPersonPathDeckGeometry(
+        session, pathElement, height, surfaceImage);
     auto boundbox = PathPaintGetBoundbox(session, height, edges);
 
     // Below Surface
     const bool hasPassedSurface = (session.Flags & PaintSessionFlags::PassedSurface) != 0;
     if (!hasSupports || !hasPassedSurface)
     {
-        PaintAddImageAsParent(session, imageTemplate.WithIndex(surfaceBaseImageIndex), { 0, 0, height }, boundbox);
+        PaintPathDeckImageAsParent(session, surfaceImage, { 0, 0, height }, boundbox);
     }
     else
     {
@@ -1006,7 +1146,7 @@ static void PathPaintPoleSupport(
 
         if (pathElement.isQueue() || (pathPaintInfo.railings.flags & RAILING_ENTRY_FLAG_DRAW_PATH_OVER_SUPPORTS))
         {
-            PaintAddImageAsChild(session, imageTemplate.WithIndex(surfaceBaseImageIndex), { 0, 0, height }, boundbox);
+            PaintPathDeckImageAsChild(session, surfaceImage, { 0, 0, height }, boundbox);
         }
     }
 

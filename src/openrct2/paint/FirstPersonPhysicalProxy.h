@@ -4,6 +4,7 @@
  *****************************************************************************/
 #pragma once
 
+#include "Paint.h"
 #include "FirstPersonSmallSceneryCollision.h"
 #include "FirstPersonTrackTrajectory.h"
 
@@ -43,7 +44,7 @@ namespace OpenRCT2::Paint
         nativePathGeometry,
         calibratedSceneryArtwork,
         calibratedLargeSceneryArtwork,
-        semanticSupportGeometry,
+        semanticComponentGeometry,
     };
 
     enum class FirstPersonPhysicalProxyCapability : uint8_t
@@ -114,52 +115,205 @@ namespace OpenRCT2::Paint
                 origin.y / kCoordsXYStep);
     }
 
-    inline auto& FirstPersonSemanticSupportProxyRegistry()
+    [[nodiscard]] inline FirstPersonVec3
+        FirstPersonSemanticWorldPoint(
+            const FirstPersonPaintSemanticTransform& transform,
+            FirstPersonPaintSemanticVec3 point)
+    {
+        return {
+            transform.origin.x
+                + transform.axisX.x * point.x
+                + transform.axisY.x * point.y
+                + transform.axisZ.x * point.z,
+            transform.origin.y
+                + transform.axisX.y * point.x
+                + transform.axisY.y * point.y
+                + transform.axisZ.y * point.z,
+            transform.origin.z
+                + transform.axisX.z * point.x
+                + transform.axisY.z * point.y
+                + transform.axisZ.z * point.z,
+        };
+    }
+
+    [[nodiscard]] inline bool
+        FirstPersonSemanticComponentBounds(
+            const FirstPersonPaintSemanticComponent& component,
+            FirstPersonVec3& low, FirstPersonVec3& high)
+    {
+        const auto& geometry = component.geometry;
+        if (geometry.kind
+                == FirstPersonPaintSemanticPrimitiveKind::opening
+            || geometry.pointCount == 0)
+            return false;
+
+        std::array<FirstPersonPaintSemanticVec3, 8>
+            local{};
+        size_t count = 0;
+        switch (geometry.kind)
+        {
+            case FirstPersonPaintSemanticPrimitiveKind::box:
+            case FirstPersonPaintSemanticPrimitiveKind::localHull:
+            {
+                if (geometry.pointCount < 2)
+                    return false;
+                const auto a = geometry.points[0];
+                const auto b = geometry.points[1];
+                local = { {
+                    { a.x, a.y, a.z },
+                    { b.x, a.y, a.z },
+                    { b.x, b.y, a.z },
+                    { a.x, b.y, a.z },
+                    { a.x, a.y, b.z },
+                    { b.x, a.y, b.z },
+                    { b.x, b.y, b.z },
+                    { a.x, b.y, b.z },
+                } };
+                count = local.size();
+                break;
+            }
+            case FirstPersonPaintSemanticPrimitiveKind::beam:
+            {
+                if (geometry.pointCount < 2)
+                    return false;
+                const float extent =
+                    std::max(
+                        geometry.halfWidth,
+                        geometry.halfHeight);
+                const auto a = geometry.points[0];
+                const auto b = geometry.points[1];
+                local[0] = {
+                    std::min(a.x, b.x) - extent,
+                    std::min(a.y, b.y) - extent,
+                    std::min(a.z, b.z) - extent,
+                };
+                local[1] = {
+                    std::max(a.x, b.x) + extent,
+                    std::max(a.y, b.y) + extent,
+                    std::max(a.z, b.z) + extent,
+                };
+                const auto min = local[0];
+                const auto max = local[1];
+                local = { {
+                    { min.x, min.y, min.z },
+                    { max.x, min.y, min.z },
+                    { max.x, max.y, min.z },
+                    { min.x, max.y, min.z },
+                    { min.x, min.y, max.z },
+                    { max.x, min.y, max.z },
+                    { max.x, max.y, max.z },
+                    { min.x, max.y, max.z },
+                } };
+                count = local.size();
+                break;
+            }
+            case FirstPersonPaintSemanticPrimitiveKind::plane:
+            case FirstPersonPaintSemanticPrimitiveKind::footprint:
+            {
+                count = std::min<size_t>(
+                    geometry.pointCount, 4);
+                for (size_t i = 0; i < count; ++i)
+                    local[i] = geometry.points[i];
+                break;
+            }
+            case FirstPersonPaintSemanticPrimitiveKind::opening:
+                return false;
+        }
+
+        if (count == 0)
+            return false;
+        low = high = FirstPersonSemanticWorldPoint(
+            component.transform, local[0]);
+        for (size_t i = 1; i < count; ++i)
+        {
+            const auto point = FirstPersonSemanticWorldPoint(
+                component.transform, local[i]);
+            low.x = std::min(low.x, point.x);
+            low.y = std::min(low.y, point.y);
+            low.z = std::min(low.z, point.z);
+            high.x = std::max(high.x, point.x);
+            high.y = std::max(high.y, point.y);
+            high.z = std::max(high.z, point.z);
+        }
+        if (geometry.kind
+                == FirstPersonPaintSemanticPrimitiveKind::plane
+            || geometry.kind
+                == FirstPersonPaintSemanticPrimitiveKind::footprint)
+        {
+            constexpr float kPlaneThickness = 0.5f;
+            low.x -= kPlaneThickness;
+            low.y -= kPlaneThickness;
+            low.z -= kPlaneThickness;
+            high.x += kPlaneThickness;
+            high.y += kPlaneThickness;
+            high.z += kPlaneThickness;
+        }
+        return true;
+    }
+
+    inline auto& FirstPersonSemanticComponentRegistry()
     {
         static std::unordered_map<
             uint64_t,
-            std::vector<FirstPersonPhysicalBoxProxy>>
+            std::vector<FirstPersonPaintSemanticComponent>>
             registry;
         return registry;
     }
 
-    inline void PublishFirstPersonSemanticSupportProxies(
+    inline void PublishFirstPersonSemanticComponents(
         CoordsXY tile,
-        std::vector<FirstPersonPhysicalBoxProxy> proxies)
+        std::vector<FirstPersonPaintSemanticComponent>
+            components)
     {
         auto& registry =
-            FirstPersonSemanticSupportProxyRegistry();
+            FirstPersonSemanticComponentRegistry();
         const auto key =
             FirstPersonPhysicalTileKey(tile);
-        if (proxies.empty())
+        if (components.empty())
             registry.erase(key);
         else
-            registry[key] = std::move(proxies);
+            registry[key] = std::move(components);
     }
 
     [[nodiscard]] inline const std::vector<
-        FirstPersonPhysicalBoxProxy>*
-        GetFirstPersonSemanticSupportProxies(
+        FirstPersonPaintSemanticComponent>*
+        GetFirstPersonSemanticComponents(
             CoordsXY tile)
     {
         const auto& registry =
-            FirstPersonSemanticSupportProxyRegistry();
+            FirstPersonSemanticComponentRegistry();
         const auto found = registry.find(
             FirstPersonPhysicalTileKey(tile));
         return found != registry.end()
             ? &found->second : nullptr;
     }
 
-    inline void WithdrawFirstPersonSemanticSupportProxies(
+    inline void WithdrawFirstPersonSemanticComponents(
         CoordsXY tile)
     {
-        FirstPersonSemanticSupportProxyRegistry().erase(
+        FirstPersonSemanticComponentRegistry().erase(
             FirstPersonPhysicalTileKey(tile));
     }
 
-    inline void ClearFirstPersonSemanticSupportProxies()
+    inline void ClearFirstPersonSemanticComponents()
     {
-        FirstPersonSemanticSupportProxyRegistry().clear();
+        FirstPersonSemanticComponentRegistry().clear();
+    }
+
+    [[nodiscard]] inline bool
+        FirstPersonSemanticComponentIntersectsWalkStep(
+            const FirstPersonPaintSemanticComponent& component,
+            FirstPersonVec3 from, FirstPersonVec3 to,
+            float eyeHeight = 20.0f, float radius = 2.0f)
+    {
+        if (!component.collidable)
+            return false;
+        FirstPersonVec3 low{}, high{};
+        if (!FirstPersonSemanticComponentBounds(
+                component, low, high))
+            return false;
+        return FirstPersonBoxIntersectsWalkStep(
+            from, to, low, high, eyeHeight, radius);
     }
 
     [[nodiscard]] inline bool AppendFirstPersonSmallSceneryProxies(
@@ -288,355 +442,6 @@ namespace OpenRCT2::Paint
             return true;
         }
         return false;
-    }
-
-    inline void AppendFirstPersonPathRailingProxies(
-        std::vector<FirstPersonPhysicalBoxProxy>& result,
-        CoordsXY tile, const PathElement& path)
-    {
-        if (path.getRailingsDescriptor() == nullptr)
-            return;
-
-        const bool hasSupports =
-            FirstPersonPathHasSupports(tile, path);
-        const bool slopeRailingsSupported =
-            path.getSurfaceDescriptor() == nullptr
-            || !(path.getSurfaceDescriptor()->flags
-                & FOOTPATH_ENTRY_FLAG_NO_SLOPE_RAILINGS);
-        if (!path.isQueue() && !hasSupports
-            && !(path.isSloped()
-                && slopeRailingsSupported))
-            return;
-
-        const int32_t height = path.getBaseZ() + 2;
-        const auto addHorizontal =
-            [&](int32_t x, int32_t y, int32_t length,
-                int32_t heightExtent) {
-                AppendFirstPersonPhysicalBoxProxy(
-                    result, tile, x, y, height,
-                    length, 1, heightExtent,
-                    FirstPersonPhysicalProxyProvenance::
-                        nativePathGeometry);
-            };
-        const auto addVertical =
-            [&](int32_t x, int32_t y, int32_t length,
-                int32_t heightExtent) {
-                AppendFirstPersonPhysicalBoxProxy(
-                    result, tile, x, y, height,
-                    1, length, heightExtent,
-                    FirstPersonPhysicalProxyProvenance::
-                        nativePathGeometry);
-            };
-        const auto addPost =
-            [&](int32_t x, int32_t y) {
-                AppendFirstPersonPhysicalBoxProxy(
-                    result, tile, x, y, height,
-                    4, 4, 7,
-                    FirstPersonPhysicalProxyProvenance::
-                        nativePathGeometry);
-            };
-
-        if (path.isSloped())
-        {
-            if ((path.getSlopeDirection() & 1u) == 0)
-            {
-                addHorizontal(0, 4, 32, 23);
-                addHorizontal(0, 27, 32, 23);
-            }
-            else
-            {
-                addVertical(4, 0, 32, 23);
-                addVertical(27, 0, 32, 23);
-            }
-            return;
-        }
-
-        // Geometry copied from the native flat railing painter at viewport
-        // rotation zero. Queue and non-queue variants use different images,
-        // but these authored physical strips are the same.
-        const uint8_t edges = path.getEdges() & 0x0Fu;
-        const auto* railings = path.getRailingsDescriptor();
-        uint8_t drawnCorners = 0;
-        if (!path.isQueue() && railings != nullptr
-            && (railings->flags
-                & RAILING_ENTRY_FLAG_DRAW_PATH_OVER_SUPPORTS))
-        {
-            drawnCorners = path.getCorners() & 0x0Fu;
-        }
-        const auto addCornerIfVisible =
-            [&](uint8_t corner, int32_t x, int32_t y) {
-                if (path.isQueue())
-                {
-                    addPost(x, y);
-                }
-                else if ((drawnCorners & (1u << corner)) == 0)
-                {
-                    addPost(x, y);
-                }
-            };
-        switch (edges)
-        {
-            case 0:
-                break;
-            case 1:
-            case 4:
-                addHorizontal(0, 4, 27, 7);
-                addHorizontal(0, 27, 27, 7);
-                break;
-            case 2:
-            case 8:
-                addVertical(4, 0, 27, 7);
-                addVertical(27, 0, 27, 7);
-                break;
-            case 5:
-                addHorizontal(0, 4, 32, 7);
-                addHorizontal(0, 27, 32, 7);
-                break;
-            case 10:
-                addVertical(4, 0, 32, 7);
-                addVertical(27, 0, 32, 7);
-                break;
-            case 3:
-                addHorizontal(0, 4, 26, 7);
-                addVertical(27, 4, 27, 7);
-                addCornerIfVisible(0, 0, 27);
-                break;
-            case 6:
-                addVertical(4, 0, 27, 7);
-                addHorizontal(0, 4, 27, 7);
-                addCornerIfVisible(1, 27, 27);
-                break;
-            case 9:
-                addVertical(27, 0, 27, 7);
-                addHorizontal(0, 27, 27, 7);
-                addCornerIfVisible(3, 0, 0);
-                break;
-            case 12:
-                addVertical(4, 0, 26, 7);
-                addHorizontal(4, 27, 27, 7);
-                addCornerIfVisible(2, 27, 0);
-                break;
-            case 7:
-                addHorizontal(0, 4, 32, 7);
-                if (path.isQueue())
-                {
-                    if (path.hasJunctionRailings())
-                    {
-                        addPost(0, 27);
-                        addPost(27, 27);
-                    }
-                }
-                else
-                {
-                    addCornerIfVisible(0, 0, 27);
-                    addCornerIfVisible(1, 27, 27);
-                }
-                break;
-            case 13:
-                addHorizontal(0, 27, 32, 7);
-                if (path.isQueue())
-                {
-                    if (path.hasJunctionRailings())
-                    {
-                        addPost(27, 0);
-                        addPost(0, 0);
-                    }
-                }
-                else
-                {
-                    addCornerIfVisible(2, 27, 0);
-                    addCornerIfVisible(3, 0, 0);
-                }
-                break;
-            case 11:
-                addVertical(27, 0, 32, 7);
-                if (path.isQueue())
-                {
-                    if (path.hasJunctionRailings())
-                    {
-                        addPost(0, 0);
-                        addPost(0, 27);
-                    }
-                }
-                else
-                {
-                    addCornerIfVisible(0, 0, 27);
-                    addCornerIfVisible(3, 0, 0);
-                }
-                break;
-            case 14:
-                addVertical(4, 0, 32, 7);
-                if (path.isQueue())
-                {
-                    if (path.hasJunctionRailings())
-                    {
-                        addPost(27, 27);
-                        addPost(27, 0);
-                    }
-                }
-                else
-                {
-                    addCornerIfVisible(1, 27, 27);
-                    addCornerIfVisible(2, 27, 0);
-                }
-                break;
-            case 15:
-                if (path.isQueue())
-                {
-                    if (path.hasJunctionRailings())
-                    {
-                        addPost(0, 27);
-                        addPost(27, 27);
-                        addPost(27, 0);
-                        addPost(0, 0);
-                    }
-                }
-                else
-                {
-                    addCornerIfVisible(0, 0, 27);
-                    addCornerIfVisible(1, 27, 27);
-                    addCornerIfVisible(2, 27, 0);
-                    addCornerIfVisible(3, 0, 0);
-                }
-                break;
-        }
-    }
-
-    inline void AppendFirstPersonPathFixtureProxies(
-        std::vector<FirstPersonPhysicalBoxProxy>& result,
-        CoordsXY tile, const PathElement& path)
-    {
-        if (!path.hasAddition() || path.additionIsGhost())
-            return;
-        const auto* entry = path.getAdditionEntry();
-        if (entry == nullptr
-            || entry->draw_type == PathAdditionDrawType::jumpingFountain)
-            return;
-
-        const uint8_t edges = uint8_t(path.getEdges() ^ 0x0Fu);
-        int32_t height = path.getBaseZ();
-        if (path.isSloped()
-            && (entry->draw_type == PathAdditionDrawType::light
-                || entry->draw_type == PathAdditionDrawType::bin))
-        {
-            height += 8;
-        }
-
-        const auto add = [&](uint8_t bit, int32_t x, int32_t y,
-                             int32_t sizeX, int32_t sizeY,
-                             int32_t sizeZ) {
-            if ((edges & bit) == 0)
-                return;
-            AppendFirstPersonPhysicalBoxProxy(
-                result, tile, x, y, height + 2,
-                sizeX, sizeY, sizeZ,
-                FirstPersonPhysicalProxyProvenance::
-                    nativePathGeometry,
-                uint64_t(entry->image));
-        };
-
-        switch (entry->draw_type)
-        {
-            case PathAdditionDrawType::light:
-                add(1u << 0, 3, 8, 0, 16, 23);
-                add(1u << 1, 2, 29, 22, 0, 23);
-                add(1u << 2, 29, 2, 0, 22, 23);
-                add(1u << 3, 8, 3, 16, 0, 23);
-                break;
-            case PathAdditionDrawType::bin:
-            case PathAdditionDrawType::bench:
-                add(1u << 0, 6, 8, 0, 16, 7);
-                add(1u << 1, 8, 23, 16, 0, 7);
-                add(1u << 2, 23, 8, 0, 16, 7);
-                add(1u << 3, 8, 6, 16, 0, 7);
-                break;
-            case PathAdditionDrawType::jumpingFountain:
-                break;
-        }
-    }
-
-    inline void AppendFirstPersonStationFenceProxies(
-        std::vector<FirstPersonPhysicalBoxProxy>& result,
-        CoordsXY tile, const TrackElement& track,
-        const Ride& ride)
-    {
-        if (!trackTypeIsStation(track.getTrackType()))
-            return;
-        const auto* stationObject = ride.getStationObject();
-        if (stationObject != nullptr
-            && stationObject->Flags.has(
-                StationObjectFlag::noPlatforms))
-            return;
-
-        const auto& station =
-            ride.getStation(track.getStationIndex());
-        const auto hasFence = [&](int32_t dx, int32_t dy) {
-            const auto adjacent =
-                TileCoordsXY(tile) + TileCoordsXY{ dx, dy };
-            return adjacent != station.entrance
-                && adjacent != station.exit;
-        };
-
-        const int32_t baseZ = track.getBaseZ() + 7;
-        const uint64_t sourceKey =
-            (uint64_t(ride.id.ToUnderlying()) << 32)
-            | uint32_t(track.getStationIndex().ToUnderlying());
-        const auto add = [&](int32_t x, int32_t y,
-                             int32_t sizeX, int32_t sizeY) {
-            AppendFirstPersonPhysicalBoxProxy(
-                result, tile, x, y, baseZ,
-                sizeX, sizeY, 7,
-                FirstPersonPhysicalProxyProvenance::
-                    nativeStationGeometry,
-                sourceKey);
-        };
-
-        const uint8_t direction = track.getDirection() & 3u;
-        if ((direction & 1u) == 0)
-        {
-            // Direction 0/2 station painters place the two long platform
-            // fences on the NW/SE sides. At viewport rotation zero those are
-            // y=0 and y=31 in world-tile coordinates.
-            if (hasFence(0, -1))
-                add(0, 0, 32, 1);
-
-            const bool farFence = hasFence(0, 1);
-            if (farFence)
-            {
-                add(0, 31, 32, 1);
-            }
-            else if ((track.getTrackType() == TrackElemType::beginStation
-                         && direction == 0)
-                || (track.getTrackType() == TrackElemType::endStation
-                    && direction == 2))
-            {
-                // TrackPaintUtilDrawStationImpl deliberately leaves the SE
-                // platform edge open at an entrance/exit, but retains two
-                // 1x8 end-cap fence fragments.
-                add(31, 23, 1, 8);
-                add(31, 0, 1, 8);
-            }
-        }
-        else
-        {
-            // Direction 1/3 mirrors the same geometry onto the NE/SW sides.
-            if (hasFence(-1, 0))
-                add(0, 0, 1, 32);
-
-            const bool farFence = hasFence(1, 0);
-            if (farFence)
-            {
-                add(31, 0, 1, 32);
-            }
-            else if ((track.getTrackType() == TrackElemType::beginStation
-                         && direction == 3)
-                || (track.getTrackType() == TrackElemType::endStation
-                    && direction == 1))
-            {
-                add(23, 31, 8, 1);
-                add(0, 31, 8, 1);
-            }
-        }
     }
 
     inline std::unordered_map<

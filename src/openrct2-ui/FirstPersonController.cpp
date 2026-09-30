@@ -623,7 +623,7 @@ namespace OpenRCT2::Ui::FirstPerson
             return false;
         }
 
-        bool WalkBlockedBySemanticSupports(
+        bool WalkBlockedBySemanticComponents(
             const Paint::FirstPersonVec3& from,
             const Paint::FirstPersonVec3& to)
         {
@@ -649,117 +649,18 @@ namespace OpenRCT2::Ui::FirstPerson
                     tx * kCoordsXYStep,
                     ty * kCoordsXYStep
                 };
-                const auto* proxies =
-                    Paint::GetFirstPersonSemanticSupportProxies(
+                const auto* components =
+                    Paint::GetFirstPersonSemanticComponents(
                         tilePos);
-                if (proxies == nullptr)
+                if (components == nullptr)
                     continue;
-                for (const auto& proxy : *proxies)
+                for (const auto& component : *components)
                 {
-                    if (Paint::FirstPersonBoxIntersectsWalkStep(
-                            from, to,
-                            proxy.low, proxy.high,
+                    if (Paint::
+                        FirstPersonSemanticComponentIntersectsWalkStep(
+                            component, from, to,
                             kEyeHeight))
                         return true;
-                }
-            }
-            return false;
-        }
-
-        bool WalkBlockedByPathFixtures(
-            const Paint::FirstPersonVec3& from,
-            const Paint::FirstPersonVec3& to)
-        {
-            const int32_t minX = std::max(
-                0, int32_t(std::floor(
-                    std::min(from.x, to.x) / kCoordsXYStep)) - 1);
-            const int32_t minY = std::max(
-                0, int32_t(std::floor(
-                    std::min(from.y, to.y) / kCoordsXYStep)) - 1);
-            const int32_t maxX = int32_t(std::floor(
-                std::max(from.x, to.x) / kCoordsXYStep)) + 1;
-            const int32_t maxY = int32_t(std::floor(
-                std::max(from.y, to.y) / kCoordsXYStep)) + 1;
-
-            std::vector<Paint::FirstPersonPhysicalBoxProxy> proxies;
-            proxies.reserve(16);
-            for (int32_t ty = minY; ty <= maxY; ++ty)
-            for (int32_t tx = minX; tx <= maxX; ++tx)
-            {
-                const CoordsXY tilePos{
-                    tx * kCoordsXYStep, ty * kCoordsXYStep
-                };
-                if (!MapIsLocationValid(tilePos))
-                    continue;
-                for (const auto* path :
-                    TileElementsView<PathElement>(tilePos))
-                {
-                    if (path == nullptr || path->isGhost()
-                        || path->isInvisible())
-                        continue;
-                    proxies.clear();
-                    Paint::AppendFirstPersonPathRailingProxies(
-                        proxies, tilePos, *path);
-                    Paint::AppendFirstPersonPathFixtureProxies(
-                        proxies, tilePos, *path);
-                    for (const auto& proxy : proxies)
-                    {
-                        if (Paint::FirstPersonBoxIntersectsWalkStep(
-                                from, to, proxy.low, proxy.high,
-                                kEyeHeight))
-                            return true;
-                    }
-                }
-            }
-            return false;
-        }
-
-        bool WalkBlockedByStationFences(
-            const Paint::FirstPersonVec3& from,
-            const Paint::FirstPersonVec3& to)
-        {
-            const int32_t minX = std::max(
-                0, int32_t(std::floor(
-                    std::min(from.x, to.x) / kCoordsXYStep)) - 1);
-            const int32_t minY = std::max(
-                0, int32_t(std::floor(
-                    std::min(from.y, to.y) / kCoordsXYStep)) - 1);
-            const int32_t maxX = int32_t(std::floor(
-                std::max(from.x, to.x) / kCoordsXYStep)) + 1;
-            const int32_t maxY = int32_t(std::floor(
-                std::max(from.y, to.y) / kCoordsXYStep)) + 1;
-
-            std::vector<Paint::FirstPersonPhysicalBoxProxy> proxies;
-            proxies.reserve(8);
-            for (int32_t ty = minY; ty <= maxY; ++ty)
-            for (int32_t tx = minX; tx <= maxX; ++tx)
-            {
-                const CoordsXY tilePos{
-                    tx * kCoordsXYStep, ty * kCoordsXYStep
-                };
-                if (!MapIsLocationValid(tilePos))
-                    continue;
-                for (const auto* track :
-                    TileElementsView<TrackElement>(tilePos))
-                {
-                    if (track == nullptr || track->isGhost()
-                        || track->isInvisible()
-                        || !trackTypeIsStation(track->getTrackType()))
-                        continue;
-                    const auto* ride =
-                        GetRide(track->getRideIndex());
-                    if (ride == nullptr)
-                        continue;
-                    proxies.clear();
-                    Paint::AppendFirstPersonStationFenceProxies(
-                        proxies, tilePos, *track, *ride);
-                    for (const auto& proxy : proxies)
-                    {
-                        if (Paint::FirstPersonBoxIntersectsWalkStep(
-                                from, to, proxy.low, proxy.high,
-                                kEyeHeight))
-                            return true;
-                    }
                 }
             }
             return false;
@@ -968,9 +869,7 @@ namespace OpenRCT2::Ui::FirstPerson
                 if (WalkBlockedByWall(from, destination)
                     || WalkBlockedByLargeScenery(from, destination)
                     || WalkBlockedBySmallScenery(from, destination)
-                    || WalkBlockedBySemanticSupports(from, destination)
-                    || WalkBlockedByPathFixtures(from, destination)
-                    || WalkBlockedByStationFences(from, destination)
+                    || WalkBlockedBySemanticComponents(from, destination)
                     || WalkBlockedByVerifiedTrackRails(
                         from, destination))
                     return false;

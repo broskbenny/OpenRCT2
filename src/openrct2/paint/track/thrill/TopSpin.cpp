@@ -144,6 +144,10 @@ static void PaintTopSpinSeat(
         imageTemplate = stationColour;
     }
 
+    uint32_t semanticSeatComponent = 0;
+    uint32_t semanticSeatArtworkGroup = 0;
+    FirstPersonPaintSemanticTransform semanticSeatTransform{};
+    float localPitch = 0.0f;
     if (vehicle != nullptr)
     {
         const float armFrame = FirstPersonResolvePaintFrame(
@@ -179,21 +183,70 @@ static void PaintTopSpinSeat(
             true, 16.0f);
         constexpr float kTwoPi =
             6.28318530717958647692f;
-        const float localPitch =
-            seatFrame * (kTwoPi / 16.0f);
+        localPitch = seatFrame * (kTwoPi / 16.0f);
+
+        semanticSeatTransform =
+            PaintSessionMakeFirstPersonSemanticTransform(
+                session,
+                { anchorX, anchorY,
+                  float(offset.z) + seatHeight });
+        const auto axisX =
+            semanticSeatTransform.axisX;
+        const auto axisZ =
+            semanticSeatTransform.axisZ;
+        const float cp = std::cos(localPitch);
+        const float sp = std::sin(localPitch);
+        semanticSeatTransform.axisX = {
+            axisX.x * cp + axisZ.x * sp,
+            axisX.y * cp + axisZ.y * sp,
+            axisX.z * cp + axisZ.z * sp,
+        };
+        semanticSeatTransform.axisZ = {
+            axisZ.x * cp - axisX.x * sp,
+            axisZ.y * cp - axisX.y * sp,
+            axisZ.z * cp - axisX.z * sp,
+        };
+
+        semanticSeatArtworkGroup =
+            PaintSessionBeginFirstPersonSemanticArtworkGroup(
+                session);
+        semanticSeatComponent =
+            PaintSessionAddFirstPersonSemanticOrientedBox(
+                session, FirstPersonPaintSemanticRole::seat,
+                semanticSeatTransform,
+                { -12.0f, -5.0f, -5.0f },
+                { 12.0f, 5.0f, 8.0f },
+                imageTemplate.WithIndex(seatImageIndex),
+                seatCoords, semanticSeatArtworkGroup,
+                uint64_t(carEntry.baseImageId), 0, false);
+
         const uint32_t seatMask =
             vehicle->num_seats >= 32
             ? 0xffffffffu
             : ((uint32_t{ 1 } << vehicle->num_seats) - 1u);
-        PaintSessionPublishFirstPersonPassengerLocalAnchor(
+        PaintSessionPublishFirstPersonPassengerComponentAnchor(
             session, *vehicle, seatMask,
-            anchorX, anchorY,
-            float(offset.z) + seatHeight,
-            false, 0.0f, 0.0f, 0.0f,
+            semanticSeatComponent, semanticSeatTransform,
+            {}, false, 0.0f, 0.0f, 0.0f,
             true, localPitch);
     }
 
-    PaintAddImageAsChild(session, imageTemplate.WithIndex(seatImageIndex), seatCoords, bb);
+    if (semanticSeatComponent != 0)
+    {
+        FirstPersonPaintSemanticScope scope(
+            session, FirstPersonPaintSemanticRole::seat,
+            semanticSeatArtworkGroup);
+        PaintAddImageAsChild(
+            session, imageTemplate.WithIndex(seatImageIndex),
+            seatCoords, bb);
+        session.FirstPersonSemanticArtworkGroup = 0;
+    }
+    else
+    {
+        PaintAddImageAsChild(
+            session, imageTemplate.WithIndex(seatImageIndex),
+            seatCoords, bb);
+    }
     if (vehicle != nullptr)
     {
         PaintTopSpinRiders(session, *vehicle, seatImageIndex, seatCoords, bb);

@@ -351,25 +351,6 @@ constexpr MetalSupportGraphic kMetalSupportGraphicRotated[kMetalSupportTypeCount
       MetalSupportGraphic::boxedCoated },
 };
 
-struct FirstPersonSupportRoleScope
-{
-    PaintSession& session;
-    FirstPersonPaintSemanticRole previous;
-
-    explicit FirstPersonSupportRoleScope(PaintSession& s)
-        : session(s)
-        , previous(s.FirstPersonSemanticRole)
-    {
-        session.FirstPersonSemanticRole =
-            FirstPersonPaintSemanticRole::support;
-    }
-
-    ~FirstPersonSupportRoleScope()
-    {
-        session.FirstPersonSemanticRole = previous;
-    }
-};
-
 static void PublishFirstPersonMetalSupportColumn(
     PaintSession& session, uint8_t segment,
     int32_t lowZ, int32_t highZ, ImageId image)
@@ -379,9 +360,8 @@ static void PublishFirstPersonMetalSupportColumn(
         return;
     const auto point =
         kMetalSupportBoundBoxOffsets[segment];
-    PaintSessionAddFirstPersonPhysicalBox(
-        session,
-        FirstPersonPaintPhysicalPrimitiveKind::supportColumn,
+    PaintSessionAddFirstPersonSemanticBox(
+        session, FirstPersonPaintSemanticRole::support,
         { point.x - 2, point.y - 2, lowZ },
         { point.x + 2, point.y + 2, highZ },
         image);
@@ -402,9 +382,8 @@ static void PublishFirstPersonMetalSupportCrossBeam(
     const auto length =
         kMetalSupportCrossBeamBoundBoxLengths[
             crossBeamIndex];
-    PaintSessionAddFirstPersonPhysicalBox(
-        session,
-        FirstPersonPaintPhysicalPrimitiveKind::supportBeam,
+    PaintSessionAddFirstPersonSemanticBox(
+        session, FirstPersonPaintSemanticRole::support,
         { low.x, low.y, z - 1 },
         { low.x + length.x,
           low.y + length.y,
@@ -438,7 +417,8 @@ static bool MetalSupportsPaintSetupCommon(
         imageTemplate = ImageId(0).WithTransparency(FilterPaletteID::paletteDarken1);
     }
 
-    FirstPersonSupportRoleScope firstPersonRole(session);
+    FirstPersonPaintSemanticScope firstPersonRole(
+        session, FirstPersonPaintSemanticRole::support);
     int32_t currentHeight = height;
     const uint32_t supportType = EnumValue(supportTypeMember);
 

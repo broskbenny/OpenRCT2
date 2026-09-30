@@ -26,6 +26,35 @@ enum
     SprObservationTowerSegmentTop = 14988,
 };
 
+static PaintStruct* PaintSemanticTowerSectionAsParent(
+    PaintSession& session, ImageId image,
+    const CoordsXYZ& offset, const BoundBoxXYZ& physicalBox,
+    uint64_t localHullKey, uint16_t repetitionIndex = 0)
+{
+    auto low = physicalBox.offset;
+    auto high = physicalBox.offset + physicalBox.length;
+    if (physicalBox.length.x == 0)
+        high.x = low.x + 1;
+    if (physicalBox.length.y == 0)
+        high.y = low.y + 1;
+    if (physicalBox.length.z == 0)
+        high.z = low.z + 1;
+    const uint32_t group =
+        PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+    PaintSessionAddFirstPersonSemanticBox(
+        session, FirstPersonPaintSemanticRole::towerSection,
+        low, high, image, offset, group,
+        localHullKey, repetitionIndex, true);
+    FirstPersonPaintSemanticScope scope(
+        session, FirstPersonPaintSemanticRole::towerSection,
+        group);
+    auto* result =
+        PaintAddImageAsParent(
+            session, image, offset, physicalBox);
+    session.FirstPersonSemanticArtworkGroup = 0;
+    return result;
+}
+
 /** rct2: 0x0070DD6C */
 static void PaintObservationTowerBase(
     PaintSession& session, const Ride& ride, uint8_t trackSequence, uint8_t direction, int32_t height,
@@ -51,13 +80,13 @@ static void PaintObservationTowerBase(
     if (trackSequence == 0)
     {
         auto imageId = session.TrackColours.WithIndex(SprObservationTowerSegmentBase);
-        PaintAddImageAsParent(session, imageId, { 0, 0, height }, { { 8, 8, height + 3 }, { 2, 2, 27 } });
+        PaintSemanticTowerSectionAsParent(session, imageId, { 0, 0, height }, { { 8, 8, height + 3 }, { 2, 2, 27 } }, uint64_t(SprObservationTowerSegment));
 
         imageId = session.TrackColours.WithIndex(SprObservationTowerSegment);
-        PaintAddImageAsParent(session, imageId, { 0, 0, height + 32 }, { { 8, 8, height + 32 }, { 2, 2, 30 } });
+        PaintSemanticTowerSectionAsParent(session, imageId, { 0, 0, height + 32 }, { { 8, 8, height + 32 }, { 2, 2, 30 } }, uint64_t(SprObservationTowerSegment));
 
         imageId = session.TrackColours.WithIndex(SprObservationTowerSegment);
-        PaintAddImageAsParent(session, imageId, { 0, 0, height + 64 }, { { 8, 8, height + 64 }, { 2, 2, 30 } });
+        PaintSemanticTowerSectionAsParent(session, imageId, { 0, 0, height + 64 }, { { 8, 8, height + 64 }, { 2, 2, 30 } }, uint64_t(SprObservationTowerSegment));
 
         PaintUtilSetVerticalTunnel(session, height + 96);
         PaintUtilSetSegmentSupportHeight(session, kSegmentsAll, 0xFFFF, 0);
@@ -117,7 +146,7 @@ static void PaintObservationTowerSection(
     }
 
     auto imageId = session.TrackColours.WithIndex(SprObservationTowerSegment);
-    PaintAddImageAsParent(session, imageId, { 0, 0, height }, { { 8, 8, height }, { 2, 2, 30 } });
+    PaintSemanticTowerSectionAsParent(session, imageId, { 0, 0, height }, { { 8, 8, height }, { 2, 2, 30 } }, uint64_t(SprObservationTowerSegment));
 
     const TileElement* nextTileElement = reinterpret_cast<const TileElement*>(&trackElement) + 1;
     if (trackElement.isLastForTile() || trackElement.getClearanceZ() != nextTileElement->getBaseZ())

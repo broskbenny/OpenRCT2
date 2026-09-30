@@ -224,6 +224,8 @@ static PaintStruct* CreateNormalPaintStruct(
     ps->FirstPersonSemanticRole = session.FirstPersonSemanticRole;
     ps->FirstPersonPassengerSeatMask =
         session.FirstPersonPassengerSeatMask;
+    ps->FirstPersonSemanticArtworkGroup =
+        session.FirstPersonSemanticArtworkGroup;
 
     return ps;
 }
@@ -277,6 +279,8 @@ static PaintStruct* CreateNormalPaintStructHeight(
     ps->FirstPersonSemanticRole = session.FirstPersonSemanticRole;
     ps->FirstPersonPassengerSeatMask =
         session.FirstPersonPassengerSeatMask;
+    ps->FirstPersonSemanticArtworkGroup =
+        session.FirstPersonSemanticArtworkGroup;
 
     return ps;
 }
@@ -937,105 +941,298 @@ void PaintSessionPublishFirstPersonPassengerLocalAnchor(
         hasLocalPitch, localPitch);
 }
 
-void PaintSessionAddFirstPersonPhysicalBox(
-    PaintSession& session,
-    FirstPersonPaintPhysicalPrimitiveKind kind,
-    const CoordsXYZ& localLow, const CoordsXYZ& localHigh,
-    ImageId image)
+static FirstPersonPaintSemanticVec3 TransformFirstPersonSemanticPoint(
+    const FirstPersonPaintSemanticTransform& transform,
+    FirstPersonPaintSemanticVec3 point)
 {
-    if (session.FirstPersonPhysicalPrimitiveSink == nullptr)
-        return;
-
-    const uint8_t rotation =
-        DirectionFlipXAxis(session.CurrentRotation) & 3u;
-    const auto rotate =
-        [rotation](float x, float y) {
-            switch (rotation)
-            {
-                case 1: return std::array<float, 2>{ y, -x };
-                case 2: return std::array<float, 2>{ -x, -y };
-                case 3: return std::array<float, 2>{ -y, x };
-                default: return std::array<float, 2>{ x, y };
-            }
-        };
-
-    const auto a = rotate(float(localLow.x), float(localLow.y));
-    const auto b = rotate(float(localHigh.x), float(localLow.y));
-    const auto d = rotate(float(localLow.x), float(localHigh.y));
-    const auto e = rotate(float(localHigh.x), float(localHigh.y));
-    const float originX = float(session.SpritePosition.x);
-    const float originY = float(session.SpritePosition.y);
-
-    FirstPersonPaintPhysicalPrimitive primitive{};
-    primitive.kind = kind;
-    primitive.mapPosition = session.MapPosition;
-    primitive.lowX = originX
-        + std::min({ a[0], b[0], d[0], e[0] });
-    primitive.lowY = originY
-        + std::min({ a[1], b[1], d[1], e[1] });
-    primitive.lowZ = float(std::min(localLow.z, localHigh.z));
-    primitive.highX = originX
-        + std::max({ a[0], b[0], d[0], e[0] });
-    primitive.highY = originY
-        + std::max({ a[1], b[1], d[1], e[1] });
-    primitive.highZ = float(std::max(localLow.z, localHigh.z));
-    primitive.image = image;
-    if (primitive.highX > primitive.lowX
-        && primitive.highY > primitive.lowY
-        && primitive.highZ > primitive.lowZ)
-    {
-        session.FirstPersonPhysicalPrimitiveSink->push_back(
-            primitive);
-    }
+    return {
+        transform.origin.x
+            + transform.axisX.x * point.x
+            + transform.axisY.x * point.y
+            + transform.axisZ.x * point.z,
+        transform.origin.y
+            + transform.axisX.y * point.x
+            + transform.axisY.y * point.y
+            + transform.axisZ.y * point.z,
+        transform.origin.z
+            + transform.axisX.z * point.x
+            + transform.axisY.z * point.y
+            + transform.axisZ.z * point.z,
+    };
 }
 
-void PaintSessionAddFirstPersonPhysicalSegment(
-    PaintSession& session,
-    FirstPersonPaintPhysicalPrimitiveKind kind,
-    const CoordsXYZ& localA, const CoordsXYZ& localB,
-    int32_t halfWidth, ImageId image)
+static ScreenCoordsXY FirstPersonSemanticArtworkScreenPos(
+    const PaintSession& session, const CoordsXYZ& offset)
 {
-    if (session.FirstPersonPhysicalPrimitiveSink == nullptr)
-        return;
+    const auto swappedRotation =
+        DirectionFlipXAxis(session.CurrentRotation);
+    auto source = CoordsXYZ{
+        offset.rotate(swappedRotation), offset.z
+    };
+    source += session.SpritePosition;
+    return Translate3DTo2DWithZ(
+        session.CurrentRotation, source);
+}
 
-    halfWidth = std::max(1, halfWidth);
-    const int32_t dx = localB.x - localA.x;
-    const int32_t dy = localB.y - localA.y;
-    const int32_t dz = localB.z - localA.z;
-    const int32_t span =
-        std::max({ std::abs(dx), std::abs(dy), std::abs(dz) });
-    const int32_t steps = std::max(1, (span + 7) / 8);
-    for (int32_t i = 0; i < steps; ++i)
+uint32_t PaintSessionBeginFirstPersonSemanticArtworkGroup(
+    PaintSession& session)
+{
+    uint32_t group =
+        session.FirstPersonSemanticNextArtworkGroup++;
+    if (group == 0)
+        group = session.FirstPersonSemanticNextArtworkGroup++;
+    return group;
+}
+
+FirstPersonPaintSemanticTransform
+    PaintSessionMakeFirstPersonSemanticTransform(
+        const PaintSession& session,
+        FirstPersonPaintSemanticVec3 localOrigin)
+{
+    const uint8_t rotation =
+        DirectionFlipXAxis(session.CurrentRotation) & 3u;
+    FirstPersonPaintSemanticTransform transform{};
+    transform.origin = {
+        float(session.SpritePosition.x),
+        float(session.SpritePosition.y),
+        0.0f,
+    };
+    switch (rotation)
     {
-        const auto interpolate =
-            [&](int32_t a, int32_t b, int32_t numerator) {
-                return a + int32_t(std::lround(
-                    double(b - a) * double(numerator)
-                    / double(steps)));
-            };
-        const CoordsXYZ a{
-            interpolate(localA.x, localB.x, i),
-            interpolate(localA.y, localB.y, i),
-            interpolate(localA.z, localB.z, i),
+        case 1:
+            transform.axisX = { 0.0f, -1.0f, 0.0f };
+            transform.axisY = { 1.0f, 0.0f, 0.0f };
+            break;
+        case 2:
+            transform.axisX = { -1.0f, 0.0f, 0.0f };
+            transform.axisY = { 0.0f, -1.0f, 0.0f };
+            break;
+        case 3:
+            transform.axisX = { 0.0f, 1.0f, 0.0f };
+            transform.axisY = { -1.0f, 0.0f, 0.0f };
+            break;
+        default:
+            break;
+    }
+    const auto worldOrigin =
+        TransformFirstPersonSemanticPoint(
+            transform, localOrigin);
+    transform.origin = worldOrigin;
+    return transform;
+}
+
+static FirstPersonPaintSemanticArtwork
+    MakeFirstPersonSemanticArtwork(
+        const PaintSession& session, ImageId image,
+        const CoordsXYZ& artworkOffset, uint32_t artworkGroup,
+        bool decal = false)
+{
+    FirstPersonPaintSemanticArtwork artwork{};
+    artwork.image = image;
+    artwork.screenPos =
+        FirstPersonSemanticArtworkScreenPos(
+            session, artworkOffset);
+    artwork.group = artworkGroup != 0
+        ? artworkGroup
+        : session.FirstPersonSemanticArtworkGroup;
+    artwork.sourceRotation = session.CurrentRotation;
+    artwork.decal = decal;
+    return artwork;
+}
+
+static uint32_t PublishFirstPersonSemanticComponent(
+    PaintSession& session,
+    FirstPersonPaintSemanticComponent component)
+{
+    if (session.FirstPersonSemanticComponentSink == nullptr)
+        return 0;
+    uint32_t id = session.FirstPersonSemanticNextComponentId++;
+    if (id == 0)
+        id = session.FirstPersonSemanticNextComponentId++;
+    component.id = id;
+    component.mapPosition = session.MapPosition;
+    session.FirstPersonSemanticComponentSink->push_back(
+        std::move(component));
+    return id;
+}
+
+uint32_t PaintSessionAddFirstPersonSemanticOrientedBox(
+    PaintSession& session, FirstPersonPaintSemanticRole role,
+    const FirstPersonPaintSemanticTransform& transform,
+    FirstPersonPaintSemanticVec3 localLow,
+    FirstPersonPaintSemanticVec3 localHigh,
+    ImageId image, const CoordsXYZ& artworkOffset,
+    uint32_t artworkGroup, uint64_t localHullKey,
+    uint16_t repetitionIndex, bool collidable)
+{
+    if (!(localHigh.x > localLow.x)
+        || !(localHigh.y > localLow.y)
+        || !(localHigh.z > localLow.z))
+        return 0;
+
+    FirstPersonPaintSemanticComponent component{};
+    component.role = role;
+    component.geometry.kind =
+        localHullKey != 0
+        ? FirstPersonPaintSemanticPrimitiveKind::localHull
+        : FirstPersonPaintSemanticPrimitiveKind::box;
+    component.geometry.points[0] = localLow;
+    component.geometry.points[1] = localHigh;
+    component.geometry.pointCount = 2;
+    component.geometry.localHullKey = localHullKey;
+    component.transform = transform;
+    component.artwork = MakeFirstPersonSemanticArtwork(
+        session, image, artworkOffset, artworkGroup);
+    component.repetitionIndex = repetitionIndex;
+    component.collidable = collidable;
+    return PublishFirstPersonSemanticComponent(
+        session, std::move(component));
+}
+
+uint32_t PaintSessionAddFirstPersonSemanticBox(
+    PaintSession& session, FirstPersonPaintSemanticRole role,
+    const CoordsXYZ& localLow, const CoordsXYZ& localHigh,
+    ImageId image, const CoordsXYZ& artworkOffset,
+    uint32_t artworkGroup, uint64_t localHullKey,
+    uint16_t repetitionIndex, bool collidable)
+{
+    return PaintSessionAddFirstPersonSemanticOrientedBox(
+        session, role,
+        PaintSessionMakeFirstPersonSemanticTransform(session),
+        { float(localLow.x), float(localLow.y),
+          float(localLow.z) },
+        { float(localHigh.x), float(localHigh.y),
+          float(localHigh.z) },
+        image, artworkOffset, artworkGroup, localHullKey,
+        repetitionIndex, collidable);
+}
+
+uint32_t PaintSessionAddFirstPersonSemanticBeam(
+    PaintSession& session, FirstPersonPaintSemanticRole role,
+    const CoordsXYZ& localA, const CoordsXYZ& localB,
+    int32_t halfWidth, ImageId image,
+    const CoordsXYZ& artworkOffset,
+    uint32_t artworkGroup, bool collidable)
+{
+    if (localA.x == localB.x
+        && localA.y == localB.y
+        && localA.z == localB.z)
+        return 0;
+    FirstPersonPaintSemanticComponent component{};
+    component.role = role;
+    component.geometry.kind =
+        FirstPersonPaintSemanticPrimitiveKind::beam;
+    component.geometry.points[0] = {
+        float(localA.x), float(localA.y), float(localA.z)
+    };
+    component.geometry.points[1] = {
+        float(localB.x), float(localB.y), float(localB.z)
+    };
+    component.geometry.pointCount = 2;
+    component.geometry.halfWidth =
+        float(std::max(1, halfWidth));
+    component.geometry.halfHeight =
+        float(std::max(1, halfWidth));
+    component.transform =
+        PaintSessionMakeFirstPersonSemanticTransform(session);
+    component.artwork = MakeFirstPersonSemanticArtwork(
+        session, image, artworkOffset, artworkGroup);
+    component.collidable = collidable;
+    return PublishFirstPersonSemanticComponent(
+        session, std::move(component));
+}
+
+uint32_t PaintSessionAddFirstPersonSemanticQuad(
+    PaintSession& session, FirstPersonPaintSemanticRole role,
+    FirstPersonPaintSemanticPrimitiveKind kind,
+    const std::array<CoordsXYZ, 4>& localCorners,
+    ImageId image, const CoordsXYZ& artworkOffset,
+    uint32_t artworkGroup, bool decal, bool collidable)
+{
+    if (kind != FirstPersonPaintSemanticPrimitiveKind::plane
+        && kind !=
+            FirstPersonPaintSemanticPrimitiveKind::footprint
+        && kind != FirstPersonPaintSemanticPrimitiveKind::opening)
+        return 0;
+
+    FirstPersonPaintSemanticComponent component{};
+    component.role = role;
+    component.geometry.kind = kind;
+    component.geometry.pointCount = 4;
+    for (size_t i = 0;
+         i < component.geometry.points.size(); ++i)
+    {
+        component.geometry.points[i] = {
+            float(localCorners[i].x),
+            float(localCorners[i].y),
+            float(localCorners[i].z),
         };
-        const CoordsXYZ b{
-            interpolate(localA.x, localB.x, i + 1),
-            interpolate(localA.y, localB.y, i + 1),
-            interpolate(localA.z, localB.z, i + 1),
-        };
-        PaintSessionAddFirstPersonPhysicalBox(
-            session, kind,
-            {
-                std::min(a.x, b.x) - halfWidth,
-                std::min(a.y, b.y) - halfWidth,
-                std::min(a.z, b.z) - halfWidth,
-            },
-            {
-                std::max(a.x, b.x) + halfWidth,
-                std::max(a.y, b.y) + halfWidth,
-                std::max(a.z, b.z) + halfWidth,
-            },
-            image);
+    }
+    component.transform =
+        PaintSessionMakeFirstPersonSemanticTransform(session);
+    component.artwork = MakeFirstPersonSemanticArtwork(
+        session, image, artworkOffset, artworkGroup, decal);
+    component.collidable = collidable;
+    return PublishFirstPersonSemanticComponent(
+        session, std::move(component));
+}
+
+uint32_t PaintSessionAddFirstPersonSemanticOrientedQuad(
+    PaintSession& session, FirstPersonPaintSemanticRole role,
+    FirstPersonPaintSemanticPrimitiveKind kind,
+    const FirstPersonPaintSemanticTransform& transform,
+    const std::array<FirstPersonPaintSemanticVec3, 4>& localCorners,
+    ImageId image, const CoordsXYZ& artworkOffset,
+    uint32_t artworkGroup, bool decal, bool collidable)
+{
+    if (kind != FirstPersonPaintSemanticPrimitiveKind::plane
+        && kind !=
+            FirstPersonPaintSemanticPrimitiveKind::footprint
+        && kind != FirstPersonPaintSemanticPrimitiveKind::opening)
+        return 0;
+
+    FirstPersonPaintSemanticComponent component{};
+    component.role = role;
+    component.geometry.kind = kind;
+    component.geometry.points = localCorners;
+    component.geometry.pointCount = 4;
+    component.transform = transform;
+    component.artwork = MakeFirstPersonSemanticArtwork(
+        session, image, artworkOffset, artworkGroup, decal);
+    component.collidable = collidable;
+    return PublishFirstPersonSemanticComponent(
+        session, std::move(component));
+}
+
+
+void PaintSessionPublishFirstPersonPassengerComponentAnchor(
+    PaintSession& session, EntityBase& entity,
+    uint32_t seatMask, uint32_t componentId,
+    const FirstPersonPaintSemanticTransform& transform,
+    FirstPersonPaintSemanticVec3 localAnchor,
+    bool hasEyeOffset, float eyeForward,
+    float eyeRight, float eyeUp,
+    bool hasLocalPitch, float localPitch)
+{
+    const auto world =
+        TransformFirstPersonSemanticPoint(
+            transform, localAnchor);
+    PaintSessionPublishFirstPersonPassengerAnchor(
+        session, entity, seatMask,
+        world.x, world.y, world.z,
+        hasEyeOffset, eyeForward, eyeRight, eyeUp,
+        hasLocalPitch, localPitch);
+
+    if (session.FirstPersonPassengerAnchorSink != nullptr
+        && session.FirstPersonPassengerAnchorSink->Entity
+            == &entity
+        && (session.FirstPersonPassengerAnchorSink->seatMask
+            & seatMask) != 0)
+    {
+        session.FirstPersonPassengerAnchorSink
+            ->semanticComponentId = componentId;
+        session.FirstPersonPassengerAnchorSink
+            ->componentLocalAnchor = localAnchor;
     }
 }
 

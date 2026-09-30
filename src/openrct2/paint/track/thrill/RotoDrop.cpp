@@ -29,6 +29,35 @@ enum
     SPR_ROTO_DROP_TOWER_BASE_SEGMENT_90_DEG = 14563,
 };
 
+static PaintStruct* PaintSemanticTowerSectionAsParent(
+    PaintSession& session, ImageId image,
+    const CoordsXYZ& offset, const BoundBoxXYZ& physicalBox,
+    uint64_t localHullKey, uint16_t repetitionIndex = 0)
+{
+    auto low = physicalBox.offset;
+    auto high = physicalBox.offset + physicalBox.length;
+    if (physicalBox.length.x == 0)
+        high.x = low.x + 1;
+    if (physicalBox.length.y == 0)
+        high.y = low.y + 1;
+    if (physicalBox.length.z == 0)
+        high.z = low.z + 1;
+    const uint32_t group =
+        PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+    PaintSessionAddFirstPersonSemanticBox(
+        session, FirstPersonPaintSemanticRole::towerSection,
+        low, high, image, offset, group,
+        localHullKey, repetitionIndex, true);
+    FirstPersonPaintSemanticScope scope(
+        session, FirstPersonPaintSemanticRole::towerSection,
+        group);
+    auto* result =
+        PaintAddImageAsParent(
+            session, image, offset, physicalBox);
+    session.FirstPersonSemanticArtworkGroup = 0;
+    return result;
+}
+
 /** rct2: 0x00886194 */
 static void PaintRotoDropBase(
     PaintSession& session, const Ride& ride, uint8_t trackSequence, uint8_t direction, int32_t height,
@@ -54,15 +83,15 @@ static void PaintRotoDropBase(
     {
         auto imageId = session.TrackColours.WithIndex(
             (direction & 1 ? SPR_ROTO_DROP_TOWER_BASE_90_DEG : SPR_ROTO_DROP_TOWER_BASE));
-        PaintAddImageAsParent(session, imageId, { 0, 0, height }, { { 8, 8, height + 3 }, { 2, 2, 27 } });
+        PaintSemanticTowerSectionAsParent(session, imageId, { 0, 0, height }, { { 8, 8, height + 3 }, { 2, 2, 27 } }, uint64_t(SPR_ROTO_DROP_TOWER_SEGMENT));
 
         imageId = session.TrackColours.WithIndex(
             (direction & 1 ? SPR_ROTO_DROP_TOWER_BASE_SEGMENT_90_DEG : SPR_ROTO_DROP_TOWER_BASE_SEGMENT));
-        PaintAddImageAsParent(session, imageId, { 0, 0, height + 32 }, { { 8, 8, height + 32 }, { 2, 2, 30 } });
+        PaintSemanticTowerSectionAsParent(session, imageId, { 0, 0, height + 32 }, { { 8, 8, height + 32 }, { 2, 2, 30 } }, uint64_t(SPR_ROTO_DROP_TOWER_SEGMENT));
 
         imageId = session.TrackColours.WithIndex(
             (direction & 1 ? SPR_ROTO_DROP_TOWER_BASE_SEGMENT_90_DEG : SPR_ROTO_DROP_TOWER_BASE_SEGMENT));
-        PaintAddImageAsParent(session, imageId, { 0, 0, height + 64 }, { { 8, 8, height + 64 }, { 2, 2, 30 } });
+        PaintSemanticTowerSectionAsParent(session, imageId, { 0, 0, height + 64 }, { { 8, 8, height + 64 }, { 2, 2, 30 } }, uint64_t(SPR_ROTO_DROP_TOWER_SEGMENT));
 
         PaintUtilSetVerticalTunnel(session, height + 96);
         PaintUtilSetSegmentSupportHeight(session, kSegmentsAll, 0xFFFF, 0);
@@ -122,7 +151,7 @@ static void PaintRotoDropTowerSection(
     }
 
     auto imageId = session.TrackColours.WithIndex(SPR_ROTO_DROP_TOWER_SEGMENT);
-    PaintAddImageAsParent(session, imageId, { 0, 0, height }, { { 8, 8, height }, { 2, 2, 30 } });
+    PaintSemanticTowerSectionAsParent(session, imageId, { 0, 0, height }, { { 8, 8, height }, { 2, 2, 30 } }, uint64_t(SPR_ROTO_DROP_TOWER_SEGMENT));
 
     // The top segment of the Roto drop is only drawn when there is no tile element right above it
     bool paintTopSegment = true;

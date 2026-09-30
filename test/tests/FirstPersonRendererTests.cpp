@@ -841,6 +841,65 @@ TEST(FirstPersonVehiclePresentationTest, HalfTweenOwnsOneSharedCarriageTransform
         expected.basis.up.z, 1e-5f);
 }
 
+TEST(FirstPersonSemanticComponentTest, OrientedBeamBoundsPreserveDiagonalGeometry)
+{
+    FirstPersonPaintSemanticComponent component{};
+    component.geometry.kind =
+        FirstPersonPaintSemanticPrimitiveKind::beam;
+    component.geometry.points[0] = { 0.0f, 0.0f, 0.0f };
+    component.geometry.points[1] = { 10.0f, 0.0f, 0.0f };
+    component.geometry.pointCount = 2;
+    component.geometry.halfWidth = 1.0f;
+    component.geometry.halfHeight = 1.0f;
+    component.transform.origin = { 100.0f, 200.0f, 10.0f };
+    component.transform.axisX = { 0.0f, 1.0f, 0.0f };
+    component.transform.axisY = { -1.0f, 0.0f, 0.0f };
+    component.transform.axisZ = { 0.0f, 0.0f, 1.0f };
+
+    FirstPersonVec3 low{}, high{};
+    ASSERT_TRUE(
+        FirstPersonSemanticComponentBounds(
+            component, low, high));
+    EXPECT_NEAR(low.x, 99.0f, 1e-5f);
+    EXPECT_NEAR(high.x, 101.0f, 1e-5f);
+    EXPECT_NEAR(low.y, 199.0f, 1e-5f);
+    EXPECT_NEAR(high.y, 211.0f, 1e-5f);
+    EXPECT_NEAR(low.z, 9.0f, 1e-5f);
+    EXPECT_NEAR(high.z, 11.0f, 1e-5f);
+}
+
+TEST(FirstPersonSemanticComponentTest, TileRegistryPublishesOneGenericContract)
+{
+    ClearFirstPersonSemanticComponents();
+    const CoordsXY tile{ 64, 96 };
+
+    FirstPersonPaintSemanticComponent component{};
+    component.role = FirstPersonPaintSemanticRole::stationFence;
+    component.geometry.kind =
+        FirstPersonPaintSemanticPrimitiveKind::box;
+    component.geometry.points[0] = { 0.0f, 0.0f, 0.0f };
+    component.geometry.points[1] = { 32.0f, 1.0f, 7.0f };
+    component.geometry.pointCount = 2;
+    component.transform.origin = {
+        float(tile.x), float(tile.y), 0.0f
+    };
+
+    PublishFirstPersonSemanticComponents(
+        tile, { component });
+    const auto* published =
+        GetFirstPersonSemanticComponents(tile);
+    ASSERT_NE(published, nullptr);
+    ASSERT_EQ(published->size(), 1u);
+    EXPECT_EQ(
+        published->front().role,
+        FirstPersonPaintSemanticRole::stationFence);
+
+    ClearFirstPersonSemanticComponents();
+    EXPECT_EQ(
+        GetFirstPersonSemanticComponents(tile),
+        nullptr);
+}
+
 TEST(FirstPersonPhysicalProxyTest, BankedRectangularRailRotatesWidthIntoVerticalExtent)
 {
     const FirstPersonBasis banked{
