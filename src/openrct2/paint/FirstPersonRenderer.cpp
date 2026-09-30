@@ -722,18 +722,38 @@ namespace OpenRCT2::Paint
                 { origin.x + kCoordsXYStep, origin.y + kCoordsXYStep, heights.north },
                 { origin.x, origin.y + kCoordsXYStep, heights.west },
             } };
+            const bool oppositeDiagonal =
+                UsesOppositeTerrainDiagonal(slope);
             const auto heightAt = [&](float localX, float localY) {
-                const float tx = std::clamp(
+                const float x = std::clamp(
                     localX / float(kCoordsXYStep), 0.0f, 1.0f);
-                const float ty = std::clamp(
+                const float y = std::clamp(
                     localY / float(kCoordsXYStep), 0.0f, 1.0f);
-                const float z0 =
-                    float(heights.south)
-                    + (float(heights.east) - float(heights.south)) * tx;
-                const float z1 =
-                    float(heights.west)
-                    + (float(heights.north) - float(heights.west)) * tx;
-                return z0 + (z1 - z0) * ty;
+                const float south = float(heights.south);
+                const float east = float(heights.east);
+                const float north = float(heights.north);
+                const float west = float(heights.west);
+
+                if (!oppositeDiagonal)
+                {
+                    // Same 0--2 diagonal as EmitQuad(): triangle 0,1,2
+                    // occupies x >= y; triangle 0,2,3 occupies y >= x.
+                    if (x >= y)
+                        return (1.0f - x) * south
+                            + (x - y) * east
+                            + y * north;
+                    return (1.0f - y) * south
+                        + x * north
+                        + (y - x) * west;
+                }
+
+                // Same 1--3 diagonal as EmitQuad(otherDiagonal=true).
+                if (x + y <= 1.0f)
+                    return (1.0f - x - y) * south
+                        + x * east + y * west;
+                return (1.0f - y) * east
+                    + (x + y - 1.0f) * north
+                    + (1.0f - x) * west;
             };
             const auto footprint = BuildFirstPersonPathFootprint(
                 path->getEdges(), path->getCorners(), path->isQueue());
@@ -768,7 +788,8 @@ namespace OpenRCT2::Paint
                         float(iso.y - spritePos.y - g1->yOffset),
                     };
                 }
-                EmitQuad(surface, vertices);
+                EmitQuad(
+                    surface, vertices, oppositeDiagonal);
                 scene.surfaces.emplace_back(std::move(surface));
             }
 
