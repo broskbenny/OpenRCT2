@@ -13,6 +13,7 @@
 #include <openrct2/paint/FirstPersonAssetReconstruction.h>
 #include <openrct2/paint/FirstPersonPeriodicPassengerMotion.h>
 #include <openrct2/paint/FirstPersonPhysicalProxy.h>
+#include <openrct2/paint/FirstPersonPathGeometry.h>
 #include <openrct2/paint/FirstPersonTrackTrajectory.h>
 #include <openrct2/paint/FirstPersonTunnelGeometry.h>
 #include <openrct2/paint/FirstPersonTrackProfileCalibration.h>
@@ -48,6 +49,94 @@ namespace
             result.add(x, y);
         return result;
     }
+}
+
+TEST(FirstPersonPathGeometryTest, FootprintPreservesMarginsEdgesAndCorners)
+{
+    const auto isolated =
+        BuildFirstPersonPathFootprint(0, 0, false);
+    ASSERT_EQ(isolated.size(), 1u);
+    EXPECT_EQ(isolated[0].x0, 3);
+    EXPECT_EQ(isolated[0].y0, 3);
+    EXPECT_EQ(isolated[0].x1, 29);
+    EXPECT_EQ(isolated[0].y1, 29);
+
+    const auto complete =
+        BuildFirstPersonPathFootprint(0x0F, 0x0F, false);
+    ASSERT_EQ(complete.size(), 9u);
+    int32_t area = 0;
+    for (const auto& cell : complete)
+        area += (cell.x1 - cell.x0)
+            * (cell.y1 - cell.y0);
+    EXPECT_EQ(area, 32 * 32);
+
+    const auto queue =
+        BuildFirstPersonPathFootprint(0, 0x0F, true);
+    ASSERT_EQ(queue.size(), 1u);
+}
+
+TEST(FirstPersonVisualHullTest, SolidVolumeMergesToSixBoundaryFaces)
+{
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 2.0f;
+    hull.sizeForward = 4;
+    hull.sizeRight = 3;
+    hull.sizeUp = 5;
+    hull.occupied.assign(
+        size_t(hull.sizeForward)
+            * size_t(hull.sizeRight)
+            * size_t(hull.sizeUp),
+        1);
+    const auto faces =
+        BuildFirstPersonVisualHullBoundaryFaces(hull);
+    ASSERT_EQ(faces.size(), 6u);
+    EXPECT_EQ(
+        std::count_if(
+            faces.begin(), faces.end(),
+            [](const auto& face) {
+                return face.kind
+                    == FirstPersonVisualHullFaceKind::bottom;
+            }),
+        1);
+}
+
+TEST(FirstPersonAssetReconstructionTest, AdjacentQuarterCellsDropInternalWall)
+{
+    struct Cell
+    {
+        int32_t qx{};
+        int32_t qy{};
+        int32_t lowZ{};
+        int32_t highZ{};
+        uint16_t sequence{};
+    };
+    const std::vector<Cell> cells{
+        { 0, 0, 0, 16, 0 },
+        { 1, 0, 0, 16, 1 },
+    };
+    const auto faces =
+        BuildFirstPersonQuarterCellOccupancyFaces(cells);
+    EXPECT_EQ(
+        std::count_if(
+            faces.begin(), faces.end(),
+            [](const auto& face) {
+                return (
+                    face.kind == FirstPersonOccupancyFaceKind::maxX
+                    && face.corners[0].x == 16)
+                    || (
+                        face.kind == FirstPersonOccupancyFaceKind::minX
+                        && face.corners[0].x == 16);
+            }),
+        0);
+    EXPECT_EQ(
+        std::count_if(
+            faces.begin(), faces.end(),
+            [](const auto& face) {
+                return face.kind
+                    == FirstPersonOccupancyFaceKind::bottom;
+            }),
+        2);
 }
 
 TEST(FirstPersonSourceRotationTest, CameraRelativePointOwnsNativeQuadrant)
@@ -220,12 +309,13 @@ TEST(FirstPersonAssetReconstructionTest, QuarterCellFallbackKeepsExactOccupancyF
     const auto faces =
         BuildFirstPersonQuarterCellOccupancyFaces(cells);
 
-    ASSERT_EQ(faces.size(), 5u);
+    ASSERT_EQ(faces.size(), 6u);
     EXPECT_EQ(faces[0].sequence, 7u);
     EXPECT_EQ(faces[0].corners[0].x, 32);
     EXPECT_EQ(faces[0].corners[0].y, 48);
     EXPECT_EQ(faces[0].corners[0].z, 8);
-    EXPECT_EQ(faces.back().kind, FirstPersonOccupancyFaceKind::top);
+    EXPECT_EQ(faces[4].kind, FirstPersonOccupancyFaceKind::top);
+    EXPECT_EQ(faces[5].kind, FirstPersonOccupancyFaceKind::bottom);
     EXPECT_EQ(faces.back().corners[0].z, 28);
 
     const auto source =

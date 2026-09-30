@@ -24,6 +24,34 @@ namespace OpenRCT2::Paint
 {
     inline constexpr int32_t kFirstPersonSmallSceneryCollisionMaxHeight = 20;
 
+    [[nodiscard]] inline bool
+        FirstPersonSmallSceneryUsesAuthoritativeOccupancy(
+            const SmallSceneryEntry& entry)
+    {
+        return !entry.flags.hasAny(
+            SmallSceneryFlag::isTree,
+            SmallSceneryFlag::isAnimated,
+            SmallSceneryFlag::hasGlass,
+            SmallSceneryFlag::isFountain,
+            SmallSceneryFlag::isCupidFountain);
+    }
+
+    inline uint64_t&
+        FirstPersonSmallSceneryReconstructionGeneration()
+    {
+        static uint64_t generation = 1;
+        return generation;
+    }
+
+    inline void ClearFirstPersonSmallSceneryReconstructionCache()
+    {
+        auto& generation =
+            FirstPersonSmallSceneryReconstructionGeneration();
+        ++generation;
+        if (generation == 0)
+            generation = 1;
+    }
+
     [[nodiscard]] constexpr bool
         FirstPersonSmallSceneryVisualReconstructionCoversHeight(
             int32_t visualHeight, int32_t reconstructedHeight)
@@ -281,12 +309,7 @@ namespace OpenRCT2::Paint
         // Irregular foliage and stateful/special-effect artwork may remain
         // sprite-based. Other static scenery keeps its declared occupancy even
         // when silhouette carving cannot be trusted.
-        if (entry.flags.hasAny(
-                SmallSceneryFlag::isTree,
-                SmallSceneryFlag::isAnimated,
-                SmallSceneryFlag::hasGlass,
-                SmallSceneryFlag::isFountain,
-                SmallSceneryFlag::isCupidFountain))
+        if (!FirstPersonSmallSceneryUsesAuthoritativeOccupancy(entry))
             return {};
 
         const uint8_t occupied =
@@ -299,6 +322,8 @@ namespace OpenRCT2::Paint
                 entry, element);
         std::vector<FirstPersonVisualHullView> views;
         views.reserve(4);
+        std::vector<FirstPersonVisualHullTextureView> textureViews;
+        textureViews.reserve(4);
         for (uint8_t rotation = 0; rotation < 4; ++rotation)
         {
             const uint8_t direction =
@@ -308,12 +333,17 @@ namespace OpenRCT2::Paint
                 entry.image + direction
                 + uint32_t(witherStage) * 4u;
             const auto* g1 = GfxGetG1Element(image);
-            constexpr size_t kMaxSourcePixels = 65536;
             if (g1 == nullptr || g1->offset == nullptr
-                || g1->width <= 0 || g1->height <= 0
-                || size_t(g1->width)
-                        * size_t(g1->height)
-                    > kMaxSourcePixels)
+                || g1->width <= 0 || g1->height <= 0)
+                continue;
+
+            // Texture availability and silhouette-analysis eligibility are
+            // separate. Oversized art can skip carving without deleting the
+            // authoritative occupancy body.
+            textureViews.push_back({ rotation, image });
+            constexpr size_t kMaxSourcePixels = 65536;
+            if (size_t(g1->width) * size_t(g1->height)
+                > kMaxSourcePixels)
                 continue;
 
             FirstPersonVisualHullView view{};
@@ -334,9 +364,6 @@ namespace OpenRCT2::Paint
             if (!view.observed.empty())
                 views.push_back(std::move(view));
         }
-        if (views.empty())
-            return {};
-
         FirstPersonVisualHullBounds bounds{};
         bounds.minForward = 0.0f;
         bounds.maxForward = float(kCoordsXYStep);
@@ -393,11 +420,6 @@ namespace OpenRCT2::Paint
         if (carved.valid)
             return carved;
 
-        std::vector<FirstPersonVisualHullTextureView> textureViews;
-        textureViews.reserve(views.size());
-        for (const auto& view : views)
-            textureViews.push_back(
-                { view.imageDirection, view.image });
         return BuildFirstPersonOccupancyHull(
             bounds, config, textureViews, occupancyPredicate);
     }
@@ -434,6 +456,7 @@ namespace OpenRCT2::Paint
         struct CacheEntry
         {
             const uint8_t* sourceIdentity{};
+            uint64_t generation{};
             FirstPersonVisualHull hull{};
         };
         static std::unordered_map<
@@ -457,15 +480,80 @@ namespace OpenRCT2::Paint
             return nullptr;
 
         auto& cached = cache[key];
-        if (cached.sourceIdentity != first->offset)
+        const auto generation =
+            FirstPersonSmallSceneryReconstructionGeneration();
+        if (cached.sourceIdentity != first->offset
+            || cached.generation != generation)
         {
             cached.sourceIdentity = first->offset;
+            cached.generation = generation;
             cached.hull =
                 BuildFirstPersonSmallSceneryVisualHull(
                     entry, element);
         }
         return cached.hull.valid
             ? &cached.hull : nullptr;
+    }
+
+    [[nodiscard]] inline FirstPersonSmallSceneryWalkingMask
+        BuildFirstPersonSmallSceneryWalkingMaskFromHull(
+            const FirstPersonVisualHull& hull,
+            int32_t visualHeight)
+    {
+        FirstPersonSmallSceneryWalkingMask result{};
+        if (!hull.valid || visualHeight <= 0)
+            return result;
+
+        const int32_t collisionTop =
+            std::min(
+                visualHeight,
+                kFirstPersonSmallSceneryCollisionMaxHeight);
+        if (collisionTop <= 0)
+            return result;
+
+        constexpr int32_t kLayerHeight = 4;
+        result.layerCount = uint8_t(std::min<int32_t>(
+            FirstPersonSmallSceneryWalkingMask::kMaxZLayers,
+            (collisionTop + kLayerHeight - 1) / kLayerHeight));
+        for (size_t layer = 0; layer < result.layerCount; ++layer)
+        {
+            const int32_t low = int32_t(layer) * kLayerHeight;
+            const int32_t high =
+                std::min(collisionTop, low + kLayerHeight);
+            result.layerLowZ[layer] = int16_t(low);
+            result.layerHighZ[layer] = int16_t(high);
+        }
+
+        constexpr int32_t cellSize =
+            FirstPersonSmallSceneryWalkingMask::kCellSize;
+        constexpr int32_t cells =
+            FirstPersonSmallSceneryWalkingMask::kCellsPerAxis;
+        for (int32_t yCell = 0; yCell < cells; ++yCell)
+        for (int32_t xCell = 0; xCell < cells; ++xCell)
+        {
+            const float x =
+                float(xCell * cellSize) + float(cellSize) * 0.5f;
+            const float y =
+                float(yCell * cellSize) + float(cellSize) * 0.5f;
+            for (size_t layer = 0; layer < result.layerCount; ++layer)
+            {
+                const int32_t low = result.layerLowZ[layer];
+                const int32_t high = result.layerHighZ[layer];
+                bool occupied = false;
+                for (float z = float(low) + 1.0f;
+                     z < float(high); z += 2.0f)
+                {
+                    if (hull.containsPoint({ x, y, z }))
+                    {
+                        occupied = true;
+                        break;
+                    }
+                }
+                if (occupied)
+                    result.add(layer, xCell, yCell);
+            }
+        }
+        return result;
     }
 
     [[nodiscard]] inline const FirstPersonSmallSceneryWalkingMask*
@@ -499,6 +587,7 @@ namespace OpenRCT2::Paint
         struct CacheEntry
         {
             const uint8_t* sourceIdentity{};
+            uint64_t generation{};
             FirstPersonSmallSceneryWalkingMask mask{};
         };
         static std::unordered_map<CacheKey, CacheEntry, CacheKeyHash> cache;
@@ -517,12 +606,28 @@ namespace OpenRCT2::Paint
             return nullptr;
 
         auto& cached = cache[key];
-        if (cached.sourceIdentity != first->offset)
+        const auto generation =
+            FirstPersonSmallSceneryReconstructionGeneration();
+        if (cached.sourceIdentity != first->offset
+            || cached.generation != generation)
         {
             cached.sourceIdentity = first->offset;
-            cached.mask =
-                BuildFirstPersonSmallSceneryWalkingMask(
-                    entry, element);
+            cached.generation = generation;
+            if (const auto* hull =
+                    GetFirstPersonSmallSceneryVisualHull(
+                        entry, element);
+                hull != nullptr)
+            {
+                cached.mask =
+                    BuildFirstPersonSmallSceneryWalkingMaskFromHull(
+                        *hull, entry.height);
+            }
+            else
+            {
+                cached.mask =
+                    BuildFirstPersonSmallSceneryWalkingMask(
+                        entry, element);
+            }
         }
         return cached.mask.valid ? &cached.mask : nullptr;
     }
