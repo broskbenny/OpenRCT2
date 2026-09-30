@@ -80,6 +80,194 @@ namespace OpenRCT2::Paint
         }
     };
 
+    enum class FirstPersonVisualHullFaceKind : uint8_t
+    {
+        minForward,
+        maxForward,
+        minRight,
+        maxRight,
+        bottom,
+        top,
+    };
+
+    struct FirstPersonVisualHullFace
+    {
+        std::array<FirstPersonVec3, 4> corners{};
+        FirstPersonVec3 normal{};
+        FirstPersonVisualHullFaceKind kind{};
+    };
+
+    template<typename SampleFace, typename BuildFace>
+    inline void AppendFirstPersonGreedyHullFaceSlices(
+        std::vector<FirstPersonVisualHullFace>& result,
+        int32_t sliceCount, int32_t axisACount,
+        int32_t axisBCount, SampleFace&& sampleFace,
+        BuildFace&& buildFace)
+    {
+        std::vector<uint8_t> mask(
+            size_t(axisACount) * size_t(axisBCount), 0);
+        for (int32_t slice = 0; slice < sliceCount; ++slice)
+        {
+            std::fill(mask.begin(), mask.end(), 0);
+            for (int32_t b = 0; b < axisBCount; ++b)
+            for (int32_t a = 0; a < axisACount; ++a)
+                mask[size_t(b) * size_t(axisACount) + size_t(a)] =
+                    sampleFace(slice, a, b) ? 1 : 0;
+
+            for (int32_t b = 0; b < axisBCount; ++b)
+            for (int32_t a = 0; a < axisACount; ++a)
+            {
+                if (mask[size_t(b) * size_t(axisACount) + size_t(a)] == 0)
+                    continue;
+                int32_t width = 1;
+                while (a + width < axisACount
+                    && mask[size_t(b) * size_t(axisACount)
+                        + size_t(a + width)] != 0)
+                    ++width;
+                int32_t height = 1;
+                for (; b + height < axisBCount; ++height)
+                {
+                    bool full = true;
+                    for (int32_t x = 0; x < width; ++x)
+                    {
+                        if (mask[size_t(b + height)
+                                * size_t(axisACount)
+                            + size_t(a + x)] == 0)
+                        {
+                            full = false;
+                            break;
+                        }
+                    }
+                    if (!full)
+                        break;
+                }
+                for (int32_t y = 0; y < height; ++y)
+                for (int32_t x = 0; x < width; ++x)
+                    mask[size_t(b + y) * size_t(axisACount)
+                        + size_t(a + x)] = 0;
+                result.push_back(
+                    buildFace(slice, a, b, width, height));
+            }
+        }
+    }
+
+    [[nodiscard]] inline std::vector<FirstPersonVisualHullFace>
+        BuildFirstPersonVisualHullBoundaryFaces(
+            const FirstPersonVisualHull& hull)
+    {
+        std::vector<FirstPersonVisualHullFace> result;
+        if (!hull.valid || hull.occupied.empty())
+            return result;
+        const auto coord =
+            [step = hull.step](float base, int32_t cell) {
+                return base + float(cell) * step;
+            };
+
+        AppendFirstPersonGreedyHullFaceSlices(
+            result, hull.sizeForward, hull.sizeRight, hull.sizeUp,
+            [&](int32_t f, int32_t r, int32_t u) {
+                return hull.contains(f, r, u)
+                    && !hull.contains(f - 1, r, u);
+            },
+            [&](int32_t f, int32_t r, int32_t u, int32_t w, int32_t h) {
+                const float x = coord(hull.minForward, f);
+                const float y0 = coord(hull.minRight, r);
+                const float y1 = coord(hull.minRight, r + w);
+                const float z0 = coord(hull.minUp, u);
+                const float z1 = coord(hull.minUp, u + h);
+                return FirstPersonVisualHullFace{ { {
+                    { x, y1, z0 }, { x, y0, z0 },
+                    { x, y0, z1 }, { x, y1, z1 },
+                } }, { -1, 0, 0 }, FirstPersonVisualHullFaceKind::minForward };
+            });
+        AppendFirstPersonGreedyHullFaceSlices(
+            result, hull.sizeForward, hull.sizeRight, hull.sizeUp,
+            [&](int32_t f, int32_t r, int32_t u) {
+                return hull.contains(f, r, u)
+                    && !hull.contains(f + 1, r, u);
+            },
+            [&](int32_t f, int32_t r, int32_t u, int32_t w, int32_t h) {
+                const float x = coord(hull.minForward, f + 1);
+                const float y0 = coord(hull.minRight, r);
+                const float y1 = coord(hull.minRight, r + w);
+                const float z0 = coord(hull.minUp, u);
+                const float z1 = coord(hull.minUp, u + h);
+                return FirstPersonVisualHullFace{ { {
+                    { x, y0, z0 }, { x, y1, z0 },
+                    { x, y1, z1 }, { x, y0, z1 },
+                } }, { 1, 0, 0 }, FirstPersonVisualHullFaceKind::maxForward };
+            });
+        AppendFirstPersonGreedyHullFaceSlices(
+            result, hull.sizeRight, hull.sizeForward, hull.sizeUp,
+            [&](int32_t r, int32_t f, int32_t u) {
+                return hull.contains(f, r, u)
+                    && !hull.contains(f, r - 1, u);
+            },
+            [&](int32_t r, int32_t f, int32_t u, int32_t w, int32_t h) {
+                const float y = coord(hull.minRight, r);
+                const float x0 = coord(hull.minForward, f);
+                const float x1 = coord(hull.minForward, f + w);
+                const float z0 = coord(hull.minUp, u);
+                const float z1 = coord(hull.minUp, u + h);
+                return FirstPersonVisualHullFace{ { {
+                    { x0, y, z0 }, { x1, y, z0 },
+                    { x1, y, z1 }, { x0, y, z1 },
+                } }, { 0, -1, 0 }, FirstPersonVisualHullFaceKind::minRight };
+            });
+        AppendFirstPersonGreedyHullFaceSlices(
+            result, hull.sizeRight, hull.sizeForward, hull.sizeUp,
+            [&](int32_t r, int32_t f, int32_t u) {
+                return hull.contains(f, r, u)
+                    && !hull.contains(f, r + 1, u);
+            },
+            [&](int32_t r, int32_t f, int32_t u, int32_t w, int32_t h) {
+                const float y = coord(hull.minRight, r + 1);
+                const float x0 = coord(hull.minForward, f);
+                const float x1 = coord(hull.minForward, f + w);
+                const float z0 = coord(hull.minUp, u);
+                const float z1 = coord(hull.minUp, u + h);
+                return FirstPersonVisualHullFace{ { {
+                    { x1, y, z0 }, { x0, y, z0 },
+                    { x0, y, z1 }, { x1, y, z1 },
+                } }, { 0, 1, 0 }, FirstPersonVisualHullFaceKind::maxRight };
+            });
+        AppendFirstPersonGreedyHullFaceSlices(
+            result, hull.sizeUp, hull.sizeForward, hull.sizeRight,
+            [&](int32_t u, int32_t f, int32_t r) {
+                return hull.contains(f, r, u)
+                    && !hull.contains(f, r, u - 1);
+            },
+            [&](int32_t u, int32_t f, int32_t r, int32_t w, int32_t h) {
+                const float z = coord(hull.minUp, u);
+                const float x0 = coord(hull.minForward, f);
+                const float x1 = coord(hull.minForward, f + w);
+                const float y0 = coord(hull.minRight, r);
+                const float y1 = coord(hull.minRight, r + h);
+                return FirstPersonVisualHullFace{ { {
+                    { x0, y1, z }, { x1, y1, z },
+                    { x1, y0, z }, { x0, y0, z },
+                } }, { 0, 0, -1 }, FirstPersonVisualHullFaceKind::bottom };
+            });
+        AppendFirstPersonGreedyHullFaceSlices(
+            result, hull.sizeUp, hull.sizeForward, hull.sizeRight,
+            [&](int32_t u, int32_t f, int32_t r) {
+                return hull.contains(f, r, u)
+                    && !hull.contains(f, r, u + 1);
+            },
+            [&](int32_t u, int32_t f, int32_t r, int32_t w, int32_t h) {
+                const float z = coord(hull.minUp, u + 1);
+                const float x0 = coord(hull.minForward, f);
+                const float x1 = coord(hull.minForward, f + w);
+                const float y0 = coord(hull.minRight, r);
+                const float y1 = coord(hull.minRight, r + h);
+                return FirstPersonVisualHullFace{ { {
+                    { x0, y0, z }, { x1, y0, z },
+                    { x1, y1, z }, { x0, y1, z },
+                } }, { 0, 0, 1 }, FirstPersonVisualHullFaceKind::top };
+            });
+        return result;
+    }
+
     struct FirstPersonVisualHullView
     {
         uint8_t imageDirection{};

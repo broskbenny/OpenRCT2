@@ -85,6 +85,7 @@ namespace OpenRCT2::Paint
         minY,
         maxY,
         top,
+        bottom,
     };
 
     struct FirstPersonOccupancyFace
@@ -93,6 +94,7 @@ namespace OpenRCT2::Paint
         uint16_t sequence{};
         FirstPersonOccupancyFaceKind kind{};
         uint8_t sourceDirection{};
+        bool textureFallbackOnly = false;
     };
 
     template<typename TCell>
@@ -101,9 +103,24 @@ namespace OpenRCT2::Paint
             const std::vector<TCell>& cells)
     {
         std::vector<FirstPersonOccupancyFace> result;
-        result.reserve(cells.size() * 5);
+        result.reserve(cells.size() * 6);
+
+        const auto coverageAt =
+            [&](int32_t qx, int32_t qy) {
+                std::vector<FirstPersonVerticalInterval> result;
+                for (const auto& other : cells)
+                {
+                    if (other.qx == qx && other.qy == qy
+                        && other.highZ > other.lowZ)
+                        result.push_back({ other.lowZ, other.highZ });
+                }
+                return result;
+            };
+
         for (const auto& cell : cells)
         {
+            if (cell.highZ <= cell.lowZ)
+                continue;
             const int32_t x0 = cell.qx * 16;
             const int32_t y0 = cell.qy * 16;
             const int32_t x1 = x0 + 16;
@@ -114,29 +131,97 @@ namespace OpenRCT2::Paint
                 [&](FirstPersonOccupancyFaceKind kind,
                     std::array<CoordsXYZ, 4> corners) {
                     result.push_back({
-                        corners, uint16_t(cell.sequence), kind, 0
+                        corners, uint16_t(cell.sequence),
+                        kind, 0, false
                     });
                 };
-            append(FirstPersonOccupancyFaceKind::minX, { {
-                { x0, y0, z0 }, { x0, y1, z0 },
-                { x0, y1, z1 }, { x0, y0, z1 },
-            } });
-            append(FirstPersonOccupancyFaceKind::maxX, { {
-                { x1, y1, z0 }, { x1, y0, z0 },
-                { x1, y0, z1 }, { x1, y1, z1 },
-            } });
-            append(FirstPersonOccupancyFaceKind::minY, { {
-                { x1, y0, z0 }, { x0, y0, z0 },
-                { x0, y0, z1 }, { x1, y0, z1 },
-            } });
-            append(FirstPersonOccupancyFaceKind::maxY, { {
-                { x0, y1, z0 }, { x1, y1, z0 },
-                { x1, y1, z1 }, { x0, y1, z1 },
-            } });
-            append(FirstPersonOccupancyFaceKind::top, { {
-                { x0, y0, z1 }, { x1, y0, z1 },
-                { x1, y1, z1 }, { x0, y1, z1 },
-            } });
+            const auto appendSide =
+                [&](FirstPersonOccupancyFaceKind kind,
+                    int32_t neighbourQx, int32_t neighbourQy) {
+                    const auto exposed =
+                        SubtractFirstPersonVerticalCoverage(
+                            { z0, z1 },
+                            coverageAt(neighbourQx, neighbourQy));
+                    for (const auto& interval : exposed)
+                    {
+                        switch (kind)
+                        {
+                            case FirstPersonOccupancyFaceKind::minX:
+                                append(kind, { {
+                                    { x0, y0, interval.low },
+                                    { x0, y1, interval.low },
+                                    { x0, y1, interval.high },
+                                    { x0, y0, interval.high },
+                                } });
+                                break;
+                            case FirstPersonOccupancyFaceKind::maxX:
+                                append(kind, { {
+                                    { x1, y1, interval.low },
+                                    { x1, y0, interval.low },
+                                    { x1, y0, interval.high },
+                                    { x1, y1, interval.high },
+                                } });
+                                break;
+                            case FirstPersonOccupancyFaceKind::minY:
+                                append(kind, { {
+                                    { x1, y0, interval.low },
+                                    { x0, y0, interval.low },
+                                    { x0, y0, interval.high },
+                                    { x1, y0, interval.high },
+                                } });
+                                break;
+                            case FirstPersonOccupancyFaceKind::maxY:
+                                append(kind, { {
+                                    { x0, y1, interval.low },
+                                    { x1, y1, interval.low },
+                                    { x1, y1, interval.high },
+                                    { x0, y1, interval.high },
+                                } });
+                                break;
+                            case FirstPersonOccupancyFaceKind::top:
+                            case FirstPersonOccupancyFaceKind::bottom:
+                                break;
+                        }
+                    }
+                };
+
+            appendSide(
+                FirstPersonOccupancyFaceKind::minX,
+                cell.qx - 1, cell.qy);
+            appendSide(
+                FirstPersonOccupancyFaceKind::maxX,
+                cell.qx + 1, cell.qy);
+            appendSide(
+                FirstPersonOccupancyFaceKind::minY,
+                cell.qx, cell.qy - 1);
+            appendSide(
+                FirstPersonOccupancyFaceKind::maxY,
+                cell.qx, cell.qy + 1);
+
+            const auto sameColumn = coverageAt(
+                cell.qx, cell.qy);
+            if (!FirstPersonVerticalPointCoveredAbove(
+                    z1, sameColumn))
+            {
+                append(FirstPersonOccupancyFaceKind::top, { {
+                    { x0, y0, z1 }, { x1, y0, z1 },
+                    { x1, y1, z1 }, { x0, y1, z1 },
+                } });
+            }
+            const bool coveredBelow =
+                std::any_of(
+                    sameColumn.begin(), sameColumn.end(),
+                    [z0](const auto& interval) {
+                        return interval.low < z0
+                            && interval.high >= z0;
+                    });
+            if (!coveredBelow)
+            {
+                append(FirstPersonOccupancyFaceKind::bottom, { {
+                    { x0, y1, z0 }, { x1, y1, z0 },
+                    { x1, y0, z0 }, { x0, y0, z0 },
+                } });
+            }
         }
         return result;
     }
@@ -182,13 +267,17 @@ namespace OpenRCT2::Paint
             case FirstPersonOccupancyFaceKind::maxX: normal = { 1, 0 }; break;
             case FirstPersonOccupancyFaceKind::minY: normal = { 0, -1 }; break;
             case FirstPersonOccupancyFaceKind::maxY: normal = { 0, 1 }; break;
-            case FirstPersonOccupancyFaceKind::top: break;
+            case FirstPersonOccupancyFaceKind::top:
+            case FirstPersonOccupancyFaceKind::bottom:
+                break;
         }
         for (uint8_t direction = 0; direction < 4; ++direction)
         {
             const bool visible =
                 kind == FirstPersonOccupancyFaceKind::top
-                || FirstPersonFaceVisibleFromNativeView(normal, direction);
+                || (kind != FirstPersonOccupancyFaceKind::bottom
+                    && FirstPersonFaceVisibleFromNativeView(
+                        normal, direction));
             if (visible && available(direction))
                 return direction;
         }
