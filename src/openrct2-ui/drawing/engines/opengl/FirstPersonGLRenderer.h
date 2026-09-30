@@ -57,6 +57,19 @@ namespace OpenRCT2::Ui
         size_t _staticRegionBytes{};
         uint64_t _frame{};
         GLuint _atlasHandle{};
+        std::unique_ptr<SwapFramebuffer> _preparedOutput;
+        uint64_t _preparedSceneSerial{};
+        int32_t _preparedScreenWidth{};
+        int32_t _preparedScreenHeight{};
+        int32_t _preparedViewportLeft{};
+        int32_t _preparedViewportTop{};
+        int32_t _preparedViewportWidth{};
+        int32_t _preparedViewportHeight{};
+
+        void RenderScene(
+            const Paint::FirstPersonScene& scene, TextureCache& textures,
+            SwapFramebuffer& output, int32_t screenWidth,
+            int32_t screenHeight, const ScreenRect& dirtyClip);
         void DiscardRegionBuffer(uint64_t key);
         void DiscardAllRegionBuffers();
     };

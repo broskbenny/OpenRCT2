@@ -423,6 +423,107 @@ void main() {
         SwapFramebuffer& output, int32_t screenWidth, int32_t screenHeight,
         const ScreenRect& dirtyClip)
     {
+        const int32_t left = scene.screenOrigin.x;
+        const int32_t top = scene.screenOrigin.y;
+        const int32_t width = scene.dimensions.width;
+        const int32_t height = scene.dimensions.height;
+        if (width <= 0 || height <= 0)
+            return;
+
+        const auto clip = Paint::IntersectFirstPersonScreenRects(
+            ScreenRect{ left, top, left + width, top + height },
+            dirtyClip);
+        if (clip.getWidth() <= 0 || clip.getHeight() <= 0)
+            return;
+
+        // Outside an explicit presentation frame, preserve the old immediate
+        // behaviour. The OpenGL window path supplies a nonzero serial and can
+        // safely reuse one fully rendered viewport for all dirty clips.
+        if (scene.presentationFrameSerial == 0)
+        {
+            RenderScene(
+                scene, textures, output,
+                screenWidth, screenHeight, dirtyClip);
+            return;
+        }
+
+        const bool rebuild =
+            _preparedOutput == nullptr
+            || _preparedSceneSerial
+                != scene.presentationFrameSerial
+            || _preparedScreenWidth != screenWidth
+            || _preparedScreenHeight != screenHeight
+            || _preparedViewportLeft != left
+            || _preparedViewportTop != top
+            || _preparedViewportWidth != width
+            || _preparedViewportHeight != height;
+        if (rebuild)
+        {
+            if (_preparedOutput == nullptr
+                || _preparedScreenWidth != screenWidth
+                || _preparedScreenHeight != screenHeight)
+            {
+                _preparedOutput =
+                    std::make_unique<SwapFramebuffer>(
+                        screenWidth, screenHeight);
+            }
+            _preparedOutput->Clear();
+            RenderScene(
+                scene, textures, *_preparedOutput,
+                screenWidth, screenHeight,
+                ScreenRect{
+                    left, top, left + width, top + height
+                });
+            _preparedSceneSerial =
+                scene.presentationFrameSerial;
+            _preparedScreenWidth = screenWidth;
+            _preparedScreenHeight = screenHeight;
+            _preparedViewportLeft = left;
+            _preparedViewportTop = top;
+            _preparedViewportWidth = width;
+            _preparedViewportHeight = height;
+        }
+
+        auto& destination = output.GetFinalFramebuffer();
+        auto& source =
+            _preparedOutput->GetFinalFramebuffer();
+        destination.BindDraw();
+        source.BindRead();
+
+        const int32_t x0 = clip.getLeft();
+        const int32_t x1 = clip.getRight();
+        const int32_t y0 =
+            screenHeight - clip.getBottom();
+        const int32_t y1 =
+            screenHeight - clip.getTop();
+        glCall(
+            glBlitFramebuffer,
+            x0, y0, x1, y1,
+            x0, y0, x1, y1,
+            GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+        // Match RenderScene's final state in the real target: first-person
+        // physical depth must never leak into later 2-D/window drawing, and
+        // pixels outside this dirty clip remain untouched.
+        destination.Bind();
+        glCall(glEnable, GL_SCISSOR_TEST);
+        glCall(
+            glScissor,
+            x0, y0,
+            clip.getWidth(), clip.getHeight());
+        glCall(glDepthMask, GL_TRUE);
+        glCall(glClear, GL_DEPTH_BUFFER_BIT);
+        glCall(glDisable, GL_SCISSOR_TEST);
+        glCall(glViewport, 0, 0, screenWidth, screenHeight);
+        glCall(glBindVertexArray, 0);
+        OpenGLState::Reset();
+    }
+
+    void FirstPersonGLRenderer::RenderScene(
+        const Paint::FirstPersonScene& scene, TextureCache& textures,
+        SwapFramebuffer& output, int32_t screenWidth, int32_t screenHeight,
+        const ScreenRect& dirtyClip)
+    {
         PROFILED_FUNCTION();
         const int32_t left = scene.screenOrigin.x;
         const int32_t top = scene.screenOrigin.y;
