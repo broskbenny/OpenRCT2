@@ -123,7 +123,7 @@ struct FirstPersonPaintSemanticVec3
     FirstPersonWallSemanticCorners(
         uint8_t direction, uint8_t slope, int32_t height)
 {
-    const float h = float(std::max(0, height));
+    const float h = float(height > 0 ? height : 0);
     const float step = float(2 * kCoordsZStep);
     FirstPersonPaintSemanticVec3 a{};
     FirstPersonPaintSemanticVec3 b{};
