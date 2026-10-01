@@ -5614,30 +5614,6 @@ namespace OpenRCT2::Paint
                 }
             };
 
-            const auto addSemanticComponent =
-                [&](const FirstPersonPaintSemanticComponent& component) {
-                    const bool moving =
-                        component.role
-                            == FirstPersonPaintSemanticRole::movingMachinery
-                        || component.role
-                            == FirstPersonPaintSemanticRole::seat;
-                    if (moving)
-                        return;
-                    const int32_t tileX =
-                        component.mapPosition.x / kCoordsXYStep;
-                    const int32_t tileY =
-                        component.mapPosition.y / kCoordsXYStep;
-                    const uint64_t componentRegion =
-                        FirstPersonGpuRegionKey(tileX, tileY);
-                    if (componentRegion != regionKey)
-                        return;
-                    auto surfaces =
-                        BuildFirstPersonSemanticComponentSurfaces(
-                            component, componentRegion);
-                    for (const auto& surface : surfaces)
-                        addSurface(surface);
-                };
-
             for (int32_t ty = y0; ty < y1; ++ty)
             for (int32_t tx = x0; tx < x1; ++tx)
             {
@@ -5660,38 +5636,93 @@ namespace OpenRCT2::Paint
                 {
                     struct SemanticViewGroup
                     {
+                        const FirstPersonPaintSemanticComponent*
+                            canonical = nullptr;
                         std::array<
                             const FirstPersonPaintSemanticComponent*, 4>
                             views{};
                     };
                     std::unordered_map<uint64_t, SemanticViewGroup>
                         semanticGroups;
+
+                    // Rotation zero is preferred only as a deterministic source
+                    // of the PHYSICAL model. If it is unavailable, use the
+                    // lowest available native rotation. Camera position is never
+                    // consulted here.
+                    uint8_t canonicalRotation = 0xff;
                     for (uint8_t rotation = 0;
                          rotation < 4; ++rotation)
                     {
                         const auto& variant =
                             supportIt->second.rotations[rotation];
-                        if (!variant.semanticValid)
-                            continue;
+                        if (variant.semanticValid
+                            && !variant.semanticComponents.empty())
+                        {
+                            canonicalRotation = rotation;
+                            break;
+                        }
+                    }
+
+                    if (canonicalRotation < 4)
+                    {
+                        const auto& canonicalVariant =
+                            supportIt->second.rotations[
+                                canonicalRotation];
                         std::unordered_map<uint64_t, uint32_t>
-                            occurrences;
+                            canonicalOccurrences;
                         for (const auto& component :
-                             variant.semanticComponents)
+                             canonicalVariant.semanticComponents)
                         {
                             const uint64_t physical =
                                 FirstPersonSemanticPhysicalFingerprint(
                                     component);
                             const uint32_t occurrence =
-                                occurrences[physical]++;
+                                canonicalOccurrences[physical]++;
                             uint64_t groupKey = physical;
-                            ExtendStableKey(
-                                groupKey, occurrence);
+                            ExtendStableKey(groupKey, occurrence);
                             auto& group =
                                 semanticGroups[groupKey];
-                            const uint8_t sourceRotation =
-                                component.artwork.sourceRotation & 3u;
-                            group.views[sourceRotation] =
+                            group.canonical = &component;
+                            group.views[
+                                component.artwork.sourceRotation & 3u] =
                                 &component;
+                        }
+
+                        // Other native rotations may contribute artwork only
+                        // when they describe the same canonical physical
+                        // component. Unmatched alternate geometry is ignored
+                        // rather than creating duplicate solids.
+                        for (uint8_t rotation = 0;
+                             rotation < 4; ++rotation)
+                        {
+                            if (rotation == canonicalRotation)
+                                continue;
+                            const auto& variant =
+                                supportIt->second.rotations[rotation];
+                            if (!variant.semanticValid)
+                                continue;
+                            std::unordered_map<uint64_t, uint32_t>
+                                occurrences;
+                            for (const auto& component :
+                                 variant.semanticComponents)
+                            {
+                                const uint64_t physical =
+                                    FirstPersonSemanticPhysicalFingerprint(
+                                        component);
+                                const uint32_t occurrence =
+                                    occurrences[physical]++;
+                                uint64_t groupKey = physical;
+                                ExtendStableKey(
+                                    groupKey, occurrence);
+                                const auto found =
+                                    semanticGroups.find(groupKey);
+                                if (found
+                                    == semanticGroups.end())
+                                    continue;
+                                found->second.views[
+                                    component.artwork.sourceRotation & 3u] =
+                                    &component;
+                            }
                         }
                     }
 
@@ -5699,19 +5730,10 @@ namespace OpenRCT2::Paint
                          semanticGroups)
                     {
                         (void)groupKey;
-                        const FirstPersonPaintSemanticComponent*
-                            canonical = nullptr;
-                        for (const auto* view : group.views)
-                        {
-                            if (view != nullptr)
-                            {
-                                canonical = view;
-                                break;
-                            }
-                        }
+                        const auto* canonical =
+                            group.canonical;
                         if (canonical == nullptr)
                             continue;
-
                         const bool moving =
                             canonical->role
                                 == FirstPersonPaintSemanticRole::movingMachinery
