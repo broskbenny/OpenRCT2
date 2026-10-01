@@ -35,29 +35,15 @@ namespace OpenRCT2::Paint
         std::vector<FirstPersonTrackTrajectoryPoint> points;
     };
 
-    // A vehicle trajectory proves the stable reference curve. Track style
-    // supplies a deterministic baseline cross-section; artwork verification may
-    // refine that baseline but never gates whether physical track exists.
+    // Stable track geometry is a property of the authoritative vehicle
+    // trajectory plus TrackStyle. Native sprites are texture evidence only.
     struct FirstPersonTrackRailProfile
     {
-        // True only when artwork has verified/refined the dimensions/material.
-        // Geometry generation must not depend on this flag.
-        bool verified = false;
         uint8_t railCount = 2;
         float halfGauge = 0.0f;
         float halfWidth = 0.0f;
         float halfHeight = 0.0f;
         float verticalOffset = 0.0f;
-        // Bitset of FirstPersonTrackPixelChannel values that independently
-        // behaved like the fitted rails in native artwork. Kept as an integer
-        // here so trajectory evidence remains independent of the calibrator.
-        uint8_t sourceChannelMask = 0;
-        // Material evidence is optional and cannot make geometry verified.
-        // For a remap channel these are native shade indices [0,11]; for the
-        // dedicated track-rail palette they are raw PaletteIndex values.
-        bool materialVerified = false;
-        uint8_t topMaterialValue = 0;
-        uint8_t sideMaterialValue = 0;
     };
 
     [[nodiscard]] inline const VehicleInfoList* GetFirstPersonStandardTrackVehicleInfo(
