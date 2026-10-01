@@ -3951,6 +3951,94 @@ namespace OpenRCT2::Paint
             }
         }
 
+        [[nodiscard]] std::array<FirstPersonSilhouette, 4>
+            BuildFirstPersonAuthoritativeRailSilhouettes(
+                const FirstPersonTrackTrajectory& trajectory,
+                const FirstPersonVec3& anchor,
+                const FirstPersonTrackRailProfile& profile)
+        {
+            std::array<FirstPersonSilhouette, 4> result{};
+            const auto rails =
+                BuildFirstPersonRailProxySegments(
+                    trajectory, profile);
+            if (rails.empty())
+                return result;
+
+            for (const auto& rail : rails)
+            {
+                const auto acrossA =
+                    Mul(rail.basisA.right, rail.halfWidth);
+                const auto acrossB =
+                    Mul(rail.basisB.right, rail.halfWidth);
+                const auto upA =
+                    Mul(rail.basisA.up, rail.halfHeight);
+                const auto upB =
+                    Mul(rail.basisB.up, rail.halfHeight);
+
+                const std::array<FirstPersonVec3, 8> p{ {
+                    Sub(Sub(rail.a, acrossA), upA),
+                    Add(Sub(rail.a, upA), acrossA),
+                    Add(Add(rail.a, acrossA), upA),
+                    Add(Sub(rail.a, acrossA), upA),
+                    Sub(Sub(rail.b, acrossB), upB),
+                    Add(Sub(rail.b, upB), acrossB),
+                    Add(Add(rail.b, acrossB), upB),
+                    Add(Sub(rail.b, acrossB), upB),
+                } };
+                const std::array<std::array<uint8_t, 4>, 4>
+                    quads{ {
+                        { 0, 1, 5, 4 },
+                        { 1, 2, 6, 5 },
+                        { 2, 3, 7, 6 },
+                        { 3, 0, 4, 7 },
+                    } };
+
+                for (uint8_t rotation = 0;
+                     rotation < 4; ++rotation)
+                {
+                    const CoordsXYZ anchorPoint{
+                        int32_t(std::lround(anchor.x)),
+                        int32_t(std::lround(anchor.y)),
+                        int32_t(std::lround(anchor.z)),
+                    };
+                    const auto anchorScreen =
+                        Translate3DTo2DWithZ(
+                            rotation, anchorPoint);
+                    for (const auto& quad : quads)
+                    {
+                        std::array<ScreenCoordsXY, 4>
+                            screen{};
+                        for (size_t i = 0;
+                             i < screen.size(); ++i)
+                        {
+                            const auto& world =
+                                p[quad[i]];
+                            const auto projected =
+                                Translate3DTo2DWithZ(
+                                    rotation,
+                                    {
+                                        int32_t(std::lround(
+                                            world.x)),
+                                        int32_t(std::lround(
+                                            world.y)),
+                                        int32_t(std::lround(
+                                            world.z)),
+                                    });
+                            screen[i] = {
+                                projected.x
+                                    - anchorScreen.x,
+                                projected.y
+                                    - anchorScreen.y,
+                            };
+                        }
+                        AddFirstPersonSilhouetteQuad(
+                            result[rotation], screen);
+                    }
+                }
+            }
+            return result;
+        }
+
         [[nodiscard]] uint8_t FirstPersonRailColour(
             const Ride& ride, const TrackElement& track,
             bool topFace)
@@ -4206,8 +4294,9 @@ namespace OpenRCT2::Paint
             if (!resolvedProfile.has_value())
                 return result;
             const auto& profile = *resolvedProfile;
-            result.railSilhouettes = BuildFirstPersonTrackRailSilhouettes(
-                trajectory, groupAnchor, profile);
+            result.railSilhouettes =
+                BuildFirstPersonAuthoritativeRailSilhouettes(
+                    trajectory, groupAnchor, profile);
             const uint8_t topColour =
                 FirstPersonRailColour(ride, track, true);
             const uint8_t sideColour =
