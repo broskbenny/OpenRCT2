@@ -144,7 +144,12 @@ struct FirstPersonPaintSemanticArtwork
     ImageId mask{};
     ScreenCoordsXY screenPos{};
     uint32_t group = 0;
-    uint32_t snapshot = 0;
+    // Dynamic native artwork (notably scrolling text) must survive beyond the
+    // paint session that produced it. Own the captured indexed pixels here
+    // rather than retaining a temporary global snapshot handle.
+    std::vector<uint8_t> immutablePixels;
+    int16_t immutableWidth = 0;
+    int16_t immutableHeight = 0;
     uint8_t sourceRotation = 0;
     bool decal = false;
 };
