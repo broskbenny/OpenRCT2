@@ -3675,20 +3675,21 @@ namespace OpenRCT2::Paint
             MarkTrackTrajectoryRegionsDirty(trajectory);
         }
 
-        void ApplyFirstPersonTrackArtworkProjection(
-            FirstPersonSurface& surface,
-            const TrackTrajectoryCacheEntry& trajectory)
+        void AppendFirstPersonTrackArtworkProjections(
+            const FirstPersonSurface& carrier,
+            const TrackTrajectoryCacheEntry& trajectory,
+            std::vector<FirstPersonSurface>& output)
         {
-            if (!surface.artworkCarrier)
+            if (!carrier.artworkCarrier)
                 return;
 
             uint8_t sourceRotation =
                 trajectory.artworkRotation;
-            if (surface.reconstructionGroup != 0)
+            if (carrier.reconstructionGroup != 0)
             {
                 const auto selected =
                     _reconstructionRotations.find(
-                        surface.reconstructionGroup);
+                        carrier.reconstructionGroup);
                 if (selected
                         != _reconstructionRotations.end()
                     && selected->second.hasSelectedRotation)
@@ -3727,22 +3728,12 @@ namespace OpenRCT2::Paint
             if (sourceRotation >= 4)
                 return;
 
+            // Preserve every relevant native paint layer in its original order.
+            // Geometry stays one stable trajectory shell; each source layer is
+            // simply another appearance pass over that shell.
             const auto& projections =
                 trajectory.artworkProjections[
                     sourceRotation];
-
-            const TrackTrajectoryCacheEntry::ArtworkProjection*
-                best = nullptr;
-            float bestPenalty =
-                std::numeric_limits<float>::infinity();
-
-            FirstPersonVec3 centre{};
-            for (const auto& vertex : surface.triangles)
-                centre = Add(centre, vertex.world);
-            centre = Mul(
-                centre,
-                1.0f / float(surface.triangles.size()));
-
             for (const auto& projection : projections)
             {
                 const auto* g1 =
@@ -3760,73 +3751,56 @@ namespace OpenRCT2::Paint
                 const auto isoAnchor =
                     Translate3DTo2DWithZ(
                         projection.rotation, anchorPoint);
-                const CoordsXYZ centrePoint{
-                    int32_t(std::lround(centre.x)),
-                    int32_t(std::lround(centre.y)),
-                    int32_t(std::lround(centre.z)),
-                };
-                const auto isoCentre =
-                    Translate3DTo2DWithZ(
-                        projection.rotation, centrePoint);
-                const float u =
-                    float(isoCentre.x - isoAnchor.x)
-                    - projection.left;
-                const float v =
-                    float(isoCentre.y - isoAnchor.y)
-                    - projection.top;
-                const float dx =
-                    u < 0.0f ? -u
-                    : (u >= g1->width
-                        ? u - float(g1->width - 1) : 0.0f);
-                const float dy =
-                    v < 0.0f ? -v
-                    : (v >= g1->height
-                        ? v - float(g1->height - 1) : 0.0f);
-                const float penalty = dx * dx + dy * dy;
-                if (penalty < bestPenalty)
+
+                FirstPersonSurface surface = carrier;
+                surface.image = projection.image;
+                surface.mask = projection.mask;
+                surface.solidColour = 0;
+                surface.physicalCoverage = false;
+
+                float minU =
+                    std::numeric_limits<float>::infinity();
+                float minV =
+                    std::numeric_limits<float>::infinity();
+                float maxU =
+                    -std::numeric_limits<float>::infinity();
+                float maxV =
+                    -std::numeric_limits<float>::infinity();
+                for (auto& vertex : surface.triangles)
                 {
-                    bestPenalty = penalty;
-                    best = &projection;
-                    if (penalty == 0.0f)
-                        break;
+                    const CoordsXYZ worldPoint{
+                        int32_t(std::lround(vertex.world.x)),
+                        int32_t(std::lround(vertex.world.y)),
+                        int32_t(std::lround(vertex.world.z)),
+                    };
+                    const auto iso =
+                        Translate3DTo2DWithZ(
+                            projection.rotation, worldPoint);
+                    vertex.u =
+                        float(iso.x - isoAnchor.x)
+                        - projection.left;
+                    vertex.v =
+                        float(iso.y - isoAnchor.y)
+                        - projection.top;
+                    minU = std::min(minU, vertex.u);
+                    minV = std::min(minV, vertex.v);
+                    maxU = std::max(maxU, vertex.u);
+                    maxV = std::max(maxV, vertex.v);
                 }
-            }
 
-            if (best == nullptr)
-                return;
-            const auto* g1 = GfxGetG1Element(best->image);
-            if (g1 == nullptr)
-                return;
+                constexpr float kProjectionHalo = 1.0f;
+                if (maxU < -kProjectionHalo
+                    || maxV < -kProjectionHalo
+                    || minU
+                        > float(g1->width)
+                            + kProjectionHalo
+                    || minV
+                        > float(g1->height)
+                            + kProjectionHalo)
+                    continue;
 
-            const CoordsXYZ anchorPoint{
-                int32_t(std::lround(best->anchor.x)),
-                int32_t(std::lround(best->anchor.y)),
-                int32_t(std::lround(best->anchor.z)),
-            };
-            const auto isoAnchor =
-                Translate3DTo2DWithZ(
-                    best->rotation, anchorPoint);
-
-            surface.image = best->image;
-            surface.mask = best->mask;
-            surface.solidColour = 0;
-            surface.physicalCoverage = false;
-            for (auto& vertex : surface.triangles)
-            {
-                const CoordsXYZ worldPoint{
-                    int32_t(std::lround(vertex.world.x)),
-                    int32_t(std::lround(vertex.world.y)),
-                    int32_t(std::lround(vertex.world.z)),
-                };
-                const auto iso =
-                    Translate3DTo2DWithZ(
-                        best->rotation, worldPoint);
-                vertex.u =
-                    float(iso.x - isoAnchor.x)
-                    - best->left;
-                vertex.v =
-                    float(iso.y - isoAnchor.y)
-                    - best->top;
+                output.emplace_back(
+                    std::move(surface));
             }
         }
 
@@ -5282,12 +5256,25 @@ namespace OpenRCT2::Paint
                             < trajectory->second
                                 .surfaces.size())
                         {
-                            auto surface =
+                            const auto& sourceSurface =
                                 trajectory->second
                                     .surfaces[index];
-                            ApplyFirstPersonTrackArtworkProjection(
-                                surface, trajectory->second);
-                            addSurface(surface);
+                            if (sourceSurface.artworkCarrier)
+                            {
+                                std::vector<FirstPersonSurface>
+                                    projected;
+                                AppendFirstPersonTrackArtworkProjections(
+                                    sourceSurface,
+                                    trajectory->second,
+                                    projected);
+                                for (const auto& surface :
+                                     projected)
+                                    addSurface(surface);
+                            }
+                            else
+                            {
+                                addSurface(sourceSurface);
+                            }
                         }
                     }
                 }
