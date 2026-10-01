@@ -2957,7 +2957,7 @@ namespace OpenRCT2::Paint
 
                     const auto* model =
                         GetLargeSceneryAssetModel(
-                            *entry, true);
+                            *entry);
                     if (model == nullptr
                         || !model->usable)
                         continue;
@@ -2972,15 +2972,8 @@ namespace OpenRCT2::Paint
                     ExtendStableKey(
                         signature,
                         static_cast<uint8_t>(large->getTertiaryColour()));
-                    ExtendStableKey(signature, model->faces.size());
                     ExtendStableKey(
-                        signature,
-                        uint32_t(std::lround(
-                            model->minimumCandidateCoverage * 1000.0f)));
-                    ExtendStableKey(
-                        signature,
-                        uint32_t(std::lround(
-                            model->minimumFaceOwnership * 1000.0f)));
+                        signature, model->faces.size());
 
                     if (cached != _largeSceneryGeometryCache.end()
                         && cached->second.signature == signature
@@ -8126,7 +8119,7 @@ namespace OpenRCT2::Paint
         }
 
         const auto* model =
-            GetLargeSceneryAssetModel(*entry, true);
+            GetLargeSceneryAssetModel(*entry);
         if (model == nullptr || !model->usable)
             return std::nullopt;
 
