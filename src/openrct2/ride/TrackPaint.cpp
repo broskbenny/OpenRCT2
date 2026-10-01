@@ -86,7 +86,8 @@ static PaintStruct* PaintStationSemanticBoxAsParent(
     PaintSession& session, FirstPersonPaintSemanticRole role,
     ImageId image, const CoordsXYZ& offset,
     const BoundBoxXYZ& physicalBox,
-    uint32_t artworkGroup = 0)
+    uint32_t artworkGroup = 0,
+    bool collidable = true, bool decal = false)
 {
     auto low = physicalBox.offset;
     auto high = physicalBox.offset + physicalBox.length;
@@ -100,7 +101,8 @@ static PaintStruct* PaintStationSemanticBoxAsParent(
         ? artworkGroup
         : PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
     PaintSessionAddFirstPersonSemanticBox(
-        session, role, low, high, image, offset, group);
+        session, role, low, high, image, offset, group,
+        0, 0, collidable, decal);
     FirstPersonPaintSemanticScope scope(session, role, group);
     auto* result =
         PaintAddImageAsParent(
@@ -113,7 +115,8 @@ static PaintStruct* PaintStationSemanticBoxAsChild(
     PaintSession& session, FirstPersonPaintSemanticRole role,
     ImageId image, const CoordsXYZ& offset,
     const BoundBoxXYZ& physicalBox,
-    uint32_t artworkGroup = 0)
+    uint32_t artworkGroup = 0,
+    bool collidable = true, bool decal = false)
 {
     auto low = physicalBox.offset;
     auto high = physicalBox.offset + physicalBox.length;
@@ -127,7 +130,8 @@ static PaintStruct* PaintStationSemanticBoxAsChild(
         ? artworkGroup
         : PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
     PaintSessionAddFirstPersonSemanticBox(
-        session, role, low, high, image, offset, group);
+        session, role, low, high, image, offset, group,
+        0, 0, collidable, decal);
     FirstPersonPaintSemanticScope scope(session, role, group);
     auto* result =
         PaintAddImageAsChild(
@@ -176,11 +180,12 @@ static PaintStruct* PaintStationFenceAsChild(
 
 static PaintStruct* PaintStationCoverAsParent(
     PaintSession& session, ImageId image,
-    const CoordsXYZ& offset, const BoundBoxXYZ& physicalBox)
+    const CoordsXYZ& offset, const BoundBoxXYZ& physicalBox,
+    uint32_t artworkGroup = 0)
 {
     return PaintStationSemanticBoxAsParent(
         session, FirstPersonPaintSemanticRole::stationCover,
-        image, offset, physicalBox);
+        image, offset, physicalBox, artworkGroup);
 }
 
 static PaintStruct* PaintStationPierAsParent(
@@ -873,14 +878,27 @@ bool TrackPaintUtilDrawStationCovers2(
             imageId = imageId.WithSecondary(session.TrackColours.GetSecondary());
     }
 
-    PaintStationCoverAsParent(session, imageId, offset, boundBox);
+    const uint32_t artworkGroup =
+        PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+    PaintStationCoverAsParent(
+        session, imageId, offset, boundBox, artworkGroup);
 
-    // Glass
-    if (colour == TrackStationColour && stationObject->Flags.has(StationObjectFlag::isTransparent))
+    // Glass is appearance on the same known shelter geometry, not another
+    // physical object and not a free-standing first-person billboard.
+    if (colour == TrackStationColour
+        && stationObject->Flags.has(StationObjectFlag::isTransparent))
     {
-        auto shelterGlassImageIndex = stationObject->shelterGlassIndex;
-        imageId = ImageId(shelterGlassImageIndex + imageOffset).WithTransparency(session.TrackColours.GetPrimary());
-        PaintAddImageAsChild(session, imageId, offset, boundBox);
+        auto shelterGlassImageIndex =
+            stationObject->shelterGlassIndex;
+        imageId =
+            ImageId(shelterGlassImageIndex + imageOffset)
+                .WithTransparency(
+                    session.TrackColours.GetPrimary());
+        PaintStationSemanticBoxAsChild(
+            session,
+            FirstPersonPaintSemanticRole::stationCover,
+            imageId, offset, boundBox, artworkGroup,
+            false, true);
     }
     return true;
 }
