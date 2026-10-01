@@ -6956,22 +6956,15 @@ namespace OpenRCT2::Paint
 
             // Once a native painter proves that a tile has semantic geometry,
             // capture the remaining source rotations as ARTWORK EVIDENCE only.
-            // Batch those captures by native rotation instead of allocating one
-            // paint session per tile/view: the resulting evidence is identical,
-            // but cold entry does not pay repeated session setup overhead.
-            struct SemanticEvidenceWorkItem
-            {
-                uint64_t key{};
-                CoordsXY position{};
-            };
-            std::array<
-                std::vector<SemanticEvidenceWorkItem>, 4>
+            // Batch these captures by rotation: opening a fresh PaintSession for
+            // every tile/view was a major cold-entry cost and provided no extra
+            // correctness.
+            std::array<std::vector<PaintWorkItem>, 4>
                 semanticEvidenceByRotation;
             for (const auto& [key, position] :
                  semanticCompletionWork)
             {
-                const auto cacheIt =
-                    _staticPaintCache.find(key);
+                auto cacheIt = _staticPaintCache.find(key);
                 if (cacheIt == _staticPaintCache.end()
                     || !cacheIt->second.valid
                     || cacheIt->second.dirty)
@@ -6988,32 +6981,31 @@ namespace OpenRCT2::Paint
                                 == sourceGeneration))
                         continue;
                     semanticEvidenceByRotation[rotation]
-                        .push_back({ key, position });
+                        .push_back({
+                            position, key, true,
+                            EntityId::GetNull()
+                        });
                 }
             }
 
-            constexpr size_t
-                kSemanticEvidenceTilesPerSession = 256;
             for (uint8_t rotation = 0;
                  rotation < 4; ++rotation)
             {
-                auto& work =
+                auto& evidence =
                     semanticEvidenceByRotation[rotation];
-                if (work.empty())
+                if (evidence.empty())
                     continue;
                 auto collection =
                     makeCollectionTarget(rotation);
 
                 for (size_t offset = 0;
-                     offset < work.size();
-                     offset +=
-                         kSemanticEvidenceTilesPerSession)
+                     offset < evidence.size();
+                     offset += kTilesPerPaintSession)
                 {
-                    const size_t endOffset =
+                    const size_t end =
                         std::min(
-                            offset
-                                + kSemanticEvidenceTilesPerSession,
-                            work.size());
+                            offset + kTilesPerPaintSession,
+                            evidence.size());
                     auto* semanticSession =
                         PaintSessionAlloc(
                             collection, opt.viewFlags,
@@ -7024,9 +7016,9 @@ namespace OpenRCT2::Paint
                     Drawing::ScrollingText::
                         BeginFirstPersonSnapshotCapture();
                     for (size_t i = offset;
-                         i < endOffset; ++i)
+                         i < end; ++i)
                     {
-                        const auto& item = work[i];
+                        const auto& item = evidence[i];
                         auto cacheIt =
                             _staticPaintCache.find(item.key);
                         if (cacheIt
@@ -7055,8 +7047,8 @@ namespace OpenRCT2::Paint
                             nullptr;
 
                         auto& variant =
-                            cacheIt->second.rotations[
-                                rotation];
+                            cacheIt->second
+                                .rotations[rotation];
                         const uint64_t
                             previousFingerprint =
                                 variant
@@ -7073,7 +7065,7 @@ namespace OpenRCT2::Paint
                                     .semanticComponents);
                         if (previousFingerprint
                             != variant
-                                .semanticFingerprint)
+                                   .semanticFingerprint)
                         {
                             MarkStaticRegionDirtyForTile(
                                 item.position.x
@@ -7084,8 +7076,7 @@ namespace OpenRCT2::Paint
                     }
                     Drawing::ScrollingText::
                         EndFirstPersonSnapshotCapture();
-                    PaintSessionFree(
-                        semanticSession);
+                    PaintSessionFree(semanticSession);
                 }
             }
 
