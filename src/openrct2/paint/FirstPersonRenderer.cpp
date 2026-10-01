@@ -3518,6 +3518,48 @@ namespace OpenRCT2::Paint
                 return;
 
             auto& trajectory = found->second;
+            const auto* g1 =
+                GfxGetG1Element(surface.image);
+            if (g1 == nullptr
+                || g1->width <= 0
+                || g1->height <= 0)
+                return;
+
+            // Track material must actually overlap the authoritative rail
+            // projection. This rejects distant support/decorative layers while
+            // keeping ties, cross-members and rail artwork that belong to the
+            // guideway itself.
+            const auto& railSilhouette =
+                trajectory.railSilhouettes[rotation];
+            if (!railSilhouette.empty())
+            {
+                const int32_t left =
+                    int32_t(std::lround(
+                        surface.billboardLeft));
+                const int32_t top =
+                    int32_t(std::lround(
+                        surface.billboardTop));
+                const int32_t right =
+                    left + g1->width;
+                const int32_t bottom =
+                    top + g1->height;
+                size_t overlap = 0;
+                for (const auto pixel :
+                     railSilhouette.pixels)
+                {
+                    const int32_t x =
+                        FirstPersonSilhouettePixelX(pixel);
+                    const int32_t y =
+                        FirstPersonSilhouettePixelY(pixel);
+                    if (x >= left && x < right
+                        && y >= top && y < bottom
+                        && ++overlap >= 3)
+                        break;
+                }
+                if (overlap < 3)
+                    return;
+            }
+
             auto& projections =
                 trajectory.artworkProjections[rotation];
             const auto duplicate = std::find_if(
