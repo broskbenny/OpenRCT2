@@ -534,7 +534,7 @@ namespace OpenRCT2::Paint
                 || type == TileElementType::surface
                 || (type == TileElementType::wall && solidWall);
             if (stationSlab)
-                surface.depthBias = true;
+                surface.coplanarOwner = true;
             std::array<FirstPersonVertex, 4> vertices{};
             for (size_t i = 0; i < vertices.size(); ++i)
             {
@@ -2674,7 +2674,7 @@ namespace OpenRCT2::Paint
                 ExtendStableKey(
                     fingerprint, surface.solidColour);
                 ExtendStableKey(
-                    fingerprint, surface.depthBias ? 1 : 0);
+                    fingerprint, surface.coplanarOwner ? 1 : 0);
                 ExtendStableKey(
                     fingerprint, surface.physicalCoverage ? 1 : 0);
                 ExtendStableKey(
@@ -4700,7 +4700,7 @@ namespace OpenRCT2::Paint
                     // Semantic surface ownership is distinct from physical
                     // height. These authored top surfaces remain coplanar with
                     // terrain, but win the depth tie where they cover it.
-                    surface.depthBias =
+                    surface.coplanarOwner =
                         FirstPersonSemanticRoleOwnsCoplanarSurface(
                             component.role);
                     const auto image =
