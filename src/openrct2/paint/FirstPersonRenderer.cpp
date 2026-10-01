@@ -455,8 +455,8 @@ namespace OpenRCT2::Paint
         };
         // Large-scenery placement uses exactly these quarter-tile occupancy bits
         // and zClearance values for native construction clearance. Convert them
-        // into a conservative physical sphere for view admission while leaving
-        // the selected original sprite/remap as the visual surface.
+        // into a conservative sphere for view admission; reconstruction itself
+        // uses occupancy-defined faces with native sprites only as artwork evidence.
         std::optional<FirstPersonSemanticSphere> LargeScenerySemanticBounds(const PaintStruct& ps)
         {
             if (ps.Element == nullptr || ps.Element->getType() != TileElementType::largeScenery)
