@@ -928,6 +928,26 @@ static void ViewportSurfaceDrawTileSideTop(
         baseImageId = GetEdgeImage(edgeObject, 1).WithIndexOffset(edge == EDGE_TOPLEFT ? 5 : 0);
     }
 
+    const auto paintTopEdgeLayer =
+        [&](ImageId imageId, const CoordsXYZ& artworkOffset,
+            const CoordsXYZ& boundBoxSize) {
+            if (!isWater)
+            {
+                FirstPersonPaintSemanticScope scope(
+                    session,
+                    FirstPersonPaintSemanticRole::terrainEdge);
+                PaintAddImageAsParent(
+                    session, imageId, artworkOffset,
+                    boundBoxSize);
+            }
+            else
+            {
+                PaintAddImageAsParent(
+                    session, imageId, artworkOffset,
+                    boundBoxSize);
+            }
+        };
+
     uint8_t cur_height = std::min(neighbourCornerHeight2, neighbourCornerHeight1);
     if (neighbourCornerHeight2 != neighbourCornerHeight1)
     {
@@ -941,8 +961,11 @@ static void ViewportSurfaceDrawTileSideTop(
         if (cur_height != cornerHeight1 && cur_height != cornerHeight2)
         {
             auto imageId = baseImageId.WithIndexOffset(image_offset);
-            PaintAddImageAsParent(
-                session, imageId, { offset.x, offset.y, cur_height * kCoordsZPerTinyZ }, { bounds.x, bounds.y, 15 });
+            paintTopEdgeLayer(
+                imageId,
+                { offset.x, offset.y,
+                  cur_height * kCoordsZPerTinyZ },
+                { bounds.x, bounds.y, 15 });
             cur_height++;
         }
     }
@@ -951,7 +974,10 @@ static void ViewportSurfaceDrawTileSideTop(
 
     while (cur_height < cornerHeight1 && cur_height < neighbourCornerHeight1)
     {
-        PaintAddImageAsParent(session, baseImageId, { offset, cur_height * kCoordsZPerTinyZ }, { bounds, 15 });
+        paintTopEdgeLayer(
+            baseImageId,
+            { offset, cur_height * kCoordsZPerTinyZ },
+            { bounds, 15 });
         cur_height++;
     }
 
@@ -967,7 +993,10 @@ static void ViewportSurfaceDrawTileSideTop(
     }
 
     auto imageId = baseImageId.WithIndexOffset(image_offset);
-    PaintAddImageAsParent(session, imageId, { offset, cur_height * kCoordsZPerTinyZ }, { bounds, 15 });
+    paintTopEdgeLayer(
+        imageId,
+        { offset, cur_height * kCoordsZPerTinyZ },
+        { bounds, 15 });
 }
 
 static std::pair<int32_t, int32_t> SurfaceGetHeightAboveWater(
