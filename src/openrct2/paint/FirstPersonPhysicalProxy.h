@@ -40,7 +40,6 @@ namespace OpenRCT2::Paint
     enum class FirstPersonPhysicalProxyProvenance : uint8_t
     {
         authoritativeTrackTrajectory,
-        verifiedTrackArtwork,
         nativeStationGeometry,
         nativePathGeometry,
         calibratedSceneryArtwork,
@@ -516,17 +515,6 @@ namespace OpenRCT2::Paint
             FirstPersonPhysicalProxyProvenance::authoritativeTrackTrajectory;
     };
 
-    struct FirstPersonVerifiedTrackProfileEvidence
-    {
-        FirstPersonTrackRailProfile profile{};
-        uint64_t sourceFingerprint = 0;
-        uint8_t holdoutKinds = 0;
-        uint8_t holdoutCount = 0;
-    };
-
-    inline std::unordered_map<uint8_t, FirstPersonVerifiedTrackProfileEvidence>
-        gFirstPersonVerifiedTrackProfiles;
-
     [[nodiscard]] inline std::optional<TrackStyle>
         FirstPersonTrackStyleFor(
             const Ride& ride, const TrackElement& track)
@@ -545,20 +533,15 @@ namespace OpenRCT2::Paint
     [[nodiscard]] inline FirstPersonTrackRailProfile
         FirstPersonDefaultTrackRailProfile(TrackStyle style)
     {
-        // These are deterministic structural baselines in RCT world units.
-        // They deliberately favour a stable continuous guideway over allowing
-        // isometric artwork to define geometry. Artwork calibration may refine
-        // the dimensions/material later.
+        // Deterministic structural baselines in RCT world units. Stable
+        // guideway geometry comes from TrackStyle; native artwork never changes
+        // these dimensions at runtime.
         FirstPersonTrackRailProfile profile{};
         profile.railCount = 2;
         profile.halfGauge = 6.0f;
         profile.halfWidth = 1.0f;
         profile.halfHeight = 1.0f;
         profile.verticalOffset = 0.0f;
-        // Until a style-specific artwork channel is verified, remove only
-        // plausible rail/remap pixels close to the generated rail silhouette.
-        profile.sourceChannelMask = 0x0Fu;
-
         switch (style)
         {
             case TrackStyle::singleRailRollerCoaster:
@@ -608,64 +591,7 @@ namespace OpenRCT2::Paint
         const auto style = FirstPersonTrackStyleFor(ride, track);
         if (!style.has_value())
             return std::nullopt;
-
-        auto profile = FirstPersonDefaultTrackRailProfile(*style);
-        const auto found = gFirstPersonVerifiedTrackProfiles.find(
-            static_cast<uint8_t>(*style));
-        if (found != gFirstPersonVerifiedTrackProfiles.end()
-            && found->second.profile.verified)
-        {
-            const uint8_t authoritativeRailCount = profile.railCount;
-            profile = found->second.profile;
-            // Artwork can refine dimensions and material, but the style owns
-            // the basic guideway topology.
-            profile.railCount = authoritativeRailCount;
-        }
-        return profile;
-    }
-
-    inline void PublishFirstPersonVerifiedTrackProfile(
-        TrackStyle style, const FirstPersonTrackRailProfile& profile,
-        uint64_t sourceFingerprint, uint8_t holdoutKinds,
-        uint8_t holdoutCount)
-    {
-        if (style == TrackStyle::null || !profile.verified)
-            return;
-        gFirstPersonVerifiedTrackProfiles[static_cast<uint8_t>(style)] = {
-            profile, sourceFingerprint, holdoutKinds, holdoutCount
-        };
-    }
-
-    inline void WithdrawFirstPersonVerifiedTrackProfile(TrackStyle style)
-    {
-        if (style != TrackStyle::null)
-            gFirstPersonVerifiedTrackProfiles.erase(
-                static_cast<uint8_t>(style));
-    }
-
-    inline void ClearFirstPersonVerifiedTrackProfiles()
-    {
-        gFirstPersonVerifiedTrackProfiles.clear();
-    }
-
-    [[nodiscard]] inline bool FirstPersonHasVerifiedTrackProfiles()
-    {
-        return !gFirstPersonVerifiedTrackProfiles.empty();
-    }
-
-    [[nodiscard]] inline std::optional<FirstPersonTrackRailProfile>
-        FirstPersonVerifiedTrackRailProfile(
-            const Ride& ride, const TrackElement& track)
-    {
-        const auto style = FirstPersonTrackStyleFor(ride, track);
-        if (!style.has_value())
-            return std::nullopt;
-        const auto found = gFirstPersonVerifiedTrackProfiles.find(
-            static_cast<uint8_t>(*style));
-        if (found == gFirstPersonVerifiedTrackProfiles.end()
-            || !found->second.profile.verified)
-            return std::nullopt;
-        return found->second.profile;
+        return FirstPersonDefaultTrackRailProfile(*style);
     }
 
     [[nodiscard]] inline bool RideUsesStandardFirstPersonTrajectory(
@@ -782,11 +708,8 @@ namespace OpenRCT2::Paint
                         b.basis,
                         profile.halfWidth,
                         profile.halfHeight,
-                        profile.verified
-                            ? FirstPersonPhysicalProxyProvenance::
-                                verifiedTrackArtwork
-                            : FirstPersonPhysicalProxyProvenance::
-                                authoritativeTrackTrajectory,
+                        FirstPersonPhysicalProxyProvenance::
+                            authoritativeTrackTrajectory,
                     });
                 };
                 if (profile.railCount == 1)
