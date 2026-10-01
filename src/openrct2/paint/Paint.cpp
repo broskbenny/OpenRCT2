@@ -1081,7 +1081,7 @@ uint32_t PaintSessionAddFirstPersonSemanticOrientedBox(
     FirstPersonPaintSemanticVec3 localHigh,
     ImageId image, const CoordsXYZ& artworkOffset,
     uint32_t artworkGroup, uint64_t localHullKey,
-    uint16_t repetitionIndex, bool collidable)
+    uint16_t repetitionIndex, bool collidable, bool decal)
 {
     if (!(localHigh.x > localLow.x)
         || !(localHigh.y > localLow.y)
@@ -1100,7 +1100,7 @@ uint32_t PaintSessionAddFirstPersonSemanticOrientedBox(
     component.geometry.localHullKey = localHullKey;
     component.transform = transform;
     component.artwork = MakeFirstPersonSemanticArtwork(
-        session, image, artworkOffset, artworkGroup);
+        session, image, artworkOffset, artworkGroup, decal);
     component.repetitionIndex = repetitionIndex;
     component.collidable = collidable;
     return PublishFirstPersonSemanticComponent(
@@ -1112,7 +1112,7 @@ uint32_t PaintSessionAddFirstPersonSemanticBox(
     const CoordsXYZ& localLow, const CoordsXYZ& localHigh,
     ImageId image, const CoordsXYZ& artworkOffset,
     uint32_t artworkGroup, uint64_t localHullKey,
-    uint16_t repetitionIndex, bool collidable)
+    uint16_t repetitionIndex, bool collidable, bool decal)
 {
     return PaintSessionAddFirstPersonSemanticOrientedBox(
         session, role,
@@ -1122,7 +1122,7 @@ uint32_t PaintSessionAddFirstPersonSemanticBox(
         { float(localHigh.x), float(localHigh.y),
           float(localHigh.z) },
         image, artworkOffset, artworkGroup, localHullKey,
-        repetitionIndex, collidable);
+        repetitionIndex, collidable, decal);
 }
 
 uint32_t PaintSessionAddFirstPersonSemanticBeam(
