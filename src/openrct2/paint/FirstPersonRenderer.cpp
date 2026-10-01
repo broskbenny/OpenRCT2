@@ -4805,90 +4805,39 @@ namespace OpenRCT2::Paint
             // invalidation. Retaining it makes a turn a visibility operation,
             // not a terrain reconstruction operation.
         }
-        [[nodiscard]] std::vector<FirstPersonSurface>
-            BuildFirstPersonSemanticComponentSurfaces(
-                const FirstPersonPaintSemanticComponent& component,
-                uint64_t gpuRegion)
+        [[nodiscard]] bool SameFirstPersonSemanticMaterialTemplate(
+            ImageId a, ImageId b)
         {
-            std::vector<FirstPersonSurface> result;
+            if (!a.HasValue() || !b.HasValue())
+                return false;
+            if (a.IsBlended() != b.IsBlended()
+                || a.IsRemap() != b.IsRemap()
+                || a.HasPrimary() != b.HasPrimary()
+                || a.HasSecondary() != b.HasSecondary()
+                || a.HasTertiary() != b.HasTertiary())
+                return false;
+            if (a.GetRemap() != b.GetRemap())
+                return false;
+            if (a.HasPrimary()
+                && a.GetPrimary() != b.GetPrimary())
+                return false;
+            if (a.HasSecondary()
+                && a.GetSecondary() != b.GetSecondary())
+                return false;
+            if (a.HasTertiary()
+                && a.GetTertiary() != b.GetTertiary())
+                return false;
+            return true;
+        }
+
+        [[nodiscard]] std::vector<std::array<FirstPersonVec3, 4>>
+            BuildFirstPersonSemanticPhysicalFaces(
+                const FirstPersonPaintSemanticComponent& component)
+        {
+            std::vector<std::array<FirstPersonVec3, 4>> result;
             if (component.geometry.kind
                 == FirstPersonPaintSemanticPrimitiveKind::opening)
                 return result;
-
-            uint8_t fallbackColour = static_cast<uint8_t>(
-                Drawing::PaletteIndex::trackRails1);
-            if (component.artwork.image.HasPrimary())
-            {
-                const auto colour =
-                    component.artwork.image.GetPrimary();
-                if (Drawing::colourIsValid(colour))
-                    fallbackColour = static_cast<uint8_t>(
-                        Drawing::getColourMap(colour).midDark);
-            }
-
-            const auto emitFace =
-                [&](const std::array<FirstPersonVec3, 4>& points) {
-                    FirstPersonSurface surface{};
-                    surface.gpuRegion = gpuRegion;
-                    surface.physicalCoverage =
-                        !component.artwork.decal;
-                    // Semantic surface ownership is distinct from physical
-                    // height. These authored top surfaces remain coplanar with
-                    // terrain, but win the depth tie where they cover it.
-                    surface.coplanarOwner =
-                        FirstPersonSemanticRoleOwnsCoplanarSurface(
-                            component.role);
-                    const auto image =
-                        component.artwork.image;
-                    const bool projectArtwork =
-                        component.role
-                            != FirstPersonPaintSemanticRole::support;
-                    const auto* g1 =
-                        projectArtwork && image.HasValue()
-                        ? GfxGetG1Element(image) : nullptr;
-                    std::array<FirstPersonVertex, 4> vertices{};
-                    if (g1 != nullptr
-                        && g1->width > 0
-                        && g1->height > 0)
-                    {
-                        surface.image = image;
-                        surface.mask = component.artwork.mask;
-                        for (size_t i = 0; i < points.size(); ++i)
-                        {
-                            const auto& p = points[i];
-                            const auto iso = Translate3DTo2DWithZ(
-                                component.artwork.sourceRotation,
-                                {
-                                    int32_t(std::lround(p.x)),
-                                    int32_t(std::lround(p.y)),
-                                    int32_t(std::lround(p.z)),
-                                });
-                            vertices[i] = {
-                                p,
-                                float(
-                                    iso.x
-                                    - component.artwork.screenPos.x
-                                    - g1->xOffset),
-                                float(
-                                    iso.y
-                                    - component.artwork.screenPos.y
-                                    - g1->yOffset),
-                            };
-                        }
-                    }
-                    else
-                    {
-                        surface.solidColour =
-                            fallbackColour != 0
-                            ? fallbackColour : 1;
-                        for (size_t i = 0; i < points.size(); ++i)
-                            vertices[i].world = points[i];
-                    }
-                    EmitQuad(surface, vertices);
-                    ApplyImmutablePaintSnapshot(
-                        surface, component.artwork.snapshot);
-                    result.emplace_back(std::move(surface));
-                };
 
             const auto worldPoint =
                 [&](FirstPersonPaintSemanticVec3 p) {
@@ -4904,7 +4853,7 @@ namespace OpenRCT2::Paint
             {
                 if (geometry.pointCount >= 4)
                 {
-                    emitFace({ {
+                    result.push_back({ {
                         worldPoint(geometry.points[0]),
                         worldPoint(geometry.points[1]),
                         worldPoint(geometry.points[2]),
@@ -4975,12 +4924,12 @@ namespace OpenRCT2::Paint
                     corner(b,  1.0f,  1.0f),
                     corner(b, -1.0f,  1.0f),
                 } };
-                emitFace({ { p[0], p[1], p[2], p[3] } });
-                emitFace({ { p[4], p[7], p[6], p[5] } });
-                emitFace({ { p[0], p[4], p[5], p[1] } });
-                emitFace({ { p[1], p[5], p[6], p[2] } });
-                emitFace({ { p[2], p[6], p[7], p[3] } });
-                emitFace({ { p[3], p[7], p[4], p[0] } });
+                result.push_back({ { p[0], p[1], p[2], p[3] } });
+                result.push_back({ { p[4], p[7], p[6], p[5] } });
+                result.push_back({ { p[0], p[4], p[5], p[1] } });
+                result.push_back({ { p[1], p[5], p[6], p[2] } });
+                result.push_back({ { p[2], p[6], p[7], p[3] } });
+                result.push_back({ { p[3], p[7], p[4], p[0] } });
                 return result;
             }
 
@@ -5006,12 +4955,593 @@ namespace OpenRCT2::Paint
                 std::array<FirstPersonVec3, 8> p{};
                 for (size_t i = 0; i < p.size(); ++i)
                     p[i] = worldPoint(local[i]);
-                emitFace({ { p[0], p[1], p[5], p[4] } });
-                emitFace({ { p[1], p[2], p[6], p[5] } });
-                emitFace({ { p[2], p[3], p[7], p[6] } });
-                emitFace({ { p[3], p[0], p[4], p[7] } });
-                emitFace({ { p[4], p[5], p[6], p[7] } });
-                emitFace({ { p[3], p[2], p[1], p[0] } });
+                result.push_back({ { p[0], p[1], p[5], p[4] } });
+                result.push_back({ { p[1], p[2], p[6], p[5] } });
+                result.push_back({ { p[2], p[3], p[7], p[6] } });
+                result.push_back({ { p[3], p[0], p[4], p[7] } });
+                result.push_back({ { p[4], p[5], p[6], p[7] } });
+                result.push_back({ { p[3], p[2], p[1], p[0] } });
+            }
+            return result;
+        }
+
+        [[nodiscard]] uint64_t FirstPersonSemanticPhysicalFingerprint(
+            const FirstPersonPaintSemanticComponent& component)
+        {
+            uint64_t fingerprint = 14695981039346656037ull;
+            ExtendStableKey(fingerprint, EnumValue(component.role));
+            ExtendStableKey(
+                fingerprint, EnumValue(component.geometry.kind));
+            ExtendStableKey(
+                fingerprint, component.geometry.localHullKey);
+            ExtendStableKey(
+                fingerprint, component.repetitionIndex);
+            ExtendStableKey(
+                fingerprint, component.collidable ? 1 : 0);
+            const auto faces =
+                BuildFirstPersonSemanticPhysicalFaces(component);
+            ExtendStableKey(fingerprint, faces.size());
+
+            std::vector<std::array<int64_t, 3>> points;
+            points.reserve(faces.size() * 4);
+            for (const auto& face : faces)
+            for (const auto& p : face)
+            {
+                points.push_back({
+                    int64_t(std::llround(double(p.x) * 256.0)),
+                    int64_t(std::llround(double(p.y) * 256.0)),
+                    int64_t(std::llround(double(p.z) * 256.0)),
+                });
+            }
+            std::sort(points.begin(), points.end());
+            for (const auto& p : points)
+            {
+                ExtendStableKey(fingerprint, uint64_t(p[0]));
+                ExtendStableKey(fingerprint, uint64_t(p[1]));
+                ExtendStableKey(fingerprint, uint64_t(p[2]));
+            }
+            ExtendStableKey(
+                fingerprint,
+                uint64_t(int64_t(std::llround(
+                    double(component.geometry.halfWidth) * 256.0))));
+            ExtendStableKey(
+                fingerprint,
+                uint64_t(int64_t(std::llround(
+                    double(component.geometry.halfHeight) * 256.0))));
+            return fingerprint;
+        }
+
+        struct FirstPersonSemanticArtworkView
+        {
+            const FirstPersonPaintSemanticComponent* component = nullptr;
+            const G1Element* g1 = nullptr;
+            std::vector<uint8_t> pixels;
+            const G1Element* maskG1 = nullptr;
+            std::vector<uint8_t> maskPixels;
+        };
+
+        [[nodiscard]] FirstPersonSemanticArtworkView
+            DecodeFirstPersonSemanticArtworkView(
+                const FirstPersonPaintSemanticComponent* component)
+        {
+            FirstPersonSemanticArtworkView result{};
+            if (component == nullptr
+                || !component->artwork.image.HasValue())
+                return result;
+
+            const auto* g1 =
+                GfxGetG1Element(component->artwork.image);
+            if (g1 == nullptr || g1->width <= 0
+                || g1->height <= 0)
+                return result;
+
+            result.component = component;
+            result.g1 = g1;
+            if (component->artwork.snapshot != 0)
+            {
+                const auto* snapshot =
+                    Drawing::ScrollingText::GetFirstPersonSnapshot(
+                        component->artwork.snapshot);
+                if (snapshot != nullptr
+                    && snapshot->width == g1->width
+                    && snapshot->height == g1->height
+                    && !snapshot->pixels.empty())
+                {
+                    result.pixels = snapshot->pixels;
+                }
+            }
+            if (result.pixels.empty())
+            {
+                const auto decoded =
+                    DecodeFirstPersonSpritePixels(*g1);
+                if (!decoded.has_value())
+                    return {};
+                result.pixels = *decoded;
+            }
+
+            if (component->artwork.mask.HasValue())
+            {
+                result.maskG1 =
+                    GfxGetG1Element(component->artwork.mask);
+                if (result.maskG1 != nullptr)
+                {
+                    const auto decodedMask =
+                        DecodeFirstPersonSpritePixels(
+                            *result.maskG1);
+                    if (decodedMask.has_value())
+                        result.maskPixels = *decodedMask;
+                }
+            }
+            return result;
+        }
+
+        [[nodiscard]] bool FirstPersonSemanticFaceOwnedNear(
+            const FirstPersonDepthOwnerMap& map,
+            uint32_t owner, int32_t x, int32_t y)
+        {
+            for (int32_t dy = -1; dy <= 1; ++dy)
+            for (int32_t dx = -1; dx <= 1; ++dx)
+            {
+                const auto found = map.find(
+                    FirstPersonSilhouettePixelKey(
+                        x + dx, y + dy));
+                if (found != map.end()
+                    && found->second.owner == owner)
+                    return true;
+            }
+            return false;
+        }
+
+        [[nodiscard]] FirstPersonVec3
+            FirstPersonSemanticFacePoint(
+                const std::array<FirstPersonVec3, 4>& face,
+                float s, float t)
+        {
+            const auto lerp =
+                [](FirstPersonVec3 a, FirstPersonVec3 b, float alpha) {
+                    return FirstPersonVec3{
+                        a.x + (b.x - a.x) * alpha,
+                        a.y + (b.y - a.y) * alpha,
+                        a.z + (b.z - a.z) * alpha,
+                    };
+                };
+            return lerp(
+                lerp(face[0], face[1], s),
+                lerp(face[3], face[2], s), t);
+        }
+
+        [[nodiscard]] float FirstPersonSemanticEdgeLength(
+            FirstPersonVec3 a, FirstPersonVec3 b)
+        {
+            const float dx = b.x - a.x;
+            const float dy = b.y - a.y;
+            const float dz = b.z - a.z;
+            return std::sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
+        [[nodiscard]] uint8_t FirstPersonSemanticFallbackPixel(
+            const FirstPersonSemanticArtworkView& view)
+        {
+            std::array<uint32_t, 256> counts{};
+            for (const auto pixel : view.pixels)
+                if (pixel != 0)
+                    ++counts[pixel];
+            uint8_t best = 0;
+            uint32_t bestCount = 0;
+            for (size_t i = 1; i < counts.size(); ++i)
+            {
+                if (counts[i] > bestCount)
+                {
+                    best = uint8_t(i);
+                    bestCount = counts[i];
+                }
+            }
+            return best;
+        }
+
+        [[nodiscard]] std::optional<uint8_t>
+            SampleFirstPersonSemanticArtwork(
+                const FirstPersonSemanticArtworkView& view,
+                const FirstPersonVec3& worldPoint,
+                uint8_t sourceRotation)
+        {
+            if (view.component == nullptr || view.g1 == nullptr
+                || view.pixels.empty())
+                return std::nullopt;
+
+            const CoordsXYZ point{
+                int32_t(std::lround(worldPoint.x)),
+                int32_t(std::lround(worldPoint.y)),
+                int32_t(std::lround(worldPoint.z)),
+            };
+            const auto iso =
+                Translate3DTo2DWithZ(sourceRotation, point);
+            const int32_t u =
+                iso.x - view.component->artwork.screenPos.x
+                - view.g1->xOffset;
+            const int32_t v =
+                iso.y - view.component->artwork.screenPos.y
+                - view.g1->yOffset;
+            if (u < 0 || v < 0
+                || u >= view.g1->width
+                || v >= view.g1->height)
+                return std::nullopt;
+
+            if (view.maskG1 != nullptr
+                && !view.maskPixels.empty())
+            {
+                const int32_t mu =
+                    iso.x - view.component->artwork.screenPos.x
+                    - view.maskG1->xOffset;
+                const int32_t mv =
+                    iso.y - view.component->artwork.screenPos.y
+                    - view.maskG1->yOffset;
+                if (mu < 0 || mv < 0
+                    || mu >= view.maskG1->width
+                    || mv >= view.maskG1->height)
+                    return std::nullopt;
+                const uint8_t mask =
+                    view.maskPixels[
+                        size_t(mv) * size_t(view.maskG1->width)
+                        + size_t(mu)];
+                if (mask == 0)
+                    return std::nullopt;
+            }
+
+            const uint8_t pixel =
+                view.pixels[
+                    size_t(v) * size_t(view.g1->width)
+                    + size_t(u)];
+            return pixel != 0
+                ? std::optional<uint8_t>{ pixel }
+                : std::nullopt;
+        }
+
+        [[nodiscard]] std::vector<FirstPersonSurface>
+            BuildFirstPersonSemanticComponentSurfaces(
+                const FirstPersonPaintSemanticComponent& component,
+                uint64_t gpuRegion,
+                const std::array<
+                    const FirstPersonPaintSemanticComponent*, 4>*
+                    artworkViews = nullptr)
+        {
+            std::vector<FirstPersonSurface> result;
+            const auto faces =
+                BuildFirstPersonSemanticPhysicalFaces(component);
+            if (faces.empty())
+                return result;
+
+            std::array<
+                const FirstPersonPaintSemanticComponent*, 4>
+                observations{};
+            if (artworkViews != nullptr)
+            {
+                observations = *artworkViews;
+            }
+            if (component.artwork.sourceRotation < 4
+                && observations[
+                       component.artwork.sourceRotation]
+                    == nullptr)
+            {
+                observations[
+                    component.artwork.sourceRotation] =
+                    &component;
+            }
+
+            std::array<FirstPersonSemanticArtworkView, 4>
+                decodedViews{};
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
+            {
+                decodedViews[rotation] =
+                    DecodeFirstPersonSemanticArtworkView(
+                        observations[rotation]);
+            }
+
+            std::array<FirstPersonDepthOwnerMap, 4>
+                depthOwners{};
+            std::array<std::vector<float>, 4>
+                projectedAreas{};
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
+            {
+                projectedAreas[rotation].resize(
+                    faces.size(), 0.0f);
+                if (decodedViews[rotation].component == nullptr)
+                    continue;
+                for (size_t faceIndex = 0;
+                     faceIndex < faces.size(); ++faceIndex)
+                {
+                    std::array<ScreenCoordsXY, 4> screen{};
+                    std::array<float, 4> depth{};
+                    for (size_t i = 0; i < 4; ++i)
+                    {
+                        const auto& p = faces[faceIndex][i];
+                        const CoordsXYZ point{
+                            int32_t(std::lround(p.x)),
+                            int32_t(std::lround(p.y)),
+                            int32_t(std::lround(p.z)),
+                        };
+                        screen[i] =
+                            Translate3DTo2DWithZ(
+                                rotation, point);
+                        depth[i] =
+                            FirstPersonIsoDepth(
+                                rotation, point);
+                    }
+                    AddFirstPersonDepthTriangle(
+                        depthOwners[rotation],
+                        uint32_t(faceIndex),
+                        { screen[0], screen[1], screen[2] },
+                        { depth[0], depth[1], depth[2] });
+                    AddFirstPersonDepthTriangle(
+                        depthOwners[rotation],
+                        uint32_t(faceIndex),
+                        { screen[0], screen[2], screen[3] },
+                        { depth[0], depth[2], depth[3] });
+                    float twiceArea = 0.0f;
+                    for (size_t i = 0; i < 4; ++i)
+                    {
+                        const auto& a = screen[i];
+                        const auto& b = screen[(i + 1) & 3u];
+                        twiceArea +=
+                            float(a.x * b.y - b.x * a.y);
+                    }
+                    projectedAreas[rotation][faceIndex] =
+                        std::abs(twiceArea) * 0.5f;
+                }
+            }
+
+            uint8_t fallbackColour = static_cast<uint8_t>(
+                Drawing::PaletteIndex::trackRails1);
+            if (component.artwork.image.HasPrimary())
+            {
+                const auto colour =
+                    component.artwork.image.GetPrimary();
+                if (Drawing::colourIsValid(colour))
+                    fallbackColour = static_cast<uint8_t>(
+                        Drawing::getColourMap(colour).midDark);
+            }
+
+            for (size_t faceIndex = 0;
+                 faceIndex < faces.size(); ++faceIndex)
+            {
+                const auto& face = faces[faceIndex];
+                struct Candidate
+                {
+                    uint8_t rotation = 0;
+                    float score = 0.0f;
+                };
+                std::vector<Candidate> candidates;
+                for (uint8_t rotation = 0;
+                     rotation < 4; ++rotation)
+                {
+                    const auto& view =
+                        decodedViews[rotation];
+                    if (view.component == nullptr
+                        || view.g1 == nullptr
+                        || view.pixels.empty())
+                        continue;
+
+                    std::array<ScreenCoordsXY, 4> projected{};
+                    FirstPersonSilhouette silhouette{};
+                    for (size_t i = 0; i < 4; ++i)
+                    {
+                        const auto& p = face[i];
+                        projected[i] =
+                            Translate3DTo2DWithZ(
+                                rotation,
+                                {
+                                    int32_t(std::lround(p.x)),
+                                    int32_t(std::lround(p.y)),
+                                    int32_t(std::lround(p.z)),
+                                });
+                    }
+                    AddFirstPersonSilhouetteQuad(
+                        silhouette, projected);
+                    const float ownership =
+                        FirstPersonDepthOwnerCoverage(
+                            depthOwners[rotation],
+                            uint32_t(faceIndex),
+                            silhouette);
+                    if (ownership < 0.20f)
+                        continue;
+                    const float score =
+                        projectedAreas[rotation][faceIndex]
+                        * ownership;
+                    if (score > 0.0f)
+                        candidates.push_back({
+                            rotation, score
+                        });
+                }
+                std::sort(
+                    candidates.begin(), candidates.end(),
+                    [](const Candidate& a, const Candidate& b) {
+                        if (a.score != b.score)
+                            return a.score > b.score;
+                        return a.rotation < b.rotation;
+                    });
+
+                FirstPersonSurface surface{};
+                surface.gpuRegion = gpuRegion;
+                surface.physicalCoverage =
+                    !component.artwork.decal;
+                surface.coplanarOwner =
+                    FirstPersonSemanticRoleOwnsCoplanarSurface(
+                        component.role);
+
+                if (!candidates.empty())
+                {
+                    const auto& anchor =
+                        decodedViews[
+                            candidates.front().rotation];
+                    surface.image =
+                        anchor.component->artwork.image;
+                    const int32_t width =
+                        std::clamp(
+                            int32_t(std::ceil(std::max(
+                                FirstPersonSemanticEdgeLength(
+                                    face[0], face[1]),
+                                FirstPersonSemanticEdgeLength(
+                                    face[3], face[2])))),
+                            1, 256);
+                    const int32_t height =
+                        std::clamp(
+                            int32_t(std::ceil(std::max(
+                                FirstPersonSemanticEdgeLength(
+                                    face[0], face[3]),
+                                FirstPersonSemanticEdgeLength(
+                                    face[1], face[2])))),
+                            1, 256);
+
+                    std::vector<uint8_t> pixels(
+                        size_t(width) * size_t(height), 0);
+                    const uint8_t materialFallback =
+                        FirstPersonSemanticFallbackPixel(anchor);
+                    for (int32_t y = 0; y < height; ++y)
+                    for (int32_t x = 0; x < width; ++x)
+                    {
+                        const float s =
+                            (float(x) + 0.5f)
+                            / float(width);
+                        const float t =
+                            (float(y) + 0.5f)
+                            / float(height);
+                        const auto worldPoint =
+                            FirstPersonSemanticFacePoint(
+                                face, s, t);
+
+                        uint8_t selectedPixel = 0;
+                        for (const auto& candidate :
+                             candidates)
+                        {
+                            const auto& view =
+                                decodedViews[
+                                    candidate.rotation];
+                            if (!SameFirstPersonSemanticMaterialTemplate(
+                                    surface.image,
+                                    view.component->artwork.image))
+                                continue;
+
+                            const CoordsXYZ point{
+                                int32_t(std::lround(
+                                    worldPoint.x)),
+                                int32_t(std::lround(
+                                    worldPoint.y)),
+                                int32_t(std::lround(
+                                    worldPoint.z)),
+                            };
+                            const auto iso =
+                                Translate3DTo2DWithZ(
+                                    candidate.rotation,
+                                    point);
+                            if (!FirstPersonSemanticFaceOwnedNear(
+                                    depthOwners[
+                                        candidate.rotation],
+                                    uint32_t(faceIndex),
+                                    iso.x, iso.y))
+                                continue;
+
+                            const auto sample =
+                                SampleFirstPersonSemanticArtwork(
+                                    view, worldPoint,
+                                    candidate.rotation);
+                            if (!sample.has_value())
+                                continue;
+                            selectedPixel = *sample;
+                            break;
+                        }
+
+                        if (selectedPixel == 0
+                            && surface.physicalCoverage)
+                        {
+                            selectedPixel =
+                                materialFallback != 0
+                                ? materialFallback
+                                : fallbackColour;
+                        }
+                        pixels[
+                            size_t(y) * size_t(width)
+                            + size_t(x)] =
+                            selectedPixel;
+                    }
+
+                    bool hasPixel = false;
+                    for (const auto pixel : pixels)
+                    {
+                        if (pixel != 0)
+                        {
+                            hasPixel = true;
+                            break;
+                        }
+                    }
+
+                    if (hasPixel)
+                    {
+                        surface.immutablePixels =
+                            std::move(pixels);
+                        surface.immutableWidth =
+                            int16_t(width);
+                        surface.immutableHeight =
+                            int16_t(height);
+                        surface.persistentBitmap = true;
+
+                        uint64_t fingerprint =
+                            14695981039346656037ull;
+                        ExtendStableKey(
+                            fingerprint,
+                            surface.image.GetRemap());
+                        ExtendStableKey(
+                            fingerprint,
+                            surface.image.HasPrimary()
+                                ? EnumValue(
+                                    surface.image.GetPrimary())
+                                : 0xffu);
+                        ExtendStableKey(
+                            fingerprint,
+                            surface.image.HasSecondary()
+                                ? EnumValue(
+                                    surface.image.GetSecondary())
+                                : 0xffu);
+                        ExtendStableKey(
+                            fingerprint,
+                            surface.image.HasTertiary()
+                                ? EnumValue(
+                                    surface.image.GetTertiary())
+                                : 0xffu);
+                        ExtendStableKey(
+                            fingerprint, width);
+                        ExtendStableKey(
+                            fingerprint, height);
+                        for (const auto pixel :
+                             surface.immutablePixels)
+                        {
+                            fingerprint ^= pixel;
+                            fingerprint *= 1099511628211ull;
+                        }
+                        surface.immutableFingerprint =
+                            fingerprint;
+
+                        const std::array<
+                            FirstPersonVertex, 4> vertices{ {
+                            { face[0], 0.0f, 0.0f },
+                            { face[1], float(width), 0.0f },
+                            { face[2], float(width), float(height) },
+                            { face[3], 0.0f, float(height) },
+                        } };
+                        EmitQuad(surface, vertices);
+                        result.emplace_back(
+                            std::move(surface));
+                        continue;
+                    }
+                }
+
+                surface.solidColour =
+                    fallbackColour != 0
+                    ? fallbackColour : 1;
+                std::array<FirstPersonVertex, 4> vertices{};
+                for (size_t i = 0; i < face.size(); ++i)
+                    vertices[i].world = face[i];
+                EmitQuad(surface, vertices);
+                result.emplace_back(std::move(surface));
             }
             return result;
         }
