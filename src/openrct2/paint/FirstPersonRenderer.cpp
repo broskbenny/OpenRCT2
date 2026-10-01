@@ -2735,8 +2735,6 @@ namespace OpenRCT2::Paint
             for (const auto& component : components)
             {
                 ExtendStableKey(
-                    fingerprint, component.id);
-                ExtendStableKey(
                     fingerprint, EnumValue(component.role));
                 ExtendStableKey(
                     fingerprint,
