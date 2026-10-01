@@ -16,7 +16,6 @@
 #include <openrct2/paint/FirstPersonPathGeometry.h>
 #include <openrct2/paint/FirstPersonTrackTrajectory.h>
 #include <openrct2/paint/FirstPersonTunnelGeometry.h>
-#include <openrct2/paint/FirstPersonTrackProfileCalibration.h>
 #include <openrct2/paint/FirstPersonSmallSceneryCollision.h>
 #include <openrct2/paint/FirstPersonVehicleBodyHull.h>
 #include <openrct2/paint/FirstPersonVisualHull.h>
@@ -681,7 +680,7 @@ TEST(FirstPersonSemanticGeometryTest, CoplanarSurfaceOwnershipIsExplicit)
             FirstPersonPaintSemanticRole::support));
 }
 
-TEST(FirstPersonTrackTrajectoryTest, MotionTemplateDoesNotClaimArtworkVerifiedProfile)
+TEST(FirstPersonTrackTrajectoryTest, MotionTemplateIsIndependentOfRailCrossSection)
 {
     const auto* a = GetFirstPersonTrackTrajectoryTemplate(
         OpenRCT2::TrackElemType::flat, 0);
@@ -695,14 +694,13 @@ TEST(FirstPersonTrackTrajectoryTest, MotionTemplateDoesNotClaimArtworkVerifiedPr
             OpenRCT2::TrackElemType::flat, 0));
 
     const FirstPersonTrackRailProfile profile{};
-    EXPECT_FALSE(profile.verified);
     EXPECT_EQ(profile.railCount, 2);
     EXPECT_FLOAT_EQ(profile.halfGauge, 0.0f);
     EXPECT_FLOAT_EQ(profile.halfWidth, 0.0f);
     EXPECT_FLOAT_EQ(profile.halfHeight, 0.0f);
 }
 
-TEST(FirstPersonTrackTrajectoryTest, StyleBaselineGeneratesGeometryWithoutArtworkVerification)
+TEST(FirstPersonTrackTrajectoryTest, StyleBaselineAlwaysGeneratesStableGeometry)
 {
     FirstPersonTrackTrajectory trajectory{};
     FirstPersonBasis basis{};
@@ -717,7 +715,6 @@ TEST(FirstPersonTrackTrajectoryTest, StyleBaselineGeneratesGeometryWithoutArtwor
     const auto twin =
         FirstPersonDefaultTrackRailProfile(
             TrackStyle::corkscrewRollerCoaster);
-    EXPECT_FALSE(twin.verified);
     EXPECT_EQ(twin.railCount, 2);
     EXPECT_EQ(
         BuildFirstPersonRailProxySegments(
@@ -727,7 +724,6 @@ TEST(FirstPersonTrackTrajectoryTest, StyleBaselineGeneratesGeometryWithoutArtwor
     const auto single =
         FirstPersonDefaultTrackRailProfile(
             TrackStyle::singleRailRollerCoaster);
-    EXPECT_FALSE(single.verified);
     EXPECT_EQ(single.railCount, 1);
     const auto singleRail =
         BuildFirstPersonRailProxySegments(
@@ -738,44 +734,6 @@ TEST(FirstPersonTrackTrajectoryTest, StyleBaselineGeneratesGeometryWithoutArtwor
         singleRail[0].provenance,
         FirstPersonPhysicalProxyProvenance::
             authoritativeTrackTrajectory);
-}
-
-TEST(FirstPersonTrackProfileCalibrationTest, IncrementalSearchHonoursCandidateBudget)
-{
-    const auto* trajectory =
-        GetFirstPersonTrackTrajectoryTemplate(
-            OpenRCT2::TrackElemType::flat, 0);
-    ASSERT_NE(trajectory, nullptr);
-
-    FirstPersonTrackRailProfile source{};
-    source.halfGauge = 6.0f;
-    source.halfWidth = 1.0f;
-    source.halfHeight = 1.0f;
-    source.verticalOffset = 0.0f;
-
-    FirstPersonTrackArtworkObservation observation{};
-    const auto channel =
-        FirstPersonTrackPixelChannel::trackRailPalette;
-    observation.channelViews[
-        static_cast<size_t>(channel)] =
-        BuildFirstPersonTrackRailSilhouettes(
-            *trajectory, { 0.0f, 0.0f, 0.0f },
-            source);
-    ASSERT_TRUE(
-        FirstPersonTrackObservationHasCompleteChannel(
-            observation));
-
-    FirstPersonTrackProfileSearchState state{};
-    EXPECT_FALSE(
-        StepFirstPersonTrackRailProfileFromArtwork(
-            observation, *trajectory,
-            { 0.0f, 0.0f, 0.0f },
-            state, 1));
-    EXPECT_TRUE(state.initialized);
-    EXPECT_EQ(
-        state.phase,
-        FirstPersonTrackProfileSearchState::Phase::coarse);
-    EXPECT_EQ(state.candidateIndex, 1u);
 }
 
 TEST(FirstPersonTrackTrajectoryTest, StandardSamplesMatchVehicleMotionSource)
@@ -822,53 +780,6 @@ TEST(FirstPersonTrackTrajectoryTest, EndpointGapMeasuresPhysicalDiscontinuity)
     EXPECT_TRUE(FirstPersonTrackTrajectorySamplesContinuous(first, 4.0f));
     EXPECT_TRUE(FirstPersonTrackTrajectorySamplesContinuous(next, 4.0f));
     EXPECT_FALSE(FirstPersonTrackTrajectorySamplesContinuous(next, 2.0f));
-}
-
-TEST(FirstPersonTrackProfileCalibrationTest, BroadSameColourSpineCannotVerifyNarrowRailPair)
-{
-    FirstPersonTrackArtworkObservation observation{};
-    std::array<FirstPersonSilhouette, 4> candidate{};
-    std::array<FirstPersonSilhouette, 4> negativeRail{};
-    std::array<FirstPersonSilhouette, 4> positiveRail{};
-
-    const auto channel =
-        FirstPersonTrackPixelChannel::trackRailPalette;
-    const size_t channelIndex =
-        static_cast<size_t>(channel);
-    for (size_t rotation = 0; rotation < 4; ++rotation)
-    {
-        // Deliberately broad same-colour structure: the old asymmetric metric
-        // would give a one-pixel rail pair perfect candidate->artwork coverage
-        // simply because the predicted rails sit inside this filled spine.
-        observation.channelViews[channelIndex][rotation] =
-            MakeSilhouetteRect(0, 0, 32, 24);
-
-        negativeRail[rotation] =
-            MakeSilhouetteRect(9, 2, 10, 22);
-        positiveRail[rotation] =
-            MakeSilhouetteRect(22, 2, 23, 22);
-        candidate[rotation] = negativeRail[rotation];
-        for (const auto pixel :
-             positiveRail[rotation].pixels)
-        {
-            const int32_t x =
-                int32_t(uint32_t(pixel >> 32));
-            const int32_t y =
-                int32_t(uint32_t(pixel));
-            candidate[rotation].add(x, y);
-        }
-    }
-
-    const auto fit =
-        EvaluateFirstPersonTrackProfileFit(
-            observation, candidate,
-            negativeRail, positiveRail, channel);
-    ASSERT_TRUE(fit.valid);
-    EXPECT_GT(fit.minimumCandidateCoverage, 0.99f);
-    EXPECT_GT(fit.minimumRailCoverage, 0.99f);
-    EXPECT_LT(fit.averageLocalObservedCoverage, 0.45f);
-    EXPECT_FALSE(
-        IsFirstPersonTrackCalibrationFitReliable(fit));
 }
 
 TEST(FirstPersonVehiclePresentationTest, HalfTweenOwnsOneSharedCarriageTransform)
@@ -1021,7 +932,7 @@ TEST(FirstPersonPhysicalProxyTest, BankedRectangularRailRotatesWidthIntoVertical
         2.0f,
         0.25f,
         FirstPersonPhysicalProxyProvenance::
-            verifiedTrackArtwork,
+            authoritativeTrackTrajectory,
     };
 
     // At 90 degrees of bank, the 2-unit local width is vertical. Treating
@@ -1072,7 +983,7 @@ TEST(FirstPersonPhysicalProxyTest, LargeSceneryCollisionUsesRecoveredFacesNotRes
     ClearFirstPersonLargeSceneryPhysicalProxies();
 }
 
-TEST(FirstPersonPhysicalProxyTest, VerifiedRailGeometryFeedsWalkingCollision)
+TEST(FirstPersonPhysicalProxyTest, AuthoritativeRailGeometryFeedsWalkingCollision)
 {
     FirstPersonTrackTrajectory trajectory{};
     const FirstPersonBasis basis{
@@ -1086,7 +997,6 @@ TEST(FirstPersonPhysicalProxyTest, VerifiedRailGeometryFeedsWalkingCollision)
     };
 
     FirstPersonTrackRailProfile profile{};
-    profile.verified = true;
     profile.halfGauge = 2.0f;
     profile.halfWidth = 0.5f;
     profile.halfHeight = 0.5f;
