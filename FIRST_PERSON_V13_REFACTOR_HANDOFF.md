@@ -506,6 +506,9 @@ Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HA
 * turning away from and back toward a previously seen static region does not rebuild CPU geometry or re-upload its GPU region unless it was invalidated or evicted for real memory pressure;
 * slow physical movement across sprite-sector boundaries does not chatter;
 * toilet/facility, shop/stall and ride entrance/exit objects keep stable box/gate geometry while camera yaw changes; wall/roof/front/back artwork stays attached to the corresponding physical faces rather than stretching as a billboard;
+* orbiting a semantic box does not produce a 45-degree whole-sprite texture pop: each wall/roof keeps its baked face-local material regardless of passenger position;
+* a face hidden in one native sprite is filled from another valid native observation of that same physical face rather than borrowing pixels from the visible front/roof face;
+* shared native artwork (for example a signboard plus scrolling-text decal or an entrance frame made from several semantic pieces) is split by the real component faces without one coincident layer cancelling its host;
 * ride entrances retain a visibly open centre instead of becoming one solid sorting-box slab;
 * on a trajectory-backed ride, rails/ties/cross-members remain attached to the sampled track route while riding through successive pieces, with no per-piece billboard morphing toward the camera;
 * orbiting or riding around trajectory-backed track must not trigger a native-view texture switch: the carrier material is already baked from the captured native views and remains attached to the physical route;
