@@ -162,54 +162,6 @@ static void PaintWallDoor(
     }
 }
 
-static std::array<FirstPersonPaintSemanticVec3, 4>
-    GetFirstPersonWallSemanticCorners(
-        const WallSceneryEntry& wallEntry,
-        const WallElement& wallElement)
-{
-    const float h =
-        float(int32_t(wallEntry.height) * kCoordsZStep);
-    const float step =
-        float(2 * kCoordsZStep);
-    FirstPersonPaintSemanticVec3 a{};
-    FirstPersonPaintSemanticVec3 b{};
-    switch (static_cast<uint8_t>(
-                wallElement.getDirection()) & 3u)
-    {
-        case 0:
-            a = { 0.0f, 0.0f, 0.0f };
-            b = { 0.0f, float(kCoordsXYStep), 0.0f };
-            break;
-        case 1:
-            a = { 0.0f, float(kCoordsXYStep), 0.0f };
-            b = { float(kCoordsXYStep), float(kCoordsXYStep), 0.0f };
-            break;
-        case 2:
-            a = { float(kCoordsXYStep), float(kCoordsXYStep), 0.0f };
-            b = { float(kCoordsXYStep), 0.0f, 0.0f };
-            break;
-        default:
-            a = { float(kCoordsXYStep), 0.0f, 0.0f };
-            b = { 0.0f, 0.0f, 0.0f };
-            break;
-    }
-
-    // Native wall slope values are 1 = upward along the authored edge,
-    // 2 = downward along it. Keep the exact physical edge in world space;
-    // the current paint rotation must never rotate the wall itself.
-    if (wallElement.getSlope() == 1)
-        b.z += step;
-    else if (wallElement.getSlope() == 2)
-        a.z += step;
-
-    return { {
-        a,
-        b,
-        { b.x, b.y, b.z + h },
-        { a.x, a.y, a.z + h },
-    } };
-}
-
 static uint32_t PublishFirstPersonWallSemanticPlane(
     PaintSession& session, const WallSceneryEntry& wallEntry,
     const WallElement& wallElement, ImageId image,
@@ -230,8 +182,10 @@ static uint32_t PublishFirstPersonWallSemanticPlane(
         session, FirstPersonPaintSemanticRole::wall,
         FirstPersonPaintSemanticPrimitiveKind::plane,
         transform,
-        GetFirstPersonWallSemanticCorners(
-            wallEntry, wallElement),
+        FirstPersonWallSemanticCorners(
+            static_cast<uint8_t>(wallElement.getDirection()),
+            wallElement.getSlope(),
+            int32_t(wallEntry.height) * kCoordsZStep),
         image, artworkOffset, artworkGroup,
         decal, collidable);
 }
