@@ -1777,8 +1777,6 @@ namespace OpenRCT2::Paint
             bool valid = false;
             bool semanticValid = false;
             uint8_t verticalTunnelHeight = 0xFF;
-            std::vector<TunnelEntry> leftTunnels;
-            std::vector<TunnelEntry> rightTunnels;
             std::vector<FirstPersonSurface> residentSurfaces;
             std::vector<FirstPersonSurface> streamedSurfaces;
             std::vector<FirstPersonPaintSemanticComponent>
@@ -7143,8 +7141,6 @@ namespace OpenRCT2::Paint
                         variant.semanticFingerprint = 0;
                         variant.semanticValid = false;
                         variant.verticalTunnelHeight = 0xFF;
-                        variant.leftTunnels.clear();
-                        variant.rightTunnels.clear();
                         variant.residentSurfaces.clear();
                         variant.streamedSurfaces.clear();
                         variant.semanticComponents.clear();
@@ -7426,10 +7422,6 @@ namespace OpenRCT2::Paint
                                     item.position,
                                     variant.semanticComponents);
                                 variant.verticalTunnelHeight = session->VerticalTunnelHeight;
-                                variant.leftTunnels.assign(
-                                    session->LeftTunnels.begin(), session->LeftTunnels.end());
-                                variant.rightTunnels.assign(
-                                    session->RightTunnels.begin(), session->RightTunnels.end());
                                 if (auto terrainIt = _terrainCache.entries.find(item.key);
                                     terrainIt != _terrainCache.entries.end())
                                 {
