@@ -1032,8 +1032,24 @@ static FirstPersonPaintSemanticArtwork
     artwork.screenPos =
         FirstPersonSemanticArtworkScreenPos(
             session, artworkOffset);
-    artwork.snapshot =
+    const uint32_t snapshotHandle =
         Drawing::ScrollingText::CaptureFirstPersonSnapshot(image);
+    if (snapshotHandle != 0)
+    {
+        const auto* snapshot =
+            Drawing::ScrollingText::GetFirstPersonSnapshot(
+                snapshotHandle);
+        if (snapshot != nullptr
+            && !snapshot->pixels.empty())
+        {
+            artwork.immutablePixels =
+                snapshot->pixels;
+            artwork.immutableWidth =
+                snapshot->width;
+            artwork.immutableHeight =
+                snapshot->height;
+        }
+    }
     artwork.group = artworkGroup != 0
         ? artworkGroup
         : session.FirstPersonSemanticArtworkGroup;
