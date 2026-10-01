@@ -442,7 +442,7 @@ Fixed terrain, semantic structures, track trajectories and static region packets
 
 Ending walking/ride POV resets only presentation/dynamic state. It no longer clears the park-bounded static world caches. Native map/object invalidation still dirties or fully clears affected data, so re-entering POV and turning back reuse unchanged geometry instead of reconstructing it.
 
-Synchronous track-art profile calibration has been removed from the ordinary render traversal. Track preparation now exposes separate build/cache-hit timing counters so any remaining cost can be measured directly rather than hidden.
+Track-art profile calibration has been removed entirely from the trajectory geometry contract. Track preparation exposes separate build/cache-hit timing counters so any remaining cost can be measured directly rather than hidden.
 
 ### Standard geometry-first artwork reconstruction
 
@@ -470,13 +470,15 @@ The shared semantic component contract now includes generic structure body, floo
 
 Each native quarter-turn is captured as an observation of the same semantic object. The renderer projects the canonical physical faces into those native views, uses geometry-derived depth ownership to determine which face actually owns each source pixel, and bakes one persistent face-local texture from the best available evidence across all matching views. Camera position does not choose the texture. Shared artwork groups also share the depth test, so one native sprite describing several posts/walls/roof pieces is split according to the real geometry rather than by sorting bounds.
 
+The same contract now covers ordinary/sloped walls, animated wall doors, banner signs and park entrances. Doors use their fixed authored wall plane with transparent animated artwork rather than a billboard; banners use their authoritative tile-edge plane and clearance; park entrances use the placed three-tile occupancy/clearance, a semantic centre path deck, fixed centre gate plane and side occupancy bodies.
+
 ### Trajectory-owned track reconstruction
 
 For standard tracked rides, physical rails no longer depend on successful artwork-profile verification.
 
 * the native vehicle trajectory is always the stable centreline;
 * `TrackStyle` supplies a deterministic guideway topology/cross-section baseline;
-* optional verified artwork data may refine dimensions/material but cannot decide whether geometry exists;
+* artwork never gates or refines the physical guideway dimensions; the deterministic style baseline owns geometry and native sprites supply appearance only;
 * physical rail segments and walking collision use the same resolved style profile;
 * a separate non-colliding trajectory-following shell carries ties, cross-members and other native track artwork;
 * the renderer captures the available native track rotations once, preserves each rotation's native paint order, groups compatible material layers, and reverse-projects them onto the trajectory-following carrier;
@@ -484,6 +486,12 @@ For standard tracked rides, physical rails no longer depend on successful artwor
 * native track PaintStructs become texture evidence once trajectory geometry exists and are not rendered as a second camera-facing track.
 
 The previous billboard rail-pixel masking path has been removed.
+
+### Multi-view capture cost and static repaint policy
+
+Completing the four native artwork observations for semantic geometry is batched by source rotation and reuses paint sessions across up to 256 tiles at a time. It no longer allocates a separate native paint session for every tile/view pair.
+
+Unchanged static rotation variants also no longer repaint merely because 240 simulation ticks elapsed. Native invalidation and the staggered tile semantic-signature probe are the correctness sources; if neither reports a change, the existing geometry/artwork stays resident. Animated tiles still repaint when their simulation animation generation changes.
 
 ## Required manual verification before creating a new stable tag
 
@@ -506,6 +514,9 @@ Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HA
 * turning away from and back toward a previously seen static region does not rebuild CPU geometry or re-upload its GPU region unless it was invalidated or evicted for real memory pressure;
 * slow physical movement across sprite-sector boundaries does not chatter;
 * toilet/facility, shop/stall and ride entrance/exit objects keep stable box/gate geometry while camera yaw changes; wall/roof/front/back artwork stays attached to the corresponding physical faces rather than stretching as a billboard;
+* ordinary/sloped walls and animated wall doors stay on their authored world plane while orbiting them; opening-door transparency changes artwork without rotating or replacing the wall geometry;
+* banner signs remain fixed to their placed tile edge, including scrolling text, rather than turning toward the passenger;
+* the three park-entrance tiles remain stable while orbiting: side occupancy bodies stay fixed, the centre path stays coplanar with terrain/path ownership rules, and the centre gate remains an oriented walk-through plane rather than a billboard;
 * orbiting a semantic box does not produce a 45-degree whole-sprite texture pop: each wall/roof keeps its baked face-local material regardless of passenger position;
 * a face hidden in one native sprite is filled from another valid native observation of that same physical face rather than borrowing pixels from the visible front/roof face;
 * shared native artwork (for example a signboard plus scrolling-text decal or an entrance frame made from several semantic pieces) is split by the real component faces without one coincident layer cancelling its host;
