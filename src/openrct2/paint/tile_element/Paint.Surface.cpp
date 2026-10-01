@@ -692,7 +692,7 @@ static void ViewportSurfaceDrawTileSideBottom(
 
     const auto paintLandEdgeBand =
         [&](ImageId imageId, uint8_t bandHeight,
-            const BoundBoxXYZ& boundBox) {
+            const CoordsXYZ& boundBoxSize) {
             const CoordsXYZ artworkOffset{
                 offset,
                 int32_t(bandHeight) * kCoordsZPerTinyZ
@@ -711,13 +711,13 @@ static void ViewportSurfaceDrawTileSideBottom(
                     FirstPersonPaintSemanticRole::terrainEdge);
                 PaintAddImageAsParent(
                     session, imageId, artworkOffset,
-                    boundBox);
+                    boundBoxSize);
             }
             else
             {
                 PaintAddImageAsParent(
                     session, imageId, artworkOffset,
-                    boundBox);
+                    boundBoxSize);
             }
         };
 
@@ -736,7 +736,7 @@ static void ViewportSurfaceDrawTileSideBottom(
         {
             auto imageId = baseImageId.WithIndexOffset(image_offset);
             paintLandEdgeBand(
-                imageId, curHeight, { { bounds, 15 } });
+                imageId, curHeight, { bounds, 15 });
             curHeight++;
         }
     }
@@ -761,7 +761,7 @@ static void ViewportSurfaceDrawTileSideBottom(
             const auto boundBoxZ = curHeight == tunnel.height - 1 ? tdOriginal.lowerEdgeBoundingBoxZ : kCoordsZPerTinyZ - 1;
             paintLandEdgeBand(
                 baseImageId, curHeight,
-                { { bounds, boundBoxZ } });
+                { bounds, boundBoxZ });
             curHeight++;
         }
 
@@ -815,7 +815,7 @@ static void ViewportSurfaceDrawTileSideBottom(
     {
         paintLandEdgeBand(
             baseImageId, curHeight,
-            { { bounds, kCoordsZPerTinyZ - 1 } });
+            { bounds, kCoordsZPerTinyZ - 1 });
         curHeight++;
     }
 
