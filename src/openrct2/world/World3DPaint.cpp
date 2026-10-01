@@ -16,25 +16,25 @@ namespace OpenRCT2::World3D
 {
     namespace
     {
-        thread_local std::vector<PaintEvidence>* _activePaintEvidence = nullptr;
+        thread_local std::vector<PaintEvidence>* gActivePaintEvidence = nullptr;
     }
 
     PaintEvidenceCapture::PaintEvidenceCapture(std::vector<PaintEvidence>& output) noexcept
-        : _previous(_activePaintEvidence)
+        : _previous(gActivePaintEvidence)
     {
-        _activePaintEvidence = &output;
+        gActivePaintEvidence = &output;
     }
 
     PaintEvidenceCapture::~PaintEvidenceCapture()
     {
-        _activePaintEvidence = _previous;
+        gActivePaintEvidence = _previous;
     }
 
     void RecordPaintEvidence(
         const PaintSession& session, ImageId imageId, const CoordsXYZ& imageOffset, const BoundBoxXYZ& bounds,
         const PaintStruct& paintStruct, int32_t heightOffset) noexcept
     {
-        if (_activePaintEvidence == nullptr)
+        if (gActivePaintEvidence == nullptr)
         {
             return;
         }
@@ -61,6 +61,6 @@ namespace OpenRCT2::World3D
             evidence.occupiedQuadrants = element->getOccupiedQuadrants();
         }
 
-        _activePaintEvidence->push_back(evidence);
+        gActivePaintEvidence->push_back(evidence);
     }
 } // namespace OpenRCT2::World3D
