@@ -5052,6 +5052,8 @@ namespace OpenRCT2::Paint
                     const auto& semanticVariant =
                         supportIt->second.rotations[
                             supportIt->second.selectedRotation & 3u];
+                    if (!semanticVariant.valid)
+                        continue;
                     for (const auto& component :
                          semanticVariant.semanticComponents)
                         addSemanticComponent(component);
@@ -5456,6 +5458,7 @@ namespace OpenRCT2::Paint
                         variant.lastSourceProbeGeneration = sourceGeneration;
                         variant.residentSurfaces.clear();
                         variant.streamedSurfaces.clear();
+                        variant.semanticComponents.clear();
                         missesByRotation[rotation].insert(key);
                         ++scene.staticTilePaints;
                     }
@@ -5889,6 +5892,8 @@ namespace OpenRCT2::Paint
                 const auto& semanticVariant =
                     cacheIt->second.rotations[
                         cacheIt->second.selectedRotation & 3u];
+                if (!semanticVariant.valid)
+                    continue;
                 for (const auto& component :
                      semanticVariant.semanticComponents)
                 {
