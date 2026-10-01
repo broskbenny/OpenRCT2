@@ -6225,6 +6225,24 @@ namespace OpenRCT2::Paint
                     for (const auto& surface :
                          variant.residentSurfaces)
                     {
+                        if (surface.reconstructionGroup != 0)
+                        {
+                            const auto trajectory =
+                                _trackTrajectoryCache.find(
+                                    surface.reconstructionGroup);
+                            if (trajectory != _trackTrajectoryCache.end()
+                                && !trajectory->second.dirty
+                                && !trajectory->second.surfaces.empty())
+                            {
+                                // Trajectory-backed track is fully
+                                // camera-independent here. Its native
+                                // PaintStruct survives only as artwork evidence
+                                // and must not enter the fallback source-view
+                                // dependency set.
+                                continue;
+                            }
+                        }
+
                         uint8_t selected =
                             cached.selectedRotation;
                         if (surface.reconstructionGroup != 0)
@@ -6243,21 +6261,6 @@ namespace OpenRCT2::Paint
                         }
                         if (selected != rotation)
                             continue;
-                        if (surface.reconstructionGroup != 0)
-                        {
-                            const auto trajectory =
-                                _trackTrajectoryCache.find(
-                                    surface.reconstructionGroup);
-                            if (trajectory != _trackTrajectoryCache.end()
-                                && !trajectory->second.dirty
-                                && !trajectory->second.surfaces.empty())
-                            {
-                                // Track PaintStructs are texture evidence once
-                                // trajectory geometry exists, never a second
-                                // physical representation of the same track.
-                                continue;
-                            }
-                        }
                         addSurface(surface);
                     }
                 }
