@@ -460,6 +460,17 @@ One deterministic semantic rotation supplies the canonical physical component se
 
 Billboards/group impostors remain a fallback only for artwork for which OpenRCT2 does not expose enough trustworthy geometry or occupancy to establish physical surfaces.
 
+### Upstream wall semantics and removal of paint-bound geometry
+
+Walls now follow the same geometry-first contract as other semantic structures.
+
+* the native wall painter publishes the authoritative full tile-edge plane, including slope and object height, before artwork becomes PaintStructs;
+* wall body, glass, scrolling text and animated door layers are attached as artwork evidence to that fixed plane;
+* rendering and walking/collision share one wall-corner definition, so there is no second renderer-side interpretation of wall geometry;
+* the former downstream `AppendSemanticWallPlane` / `AppendPhysicalPlane` reconstruction paths are removed;
+* first-person no longer uses PaintStruct sorting bounds to determine fixed-world geometry or even tile fallback anchoring. Sorting bounds remain sorting metadata only;
+* the sole passenger-facing `viewFacing` path is now the explicit fallback for artwork whose physical geometry cannot be established from authoritative/recoverable data.
+
 ### Generic facility / entrance semantics
 
 The shared semantic component contract now includes generic structure body, floor and roof roles.
