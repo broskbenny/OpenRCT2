@@ -97,6 +97,10 @@ namespace OpenRCT2::Paint
         // Physical surfaces take coverage from world geometry. Sprite
         // transparency supplies appearance only; explicit masks still cut holes.
         bool physicalCoverage = false;
+        // Non-physical appearance carriers follow authoritative geometry but
+        // exist only to receive inverse-projected native artwork (for example
+        // ties/cross-members around trajectory-derived rails).
+        bool artworkCarrier = false;
         // When a face has no trustworthy projective source, retain physical
         // geometry but use only a deliberate material fallback from the sprite.
         bool textureFallbackOnly = false;
