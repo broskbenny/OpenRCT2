@@ -100,7 +100,7 @@ static void PaintFacility(
         const auto roofImage = imageId.WithIndexOffset(direction == 1 ? 2 : 4);
         const uint32_t roofGroup = PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
         PaintSessionAddFirstPersonSemanticOrientedQuad(
-            session, FirstPersonPaintSemanticRole::structureFloor,
+            session, FirstPersonPaintSemanticRole::structureRoof,
             FirstPersonPaintSemanticPrimitiveKind::plane,
             semanticTransform,
             { {
@@ -111,7 +111,7 @@ static void PaintFacility(
             } },
             roofImage, offset, roofGroup, false, false);
         FirstPersonPaintSemanticScope roofScope(
-            session, FirstPersonPaintSemanticRole::structureFloor, roofGroup);
+            session, FirstPersonPaintSemanticRole::structureRoof, roofGroup);
         PaintAddImageAsParent(
             session, roofImage, offset,
             { { 2, 2, height + lengthZ }, { 28, 28, 1 } });
