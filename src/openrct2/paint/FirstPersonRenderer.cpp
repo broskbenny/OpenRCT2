@@ -273,8 +273,24 @@ namespace OpenRCT2::Paint
                 const auto p = ps.Entity->getLocation();
                 return { float(p.x), float(p.y), float(p.z) };
             }
-            return { float(ps.Bounds.x + ps.Bounds.x_end) * 0.5f,
-                     float(ps.Bounds.y + ps.Bounds.y_end) * 0.5f, float(ps.Bounds.z) };
+            if (ps.Element != nullptr)
+            {
+                // PaintStruct bounds are sorting metadata, not world geometry.
+                // Even a genuine fallback billboard is anchored to the
+                // authoritative tile element, never to the sorting box.
+                return {
+                    float(ps.MapPos.x + kCoordsXYHalfTile),
+                    float(ps.MapPos.y + kCoordsXYHalfTile),
+                    float(ps.Element->getBaseZ()),
+                };
+            }
+            // Only non-world/native paint records without an element or entity
+            // lack a stronger anchor.
+            return {
+                float(ps.MapPos.x + kCoordsXYHalfTile),
+                float(ps.MapPos.y + kCoordsXYHalfTile),
+                0.0f,
+            };
         }
         // An upright impostor faces the PASSENGER'S LOCATION, never the gaze
         // direction. Otherwise looking sideways or rolling the head physically
