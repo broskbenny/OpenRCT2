@@ -76,6 +76,7 @@ enum class FirstPersonPaintSemanticRole : uint8_t
     stationCover,
     structureBody,
     structureFloor,
+    structureRoof,
     pier,
     towerSection,
     movingMachinery,
@@ -92,6 +93,7 @@ enum class FirstPersonPaintSemanticRole : uint8_t
         case FirstPersonPaintSemanticRole::pathDeck:
         case FirstPersonPaintSemanticRole::stationFloor:
         case FirstPersonPaintSemanticRole::structureFloor:
+        case FirstPersonPaintSemanticRole::structureRoof:
             return true;
         default:
             return false;
