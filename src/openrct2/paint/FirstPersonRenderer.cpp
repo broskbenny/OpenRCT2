@@ -3690,46 +3690,52 @@ namespace OpenRCT2::Paint
             if (!carrier.artworkCarrier)
                 return;
 
-            uint8_t sourceRotation =
-                trajectory.artworkRotation;
-            if (carrier.reconstructionGroup != 0)
+            // Pick the native source from the physical carrier face,
+            // never from passenger/camera position. The chosen material is
+            // therefore stable while the player walks or rides around it.
+            const std::array<FirstPersonVec3, 4> face{ {
+                carrier.triangles[0].world,
+                carrier.triangles[1].world,
+                carrier.triangles[2].world,
+                carrier.triangles[5].world,
+            } };
+            uint8_t sourceRotation = 0xff;
+            float bestArea = -1.0f;
+            for (uint8_t rotation = 0;
+                 rotation < 4; ++rotation)
             {
-                const auto selected =
-                    _reconstructionRotations.find(
-                        carrier.reconstructionGroup);
-                if (selected
-                        != _reconstructionRotations.end()
-                    && selected->second.hasSelectedRotation)
+                if (trajectory
+                        .artworkProjections[rotation]
+                        .empty())
+                    continue;
+                std::array<ScreenCoordsXY, 4> projected{};
+                for (size_t i = 0; i < face.size(); ++i)
                 {
-                    const uint8_t candidate =
-                        selected->second.selectedRotation & 3u;
-                    if (!trajectory
-                             .artworkProjections[
-                                 candidate]
-                             .empty())
-                    {
-                        sourceRotation = candidate;
-                    }
+                    const auto& p = face[i];
+                    projected[i] =
+                        Translate3DTo2DWithZ(
+                            rotation,
+                            {
+                                int32_t(std::lround(p.x)),
+                                int32_t(std::lround(p.y)),
+                                int32_t(std::lround(p.z)),
+                            });
                 }
-            }
-            if (sourceRotation >= 4
-                || trajectory
-                       .artworkProjections[
-                           sourceRotation]
-                       .empty())
-            {
-                sourceRotation = 0xFF;
-                for (uint8_t rotation = 0;
-                     rotation < 4; ++rotation)
+                float twiceArea = 0.0f;
+                for (size_t i = 0; i < projected.size(); ++i)
                 {
-                    if (!trajectory
-                             .artworkProjections[
-                                 rotation]
-                             .empty())
-                    {
-                        sourceRotation = rotation;
-                        break;
-                    }
+                    const auto& a = projected[i];
+                    const auto& b =
+                        projected[(i + 1) & 3u];
+                    twiceArea +=
+                        float(a.x * b.y - b.x * a.y);
+                }
+                const float area =
+                    std::abs(twiceArea) * 0.5f;
+                if (area > bestArea)
+                {
+                    bestArea = area;
+                    sourceRotation = rotation;
                 }
             }
             if (sourceRotation >= 4)
@@ -5859,10 +5865,8 @@ namespace OpenRCT2::Paint
                 for (const auto groupKey :
                      membership->second)
                 {
-                    // Geometry is stable, but inverse-projected material uses
-                    // the reconstruction group's selected native source view.
-                    reconstructionDependencies.insert(
-                        groupKey);
+                    // Track geometry and its face-selected native
+                    // material are both camera-independent.
                     const auto trajectory =
                         _trackTrajectoryCache.find(
                             groupKey);
