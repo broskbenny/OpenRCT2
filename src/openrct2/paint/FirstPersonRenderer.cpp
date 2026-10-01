@@ -8224,7 +8224,6 @@ namespace OpenRCT2::Paint
         scene.sceneEpoch = _sceneEpoch;
         scene.options = opt;
         scene.dimensions = dimensions;
-        scene.sceneEpoch = _sceneEpoch;
         const auto map = getGameState().mapSize;
         scene.resolvedView = ResolveFirstPersonView(
             opt.camera, dimensions.width, dimensions.height, map.x, map.y,
