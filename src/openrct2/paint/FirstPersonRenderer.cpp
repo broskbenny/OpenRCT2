@@ -5917,6 +5917,8 @@ namespace OpenRCT2::Paint
                 groupIndex;
             const auto& canonicalVariant =
                 cached.rotations[canonicalRotation];
+            const uint32_t canonicalGeneration =
+                canonicalVariant.lastAnimationGeneration;
             std::unordered_map<uint64_t, uint32_t>
                 canonicalOccurrences;
             for (const auto& component :
@@ -5948,7 +5950,9 @@ namespace OpenRCT2::Paint
                     continue;
                 const auto& variant =
                     cached.rotations[rotation];
-                if (!variant.semanticValid)
+                if (!variant.semanticValid
+                    || variant.lastAnimationGeneration
+                        != canonicalGeneration)
                     continue;
                 std::unordered_map<uint64_t, uint32_t>
                     occurrences;
@@ -6936,7 +6940,10 @@ namespace OpenRCT2::Paint
                 {
                     auto& variant =
                         cacheIt->second.rotations[rotation];
-                    if (variant.semanticValid)
+                    if (variant.semanticValid
+                        && (!cacheIt->second.animated
+                            || variant.lastAnimationGeneration
+                                == sourceGeneration))
                         continue;
 
                     auto collection =
