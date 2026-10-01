@@ -625,6 +625,9 @@ TEST(FirstPersonSemanticGeometryTest, CoplanarSurfaceOwnershipIsExplicit)
     EXPECT_TRUE(
         FirstPersonSemanticRoleOwnsCoplanarSurface(
             FirstPersonPaintSemanticRole::structureFloor));
+    EXPECT_TRUE(
+        FirstPersonSemanticRoleOwnsCoplanarSurface(
+            FirstPersonPaintSemanticRole::structureRoof));
     EXPECT_FALSE(
         FirstPersonSemanticRoleOwnsCoplanarSurface(
             FirstPersonPaintSemanticRole::structureBody));
