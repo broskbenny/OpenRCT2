@@ -435,18 +435,10 @@ namespace OpenRCT2::Paint
                 return false;
 
             const auto type = ps.Element->getType();
-            const auto* track = ps.Element->asTrack();
-            const auto* path = ps.Element->asPath();
-            const bool stationTrack =
-                track != nullptr
-                && trackTypeIsStation(track->getTrackType());
-            const bool pathGeometry =
-                path != nullptr && image.HasValue()
-                && FirstPersonPathArtworkIsPhysical(
-                    *path, image.GetIndex());
-            const bool legacyPlanar =
-                type == TileElementType::surface;
-            if (!legacyPlanar && !stationTrack && !pathGeometry)
+            // Known paths/stations/walls publish semantic geometry upstream.
+            // Do not reinterpret their paint sorting bounds as physical slabs.
+            // This fallback is retained only for native surface/cliff paint.
+            if (type != TileElementType::surface)
                 return false;
 
             const auto layout = GetSpriteCompositeLayout(image, mask);
@@ -467,56 +459,32 @@ namespace OpenRCT2::Paint
                 sx >= 6.0f && sy <= 4.0f && sz >= 5.0f;
             const bool alongY =
                 sy >= 6.0f && sx <= 4.0f && sz >= 5.0f;
-            const bool stationSlab =
-                stationTrack && sz <= 2.0f
-                && sx >= 6.0f && sy >= 6.0f
-                // Native station base/floor slabs are authored at track
-                // height. Platform strips several units above that can carry
-                // an integrated fence in the same sprite; flattening those
-                // would turn a visible fence into floor texture.
-                && z0 <= float(track->getBaseZ() + 4);
-            const bool stationFence =
-                stationTrack && (alongX || alongY)
-                && z0 >= float(track->getBaseZ() + 1)
-                && z1 <= float(track->getBaseZ() + 24);
-            const bool verticalPlane =
-                (alongX || alongY)
-                && (legacyPlanar || pathGeometry || stationFence);
-            if (!verticalPlane && !stationSlab)
+            if (!alongX && !alongY)
                 return false;
 
             std::array<FirstPersonVec3, 4> world{};
-            if (stationSlab)
+            if (alongX)
             {
-                const float fixedZ = 0.5f * (z0 + z1);
+                const float y =
+                    0.5f * (y0 + y1);
                 world = { {
-                    { x0, y0, fixedZ },
-                    { x1, y0, fixedZ },
-                    { x1, y1, fixedZ },
-                    { x0, y1, fixedZ },
-                } };
-            }
-            else if (alongX)
-            {
-                const float fixedY = 0.5f * (y0 + y1);
-                world = { {
-                    { x0, fixedY, z0 },
-                    { x1, fixedY, z0 },
-                    { x1, fixedY, z1 },
-                    { x0, fixedY, z1 },
+                    { x0, y, z0 },
+                    { x1, y, z0 },
+                    { x1, y, z1 },
+                    { x0, y, z1 },
                 } };
             }
             else
             {
-                const float fixedX = 0.5f * (x0 + x1);
+                const float x =
+                    0.5f * (x0 + x1);
                 world = { {
-                    { fixedX, y0, z0 },
-                    { fixedX, y1, z0 },
-                    { fixedX, y1, z1 },
-                    { fixedX, y0, z1 },
+                    { x, y0, z0 },
+                    { x, y1, z0 },
+                    { x, y1, z1 },
+                    { x, y0, z1 },
                 } };
             }
-
             FirstPersonSurface surface{};
             surface.image = image;
             surface.mask = mask;
@@ -1713,16 +1681,10 @@ namespace OpenRCT2::Paint
                     ? id.WithTransparency(Drawing::FilterPaletteID::paletteDarken1)
                     : id;
             };
-            const auto* physicalTrack =
-                ps.Element != nullptr ? ps.Element->asTrack() : nullptr;
             const bool physicallyPlanar =
                 ps.Element != nullptr
-                && (ps.Element->getType() == TileElementType::wall
-                    || ps.Element->getType() == TileElementType::surface
-                    || ps.Element->getType() == TileElementType::path
-                    || (physicalTrack != nullptr
-                        && trackTypeIsStation(
-                            physicalTrack->getTrackType())));
+                && ps.Element->getType()
+                    == TileElementType::surface;
             bool suppressCurrentImage =
                 ps.FirstPersonSemanticRole
                     != FirstPersonPaintSemanticRole::none;
