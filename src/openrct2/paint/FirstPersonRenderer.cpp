@@ -7145,6 +7145,30 @@ namespace OpenRCT2::Paint
                     surface->getBaseZ(),
                     surface->getSlope());
 
+            const uint16_t waterHeight =
+                surface->getWaterHeight();
+            if (waterHeight > 0)
+            {
+                for (const CoordsXY delta : {
+                         CoordsXY{ kCoordsXYStep, 0 },
+                         CoordsXY{ -kCoordsXYStep, 0 },
+                         CoordsXY{ 0, kCoordsXYStep },
+                         CoordsXY{ 0, -kCoordsXYStep } })
+                {
+                    const CoordsXY neighbourTile =
+                        tile + delta;
+                    const auto* neighbour =
+                        MapIsLocationValid(neighbourTile)
+                        ? MapGetSurfaceElementAt(
+                            neighbourTile)
+                        : nullptr;
+                    if (neighbour == nullptr
+                        || neighbour->getWaterHeight()
+                            != waterHeight)
+                        return true;
+                }
+            }
+
             const auto exposedAgainst =
                 [&](CoordsXY delta,
                     int32_t selfA, int32_t selfB,
