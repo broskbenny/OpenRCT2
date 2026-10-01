@@ -852,15 +852,10 @@ void main() {
             region.lastSeen=_frame;
             regionDraws.push_back(key);
         }
-        // Retain regions briefly during quick turns, but not every region ever
-        // explored on a large map. GPU objects belong to this GL context only.
-        if(_frame%120==0)
-        {
-            std::vector<uint64_t> old;
-            for(const auto& [key,region]:_staticOpaqueRegions)
-                if(_frame-region.lastSeen>240) old.push_back(key);
-            for(const auto key:old) DiscardRegionBuffer(key);
-        }
+        // Do not evict fixed world geometry merely because the camera looked
+        // away. The memory-budget path above performs LRU eviction only when a
+        // new region actually needs space, so ordinary turning does not cause
+        // avoidable GPU re-uploads.
         // Bind sprites AFTER all texture loads; the atlas array may have grown.
         OpenGLAPI::SetTexture(0,GL_TEXTURE_2D_ARRAY,textures.GetAtlasesTexture());
         OpenGLAPI::SetTexture(1,GL_TEXTURE_2D,textures.GetPaletteTexture());
