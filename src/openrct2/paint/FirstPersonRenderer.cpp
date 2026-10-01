@@ -3220,6 +3220,26 @@ namespace OpenRCT2::Paint
                 // of tiles is repainted. They are not semantic world state.
                 ExtendStableKey(
                     fingerprint,
+                    component.artwork.immutableWidth);
+                ExtendStableKey(
+                    fingerprint,
+                    component.artwork.immutableHeight);
+                if (!component.artwork.immutablePixels.empty())
+                {
+                    uint64_t pixelHash =
+                        14695981039346656037ull;
+                    for (const auto pixel :
+                         component.artwork.immutablePixels)
+                    {
+                        pixelHash ^= pixel;
+                        pixelHash *=
+                            1099511628211ull;
+                    }
+                    ExtendStableKey(
+                        fingerprint, pixelHash);
+                }
+                ExtendStableKey(
+                    fingerprint,
                     component.artwork.sourceRotation);
                 ExtendStableKey(
                     fingerprint,
@@ -5203,18 +5223,14 @@ namespace OpenRCT2::Paint
 
             result.component = component;
             result.g1 = g1;
-            if (component->artwork.snapshot != 0)
+            if (!component->artwork.immutablePixels.empty()
+                && component->artwork.immutableWidth
+                    == g1->width
+                && component->artwork.immutableHeight
+                    == g1->height)
             {
-                const auto* snapshot =
-                    Drawing::ScrollingText::GetFirstPersonSnapshot(
-                        component->artwork.snapshot);
-                if (snapshot != nullptr
-                    && snapshot->width == g1->width
-                    && snapshot->height == g1->height
-                    && !snapshot->pixels.empty())
-                {
-                    result.pixels = snapshot->pixels;
-                }
+                result.pixels =
+                    component->artwork.immutablePixels;
             }
             if (result.pixels.empty())
             {
