@@ -6125,8 +6125,8 @@ namespace OpenRCT2::Paint
                 const FirstPersonPaintSemanticComponent& component,
                 uint64_t gpuRegion,
                 const std::array<
-                    const FirstPersonPaintSemanticComponent*, 4>*
-                    artworkViews = nullptr,
+                    const FirstPersonPaintSemanticComponent*, 4>&
+                    artworkViews,
                 const std::vector<
                     const FirstPersonPaintSemanticComponent*>*
                     depthPeers = nullptr)
@@ -6170,11 +6170,7 @@ namespace OpenRCT2::Paint
 
             std::array<
                 const FirstPersonPaintSemanticComponent*, 4>
-                observations{};
-            if (artworkViews != nullptr)
-            {
-                observations = *artworkViews;
-            }
+                observations = artworkViews;
             if (component.artwork.sourceRotation < 4
                 && observations[
                        component.artwork.sourceRotation]
@@ -6751,7 +6747,7 @@ namespace OpenRCT2::Paint
                             BuildFirstPersonSemanticComponentSurfaces(
                                 *canonical,
                                 componentRegion,
-                                &group.views,
+                                group.views,
                                 depthPeers.empty()
                                     ? nullptr : &depthPeers);
                         for (const auto& surface :
@@ -7849,7 +7845,7 @@ namespace OpenRCT2::Paint
                     auto surfaces =
                         BuildFirstPersonSemanticComponentSurfaces(
                             *canonical, 0,
-                            &group.views,
+                            group.views,
                             depthPeers.empty()
                                 ? nullptr : &depthPeers);
                     for (auto& surface : surfaces)
