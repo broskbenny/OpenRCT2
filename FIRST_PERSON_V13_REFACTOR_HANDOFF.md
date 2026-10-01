@@ -187,7 +187,7 @@ The four native quarter-turn tile variants remain the source-image cache, but a 
 * unrelated groups on one tile may legally select different cached native variants;
 * grouped arbitrary sprite artwork is streamed as one coherent group impostor rather than being stored as resident fixed geometry.
 
-Reconstruction-group state contains only the selected source rotation and `lastSeen`; it carries no historical GPU-region membership and expires with the ordinary cache lifetime.
+Reconstruction-group state contains only the selected source rotation and `lastSeen`; it carries no historical GPU-region membership. It is park-bounded and survives camera motion so returning to a previously viewed group does not recreate selection state.
 
 ### Persistent static regions are the render unit
 
@@ -279,11 +279,11 @@ Static-region residency already removes the principal CPU/VBO cost of exact terr
 
 The previous global transparency workload has already been replaced by conservative screen-space tiling. Transparent candidates are projected into local viewport tiles so disjoint glass/water does not multiply every other transparent surface's geometry work.
 
-### Reconstruction-group state is lifetime-bounded
+### Reconstruction-group state is park-bounded and invalidation-driven
 
 Reconstruction groups no longer retain historical GPU-region sets.
 
-A group now stores only source rotation and `lastSeen`; stale entries expire with the ordinary 240-frame cache policy. Because arbitrary grouped sprite artwork is streamed rather than resident fixed geometry, group-sector changes do not recreate or dirty historical static-region packets.
+A group stores only source rotation and `lastSeen`; static group state is retained for the current park rather than expiring because it left the camera. Because arbitrary grouped sprite artwork is streamed rather than resident fixed geometry, group-sector changes do not recreate historical geometry; semantic/trajectory packet refresh is driven only by native invalidation or a material source-view dependency change.
 
 ## Fifth independent audit corrections
 
@@ -510,7 +510,7 @@ Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HA
 * many screen-disjoint glass/water surfaces scale transparency work with local screen-tile overlap rather than a global layer count;
 * several coplanar palette filters on one wall/water plane all survive and compose in deterministic paint order without Z offsets;
 * a genuinely layered stack of more than six palette-filter surfaces remains exact rather than entering an overflow approximation;
-* long first-person exploration/editing does not monotonically grow reconstruction-group state or recreate expired static-region packets when a group changes source quadrant;
+* long first-person exploration/editing keeps reconstruction/static-region state bounded by the current park and real GPU memory pressure, without time-based eviction/recreation merely because the camera looked away;
 * at 120/144 Hz, an animated static tile is natively repainted at most once per simulation animation generation unless invalidated/fallback-refreshed;
 * a stationary dense park no longer walks every admitted tile-element stack every presentation frame merely to rebuild min/max Z;
 * first-person ride audio and camera remain attached to the same pinned seat through inversions/spinning and Top Spin cabin motion;
