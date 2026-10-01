@@ -217,8 +217,8 @@ namespace OpenRCT2::Paint
                 auto* large = element->asLargeScenery();
                 const auto* entry = large != nullptr ? large->getEntry() : nullptr;
                 const size_t sequence = large != nullptr ? large->getSequenceIndex() : 0;
-                if (entry == nullptr || sequence >= entry->tiles.size()
-                    || entry->flags.has(LargeSceneryFlag::isTree))
+                if (entry == nullptr
+                    || sequence >= entry->tiles.size())
                     return std::nullopt;
 
                 const auto direction = large->getDirection();
