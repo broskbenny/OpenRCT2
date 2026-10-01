@@ -655,50 +655,22 @@ namespace OpenRCT2::Paint
             if (!LargeSceneryAssetEligible(entry))
                 return model;
 
-            const auto cells = BuildLargeSceneryAssetCells(entry);
+            const auto cells =
+                BuildLargeSceneryAssetCells(entry);
             if (!cells.has_value())
                 return model;
 
-            constexpr size_t kMaxCarvedCells = 48;
-            LargeSceneryObservedViews observed{};
-            FirstPersonVisualHull hull{};
-            std::vector<LargeSceneryAssetFace> faces;
-            if (cells->size() <= kMaxCarvedCells)
-            {
-                observed =
-                    CollectLargeSceneryObservedViews(entry);
-                hull = BuildLargeSceneryAssetHull(*cells, observed);
-                if (hull.valid)
-                    faces = BuildLargeSceneryAssetFaces(
-                        hull, *cells, observed);
-            }
-
-            constexpr size_t kMaxCarvedFaces = 1024;
-            const bool carved =
-                !faces.empty()
-                && faces.size() <= kMaxCarvedFaces
-                && EstimateLargeSceneryAssetRasterWork(faces)
-                    .has_value();
-            if (!carved)
-            {
-                faces =
-                    BuildFirstPersonQuarterCellOccupancyFaces(
-                        *cells);
-                if (faces.empty())
-                    return model;
-
-                // Geometry is the contract. Native directions are consumed
-                // later as multi-view texture evidence, so the asset model no
-                // longer chooses or verifies one source sprite per face.
-                model.minimumCandidateCoverage = 0.0f;
-                model.minimumFaceOwnership = 0.0f;
-                model.faces = std::move(faces);
-                model.usable = true;
+            // Authoritative quarter-tile occupancy and clearance are the
+            // physical contract. Native sprite silhouettes are appearance
+            // evidence only and must never gate or delay whether geometry
+            // exists.
+            auto faces =
+                BuildFirstPersonQuarterCellOccupancyFaces(
+                    *cells);
+            if (faces.empty())
                 return model;
-            }
 
-            model.minimumCandidateCoverage =
-                hull.minimumCandidateCoverage;
+            model.minimumCandidateCoverage = 0.0f;
             model.minimumFaceOwnership = 0.0f;
             model.faces = std::move(faces);
             model.usable = true;
