@@ -1335,6 +1335,35 @@ TEST(FirstPersonVisibilityTest, ObjectsJustCrossingNearPlaneRemainEligible)
                                            4.0f, 70.0f, 1.5f, 2.0f, 8192.0f));
 }
 
+TEST(FirstPersonWallGeometryTest, SharedSemanticCornersMatchWorldPlane)
+{
+    const CoordsXY origin{ 96, 160 };
+    constexpr int32_t baseZ = 80;
+    constexpr int32_t height = 48;
+    constexpr uint8_t direction = 1;
+    constexpr uint8_t slope = EDGE_SLOPE_UPWARDS;
+
+    const auto local =
+        FirstPersonWallSemanticCorners(
+            direction, slope, height);
+    const auto world =
+        BuildFirstPersonWallPlane(
+            origin, baseZ, direction, slope, height);
+
+    for (size_t i = 0; i < local.size(); ++i)
+    {
+        EXPECT_FLOAT_EQ(
+            world.corners[i].x,
+            float(origin.x) + local[i].x);
+        EXPECT_FLOAT_EQ(
+            world.corners[i].y,
+            float(origin.y) + local[i].y);
+        EXPECT_FLOAT_EQ(
+            world.corners[i].z,
+            float(baseZ) + local[i].z);
+    }
+}
+
 TEST(FirstPersonWallGeometryTest, UsesCompleteTileEdgesWithoutPainterInsets)
 {
     const CoordsXY origin{ 64, 96 };
