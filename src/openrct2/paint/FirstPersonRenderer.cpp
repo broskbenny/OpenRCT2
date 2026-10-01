@@ -1900,11 +1900,16 @@ namespace OpenRCT2::Paint
             int32_t visibilityMaxZ = 0;
             uint32_t lastVisibilityGeneration = 0;
             uint64_t cameraIndependentFingerprint = 0;
+            uint64_t semanticSurfaceFingerprint = 0;
             std::vector<ReconstructionGroupInfo> reconstructionGroups;
             std::vector<FirstPersonSurface>
                 cameraIndependentResidentSurfaces;
             std::vector<FirstPersonSurface>
                 cameraIndependentStreamedSurfaces;
+            std::vector<FirstPersonSurface>
+                semanticResidentSurfaces;
+            std::vector<FirstPersonSurface>
+                semanticStreamedSurfaces;
             // Keep all four native quarter-turn variants. Crossing a viewpoint
             // boundary can paint a variant once without destroying the previous
             // one, so moving back and forth does not thrash the whole park.
@@ -6611,6 +6616,123 @@ namespace OpenRCT2::Paint
             return result;
         }
 
+        [[nodiscard]] uint64_t
+            FirstPersonSemanticViewSetFingerprint(
+                const StaticPaintCacheEntry& cached)
+        {
+            uint64_t fingerprint =
+                14695981039346656037ull;
+            for (uint8_t rotation = 0;
+                 rotation < 4; ++rotation)
+            {
+                const auto& variant =
+                    cached.rotations[rotation];
+                ExtendStableKey(
+                    fingerprint,
+                    variant.semanticValid ? 1 : 0);
+                if (!variant.semanticValid)
+                    continue;
+                ExtendStableKey(
+                    fingerprint,
+                    variant.lastAnimationGeneration);
+                ExtendStableKey(
+                    fingerprint,
+                    variant.semanticFingerprint);
+            }
+            return fingerprint;
+        }
+
+        void EnsureFirstPersonSemanticSurfaceCache(
+            StaticPaintCacheEntry& cached)
+        {
+            const uint64_t fingerprint =
+                FirstPersonSemanticViewSetFingerprint(
+                    cached);
+            if (cached.semanticSurfaceFingerprint
+                    == fingerprint
+                && (!cached.semanticResidentSurfaces.empty()
+                    || !cached.semanticStreamedSurfaces.empty()
+                    || fingerprint
+                        == 14695981039346656037ull))
+                return;
+
+            cached.semanticResidentSurfaces.clear();
+            cached.semanticStreamedSurfaces.clear();
+
+            const auto semanticGroups =
+                BuildFirstPersonSemanticViewGroups(cached);
+            for (const auto& group : semanticGroups)
+            {
+                const auto* canonical =
+                    group.canonical;
+                if (canonical == nullptr)
+                    continue;
+                const bool moving =
+                    canonical->role
+                        == FirstPersonPaintSemanticRole::
+                            movingMachinery
+                    || canonical->role
+                        == FirstPersonPaintSemanticRole::seat;
+                if (moving)
+                    continue;
+
+                const int32_t componentTileX =
+                    canonical->mapPosition.x
+                    / kCoordsXYStep;
+                const int32_t componentTileY =
+                    canonical->mapPosition.y
+                    / kCoordsXYStep;
+                const uint64_t componentRegion =
+                    FirstPersonGpuRegionKey(
+                        componentTileX,
+                        componentTileY);
+
+                std::vector<
+                    const FirstPersonPaintSemanticComponent*>
+                    depthPeers;
+                if (canonical->artwork.group != 0)
+                {
+                    for (const auto& peerGroup :
+                         semanticGroups)
+                    {
+                        const auto* peer =
+                            peerGroup.canonical;
+                        if (peer != nullptr
+                            && peer->artwork.group
+                                == canonical->artwork.group)
+                        {
+                            depthPeers.push_back(peer);
+                        }
+                    }
+                }
+
+                auto surfaces =
+                    BuildFirstPersonSemanticComponentSurfaces(
+                        *canonical,
+                        componentRegion,
+                        group.views,
+                        depthPeers.empty()
+                            ? nullptr : &depthPeers);
+                for (auto& surface : surfaces)
+                {
+                    if (IsResidentStaticSurface(surface))
+                    {
+                        cached.semanticResidentSurfaces
+                            .emplace_back(
+                                std::move(surface));
+                    }
+                    else
+                    {
+                        cached.semanticStreamedSurfaces
+                            .emplace_back(
+                                std::move(surface));
+                    }
+                }
+            }
+            cached.semanticSurfaceFingerprint =
+                fingerprint;
+        }
+
         void RebuildStaticRegionPacket(uint64_t regionKey, uint64_t frame)
         {
             auto& packet = _staticRegionPackets[regionKey];
@@ -6692,66 +6814,19 @@ namespace OpenRCT2::Paint
                     if (terrain.waterOverlay.has_value()) addSurface(*terrain.waterOverlay);
                 }
 
-                if (const auto supportIt =
+                if (auto supportIt =
                         _staticPaintCache.find(tileKey);
                     supportIt != _staticPaintCache.end()
                     && supportIt->second.valid
                     && !supportIt->second.dirty)
                 {
-                    const auto semanticGroups =
-                        BuildFirstPersonSemanticViewGroups(
-                            supportIt->second);
-                    for (const auto& group :
-                         semanticGroups)
+                    EnsureFirstPersonSemanticSurfaceCache(
+                        supportIt->second);
+                    for (const auto& surface :
+                         supportIt->second
+                             .semanticResidentSurfaces)
                     {
-                        const auto* canonical =
-                            group.canonical;
-                        if (canonical == nullptr)
-                            continue;
-                        const bool moving =
-                            canonical->role
-                                == FirstPersonPaintSemanticRole::movingMachinery
-                            || canonical->role
-                                == FirstPersonPaintSemanticRole::seat;
-                        if (moving)
-                            continue;
-                        const int32_t componentTileX =
-                            canonical->mapPosition.x / kCoordsXYStep;
-                        const int32_t componentTileY =
-                            canonical->mapPosition.y / kCoordsXYStep;
-                        const uint64_t componentRegion =
-                            FirstPersonGpuRegionKey(
-                                componentTileX,
-                                componentTileY);
-                        if (componentRegion != regionKey)
-                            continue;
-                        std::vector<
-                            const FirstPersonPaintSemanticComponent*>
-                            depthPeers;
-                        if (canonical->artwork.group != 0)
-                        {
-                            for (const auto& peerGroup :
-                                 semanticGroups)
-                            {
-                                const auto* peer =
-                                    peerGroup.canonical;
-                                if (peer != nullptr
-                                    && peer->artwork.group
-                                        == canonical->artwork.group)
-                                {
-                                    depthPeers.push_back(peer);
-                                }
-                            }
-                        }
-                        auto surfaces =
-                            BuildFirstPersonSemanticComponentSurfaces(
-                                *canonical,
-                                componentRegion,
-                                group.views,
-                                depthPeers.empty()
-                                    ? nullptr : &depthPeers);
-                        for (const auto& surface :
-                             surfaces)
+                        if (surface.gpuRegion == regionKey)
                             addSurface(surface);
                     }
                 }
@@ -6801,6 +6876,18 @@ namespace OpenRCT2::Paint
                 for (const auto& surface :
                      cached.cameraIndependentResidentSurfaces)
                     addSurface(surface);
+
+                EnsureFirstPersonSemanticSurfaceCache(cached);
+                for (const auto& surface :
+                     cached.semanticStreamedSurfaces)
+                {
+                    if (SurfaceMayBeVisible(
+                            surface, worldFrustum))
+                    {
+                        scene.surfaces.push_back(surface);
+                    }
+                }
+
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
                     const auto& variant = cached.rotations[rotation];
@@ -7082,6 +7169,9 @@ namespace OpenRCT2::Paint
                     cached.cameraIndependentResidentSurfaces.clear();
                     cached.cameraIndependentStreamedSurfaces.clear();
                     cached.cameraIndependentFingerprint = 0;
+                    cached.semanticSurfaceFingerprint = 0;
+                    cached.semanticResidentSurfaces.clear();
+                    cached.semanticStreamedSurfaces.clear();
                     WithdrawFirstPersonSemanticComponents(tile);
                     cached.hasUngroupedResident = false;
 
