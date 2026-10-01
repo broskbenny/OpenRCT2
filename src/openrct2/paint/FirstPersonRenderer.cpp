@@ -2042,6 +2042,7 @@ namespace OpenRCT2::Paint
             int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
             uint8_t sourceChannelMask = 0;
             uint8_t artworkRotation = 0xFF;
+            std::array<bool, 4> artworkCaptureAttempted{};
             std::array<FirstPersonSilhouette, 4> railSilhouettes{};
             std::array<std::vector<ArtworkProjection>, 4> artworkProjections{};
             std::unordered_map<uint64_t, std::vector<size_t>>
@@ -6150,6 +6151,29 @@ namespace OpenRCT2::Paint
                     state.lastSeen = frame;
                     rotationMask |= uint8_t(1u << selected);
 
+                    if (group.type == TileElementType::track)
+                    {
+                        const auto trajectory =
+                            _trackTrajectoryCache.find(group.key);
+                        if (trajectory
+                            != _trackTrajectoryCache.end()
+                            && !trajectory->second.dirty)
+                        {
+                            for (uint8_t sourceRotation = 0;
+                                 sourceRotation < 4;
+                                 ++sourceRotation)
+                            {
+                                if (!trajectory->second
+                                         .artworkCaptureAttempted[
+                                             sourceRotation])
+                                {
+                                    rotationMask |= uint8_t(
+                                        1u << sourceRotation);
+                                }
+                            }
+                        }
+                    }
+
                 }
 
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
@@ -6458,12 +6482,14 @@ namespace OpenRCT2::Paint
                                 cacheIt->second.animated = true;
                                 MarkStaticRegionDirtyForTile(tx, ty);
                             }
+                            const bool trackRoot =
+                                root->Element != nullptr
+                                && root->Element->getType()
+                                    == TileElementType::track;
                             for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
                             {
                                 scene.surfaces[i].reconstructionGroup = reconstruction.groupKey;
-                                if (root->Element != nullptr
-                                    && root->Element->getType()
-                                        == TileElementType::track)
+                                if (trackRoot)
                                 {
                                     CaptureFirstPersonTrackArtworkProjection(
                                         scene.surfaces[i], rotation);
@@ -6480,6 +6506,21 @@ namespace OpenRCT2::Paint
                                 else if (!scene.surfaces[i].viewFacing)
                                 {
                                     scene.surfaces[i].gpuRegion = region;
+                                }
+                            }
+
+                            if (trackRoot
+                                && reconstruction.groupKey != 0)
+                            {
+                                const auto trajectory =
+                                    _trackTrajectoryCache.find(
+                                        reconstruction.groupKey);
+                                if (trajectory
+                                    != _trackTrajectoryCache.end())
+                                {
+                                    trajectory->second
+                                        .artworkCaptureAttempted[
+                                            rotation] = true;
                                 }
                             }
 
