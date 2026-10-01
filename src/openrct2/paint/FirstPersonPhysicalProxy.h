@@ -42,8 +42,8 @@ namespace OpenRCT2::Paint
         authoritativeTrackTrajectory,
         nativeStationGeometry,
         nativePathGeometry,
-        calibratedSceneryArtwork,
-        calibratedLargeSceneryArtwork,
+        authoritativeSceneryOccupancy,
+        authoritativeLargeSceneryOccupancy,
         semanticComponentGeometry,
     };
 
@@ -373,7 +373,7 @@ namespace OpenRCT2::Paint
                         cellSize,
                         z1 - z0,
                         FirstPersonPhysicalProxyProvenance::
-                            calibratedSceneryArtwork,
+                            authoritativeSceneryOccupancy,
                         uint64_t(entry->image));
                     if (result.size() - start
                         > kMaxProxyBoxes)
