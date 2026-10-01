@@ -3007,7 +3007,7 @@ namespace OpenRCT2::Paint
         }
 
         [[nodiscard]] std::optional<std::vector<uint8_t>>
-            DecodeFirstPersonTrackSprite(const G1Element& g1)
+            DecodeFirstPersonSpritePixels(const G1Element& g1)
         {
             if (g1.offset == nullptr || g1.width <= 0 || g1.height <= 0
                 || g1.width > 512 || g1.height > 512
@@ -3072,7 +3072,7 @@ namespace OpenRCT2::Paint
             if (g1 == nullptr)
                 return;
             const auto pixels =
-                DecodeFirstPersonTrackSprite(*g1);
+                DecodeFirstPersonSpritePixels(*g1);
             if (!pixels.has_value())
                 return;
 
