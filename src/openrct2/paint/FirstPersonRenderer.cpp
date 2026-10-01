@@ -6976,6 +6976,12 @@ namespace OpenRCT2::Paint
                     {
                         for (const auto key : missesByRotation[rotation])
                             _staticPaintCache[key].rotations[rotation].valid = false;
+                        for (const auto key : cameraIndependentRefreshKeys)
+                        {
+                            MarkStaticRegionDirtyForTile(
+                                int32_t(key >> 32),
+                                int32_t(key & 0xffffffffu));
+                        }
                         return;
                     }
                     Drawing::ScrollingText::BeginFirstPersonSnapshotCapture();
@@ -7320,7 +7326,9 @@ namespace OpenRCT2::Paint
                     continue;
                 auto& cached = cacheIt->second;
                 const uint64_t fingerprint =
-                    ResidentStaticSurfaceFingerprint(
+                    cached.cameraIndependentResidentSurfaces.empty()
+                    ? 0
+                    : ResidentStaticSurfaceFingerprint(
                         cached.cameraIndependentResidentSurfaces);
                 if (cached.cameraIndependentFingerprint
                     != fingerprint)
