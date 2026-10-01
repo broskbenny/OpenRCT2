@@ -512,6 +512,25 @@ Semantic and trajectory reconstruction no longer retain temporary scrolling-text
 
 `src/openrct2/libopenrct2.vcxproj` explicitly compiles `paint\\FirstPersonLargeSceneryReconstruction.cpp`. This translation unit had fallen out of the Windows project despite being used by the renderer; leaving it omitted would produce unresolved reconstruction symbols in the VS2019 build.
 
+## Geometry-first reconstruction cleanup completion — 2026-10-01
+
+The renderer now has one reconstruction hierarchy:
+
+1. Authoritative native/world geometry or occupancy defines physical surfaces.
+2. All available native sprite rotations are observations of those fixed surfaces.
+3. Geometry-derived visibility/depth ownership selects valid source pixels.
+4. Those pixels are baked into persistent face-local artwork.
+5. Silhouette carving may refine authoritative occupancy where permitted, but cannot replace or erase the base physical contract.
+6. Passenger-facing billboards remain only for dynamic/native artwork or static assets for which no trustworthy physical surface can be recovered.
+
+The downstream PaintStruct wall/plane reconstruction paths have been removed. Walls, path structures, terrain edges/tunnels/fences, banners, ride/park entrances, station floors/fences/covers/piers, shops/facilities and metal/wooden supports publish semantic geometry at their native paint helpers.
+
+Station shelter glass now publishes as a non-colliding semantic decal on the same shelter geometry; it no longer survives as an independent child billboard.
+
+Large scenery uses authoritative quarter-tile occupancy and clearance to define its faces. Small scenery begins from authoritative occupied quadrants and object height; multi-view silhouette analysis is only an optional refinement of that occupancy. Standard tracked rides use authoritative trajectory plus TrackStyle-derived guideway topology. The old artwork-profile calibration/verification subsystem is removed.
+
+The remaining ordinary billboard path is therefore an explicit fallback for data-poor artwork/entities, not a competing reconstruction path for objects whose geometry is already known.
+
 ## Required manual verification before creating a new stable tag
 
 Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HANDOFF.md`, then verify:
