@@ -45,7 +45,7 @@ Native path surface-image selection is now shared through `GetPathSurfaceImageOf
 * A semantic walking deck is emitted from authoritative path/bridge artwork even when the native painter omits the separate surface sprite.
 * Bridge/support sprites are not flattened.
 * Path geometry remains at the true simulation floor height; the previous `+1` world-unit lift was removed.
-* Coplanar separation is handled by a small depth-only render bias, so physical geometry and UV mapping remain truthful.
+* Coplanar separation is handled by explicit semantic surface ownership. Terrain and path/deck/floor geometry remain at their exact physical Z; the owning surface is rendered later at the same depth, with no geometric or depth offset.
 * Synthesized bridge decks compute their own native surface sprite origin rather than inheriting an arbitrary support/fence root position.
 * Deck synthesis is accepted only from a native path-surface or bridge root so ghost/highlight remaps come from the correct path image template.
 
@@ -55,8 +55,9 @@ Only artwork backed by meaningful world geometry is reconstructed as a fixed pla
 
 * semantic walls and path decks are built from authoritative world geometry and derive UVs by projecting those world points back into the selected native image;
 * genuinely narrow/tall physical paint bounds may still become fixed planes when they represent a real wall-like surface;
-* arbitrary track, large-scenery, small-scenery and support artwork is not assigned a false world-fixed horizontal axis;
-* connected large-scenery/track fragments instead share one canonical group anchor and one native source rotation, forming a coherent passenger-facing group impostor;
+* arbitrary large-scenery, small-scenery and unsupported track artwork is not assigned a false world-fixed horizontal axis;
+* standard trajectory-backed track no longer uses a group impostor as its physical representation: the native vehicle trajectory defines stable guideway geometry and a non-physical trajectory-following artwork carrier receives inverse-projected track artwork;
+* connected large-scenery fragments and unsupported track fallbacks still share one canonical group anchor and one native source rotation rather than rotating tile fragments independently;
 * entities and ordinary isolated props are passenger-facing impostors.
 
 This intentionally prefers a truthful 2-D impostor over fabricated 3-D orientation when the source asset contains no recoverable physical surface.
@@ -427,6 +428,47 @@ Stable rollback remains unchanged and must not be treated as moved:
 
 The old stable tag has **NOT** been moved and remains the rollback checkpoint.
 
+## Full semantic / trajectory refactor — 2026-10-01
+
+The player-facing issues agreed with the tester are now represented as renderer invariants rather than object-specific visual patches.
+
+### Coplanar surface ownership
+
+Ground-level paths, station floors and generic structure floors/roofs keep their authoritative world height. A semantic ownership bit records that they replace a covered surface at equal physical depth. The opaque renderer draws non-owners first and owners second under `GL_LEQUAL`; the transparent path carries the same ownership rule when comparing against opaque depth. No Z lift or depth-only nudge is used.
+
+### Persistent world preparation
+
+Fixed terrain, semantic structures, track trajectories and static region packets no longer expire merely because the camera looked away. GPU region buffers likewise remain resident until actual memory pressure requires LRU eviction.
+
+Ending walking/ride POV resets only presentation/dynamic state. It no longer clears the park-bounded static world caches. Native map/object invalidation still dirties or fully clears affected data, so re-entering POV and turning back reuse unchanged geometry instead of reconstructing it.
+
+Synchronous track-art profile calibration has been removed from the ordinary render traversal. Track preparation now exposes separate build/cache-hit timing counters so any remaining cost can be measured directly rather than hidden.
+
+### Generic facility / entrance semantics
+
+The shared semantic component contract now includes generic structure body, floor and roof roles.
+
+* shop/stall painters publish their stable 1x1 body and foundation geometry before the sprite is flattened;
+* facility/toilet painters publish a stable box, foundation and roof plane;
+* ride entrance/exit painters publish an oriented open gate frame with posts/header plus front/back/glass artwork planes, rather than treating native sorting slabs as the physical object.
+
+Artwork is inverse-projected from the native sprite source onto those stable world surfaces. These are uses of the common box/plane/footprint component contract, not first-person billboard special cases.
+
+### Trajectory-owned track reconstruction
+
+For standard tracked rides, physical rails no longer depend on successful artwork-profile verification.
+
+* the native vehicle trajectory is always the stable centreline;
+* `TrackStyle` supplies a deterministic guideway topology/cross-section baseline;
+* optional verified artwork data may refine dimensions/material but cannot decide whether geometry exists;
+* physical rail segments and walking collision use the same resolved style profile;
+* a separate non-colliding trajectory-following shell carries ties, cross-members and other native track artwork by inverse projection;
+* native track PaintStructs become texture evidence once trajectory geometry exists and are not rendered as a second camera-facing track;
+* native source-view selection remains independent of geometry and can change material view without rotating/rebuilding the rails;
+* static region packets track that source-view dependency so material changes refresh the packet without reconstructing trajectory geometry.
+
+The previous billboard rail-pixel masking path has been removed.
+
 ## Required manual verification before creating a new stable tag
 
 Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HANDOFF.md`, then verify:
@@ -435,15 +477,22 @@ Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HA
 * repeated flat walls and 90-degree wall corners have no gaps;
 * sloped walls follow their terrain edge without open wedges;
 * flat and sloped supported paths always show a horizontal/ramped walking deck in all four native paint rotations, without texture displacement or disappearance;
+* a ground-level path never flickers with terrain beneath it; the path owns only its actual footprint at the exact same physical height, with no visible or collision Z offset;
 * ride POV heading agrees with native vehicle travel at cardinal and intermediate 32-step orientations, including ride audio left/right orientation;
 * guests on flat and sloped paths are reassessed for foot contact before any peep offset is considered;
 * ordinary terrain tile boundaries are seam-free at near and far viewing distances;
 * trees retain the desirable upright impostor appearance;
-* buildings, multi-tile large scenery, ride parts and supports retain coherent shared group-impostor placement/source views across tile boundaries without strange fixed-card orientation;
+* arbitrary/unconverted large scenery retains coherent shared group-impostor placement/source views across tile boundaries, while semantic shops/facilities/ride entrances remain fixed world geometry rather than cards;
 * guests, staff and non-attached vehicles remain smoothly interpolated when visible only to the first-person camera, including after entering from a zoomed-out overhead view;
 * parks with more than 256 distinct simultaneously collected scrolling-text variants do not show text from later signs on earlier signs;
 * head turns in place do not swap native sprite sides or trigger park-wide static repaints;
+* exiting and immediately re-entering walking/ride POV reuses unchanged terrain/static/track caches rather than cold-reconstructing the same area;
+* turning away from and back toward a previously seen static region does not rebuild CPU geometry or re-upload its GPU region unless it was invalidated or evicted for real memory pressure;
 * slow physical movement across sprite-sector boundaries does not chatter;
+* toilet/facility, shop/stall and ride entrance/exit objects keep stable box/gate geometry while camera yaw changes; wall/roof/front/back artwork stays attached to the corresponding physical faces rather than stretching as a billboard;
+* ride entrances retain a visibly open centre instead of becoming one solid sorting-box slab;
+* on a trajectory-backed ride, rails/ties/cross-members remain attached to the sampled track route while riding through successive pieces, with no per-piece billboard morphing toward the camera;
+* changing the selected native track source view may change texture evidence but must not rotate, rebuild or relocate the trajectory geometry;
 * masked/glass artwork with differing mask/colour offsets stays aligned;
 * repeated turns and edits do not cause avoidable resident-region `glBufferData()` churn;
 * walking collision meets adjacent full wall edges and remains consistent on sloped walls.
