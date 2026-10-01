@@ -53,7 +53,7 @@ Native path surface-image selection is now shared through `GetPathSurfaceImageOf
 
 Only artwork backed by meaningful world geometry is reconstructed as a fixed plane.
 
-* semantic walls and path decks are built from authoritative world geometry and derive UVs by projecting those world points back into the selected native image;
+* semantic walls, paths, decks, floors, roofs and other known surfaces are built from authoritative world geometry. Their physical faces are projected into every available native image, and native pixels are reverse-mapped back onto persistent face-local textures;
 * genuinely narrow/tall physical paint bounds may still become fixed planes when they represent a real wall-like surface;
 * arbitrary large-scenery, small-scenery and unsupported track artwork is not assigned a false world-fixed horizontal axis;
 * standard trajectory-backed track no longer uses a group impostor as its physical representation: the native vehicle trajectory defines stable guideway geometry and a non-physical trajectory-following artwork carrier receives inverse-projected track artwork;
@@ -226,7 +226,7 @@ The final camera Z comes from the same accepted swept floor traversal used to va
 
 The interim semantic classifier for small scenery has been superseded by the stricter projection invariant above.
 
-Unless an artwork root can be reconstructed from meaningful world geometry, it remains an impostor. This applies to compact props, rotatable signs/decorations, large scenery, track artwork and supports. Connected large-scenery/track pieces still share a canonical group anchor/source view, so this does not reintroduce per-tile independent rotation.
+Unless an artwork root can be reconstructed from meaningful world geometry, it remains an impostor. Compact props and irregular arbitrary scenery may therefore still use that fallback. Standard trajectory-backed track and semantic supports/structures are no longer in this category: their authoritative geometry exists first and native sprites are texture evidence only.
 
 ### Renderer and tweener share one resolved view
 
@@ -254,7 +254,7 @@ A further audit at `f60ae08ef22928c6d6c91a13fa02082f92b10653` identified five re
 
 The previous fallback mapped native sprite X directly onto a horizontal world vector even though the native isometric projection couples X/Y/Z. That mapping could not reproduce its own source view.
 
-The fallback is now a passenger-facing impostor. Connected large-scenery and track fragments still use one canonical group anchor and source rotation, so their native image-space offsets remain mutually coherent. World-fixed geometry is reserved for semantic walls/path decks and genuine physical planes whose UVs are derived from projecting their actual world vertices.
+The fallback is now a passenger-facing impostor only when authoritative/recoverable geometry is genuinely unavailable. Standard track, semantic structures, paths, supports and other known physical components instead use stable geometry with inverse-projected artwork. Connected arbitrary large-scenery fallback fragments may still share one canonical group source view.
 
 ### Moving entities own their native source rotation
 
@@ -283,7 +283,7 @@ The previous global transparency workload has already been replaced by conservat
 
 Reconstruction groups no longer retain historical GPU-region sets.
 
-A group stores only source rotation and `lastSeen`; static group state is retained for the current park rather than expiring because it left the camera. Because arbitrary grouped sprite artwork is streamed rather than resident fixed geometry, group-sector changes do not recreate historical geometry; semantic/trajectory packet refresh is driven only by native invalidation or a material source-view dependency change.
+A fallback reconstruction group stores only source rotation and `lastSeen`; that state is retained for the current park rather than expiring because it left the camera. Semantic and trajectory-backed geometry no longer depend on this source-view state. It remains only for artwork that still genuinely requires the grouped-impostor fallback.
 
 ## Fifth independent audit corrections
 
@@ -444,6 +444,22 @@ Ending walking/ride POV resets only presentation/dynamic state. It no longer cle
 
 Synchronous track-art profile calibration has been removed from the ordinary render traversal. Track preparation now exposes separate build/cache-hit timing counters so any remaining cost can be measured directly rather than hidden.
 
+### Standard geometry-first artwork reconstruction
+
+For any component whose physical geometry is known, first person now follows one reconstruction contract:
+
+1. Native/world data defines the physical faces first.
+2. The same faces are projected into each available native isometric sprite.
+3. A geometry-derived depth-owner map determines which physical face owns each projected source pixel; hidden faces cannot borrow pixels from visible ones.
+4. Matching native rotations are treated as multiple observations of the same face, not competing object models.
+5. Each face is baked once into face-local indexed artwork. Missing pixels may be filled from another valid native observation of that same face.
+6. The baked artwork is cached persistently in the first-person OpenGL atlas and remains attached to that face as the passenger moves.
+7. The player/camera never selects a different physical model or whole-object texture view for geometry-backed objects.
+
+One deterministic semantic rotation supplies the canonical physical component set. Other rotations are permitted to contribute artwork only when their world-space physical fingerprint matches that component. For animated semantic components the physical model and contributing artwork views must come from the same simulation generation.
+
+Billboards/group impostors remain a fallback only for artwork for which OpenRCT2 does not expose enough trustworthy geometry or occupancy to establish physical surfaces.
+
 ### Generic facility / entrance semantics
 
 The shared semantic component contract now includes generic structure body, floor and roof roles.
@@ -452,7 +468,7 @@ The shared semantic component contract now includes generic structure body, floo
 * facility/toilet painters publish a stable box, foundation and roof plane;
 * ride entrance/exit painters publish an oriented open gate frame with posts/header plus front/back/glass artwork planes, rather than treating native sorting slabs as the physical object.
 
-Artwork is inverse-projected from the native sprite source onto those stable world surfaces. Geometry is shared semantically, while each cached native quarter-turn keeps its own artwork binding so repainting one view cannot overwrite another. These are uses of the common box/plane/footprint component contract, not first-person billboard special cases.
+Each native quarter-turn is captured as an observation of the same semantic object. The renderer projects the canonical physical faces into those native views, uses geometry-derived depth ownership to determine which face actually owns each source pixel, and bakes one persistent face-local texture from the best available evidence across all matching views. Camera position does not choose the texture. Shared artwork groups also share the depth test, so one native sprite describing several posts/walls/roof pieces is split according to the real geometry rather than by sorting bounds.
 
 ### Trajectory-owned track reconstruction
 
@@ -462,10 +478,10 @@ For standard tracked rides, physical rails no longer depend on successful artwor
 * `TrackStyle` supplies a deterministic guideway topology/cross-section baseline;
 * optional verified artwork data may refine dimensions/material but cannot decide whether geometry exists;
 * physical rail segments and walking collision use the same resolved style profile;
-* a separate non-colliding trajectory-following shell carries ties, cross-members and other native track artwork by inverse projection, preserving every relevant native paint layer in paint order;
-* native track PaintStructs become texture evidence once trajectory geometry exists and are not rendered as a second camera-facing track;
-* native source-view selection remains independent of geometry and can change material view without rotating/rebuilding the rails;
-* static region packets track that source-view dependency so material changes refresh the packet without reconstructing trajectory geometry.
+* a separate non-colliding trajectory-following shell carries ties, cross-members and other native track artwork;
+* the renderer captures the available native track rotations once, preserves each rotation's native paint order, groups compatible material layers, and reverse-projects them onto the trajectory-following carrier;
+* each carrier face receives a persistent baked material assembled from multiple native views according to that face's geometry, not the passenger viewpoint;
+* native track PaintStructs become texture evidence once trajectory geometry exists and are not rendered as a second camera-facing track.
 
 The previous billboard rail-pixel masking path has been removed.
 
@@ -492,11 +508,11 @@ Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HA
 * toilet/facility, shop/stall and ride entrance/exit objects keep stable box/gate geometry while camera yaw changes; wall/roof/front/back artwork stays attached to the corresponding physical faces rather than stretching as a billboard;
 * ride entrances retain a visibly open centre instead of becoming one solid sorting-box slab;
 * on a trajectory-backed ride, rails/ties/cross-members remain attached to the sampled track route while riding through successive pieces, with no per-piece billboard morphing toward the camera;
-* changing the selected native track source view may change texture evidence but must not rotate, rebuild or relocate the trajectory geometry;
+* orbiting or riding around trajectory-backed track must not trigger a native-view texture switch: the carrier material is already baked from the captured native views and remains attached to the physical route;
 * masked/glass artwork with differing mask/colour offsets stays aligned;
 * repeated turns and edits do not cause avoidable resident-region `glBufferData()` churn;
 * walking collision meets adjacent full wall edges and remains consistent on sloped walls.
-* a multi-tile large-scenery object and a multi-sequence track piece keep one coherent native source view across tile and 32x32 GPU-region boundaries, including near 45-degree source-view thresholds;
+* a multi-tile arbitrary large-scenery fallback keeps one coherent native source view across tile/GPU-region boundaries; trajectory-backed track is instead camera-independent and must show no 45-degree native-source threshold at all;
 * a tile containing unrelated connected groups can select different native variants without mixing variants inside either group;
 * in a dense static park, steady camera frames reuse resident region packets/VBOs without static-surface copy, cull, grouping, vertex hashing or repacking; exact terrain texel scale remains unchanged with distance;
 * walking into a vertical terrain cliff stops instead of snapping upward, and stepping off a large ledge stops instead of snapping downward;
