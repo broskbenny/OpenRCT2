@@ -6649,11 +6649,7 @@ namespace OpenRCT2::Paint
                 FirstPersonSemanticViewSetFingerprint(
                     cached);
             if (cached.semanticSurfaceFingerprint
-                    == fingerprint
-                && (!cached.semanticResidentSurfaces.empty()
-                    || !cached.semanticStreamedSurfaces.empty()
-                    || fingerprint
-                        == 14695981039346656037ull))
+                == fingerprint)
                 return;
 
             cached.semanticResidentSurfaces.clear();
