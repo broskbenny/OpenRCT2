@@ -438,6 +438,7 @@ void TextureCache::FreeTextures()
     glCall(glDeleteTextures, 1, &_atlasesTexture);
     _textureCache.clear();
     _firstPersonTransientBitmaps.clear();
+    _firstPersonPersistentBitmaps.clear();
     std::fill(_indexMap.begin(), _indexMap.end(), kUnusedIndex);
 }
 
