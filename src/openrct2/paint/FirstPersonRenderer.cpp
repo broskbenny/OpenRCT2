@@ -1778,6 +1778,7 @@ namespace OpenRCT2::Paint
             uint32_t lastAnimationGeneration{};
             uint32_t lastSourceProbeGeneration{};
             uint64_t residentFingerprint{};
+            uint64_t semanticFingerprint{};
             bool valid = false;
             uint8_t verticalTunnelHeight = 0xFF;
             std::vector<TunnelEntry> leftTunnels;
@@ -2690,6 +2691,107 @@ namespace OpenRCT2::Paint
                     extendFloat(vertex.u);
                     extendFloat(vertex.v);
                 }
+            }
+            return fingerprint;
+        }
+
+        [[nodiscard]] uint64_t SemanticComponentFingerprint(
+            const std::vector<FirstPersonPaintSemanticComponent>& components)
+        {
+            uint64_t fingerprint = 14695981039346656037ull;
+            const auto extendFloat = [&](float value) {
+                ExtendStableKey(
+                    fingerprint,
+                    uint64_t(int64_t(std::llround(
+                        double(value) * 1024.0))));
+            };
+            const auto extendVec =
+                [&](FirstPersonPaintSemanticVec3 value) {
+                    extendFloat(value.x);
+                    extendFloat(value.y);
+                    extendFloat(value.z);
+                };
+            const auto extendImage = [&](ImageId image) {
+                ExtendStableKey(fingerprint, image.GetIndex());
+                ExtendStableKey(fingerprint, image.GetRemap());
+                ExtendStableKey(
+                    fingerprint, EnumValue(image.GetPrimary()));
+                ExtendStableKey(
+                    fingerprint, EnumValue(image.GetSecondary()));
+                ExtendStableKey(
+                    fingerprint, EnumValue(image.GetTertiary()));
+                ExtendStableKey(
+                    fingerprint, image.HasPrimary() ? 1 : 0);
+                ExtendStableKey(
+                    fingerprint, image.HasSecondary() ? 1 : 0);
+                ExtendStableKey(
+                    fingerprint, image.HasTertiary() ? 1 : 0);
+                ExtendStableKey(
+                    fingerprint, image.IsBlended() ? 1 : 0);
+            };
+
+            ExtendStableKey(
+                fingerprint, components.size());
+            for (const auto& component : components)
+            {
+                ExtendStableKey(
+                    fingerprint, component.id);
+                ExtendStableKey(
+                    fingerprint, EnumValue(component.role));
+                ExtendStableKey(
+                    fingerprint,
+                    uint32_t(component.mapPosition.x));
+                ExtendStableKey(
+                    fingerprint,
+                    uint32_t(component.mapPosition.y));
+                ExtendStableKey(
+                    fingerprint,
+                    EnumValue(component.geometry.kind));
+                ExtendStableKey(
+                    fingerprint,
+                    component.geometry.pointCount);
+                for (size_t i = 0;
+                     i < component.geometry.pointCount
+                        && i < component.geometry.points.size();
+                     ++i)
+                {
+                    extendVec(component.geometry.points[i]);
+                }
+                extendFloat(
+                    component.geometry.halfWidth);
+                extendFloat(
+                    component.geometry.halfHeight);
+                ExtendStableKey(
+                    fingerprint,
+                    component.geometry.localHullKey);
+                extendVec(component.transform.origin);
+                extendVec(component.transform.axisX);
+                extendVec(component.transform.axisY);
+                extendVec(component.transform.axisZ);
+                extendImage(component.artwork.image);
+                extendImage(component.artwork.mask);
+                ExtendStableKey(
+                    fingerprint,
+                    uint32_t(component.artwork.screenPos.x));
+                ExtendStableKey(
+                    fingerprint,
+                    uint32_t(component.artwork.screenPos.y));
+                ExtendStableKey(
+                    fingerprint, component.artwork.group);
+                ExtendStableKey(
+                    fingerprint, component.artwork.snapshot);
+                ExtendStableKey(
+                    fingerprint,
+                    component.artwork.sourceRotation);
+                ExtendStableKey(
+                    fingerprint,
+                    component.artwork.decal ? 1 : 0);
+                ExtendStableKey(
+                    fingerprint,
+                    component.repetitionIndex);
+                ExtendStableKey(
+                    fingerprint,
+                    component.collidable ? 1 : 0);
             }
             return fingerprint;
         }
@@ -5392,6 +5494,7 @@ namespace OpenRCT2::Paint
                         variant.lastAnimationGeneration = 0;
                         variant.lastSourceProbeGeneration = 0;
                         variant.residentFingerprint = 0;
+                        variant.semanticFingerprint = 0;
                         variant.verticalTunnelHeight = 0xFF;
                         variant.leftTunnels.clear();
                         variant.rightTunnels.clear();
@@ -5610,8 +5713,23 @@ namespace OpenRCT2::Paint
                             {
                                 auto& variant =
                                     cacheIt->second.rotations[rotation];
+                                const uint64_t previousSemanticFingerprint =
+                                    variant.semanticFingerprint;
                                 variant.semanticComponents =
                                     std::move(semanticComponents);
+                                variant.semanticFingerprint =
+                                    SemanticComponentFingerprint(
+                                        variant.semanticComponents);
+                                if (cacheIt->second.hasSelectedRotation
+                                    && (cacheIt->second.selectedRotation & 3u)
+                                        == rotation
+                                    && previousSemanticFingerprint
+                                        != variant.semanticFingerprint)
+                                {
+                                    MarkStaticRegionDirtyForTile(
+                                        item.position.x / kCoordsXYStep,
+                                        item.position.y / kCoordsXYStep);
+                                }
                                 // Walking collision needs only stable physical
                                 // geometry; any native rotation is equivalent
                                 // for that purpose.
