@@ -6831,12 +6831,40 @@ namespace OpenRCT2::Paint
                         _staticPaintCache.find(tileKey);
                     portalCache != _staticPaintCache.end()
                     && portalCache->second.valid
-                    && !portalCache->second.dirty
-                    && portalCache->second.hasSelectedRotation)
+                    && !portalCache->second.dirty)
                 {
-                    const auto& portalVariant =
-                        portalCache->second.rotations[
-                            portalCache->second.selectedRotation & 3u];
+                    std::vector<FirstPersonTunnelPortal>
+                        canonicalPortals;
+                    for (const auto& variant :
+                         portalCache->second.rotations)
+                    {
+                        if (!variant.valid)
+                            continue;
+                        for (const auto& portal :
+                             variant.portals)
+                        {
+                            const bool duplicate =
+                                std::any_of(
+                                    canonicalPortals.begin(),
+                                    canonicalPortals.end(),
+                                    [&](const auto& existing) {
+                                        return existing.tile
+                                                == portal.tile
+                                            && existing.edge
+                                                == portal.edge
+                                            && existing.type
+                                                == portal.type
+                                            && existing.lowZ
+                                                == portal.lowZ
+                                            && existing.highZ
+                                                == portal.highZ;
+                                    });
+                            if (!duplicate)
+                                canonicalPortals.push_back(
+                                    portal);
+                        }
+                    }
+
                     uint8_t portalColour =
                         static_cast<uint8_t>(
                             Drawing::getColourMap(
@@ -6845,7 +6873,7 @@ namespace OpenRCT2::Paint
                         portalColour = static_cast<uint8_t>(
                             Drawing::PaletteIndex::trackRails1);
                     for (const auto& portal :
-                         portalVariant.portals)
+                         canonicalPortals)
                     {
                         for (const auto& quad :
                              BuildFirstPersonTunnelPortalTerrainWall(
