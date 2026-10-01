@@ -493,6 +493,14 @@ Completing the four native artwork observations for semantic geometry is batched
 
 Unchanged static rotation variants also no longer repaint merely because 240 simulation ticks elapsed. Native invalidation and the staggered tile semantic-signature probe are the correctness sources; if neither reports a change, the existing geometry/artwork stays resident. Animated tiles still repaint when their simulation animation generation changes.
 
+### Dynamic artwork lifetime
+
+Semantic and trajectory reconstruction no longer retain temporary scrolling-text/sprite snapshot handles after a native paint batch ends. Any immutable dynamic indexed artwork needed by a cached semantic component or track projection is copied into the cached artwork evidence immediately and included in its material fingerprint. Later paint batches can therefore recycle native scrolling-text slots without silently changing an already reconstructed sign, entrance or track material.
+
+### Windows / VS2019 project integration
+
+`src/openrct2/libopenrct2.vcxproj` explicitly compiles `paint\\FirstPersonLargeSceneryReconstruction.cpp`. This translation unit had fallen out of the Windows project despite being used by the renderer; leaving it omitted would produce unresolved reconstruction symbols in the VS2019 build.
+
 ## Required manual verification before creating a new stable tag
 
 Use the same real Windows 7 SP1 / VS2019 path documented in `FIRST_PERSON_V13_HANDOFF.md`, then verify:
