@@ -3060,6 +3060,31 @@ namespace OpenRCT2::Paint
             return pixels;
         }
 
+        [[nodiscard]] bool SameFirstPersonMaterialTemplate(
+            ImageId a, ImageId b)
+        {
+            if (!a.HasValue() || !b.HasValue())
+                return false;
+            if (a.IsBlended() != b.IsBlended()
+                || a.IsRemap() != b.IsRemap()
+                || a.HasPrimary() != b.HasPrimary()
+                || a.HasSecondary() != b.HasSecondary()
+                || a.HasTertiary() != b.HasTertiary())
+                return false;
+            if (a.GetRemap() != b.GetRemap())
+                return false;
+            if (a.HasPrimary()
+                && a.GetPrimary() != b.GetPrimary())
+                return false;
+            if (a.HasSecondary()
+                && a.GetSecondary() != b.GetSecondary())
+                return false;
+            if (a.HasTertiary()
+                && a.GetTertiary() != b.GetTertiary())
+                return false;
+            return true;
+        }
+
         void AddFirstPersonSyntheticTrackImageObservation(
             FirstPersonTrackArtworkObservation& observation,
             uint8_t rotation, ImageId image,
@@ -4813,32 +4838,7 @@ namespace OpenRCT2::Paint
             // invalidation. Retaining it makes a turn a visibility operation,
             // not a terrain reconstruction operation.
         }
-        [[nodiscard]] bool SameFirstPersonSemanticMaterialTemplate(
-            ImageId a, ImageId b)
-        {
-            if (!a.HasValue() || !b.HasValue())
-                return false;
-            if (a.IsBlended() != b.IsBlended()
-                || a.IsRemap() != b.IsRemap()
-                || a.HasPrimary() != b.HasPrimary()
-                || a.HasSecondary() != b.HasSecondary()
-                || a.HasTertiary() != b.HasTertiary())
-                return false;
-            if (a.GetRemap() != b.GetRemap())
-                return false;
-            if (a.HasPrimary()
-                && a.GetPrimary() != b.GetPrimary())
-                return false;
-            if (a.HasSecondary()
-                && a.GetSecondary() != b.GetSecondary())
-                return false;
-            if (a.HasTertiary()
-                && a.GetTertiary() != b.GetTertiary())
-                return false;
-            return true;
-        }
-
-        [[nodiscard]] std::vector<std::array<FirstPersonVec3, 4>>
+                [[nodiscard]] std::vector<std::array<FirstPersonVec3, 4>>
             BuildFirstPersonSemanticPhysicalFaces(
                 const FirstPersonPaintSemanticComponent& component)
         {
@@ -5424,7 +5424,7 @@ namespace OpenRCT2::Paint
                             const auto& view =
                                 decodedViews[
                                     candidate.rotation];
-                            if (!SameFirstPersonSemanticMaterialTemplate(
+                            if (!SameFirstPersonMaterialTemplate(
                                     surface.image,
                                     view.component->artwork.image))
                                 continue;
