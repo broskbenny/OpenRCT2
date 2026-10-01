@@ -445,8 +445,7 @@ namespace OpenRCT2::Paint
                 && FirstPersonPathArtworkIsPhysical(
                     *path, image.GetIndex());
             const bool legacyPlanar =
-                type == TileElementType::wall
-                || type == TileElementType::surface;
+                type == TileElementType::surface;
             if (!legacyPlanar && !stationTrack && !pathGeometry)
                 return false;
 
@@ -551,42 +550,6 @@ namespace OpenRCT2::Paint
                     float(iso.x - spritePos.x - layout->xOffset),
                     float(iso.y - spritePos.y - layout->yOffset),
                 };
-            }
-            EmitQuad(surface, vertices);
-            scene.surfaces.emplace_back(std::move(surface));
-            return true;
-        }
-        // Native wall placement, slope and object height define the plane.
-        bool AppendSemanticWallPlane(
-            FirstPersonScene& scene, const PaintStruct& ps, ImageId image,
-            const ScreenCoordsXY& spritePos, uint8_t rotation, ImageId mask = {})
-        {
-            if (ps.Element == nullptr || ps.Element->getType() != TileElementType::wall || !image.HasValue())
-                return false;
-            const auto* wall = ps.Element->asWall();
-            const auto* entry = wall != nullptr ? wall->getEntry() : nullptr;
-            const auto layout = GetSpriteCompositeLayout(image, mask);
-            if (entry == nullptr || !layout.has_value() ||
-                entry->flags.has(WallSceneryFlag::isDoor) || entry->height == 0)
-                return false;
-
-            const auto physical = BuildFirstPersonWallPlane(
-                ps.MapPos, wall->getBaseZ(), wall->getDirection(), wall->getSlope(),
-                int32_t(entry->height) * kCoordsZStep);
-            FirstPersonSurface surface{};
-            surface.image = image;
-            surface.mask = mask;
-            surface.physicalCoverage =
-                !entry->flags.has(WallSceneryFlag::hasGlass)
-                && !entry->flags2.has(WallSceneryFlag2::isTransparent);
-            std::array<FirstPersonVertex, 4> vertices{};
-            for (size_t i = 0; i < physical.corners.size(); ++i)
-            {
-                const auto& pos = physical.corners[i];
-                const auto iso = Translate3DTo2DWithZ(rotation,
-                    { int32_t(std::lround(pos.x)), int32_t(std::lround(pos.y)), int32_t(std::lround(pos.z)) });
-                vertices[i] = { pos, float(iso.x - spritePos.x - layout->xOffset),
-                                    float(iso.y - spritePos.y - layout->yOffset) };
             }
             EmitQuad(surface, vertices);
             scene.surfaces.emplace_back(std::move(surface));
@@ -1829,9 +1792,6 @@ namespace OpenRCT2::Paint
                         scene, ps, colourify(ps.image_id),
                         ps.ScreenPos, rotation);
                 if (!smallPhysical
-                    && !AppendSemanticWallPlane(
-                        scene, ps, colourify(ps.image_id),
-                        ps.ScreenPos, rotation)
                     && (!physicallyPlanar
                         || !AppendPhysicalPlane(
                             scene, ps, colourify(ps.image_id),
@@ -1863,9 +1823,10 @@ namespace OpenRCT2::Paint
                     const auto maskImage = a->IsMasked ? a->image_id : ImageId{};
                     const auto position = ps.ScreenPos + a->RelativePos;
                     const auto surfaceStart = scene.surfaces.size();
-                    if (!AppendSemanticWallPlane(scene, ps, colourImage, position, rotation, maskImage) &&
-                        (!physicallyPlanar ||
-                         !AppendPhysicalPlane(scene, ps, colourImage, position, rotation, maskImage)))
+                    if (!physicallyPlanar ||
+                        !AppendPhysicalPlane(
+                            scene, ps, colourImage, position,
+                            rotation, maskImage))
                     {
                         AppendLayer(
                             scene, anchor, basis, isoAnchor, colourImage, position, maskImage);
