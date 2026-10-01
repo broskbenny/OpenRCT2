@@ -51,6 +51,48 @@ namespace
     }
 }
 
+TEST(FirstPersonAssetReconstructionTest, PhysicalDepthDeterminesSpriteFaceOwnership)
+{
+    FirstPersonDepthOwnerMap owners{};
+    const std::array<ScreenCoordsXY, 4> square{ {
+        { 0, 0 }, { 4, 0 }, { 4, 4 }, { 0, 4 },
+    } };
+    const auto addSquare =
+        [&](uint32_t owner, float depth) {
+            AddFirstPersonDepthTriangle(
+                owners, owner,
+                { square[0], square[1], square[2] },
+                { depth, depth, depth });
+            AddFirstPersonDepthTriangle(
+                owners, owner,
+                { square[0], square[2], square[3] },
+                { depth, depth, depth });
+        };
+
+    constexpr uint32_t kBackFace = 3;
+    constexpr uint32_t kFrontFace = 7;
+    addSquare(kBackFace, 10.0f);
+    addSquare(kFrontFace, 20.0f);
+
+    const auto silhouette =
+        MakeSilhouetteRect(0, 0, 4, 4);
+    EXPECT_FLOAT_EQ(
+        FirstPersonDepthOwnerCoverage(
+            owners, kFrontFace, silhouette),
+        1.0f);
+    EXPECT_FLOAT_EQ(
+        FirstPersonDepthOwnerCoverage(
+            owners, kBackFace, silhouette),
+        0.0f);
+
+    // A later draw of a physically farther face must not steal the pixels.
+    addSquare(kBackFace, 5.0f);
+    EXPECT_FLOAT_EQ(
+        FirstPersonDepthOwnerCoverage(
+            owners, kFrontFace, silhouette),
+        1.0f);
+}
+
 TEST(FirstPersonAssetReconstructionTest, TextureReprojectionRequiresOwnershipAndSourceCoverage)
 {
     EXPECT_TRUE(
