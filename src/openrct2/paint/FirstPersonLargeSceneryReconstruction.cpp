@@ -596,17 +596,6 @@ namespace OpenRCT2::Paint
             return FirstPersonFaceVisibleFromNativeView(normal, direction);
         }
 
-        [[nodiscard]] FirstPersonSilhouette RasterizeLargeSceneryAssetFace(
-            const LargeSceneryAssetFace& face, uint8_t rotation)
-        {
-            std::array<ScreenCoordsXY, 4> projected{};
-            for (size_t i = 0; i < face.corners.size(); ++i)
-                projected[i] = Translate3DTo2DWithZ(rotation, face.corners[i]);
-            FirstPersonSilhouette result{};
-            AddFirstPersonSilhouetteQuad(result, projected);
-            return result;
-        }
-
         [[nodiscard]] std::optional<size_t>
             EstimateLargeSceneryAssetRasterWork(
                 const std::vector<LargeSceneryAssetFace>& faces)
@@ -655,39 +644,6 @@ namespace OpenRCT2::Paint
             return work;
         }
 
-        [[nodiscard]] std::array<FirstPersonDepthOwnerMap, 4>
-            BuildLargeSceneryAssetDepthOwners(
-                const std::vector<LargeSceneryAssetFace>& faces)
-        {
-            std::array<FirstPersonDepthOwnerMap, 4> result{};
-            for (uint8_t rotation = 0; rotation < 4; ++rotation)
-            {
-                for (size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex)
-                {
-                    const auto& face = faces[faceIndex];
-                    if (!LargeSceneryFaceVisibleFromDirection(face.kind, rotation))
-                        continue;
-
-                    std::array<ScreenCoordsXY, 4> screen{};
-                    std::array<float, 4> depth{};
-                    for (size_t i = 0; i < face.corners.size(); ++i)
-                    {
-                        screen[i] = Translate3DTo2DWithZ(rotation, face.corners[i]);
-                        depth[i] = FirstPersonIsoDepth(rotation, face.corners[i]);
-                    }
-                    AddFirstPersonDepthTriangle(
-                        result[rotation], uint32_t(faceIndex),
-                        { screen[0], screen[1], screen[2] },
-                        { depth[0], depth[1], depth[2] });
-                    AddFirstPersonDepthTriangle(
-                        result[rotation], uint32_t(faceIndex),
-                        { screen[0], screen[2], screen[3] },
-                        { depth[0], depth[2], depth[3] });
-                }
-            }
-            return result;
-        }
-
         [[nodiscard]] LargeSceneryAssetModel BuildLargeSceneryAssetModel(
             const LargeSceneryEntry& entry)
         {
@@ -705,14 +661,12 @@ namespace OpenRCT2::Paint
 
             constexpr size_t kMaxCarvedCells = 48;
             LargeSceneryObservedViews observed{};
-            bool observedAttempted = false;
             FirstPersonVisualHull hull{};
             std::vector<LargeSceneryAssetFace> faces;
             if (cells->size() <= kMaxCarvedCells)
             {
                 observed =
                     CollectLargeSceneryObservedViews(entry);
-                observedAttempted = true;
                 hull = BuildLargeSceneryAssetHull(*cells, observed);
                 if (hull.valid)
                     faces = BuildLargeSceneryAssetFaces(
