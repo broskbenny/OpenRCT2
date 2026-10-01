@@ -5570,16 +5570,22 @@ namespace OpenRCT2::Paint
         {
             std::vector<FirstPersonSemanticViewGroup> result;
             uint8_t canonicalRotation = 0xff;
+            uint32_t newestGeneration = 0;
             for (uint8_t rotation = 0;
                  rotation < 4; ++rotation)
             {
                 const auto& variant =
                     cached.rotations[rotation];
-                if (variant.semanticValid
-                    && !variant.semanticComponents.empty())
+                if (!variant.semanticValid
+                    || variant.semanticComponents.empty())
+                    continue;
+                if (canonicalRotation >= 4
+                    || variant.lastAnimationGeneration
+                        > newestGeneration)
                 {
                     canonicalRotation = rotation;
-                    break;
+                    newestGeneration =
+                        variant.lastAnimationGeneration;
                 }
             }
             if (canonicalRotation >= 4)
@@ -6624,6 +6630,8 @@ namespace OpenRCT2::Paint
                     variant.semanticComponents =
                         std::move(semanticComponents);
                     variant.semanticValid = true;
+                    variant.lastAnimationGeneration =
+                        sourceGeneration;
                     variant.semanticFingerprint =
                         SemanticComponentFingerprint(
                             variant.semanticComponents);
@@ -6729,34 +6737,40 @@ namespace OpenRCT2::Paint
                 }
             }
 
-            // Moving semantic components reuse stable local geometry but
-            // stream their current native transform every presentation frame.
+            // Moving semantic components use the newest semantic transform as
+            // their canonical physical model. Native rotations contribute only
+            // artwork evidence, so head/camera direction cannot choose geometry.
             for (const auto tile : scene.visibleTiles)
             {
                 const auto key = TerrainKey(
                     tile.x / kCoordsXYStep,
                     tile.y / kCoordsXYStep);
-                const auto cacheIt = _staticPaintCache.find(key);
-                if (cacheIt == _staticPaintCache.end())
+                const auto cacheIt =
+                    _staticPaintCache.find(key);
+                if (cacheIt == _staticPaintCache.end()
+                    || !cacheIt->second.valid
+                    || cacheIt->second.dirty)
                     continue;
-                if (!cacheIt->second.hasSelectedRotation)
-                    continue;
-                const auto& semanticVariant =
-                    cacheIt->second.rotations[
-                        cacheIt->second.selectedRotation & 3u];
-                if (!semanticVariant.valid)
-                    continue;
-                for (const auto& component :
-                     semanticVariant.semanticComponents)
+
+                const auto semanticGroups =
+                    BuildFirstPersonSemanticViewGroups(
+                        cacheIt->second);
+                for (const auto& group :
+                     semanticGroups)
                 {
-                    if (component.role
-                            != FirstPersonPaintSemanticRole::movingMachinery
-                        && component.role
-                            != FirstPersonPaintSemanticRole::seat)
+                    const auto* canonical =
+                        group.canonical;
+                    if (canonical == nullptr
+                        || (canonical->role
+                                != FirstPersonPaintSemanticRole::movingMachinery
+                            && canonical->role
+                                != FirstPersonPaintSemanticRole::seat))
                         continue;
+
                     auto surfaces =
                         BuildFirstPersonSemanticComponentSurfaces(
-                            component, 0);
+                            *canonical, 0,
+                            &group.views);
                     for (auto& surface : surfaces)
                     {
                         if (SurfaceMayBeVisible(
