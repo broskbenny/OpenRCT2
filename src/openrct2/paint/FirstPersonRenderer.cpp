@@ -488,20 +488,7 @@ namespace OpenRCT2::Paint
             FirstPersonSurface surface{};
             surface.image = image;
             surface.mask = mask;
-            const auto* wall = ps.Element->asWall();
-            const auto* wallEntry =
-                wall != nullptr ? wall->getEntry() : nullptr;
-            const bool solidWall =
-                wallEntry != nullptr
-                && !wallEntry->flags.has(WallSceneryFlag::isDoor)
-                && !wallEntry->flags.has(WallSceneryFlag::hasGlass)
-                && !wallEntry->flags2.has(WallSceneryFlag2::isTransparent);
-            surface.physicalCoverage =
-                stationSlab
-                || type == TileElementType::surface
-                || (type == TileElementType::wall && solidWall);
-            if (stationSlab)
-                surface.coplanarOwner = true;
+            surface.physicalCoverage = true;
             std::array<FirstPersonVertex, 4> vertices{};
             for (size_t i = 0; i < vertices.size(); ++i)
             {
