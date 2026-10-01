@@ -8221,6 +8221,7 @@ namespace OpenRCT2::Paint
         const FirstPersonRenderOptions& opt, const ScreenSize& dimensions)
     {
         FirstPersonScene scene{};
+        scene.sceneEpoch = _sceneEpoch;
         scene.options = opt;
         scene.dimensions = dimensions;
         scene.sceneEpoch = _sceneEpoch;
