@@ -2607,6 +2607,8 @@ namespace OpenRCT2::Paint
                 return false;
             if (surface.solidColour != 0)
                 return true;
+            if (surface.persistentBitmap)
+                return !surface.image.IsBlended();
             return surface.image.HasValue() && !surface.image.IsBlended()
                 && surface.immutablePixels.empty();
         }
@@ -2664,6 +2666,10 @@ namespace OpenRCT2::Paint
                     fingerprint, surface.physicalCoverage ? 1 : 0);
                 ExtendStableKey(
                     fingerprint, surface.artworkCarrier ? 1 : 0);
+                ExtendStableKey(
+                    fingerprint, surface.persistentBitmap ? 1 : 0);
+                ExtendStableKey(
+                    fingerprint, surface.immutableFingerprint);
                 ExtendStableKey(
                     fingerprint, surface.textureFallbackOnly ? 1 : 0);
                 ExtendStableKey(
@@ -6289,6 +6295,7 @@ namespace OpenRCT2::Paint
         FirstPersonScene scene{};
         scene.options = opt;
         scene.dimensions = dimensions;
+        scene.sceneEpoch = _sceneEpoch;
         const auto map = getGameState().mapSize;
         scene.resolvedView = ResolveFirstPersonView(
             opt.camera, dimensions.width, dimensions.height, map.x, map.y,
