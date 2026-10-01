@@ -42,14 +42,38 @@ static constexpr uint8_t DirectionToDoorImageOffset3[] = {
 static constexpr const uint8_t* DirectionToDoorImageOffset[] = { DirectionToDoorImageOffset0, DirectionToDoorImageOffset1,
                                                                  DirectionToDoorImageOffset2, DirectionToDoorImageOffset3 };
 
+static uint32_t PublishFirstPersonWallSemanticPlane(
+    PaintSession& session, const WallSceneryEntry& wallEntry,
+    const WallElement& wallElement, ImageId image,
+    const CoordsXYZ& artworkOffset, uint32_t artworkGroup,
+    bool decal, bool collidable);
+
 static void PaintWallDoor(
-    PaintSession& session, const WallSceneryEntry& wallEntry, ImageId imageId, CoordsXYZ offset, BoundBoxXYZ bbR1,
-    BoundBoxXYZ bbR2, BoundBoxXYZ bbL)
+    PaintSession& session, const WallSceneryEntry& wallEntry,
+    const WallElement& wallElement, ImageId imageId, CoordsXYZ offset,
+    BoundBoxXYZ bbR1, BoundBoxXYZ bbR2, BoundBoxXYZ bbL)
 {
     PROFILED_FUNCTION();
 
-    auto newImageId0 = imageId;
-    auto newImageId1 = imageId.WithIndexOffset(1);
+    const auto newImageId0 = imageId;
+    const auto newImageId1 = imageId.WithIndexOffset(1);
+    const uint32_t artworkGroup =
+        PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+
+    // A door is still authored on one known wall plane. Its animation may
+    // create a transparent opening, so the semantic plane is visual evidence
+    // rather than a solid collision slab. Both native layers remain attached
+    // to the same fixed world plane instead of becoming passenger-facing cards.
+    PublishFirstPersonWallSemanticPlane(
+        session, wallEntry, wallElement, newImageId0,
+        offset, artworkGroup, true, false);
+    PublishFirstPersonWallSemanticPlane(
+        session, wallEntry, wallElement, newImageId1,
+        offset, artworkGroup, true, false);
+
+    FirstPersonPaintSemanticScope scope(
+        session, FirstPersonPaintSemanticRole::wall,
+        artworkGroup);
     if (wallEntry.flags.has(WallSceneryFlag::cannotBuildOnSlope))
     {
         PaintAddImageAsParent(session, newImageId0, offset, bbR1);
@@ -87,7 +111,10 @@ static void PaintWallDoor(
 
             CoordsXYZ offset = { 0, 0, height };
 
-            PaintWallDoor(session, wallEntry, imageTemplate.WithIndex(imageId), offset, bbR1, bbR2, bbL);
+            PaintWallDoor(
+                session, wallEntry, wallElement,
+                imageTemplate.WithIndex(imageId),
+                offset, bbR1, bbR2, bbL);
             break;
         }
         case 1:
@@ -98,7 +125,10 @@ static void PaintWallDoor(
 
             CoordsXYZ offset = { 1, 31, height };
 
-            PaintWallDoor(session, wallEntry, imageTemplate.WithIndex(imageId), offset, bbR1, bbR2, bbL);
+            PaintWallDoor(
+                session, wallEntry, wallElement,
+                imageTemplate.WithIndex(imageId),
+                offset, bbR1, bbR2, bbL);
             break;
         }
         case 2:
@@ -109,7 +139,10 @@ static void PaintWallDoor(
 
             CoordsXYZ offset = { 31, 0, height };
 
-            PaintWallDoor(session, wallEntry, imageTemplate.WithIndex(imageId), offset, bbR1, bbR2, bbL);
+            PaintWallDoor(
+                session, wallEntry, wallElement,
+                imageTemplate.WithIndex(imageId),
+                offset, bbR1, bbR2, bbL);
             break;
         }
         case 3:
@@ -120,7 +153,10 @@ static void PaintWallDoor(
 
             CoordsXYZ offset = { 2, 1, height };
 
-            PaintWallDoor(session, wallEntry, imageTemplate.WithIndex(imageId), offset, bbR1, bbR2, bbL);
+            PaintWallDoor(
+                session, wallEntry, wallElement,
+                imageTemplate.WithIndex(imageId),
+                offset, bbR1, bbR2, bbL);
             break;
         }
     }
