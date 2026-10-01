@@ -271,8 +271,25 @@ static void PaintWallScrollingText(
     auto textPaletteIndex = direction == 0 ? getColourMap(textColour).midDark : getColourMap(textColour).light;
 
     auto bannerText = banner->getText();
-    auto imageId = ScrollingText::setup(session, bannerText, scrollingMode, textPaletteIndex);
-    PaintAddImageAsChild(session, imageId, { 0, 0, height + 8 }, { boundsOffset, { 1, 1, 13 } });
+    auto imageId = ScrollingText::setup(
+        session, bannerText, scrollingMode,
+        textPaletteIndex);
+    const CoordsXYZ artworkOffset{
+        0, 0, height + 8
+    };
+    const uint32_t artworkGroup =
+        PaintSessionBeginFirstPersonSemanticArtworkGroup(
+            session);
+    PublishFirstPersonWallSemanticPlane(
+        session, wallEntry, wallElement,
+        imageId, artworkOffset, artworkGroup,
+        true, false);
+    FirstPersonPaintSemanticScope scope(
+        session, FirstPersonPaintSemanticRole::wall,
+        artworkGroup);
+    PaintAddImageAsChild(
+        session, imageId, artworkOffset,
+        { boundsOffset, { 1, 1, 13 } });
 }
 
 static void PaintWallWall(
