@@ -157,8 +157,6 @@ void main() {
     // Logarithmic physical depth leaves usable precision at the far end of
     // a complete RCT2 park while allowing the passenger near geometry.
     float depth = max(0.0, dot(fWorld - uEye, uForward));
-    if ((fFlags & 4) != 0)
-        depth = max(0.0, depth - 0.125);
     float logarithmic = log2(1.0 + depth)/log2(1.0 + uNearFar.y);
     gl_FragDepth = logarithmic;
     if ((fFlags & 1) != 0) {
@@ -758,7 +756,6 @@ void main() {
                     (surface.solidColour == 0 && image.IsBlended()
                         ? (image.GetRemap()==static_cast<uint8_t>(Drawing::FilterPaletteID::paletteWater)?3:1)
                         : 0)
-                        | (surface.depthBias ? 4 : 0)
                         | (surface.physicalCoverage ? 8 : 0)
                         | (surface.solidColour != 0 ? 16 : 0)
                         | (surface.textureFallbackOnly ? 32 : 0)
@@ -769,7 +766,13 @@ void main() {
                     std::min<uint32_t>(surface.nativePaintOrdinal,0x00ffffffu)});
         };
         std::vector<GPUVertex> opaqueVertices;
-        for(const auto* surface:streamedOpaque) appendVertices(opaqueVertices,*surface);
+        // Equal-depth ownership is resolved without changing physical depth:
+        // draw ordinary opaque geometry first, then semantic owners. GL_LEQUAL
+        // lets the later owner replace exactly coplanar terrain pixels.
+        for(const auto* surface:streamedOpaque)
+            if(!surface->coplanarOwner) appendVertices(opaqueVertices,*surface);
+        for(const auto* surface:streamedOpaque)
+            if(surface->coplanarOwner) appendVertices(opaqueVertices,*surface);
         std::vector<uint64_t> regionDraws;
         regionDraws.reserve(scene.staticRegions.size());
         for (const auto& packet : scene.staticRegions)
@@ -802,7 +805,9 @@ void main() {
             std::vector<GPUVertex> packed;
             packed.reserve(packet.surfaces->size()*6);
             for(const auto& surface:*packet.surfaces)
-                appendVertices(packed,surface);
+                if(!surface.coplanarOwner) appendVertices(packed,surface);
+            for(const auto& surface:*packet.surfaces)
+                if(surface.coplanarOwner) appendVertices(packed,surface);
             const size_t bytes=packed.size()*sizeof(GPUVertex);
             if(bytes==0) continue;
             const size_t oldBytes=found!=_staticOpaqueRegions.end()?found->second.bytes:0;
