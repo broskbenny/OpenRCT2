@@ -1876,7 +1876,6 @@ namespace OpenRCT2::Paint
             uint8_t verticalTunnelHeight = 0xFF;
             std::vector<TunnelEntry> leftTunnels;
             std::vector<TunnelEntry> rightTunnels;
-            std::vector<FirstPersonTunnelPortal> portals;
             std::vector<FirstPersonSurface> residentSurfaces;
             std::vector<FirstPersonSurface> streamedSurfaces;
             std::vector<FirstPersonPaintSemanticComponent>
@@ -6827,71 +6826,6 @@ namespace OpenRCT2::Paint
                     }
                 }
 
-                if (const auto portalCache =
-                        _staticPaintCache.find(tileKey);
-                    portalCache != _staticPaintCache.end()
-                    && portalCache->second.valid
-                    && !portalCache->second.dirty)
-                {
-                    std::vector<FirstPersonTunnelPortal>
-                        canonicalPortals;
-                    for (const auto& variant :
-                         portalCache->second.rotations)
-                    {
-                        if (!variant.valid)
-                            continue;
-                        for (const auto& portal :
-                             variant.portals)
-                        {
-                            const bool duplicate =
-                                std::any_of(
-                                    canonicalPortals.begin(),
-                                    canonicalPortals.end(),
-                                    [&](const auto& existing) {
-                                        return existing.tile
-                                                == portal.tile
-                                            && existing.edge
-                                                == portal.edge
-                                            && existing.type
-                                                == portal.type
-                                            && existing.lowZ
-                                                == portal.lowZ
-                                            && existing.highZ
-                                                == portal.highZ;
-                                    });
-                            if (!duplicate)
-                                canonicalPortals.push_back(
-                                    portal);
-                        }
-                    }
-
-                    uint8_t portalColour =
-                        static_cast<uint8_t>(
-                            Drawing::getColourMap(
-                                Drawing::Colour::darkBrown).midDark);
-                    if (portalColour == 0)
-                        portalColour = static_cast<uint8_t>(
-                            Drawing::PaletteIndex::trackRails1);
-                    for (const auto& portal :
-                         canonicalPortals)
-                    {
-                        for (const auto& quad :
-                             BuildFirstPersonTunnelPortalTerrainWall(
-                                 portal))
-                        {
-                            FirstPersonSurface surface{};
-                            surface.solidColour = portalColour;
-                            surface.gpuRegion = regionKey;
-                            std::array<FirstPersonVertex, 4> vertices{};
-                            for (size_t i = 0; i < 4; ++i)
-                                vertices[i].world =
-                                    quad.corners[i];
-                            EmitQuad(surface, vertices);
-                            addSurface(surface);
-                        }
-                    }
-                }
-
                 const auto cacheIt = _staticPaintCache.find(tileKey);
                 if (cacheIt == _staticPaintCache.end() || !cacheIt->second.valid
                     || cacheIt->second.dirty || cacheIt->second.animated)
@@ -7308,7 +7242,6 @@ namespace OpenRCT2::Paint
                         variant.verticalTunnelHeight = 0xFF;
                         variant.leftTunnels.clear();
                         variant.rightTunnels.clear();
-                        variant.portals.clear();
                         variant.residentSurfaces.clear();
                         variant.streamedSurfaces.clear();
                         variant.semanticComponents.clear();
@@ -7594,8 +7527,7 @@ namespace OpenRCT2::Paint
                                     session->LeftTunnels.begin(), session->LeftTunnels.end());
                                 variant.rightTunnels.assign(
                                     session->RightTunnels.begin(), session->RightTunnels.end());
-                                variant.portals.clear();
-                                AppendFirstPersonTunnelPortals(
+                                        AppendFirstPersonTunnelPortals(
                                     variant.portals,
                                     item.position,
                                     FirstPersonLeftTunnelWorldEdge(
