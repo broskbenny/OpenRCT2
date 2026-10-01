@@ -3581,14 +3581,57 @@ namespace OpenRCT2::Paint
             FirstPersonSurface& surface,
             const TrackTrajectoryCacheEntry& trajectory)
         {
-            if (!surface.artworkCarrier
-                || trajectory.artworkRotation >= 4)
+            if (!surface.artworkCarrier)
                 return;
+
+            uint8_t sourceRotation =
+                trajectory.artworkRotation;
+            if (surface.reconstructionGroup != 0)
+            {
+                const auto selected =
+                    _reconstructionRotations.find(
+                        surface.reconstructionGroup);
+                if (selected
+                        != _reconstructionRotations.end()
+                    && selected->second.hasSelectedRotation)
+                {
+                    const uint8_t candidate =
+                        selected->second.selectedRotation & 3u;
+                    if (!trajectory
+                             .artworkProjections[
+                                 candidate]
+                             .empty())
+                    {
+                        sourceRotation = candidate;
+                    }
+                }
+            }
+            if (sourceRotation >= 4
+                || trajectory
+                       .artworkProjections[
+                           sourceRotation]
+                       .empty())
+            {
+                sourceRotation = 0xFF;
+                for (uint8_t rotation = 0;
+                     rotation < 4; ++rotation)
+                {
+                    if (!trajectory
+                             .artworkProjections[
+                                 rotation]
+                             .empty())
+                    {
+                        sourceRotation = rotation;
+                        break;
+                    }
+                }
+            }
+            if (sourceRotation >= 4)
+                return;
+
             const auto& projections =
                 trajectory.artworkProjections[
-                    trajectory.artworkRotation];
-            if (projections.empty())
-                return;
+                    sourceRotation];
 
             const TrackTrajectoryCacheEntry::ArtworkProjection*
                 best = nullptr;
