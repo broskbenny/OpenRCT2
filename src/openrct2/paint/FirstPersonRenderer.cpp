@@ -1785,6 +1785,8 @@ namespace OpenRCT2::Paint
             std::vector<FirstPersonTunnelPortal> portals;
             std::vector<FirstPersonSurface> residentSurfaces;
             std::vector<FirstPersonSurface> streamedSurfaces;
+            std::vector<FirstPersonPaintSemanticComponent>
+                semanticComponents;
         };
         struct StaticPaintCacheEntry
         {
@@ -1804,8 +1806,6 @@ namespace OpenRCT2::Paint
             int32_t visibilityMaxZ = 0;
             uint32_t lastVisibilityGeneration = 0;
             std::vector<ReconstructionGroupInfo> reconstructionGroups;
-            std::vector<FirstPersonPaintSemanticComponent>
-                semanticComponents;
             // Keep all four native quarter-turn variants. Crossing a viewpoint
             // boundary can paint a variant once without destroying the previous
             // one, so moving back and forth does not thrash the whole park.
@@ -5047,10 +5047,14 @@ namespace OpenRCT2::Paint
                         _staticPaintCache.find(tileKey);
                     supportIt != _staticPaintCache.end()
                     && supportIt->second.valid
-                    && !supportIt->second.dirty)
+                    && !supportIt->second.dirty
+                    && supportIt->second.hasSelectedRotation)
                 {
+                    const auto& semanticVariant =
+                        supportIt->second.rotations[
+                            supportIt->second.selectedRotation & 3u];
                     for (const auto& component :
-                         supportIt->second.semanticComponents)
+                         semanticVariant.semanticComponents)
                         addSemanticComponent(component);
                 }
 
@@ -5358,7 +5362,6 @@ namespace OpenRCT2::Paint
                     cached.valid = true;
                     cached.dirty = false;
                     cached.reconstructionGroups.clear();
-                    cached.semanticComponents.clear();
                     WithdrawFirstPersonSemanticComponents(tile);
                     cached.hasUngroupedResident = false;
 
@@ -5393,6 +5396,7 @@ namespace OpenRCT2::Paint
                         variant.portals.clear();
                         variant.residentSurfaces.clear();
                         variant.streamedSurfaces.clear();
+                        variant.semanticComponents.clear();
                     }
                     MarkStaticRegionDirtyForTile(tx, ty);
                 }
@@ -5401,8 +5405,17 @@ namespace OpenRCT2::Paint
                     ? std::optional<uint8_t>{ cached.selectedRotation }
                     : std::nullopt;
                 const auto tileRotation = PaintRotationForTile(opt.camera, tile, previousRotation);
-                if ((!cached.hasSelectedRotation || cached.selectedRotation != tileRotation)
-                    && cached.hasUngroupedResident)
+                const bool hasSemanticResident =
+                    std::any_of(
+                        cached.rotations.begin(),
+                        cached.rotations.end(),
+                        [](const StaticPaintRotationCache& variant) {
+                            return !variant.semanticComponents.empty();
+                        });
+                if ((!cached.hasSelectedRotation
+                        || cached.selectedRotation != tileRotation)
+                    && (cached.hasUngroupedResident
+                        || hasSemanticResident))
                     MarkStaticRegionDirtyForTile(tx, ty);
                 cached.selectedRotation = tileRotation;
                 cached.hasSelectedRotation = true;
@@ -5592,12 +5605,16 @@ namespace OpenRCT2::Paint
                             auto cacheIt = _staticPaintCache.find(item.key);
                             if (cacheIt != _staticPaintCache.end())
                             {
-                                cacheIt->second.semanticComponents =
+                                auto& variant =
+                                    cacheIt->second.rotations[rotation];
+                                variant.semanticComponents =
                                     std::move(semanticComponents);
+                                // Walking collision needs only stable physical
+                                // geometry; any native rotation is equivalent
+                                // for that purpose.
                                 PublishFirstPersonSemanticComponents(
                                     item.position,
-                                    cacheIt->second.semanticComponents);
-                                auto& variant = cacheIt->second.rotations[rotation];
+                                    variant.semanticComponents);
                                 variant.verticalTunnelHeight = session->VerticalTunnelHeight;
                                 variant.leftTunnels.assign(
                                     session->LeftTunnels.begin(), session->LeftTunnels.end());
@@ -5868,8 +5885,13 @@ namespace OpenRCT2::Paint
                 const auto cacheIt = _staticPaintCache.find(key);
                 if (cacheIt == _staticPaintCache.end())
                     continue;
+                if (!cacheIt->second.hasSelectedRotation)
+                    continue;
+                const auto& semanticVariant =
+                    cacheIt->second.rotations[
+                        cacheIt->second.selectedRotation & 3u];
                 for (const auto& component :
-                     cacheIt->second.semanticComponents)
+                     semanticVariant.semanticComponents)
                 {
                     if (component.role
                             != FirstPersonPaintSemanticRole::movingMachinery
