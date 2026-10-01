@@ -7587,31 +7587,18 @@ namespace OpenRCT2::Paint
     FirstPersonWallPlane BuildFirstPersonWallPlane(
         CoordsXY tileOrigin, int32_t baseZ, uint8_t direction, uint8_t slope, int32_t height)
     {
-        const float x = float(tileOrigin.x);
-        const float y = float(tileOrigin.y);
-        FirstPersonVec3 a{}, b{};
-        // Clockwise edge order follows the native wall-slope convention:
-        // south->west, west->north, north->east, east->south.
-        switch (direction & 3)
-        {
-            case 0: a = { x, y, float(baseZ) }; b = { x, y + kCoordsXYStep, float(baseZ) }; break;
-            case 1: a = { x, y + kCoordsXYStep, float(baseZ) }; b = { x + kCoordsXYStep, y + kCoordsXYStep, float(baseZ) }; break;
-            case 2: a = { x + kCoordsXYStep, y + kCoordsXYStep, float(baseZ) }; b = { x + kCoordsXYStep, y, float(baseZ) }; break;
-            default: a = { x + kCoordsXYStep, y, float(baseZ) }; b = { x, y, float(baseZ) }; break;
-        }
-        if ((slope & EDGE_SLOPE_UPWARDS) != 0)
-            b.z += 2 * kCoordsZStep;
-        else if ((slope & EDGE_SLOPE_DOWNWARDS) != 0)
-            a.z += 2 * kCoordsZStep;
-
-        const float wallHeight = float(std::max(0, height));
+        const auto local =
+            FirstPersonWallSemanticCorners(
+                direction, slope, height);
         FirstPersonWallPlane plane{};
-        plane.corners = {
-            a,
-            b,
-            FirstPersonVec3{ b.x, b.y, b.z + wallHeight },
-            FirstPersonVec3{ a.x, a.y, a.z + wallHeight },
-        };
+        for (size_t i = 0; i < local.size(); ++i)
+        {
+            plane.corners[i] = {
+                float(tileOrigin.x) + local[i].x,
+                float(tileOrigin.y) + local[i].y,
+                float(baseZ) + local[i].z,
+            };
+        }
         return plane;
     }
 
