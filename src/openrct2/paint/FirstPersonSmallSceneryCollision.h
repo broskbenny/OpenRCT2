@@ -28,8 +28,14 @@ namespace OpenRCT2::Paint
         FirstPersonSmallSceneryUsesAuthoritativeOccupancy(
             const SmallSceneryEntry& entry)
     {
+        return entry.height > 0;
+    }
+
+    [[nodiscard]] inline bool
+        FirstPersonSmallSceneryCanUseSilhouetteRefinement(
+            const SmallSceneryEntry& entry)
+    {
         return !entry.flags.hasAny(
-            SmallSceneryFlag::isTree,
             SmallSceneryFlag::isAnimated,
             SmallSceneryFlag::hasGlass,
             SmallSceneryFlag::isFountain,
@@ -306,11 +312,15 @@ namespace OpenRCT2::Paint
             const SmallSceneryEntry& entry,
             const SmallSceneryElement& element)
     {
-        // Irregular foliage and stateful/special-effect artwork may remain
-        // sprite-based. Other static scenery keeps its declared occupancy even
-        // when silhouette carving cannot be trusted.
+        // Declared occupied quadrants and object height are the physical
+        // contract for every scenery item that has one. Stateful/glass/effect
+        // artwork may skip silhouette carving, but it must not erase that
+        // authoritative body.
         if (!FirstPersonSmallSceneryUsesAuthoritativeOccupancy(entry))
             return {};
+        const bool allowSilhouetteRefinement =
+            FirstPersonSmallSceneryCanUseSilhouetteRefinement(
+                entry);
 
         const uint8_t occupied =
             element.getOccupiedQuadrants() & 0x0Fu;
@@ -338,9 +348,11 @@ namespace OpenRCT2::Paint
                 continue;
 
             // Texture availability and silhouette-analysis eligibility are
-            // separate. Oversized art can skip carving without deleting the
-            // authoritative occupancy body.
+            // separate. Special/stateful artwork and oversized sprites skip
+            // carving while the occupancy body remains valid.
             textureViews.push_back({ rotation, image });
+            if (!allowSilhouetteRefinement)
+                continue;
             constexpr size_t kMaxSourcePixels = 65536;
             if (size_t(g1->width) * size_t(g1->height)
                 > kMaxSourcePixels)
@@ -395,30 +407,34 @@ namespace OpenRCT2::Paint
                     FirstPersonSmallSceneryQuarterForPoint(x, y);
                 return (occupied & (1u << quarter)) != 0;
             };
-        auto carved = BuildFirstPersonVisualHull(
-            views, bounds, config,
-            [&](uint8_t rotation, FirstPersonVec3 point) {
-                const auto offset =
-                    FirstPersonSmallSceneryPaintOffset(
-                        entry, element, rotation);
-                const auto spriteOrigin =
-                    Translate3DTo2DWithZ(rotation, { offset, 0 });
-                const auto projected =
-                    Translate3DTo2DWithZ(
-                        rotation,
-                        {
-                            int32_t(std::lround(point.x)),
-                            int32_t(std::lround(point.y)),
-                            int32_t(std::lround(point.z)),
-                        });
-                return std::array<float, 2>{
-                    float(projected.x - spriteOrigin.x),
-                    float(projected.y - spriteOrigin.y),
-                };
-            },
-            occupancyPredicate);
-        if (carved.valid)
-            return carved;
+        if (allowSilhouetteRefinement)
+        {
+            auto carved = BuildFirstPersonVisualHull(
+                views, bounds, config,
+                [&](uint8_t rotation, FirstPersonVec3 point) {
+                    const auto offset =
+                        FirstPersonSmallSceneryPaintOffset(
+                            entry, element, rotation);
+                    const auto spriteOrigin =
+                        Translate3DTo2DWithZ(
+                            rotation, { offset, 0 });
+                    const auto projected =
+                        Translate3DTo2DWithZ(
+                            rotation,
+                            {
+                                int32_t(std::lround(point.x)),
+                                int32_t(std::lround(point.y)),
+                                int32_t(std::lround(point.z)),
+                            });
+                    return std::array<float, 2>{
+                        float(projected.x - spriteOrigin.x),
+                        float(projected.y - spriteOrigin.y),
+                    };
+                },
+                occupancyPredicate);
+            if (carved.valid)
+                return carved;
+        }
 
         return BuildFirstPersonOccupancyHull(
             bounds, config, textureViews, occupancyPredicate);
