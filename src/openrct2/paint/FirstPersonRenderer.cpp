@@ -7481,13 +7481,17 @@ namespace OpenRCT2::Paint
                         if (!dynamic && !missesByRotation[rotation].contains(key))
                             continue;
 
-                        if (root->Element != nullptr && root->Element->getType() == TileElementType::surface)
+                        if (root->Element != nullptr
+                            && root->Element->getType()
+                                == TileElementType::surface
+                            && root->FirstPersonSemanticRole
+                                == FirstPersonPaintSemanticRole::none)
                         {
-                            const auto sx = std::abs(root->Bounds.x_end - root->Bounds.x);
-                            const auto sy = std::abs(root->Bounds.y_end - root->Bounds.y);
-                            const auto sz = std::abs(root->Bounds.z_end - root->Bounds.z);
-                            if (sz < 8 || std::min(sx, sy) > 4 || std::max(sx, sy) < 16)
-                                continue;
+                            // Terrain/water tops are reconstructed directly
+                            // from map geometry. Surface-painter artwork enters
+                            // first person only when the native painter has
+                            // explicitly attached a semantic physical meaning.
+                            continue;
                         }
 
                         const auto fallbackAnchor = Anchor(*root);
