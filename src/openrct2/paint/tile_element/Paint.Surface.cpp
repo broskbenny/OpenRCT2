@@ -1344,11 +1344,90 @@ void PaintSurface(PaintSession& session, uint8_t direction, uint16_t height, con
     bool has_surface = false;
     if (session.VerticalTunnelHeight * kCoordsZPerTinyZ == height)
     {
-        // Vertical tunnels
-        PaintAddImageAsParent(session, ImageId(1575), { 0, 0, height }, { { -2, 1, height - 40 }, { 1, 30, 39 } });
-        PaintAddImageAsParent(session, ImageId(1576), { 0, 0, height }, { { 1, 31, height }, { 30, 1, 0 } });
-        PaintAddImageAsParent(session, ImageId(1577), { 0, 0, height }, { { 31, 1, height }, { 1, 30, 0 } });
-        PaintAddImageAsParent(session, ImageId(1578), { 0, 0, height }, { { 1, -2, height - 40 }, { 30, 1, 39 } });
+        // The vertical opening is a full-tile shaft. Native isometric paint
+        // exposes two inside walls in each quarter-turn; capture those walls
+        // as real tile-edge planes. The other two native layers are rim
+        // artwork only and are suppressed from first-person geometry.
+        const auto transform =
+            PaintSessionMakeFirstPersonSemanticTransform(
+                session);
+        const uint32_t shaftGroup =
+            PaintSessionBeginFirstPersonSemanticArtworkGroup(
+                session);
+        const float lowZ = float(height - 40);
+        const float highZ = float(height);
+
+        const ImageId xMinImage(1575);
+        PaintSessionAddFirstPersonSemanticOrientedQuad(
+            session,
+            FirstPersonPaintSemanticRole::terrainEdge,
+            FirstPersonPaintSemanticPrimitiveKind::plane,
+            transform,
+            { {
+                { 0.0f, 0.0f, lowZ },
+                { 0.0f, float(kCoordsXYStep), lowZ },
+                { 0.0f, float(kCoordsXYStep), highZ },
+                { 0.0f, 0.0f, highZ },
+            } },
+            xMinImage, { 0, 0, height },
+            shaftGroup, false, false);
+        {
+            FirstPersonPaintSemanticScope scope(
+                session,
+                FirstPersonPaintSemanticRole::terrainEdge,
+                shaftGroup);
+            PaintAddImageAsParent(
+                session, xMinImage, { 0, 0, height },
+                { { -2, 1, height - 40 },
+                  { 1, 30, 39 } });
+        }
+
+        const ImageId yMaxRim(1576);
+        {
+            FirstPersonPaintSemanticScope scope(
+                session,
+                FirstPersonPaintSemanticRole::terrainEdge,
+                shaftGroup);
+            PaintAddImageAsParent(
+                session, yMaxRim, { 0, 0, height },
+                { { 1, 31, height }, { 30, 1, 0 } });
+        }
+
+        const ImageId xMaxRim(1577);
+        {
+            FirstPersonPaintSemanticScope scope(
+                session,
+                FirstPersonPaintSemanticRole::terrainEdge,
+                shaftGroup);
+            PaintAddImageAsParent(
+                session, xMaxRim, { 0, 0, height },
+                { { 31, 1, height }, { 1, 30, 0 } });
+        }
+
+        const ImageId yMinImage(1578);
+        PaintSessionAddFirstPersonSemanticOrientedQuad(
+            session,
+            FirstPersonPaintSemanticRole::terrainEdge,
+            FirstPersonPaintSemanticPrimitiveKind::plane,
+            transform,
+            { {
+                { 0.0f, 0.0f, lowZ },
+                { float(kCoordsXYStep), 0.0f, lowZ },
+                { float(kCoordsXYStep), 0.0f, highZ },
+                { 0.0f, 0.0f, highZ },
+            } },
+            yMinImage, { 0, 0, height },
+            shaftGroup, false, false);
+        {
+            FirstPersonPaintSemanticScope scope(
+                session,
+                FirstPersonPaintSemanticRole::terrainEdge,
+                shaftGroup);
+            PaintAddImageAsParent(
+                session, yMinImage, { 0, 0, height },
+                { { 1, -2, height - 40 },
+                  { 30, 1, 39 } });
+        }
     }
     else
     {
