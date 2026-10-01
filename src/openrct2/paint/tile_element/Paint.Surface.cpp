@@ -826,7 +826,7 @@ static void ViewportSurfaceDrawTileSideBottom(
         const auto imageId = baseImageId.WithIndexOffset(imageOffset);
         paintLandEdgeBand(
             imageId, curHeight,
-            { { bounds, kCoordsZPerTinyZ - 1 } });
+            { bounds, kCoordsZPerTinyZ - 1 });
     }
 }
 
