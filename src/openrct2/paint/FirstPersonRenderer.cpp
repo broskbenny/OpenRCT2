@@ -2041,7 +2041,6 @@ namespace OpenRCT2::Paint
             bool hasBounds = false;
             int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
             uint8_t sourceChannelMask = 0;
-            uint8_t artworkRotation = 0xFF;
             std::array<bool, 4> artworkCaptureAttempted{};
             std::array<FirstPersonSilhouette, 4> railSilhouettes{};
             std::array<std::vector<ArtworkProjection>, 4> artworkProjections{};
@@ -3700,9 +3699,6 @@ namespace OpenRCT2::Paint
                 surface.billboardTop,
                 rotation,
             });
-            if (trajectory.artworkRotation == 0xFF)
-                trajectory.artworkRotation = rotation;
-
             // Geometry stays unchanged; only the resident rail material packet
             // needs to pick up the newly captured native artwork.
             MarkTrackTrajectoryRegionsDirty(trajectory);
