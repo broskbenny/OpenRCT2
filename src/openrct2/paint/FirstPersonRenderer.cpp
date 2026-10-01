@@ -2041,7 +2041,6 @@ namespace OpenRCT2::Paint
             bool boundaryContinuous = true;
             bool hasBounds = false;
             int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
-            uint8_t sourceChannelMask = 0;
             std::array<bool, 4> artworkCaptureAttempted{};
             std::array<FirstPersonSilhouette, 4> railSilhouettes{};
             std::array<std::vector<ArtworkProjection>, 4> artworkProjections{};
@@ -3337,7 +3336,6 @@ namespace OpenRCT2::Paint
             if (!profile.has_value())
                 return 0;
             uint64_t result = 14695981039346656037ull;
-            ExtendStableKey(result, profile->verified ? 1 : 0);
             ExtendStableKey(result, profile->railCount);
             ExtendStableKey(
                 result, uint32_t(std::lround(profile->halfGauge * 100.0f)));
@@ -3348,10 +3346,6 @@ namespace OpenRCT2::Paint
             ExtendStableKey(
                 result, uint32_t(int32_t(std::lround(
                     profile->verticalOffset * 100.0f))));
-            ExtendStableKey(result, profile->sourceChannelMask);
-            ExtendStableKey(result, profile->materialVerified ? 1 : 0);
-            ExtendStableKey(result, profile->topMaterialValue);
-            ExtendStableKey(result, profile->sideMaterialValue);
             return result;
         }
 
@@ -3957,80 +3951,13 @@ namespace OpenRCT2::Paint
             }
         }
 
-        [[nodiscard]] uint8_t FirstPersonColourShade(
-            const Drawing::ColourShadeMap& shades, uint8_t shade)
-        {
-            switch (std::min<uint8_t>(shade, 11))
-            {
-                case 0: return static_cast<uint8_t>(shades.colour0);
-                case 1: return static_cast<uint8_t>(shades.colour1);
-                case 2: return static_cast<uint8_t>(shades.darkest);
-                case 3: return static_cast<uint8_t>(shades.darker);
-                case 4: return static_cast<uint8_t>(shades.dark);
-                case 5: return static_cast<uint8_t>(shades.midDark);
-                case 6: return static_cast<uint8_t>(shades.midLight);
-                case 7: return static_cast<uint8_t>(shades.light);
-                case 8: return static_cast<uint8_t>(shades.lighter);
-                case 9: return static_cast<uint8_t>(shades.lightest);
-                case 10: return static_cast<uint8_t>(shades.colour10);
-                default: return static_cast<uint8_t>(shades.colour11);
-            }
-        }
-
         [[nodiscard]] uint8_t FirstPersonRailColour(
             const Ride& ride, const TrackElement& track,
-            const FirstPersonTrackRailProfile& profile, bool topFace)
+            bool topFace)
         {
             const auto scheme = std::min<uint8_t>(
                 track.getColourScheme(),
                 uint8_t(kNumRideColourSchemes - 1));
-            const uint8_t materialValue = topFace
-                ? profile.topMaterialValue
-                : profile.sideMaterialValue;
-
-            if (profile.materialVerified)
-            {
-                const uint8_t railPaletteBit =
-                    FirstPersonTrackPixelChannelBit(
-                        FirstPersonTrackPixelChannel::trackRailPalette);
-                if ((profile.sourceChannelMask & railPaletteBit) != 0
-                    && materialValue >= static_cast<uint8_t>(
-                        Drawing::PaletteIndex::trackRails0)
-                    && materialValue <= static_cast<uint8_t>(
-                        Drawing::PaletteIndex::trackRails2))
-                {
-                    return materialValue;
-                }
-
-                Drawing::Colour colour =
-                    ride.trackColours[scheme].main;
-                if ((profile.sourceChannelMask
-                        & FirstPersonTrackPixelChannelBit(
-                            FirstPersonTrackPixelChannel::secondaryRemap))
-                    != 0)
-                {
-                    colour = ride.trackColours[scheme].additional;
-                }
-                else if ((profile.sourceChannelMask
-                            & FirstPersonTrackPixelChannelBit(
-                                FirstPersonTrackPixelChannel::tertiaryRemap))
-                    != 0)
-                {
-                    colour = ride.trackColours[scheme].supports;
-                }
-
-                if (Drawing::colourIsValid(colour)
-                    && materialValue <= 11)
-                {
-                    const uint8_t sampled =
-                        FirstPersonColourShade(
-                            Drawing::getColourMap(colour),
-                            materialValue);
-                    if (sampled != 0)
-                        return sampled;
-                }
-            }
-
             auto colour = ride.trackColours[scheme].main;
             if (!Drawing::colourIsValid(colour))
                 colour = Drawing::Colour::grey;
@@ -4279,13 +4206,12 @@ namespace OpenRCT2::Paint
             if (!resolvedProfile.has_value())
                 return result;
             const auto& profile = *resolvedProfile;
-            result.sourceChannelMask = profile.sourceChannelMask;
             result.railSilhouettes = BuildFirstPersonTrackRailSilhouettes(
                 trajectory, groupAnchor, profile);
             const uint8_t topColour =
-                FirstPersonRailColour(ride, track, profile, true);
+                FirstPersonRailColour(ride, track, true);
             const uint8_t sideColour =
-                FirstPersonRailColour(ride, track, profile, false);
+                FirstPersonRailColour(ride, track, false);
 
             const auto railProxies =
                 BuildFirstPersonRailProxySegments(
