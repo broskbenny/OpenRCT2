@@ -89,9 +89,11 @@ namespace OpenRCT2::Paint
         // Cached upright sprites must always face the CURRENT camera: keep their
         // original native image-space offsets and world anchor, not old vertices.
         bool viewFacing = false;
-        // Semantic decks stay at their true physical height. A small depth-only
-        // bias resolves coplanar terrain without moving collision/ground geometry.
-        bool depthBias = false;
+        // Equal-height surface ownership is semantic, not geometric.
+        // Owning surfaces are drawn after non-owners with the same physical
+        // depth so path/deck/floor artwork replaces covered terrain without
+        // moving either surface.
+        bool coplanarOwner = false;
         // Physical surfaces take coverage from world geometry. Sprite
         // transparency supplies appearance only; explicit masks still cut holes.
         bool physicalCoverage = false;
