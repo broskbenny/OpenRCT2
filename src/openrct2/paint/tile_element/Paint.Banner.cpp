@@ -21,6 +21,8 @@
 #include "Paint.Banner.h"
 #include "Paint.TileElement.h"
 
+#include <algorithm>
+
 using namespace OpenRCT2;
 using namespace OpenRCT2::Drawing;
 
