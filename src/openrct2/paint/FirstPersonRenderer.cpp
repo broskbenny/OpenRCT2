@@ -6205,6 +6205,7 @@ namespace OpenRCT2::Paint
     {
         _preparedFrame.active = false;
         _preparedFrame.valid = false;
+        _preparedFrame.drawingEngine = nullptr;
         _preparedFrame.scene = {};
         _entityRotations.clear();
         _passengerAnchorSourceTiles.clear();
