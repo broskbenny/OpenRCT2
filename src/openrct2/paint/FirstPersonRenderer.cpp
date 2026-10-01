@@ -4327,11 +4327,8 @@ namespace OpenRCT2::Paint
                                 b.basis,
                                 profile.halfWidth,
                                 profile.halfHeight,
-                                profile.verified
-                                    ? FirstPersonPhysicalProxyProvenance::
-                                        verifiedTrackArtwork
-                                    : FirstPersonPhysicalProxyProvenance::
-                                        authoritativeTrackTrajectory,
+                                FirstPersonPhysicalProxyProvenance::
+                                    authoritativeTrackTrajectory,
                             };
                             AppendTrajectoryRailSegment(
                                 result, groupKey, bridge,
