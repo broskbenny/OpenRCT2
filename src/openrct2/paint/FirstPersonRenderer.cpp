@@ -3716,25 +3716,52 @@ namespace OpenRCT2::Paint
             if (!carrier.artworkCarrier)
                 return;
 
-            // Pick the native source from the physical carrier face,
-            // never from passenger/camera position. The chosen material is
-            // therefore stable while the player walks or rides around it.
             const std::array<FirstPersonVec3, 4> face{ {
                 carrier.triangles[0].world,
                 carrier.triangles[1].world,
                 carrier.triangles[2].world,
                 carrier.triangles[5].world,
             } };
-            uint8_t sourceRotation = 0xff;
-            float bestArea = -1.0f;
+            const auto edgeLength =
+                [](FirstPersonVec3 a, FirstPersonVec3 b) {
+                    const float dx = b.x - a.x;
+                    const float dy = b.y - a.y;
+                    const float dz = b.z - a.z;
+                    return std::sqrt(
+                        dx * dx + dy * dy + dz * dz);
+                };
+            const auto facePoint =
+                [&](float s, float t) {
+                    const auto lerp =
+                        [](FirstPersonVec3 a, FirstPersonVec3 b,
+                           float alpha) {
+                            return FirstPersonVec3{
+                                a.x + (b.x - a.x) * alpha,
+                                a.y + (b.y - a.y) * alpha,
+                                a.z + (b.z - a.z) * alpha,
+                            };
+                        };
+                    return lerp(
+                        lerp(face[0], face[1], s),
+                        lerp(face[3], face[2], s), t);
+                };
+
+            std::array<float, 4> rotationArea{};
+            size_t maximumLayers = 0;
             for (uint8_t rotation = 0;
                  rotation < 4; ++rotation)
             {
+                maximumLayers = std::max(
+                    maximumLayers,
+                    trajectory
+                        .artworkProjections[rotation]
+                        .size());
                 if (trajectory
                         .artworkProjections[rotation]
                         .empty())
                     continue;
-                std::array<ScreenCoordsXY, 4> projected{};
+                std::array<ScreenCoordsXY, 4>
+                    projected{};
                 for (size_t i = 0; i < face.size(); ++i)
                 {
                     const auto& p = face[i];
@@ -3748,7 +3775,8 @@ namespace OpenRCT2::Paint
                             });
                 }
                 float twiceArea = 0.0f;
-                for (size_t i = 0; i < projected.size(); ++i)
+                for (size_t i = 0;
+                     i < projected.size(); ++i)
                 {
                     const auto& a = projected[i];
                     const auto& b =
@@ -3756,88 +3784,272 @@ namespace OpenRCT2::Paint
                     twiceArea +=
                         float(a.x * b.y - b.x * a.y);
                 }
-                const float area =
+                rotationArea[rotation] =
                     std::abs(twiceArea) * 0.5f;
-                if (area > bestArea)
-                {
-                    bestArea = area;
-                    sourceRotation = rotation;
-                }
             }
-            if (sourceRotation >= 4)
-                return;
 
-            // Preserve every relevant native paint layer in its original order.
-            // Geometry stays one stable trajectory shell; each source layer is
-            // simply another appearance pass over that shell.
-            const auto& projections =
-                trajectory.artworkProjections[
-                    sourceRotation];
-            for (const auto& projection : projections)
+            const int32_t width =
+                std::clamp(
+                    int32_t(std::ceil(std::max(
+                        edgeLength(face[0], face[1]),
+                        edgeLength(face[3], face[2])))),
+                    1, 256);
+            const int32_t height =
+                std::clamp(
+                    int32_t(std::ceil(std::max(
+                        edgeLength(face[0], face[3]),
+                        edgeLength(face[1], face[2])))),
+                    1, 256);
+
+            struct TrackArtworkCandidate
             {
-                const auto* g1 =
-                    GfxGetG1Element(projection.image);
-                if (g1 == nullptr
-                    || g1->width <= 0
-                    || g1->height <= 0)
+                const TrackTrajectoryCacheEntry::
+                    ArtworkProjection* projection = nullptr;
+                const G1Element* g1 = nullptr;
+                std::vector<uint8_t> pixels;
+                const G1Element* maskG1 = nullptr;
+                std::vector<uint8_t> maskPixels;
+                float score = 0.0f;
+            };
+
+            for (size_t layer = 0;
+                 layer < maximumLayers; ++layer)
+            {
+                std::vector<TrackArtworkCandidate>
+                    candidates;
+                for (uint8_t rotation = 0;
+                     rotation < 4; ++rotation)
+                {
+                    const auto& projections =
+                        trajectory
+                            .artworkProjections[rotation];
+                    if (layer >= projections.size()
+                        || rotationArea[rotation] <= 0.0f)
+                        continue;
+                    const auto& projection =
+                        projections[layer];
+                    const auto* g1 =
+                        GfxGetG1Element(projection.image);
+                    if (g1 == nullptr || g1->width <= 0
+                        || g1->height <= 0)
+                        continue;
+                    const auto decoded =
+                        DecodeFirstPersonSpritePixels(*g1);
+                    if (!decoded.has_value())
+                        continue;
+
+                    TrackArtworkCandidate candidate{};
+                    candidate.projection = &projection;
+                    candidate.g1 = g1;
+                    candidate.pixels = *decoded;
+                    candidate.score =
+                        rotationArea[rotation];
+                    if (projection.mask.HasValue())
+                    {
+                        candidate.maskG1 =
+                            GfxGetG1Element(
+                                projection.mask);
+                        if (candidate.maskG1 != nullptr)
+                        {
+                            const auto decodedMask =
+                                DecodeFirstPersonSpritePixels(
+                                    *candidate.maskG1);
+                            if (decodedMask.has_value())
+                                candidate.maskPixels =
+                                    *decodedMask;
+                        }
+                    }
+                    candidates.emplace_back(
+                        std::move(candidate));
+                }
+                if (candidates.empty())
                     continue;
 
-                const CoordsXYZ anchorPoint{
-                    int32_t(std::lround(projection.anchor.x)),
-                    int32_t(std::lround(projection.anchor.y)),
-                    int32_t(std::lround(projection.anchor.z)),
-                };
-                const auto isoAnchor =
-                    Translate3DTo2DWithZ(
-                        projection.rotation, anchorPoint);
+                std::sort(
+                    candidates.begin(), candidates.end(),
+                    [](const TrackArtworkCandidate& a,
+                       const TrackArtworkCandidate& b) {
+                        if (a.score != b.score)
+                            return a.score > b.score;
+                        return a.projection->rotation
+                            < b.projection->rotation;
+                    });
 
-                FirstPersonSurface surface = carrier;
-                surface.image = projection.image;
-                surface.mask = projection.mask;
+                const ImageId material =
+                    candidates.front()
+                        .projection->image;
+                std::vector<uint8_t> pixels(
+                    size_t(width) * size_t(height), 0);
+                bool hasPixel = false;
+
+                for (int32_t y = 0; y < height; ++y)
+                for (int32_t x = 0; x < width; ++x)
+                {
+                    const auto worldPoint =
+                        facePoint(
+                            (float(x) + 0.5f)
+                                / float(width),
+                            (float(y) + 0.5f)
+                                / float(height));
+                    const CoordsXYZ world{
+                        int32_t(std::lround(
+                            worldPoint.x)),
+                        int32_t(std::lround(
+                            worldPoint.y)),
+                        int32_t(std::lround(
+                            worldPoint.z)),
+                    };
+
+                    uint8_t selectedPixel = 0;
+                    for (const auto& candidate :
+                         candidates)
+                    {
+                        if (!SameFirstPersonMaterialTemplate(
+                                material,
+                                candidate
+                                    .projection->image))
+                            continue;
+
+                        const auto& projection =
+                            *candidate.projection;
+                        const CoordsXYZ anchorPoint{
+                            int32_t(std::lround(
+                                projection.anchor.x)),
+                            int32_t(std::lround(
+                                projection.anchor.y)),
+                            int32_t(std::lround(
+                                projection.anchor.z)),
+                        };
+                        const auto isoAnchor =
+                            Translate3DTo2DWithZ(
+                                projection.rotation,
+                                anchorPoint);
+                        const auto iso =
+                            Translate3DTo2DWithZ(
+                                projection.rotation,
+                                world);
+                        const int32_t u =
+                            int32_t(std::lround(
+                                float(
+                                    iso.x
+                                    - isoAnchor.x)
+                                - projection.left));
+                        const int32_t v =
+                            int32_t(std::lround(
+                                float(
+                                    iso.y
+                                    - isoAnchor.y)
+                                - projection.top));
+                        if (u < 0 || v < 0
+                            || u >= candidate.g1->width
+                            || v >= candidate.g1->height)
+                            continue;
+
+                        if (candidate.maskG1 != nullptr
+                            && !candidate
+                                    .maskPixels.empty())
+                        {
+                            if (u >= candidate
+                                    .maskG1->width
+                                || v >= candidate
+                                    .maskG1->height)
+                                continue;
+                            const uint8_t mask =
+                                candidate.maskPixels[
+                                    size_t(v)
+                                        * size_t(
+                                            candidate
+                                                .maskG1->width)
+                                    + size_t(u)];
+                            if (mask == 0)
+                                continue;
+                        }
+
+                        const uint8_t pixel =
+                            candidate.pixels[
+                                size_t(v)
+                                    * size_t(
+                                        candidate.g1->width)
+                                + size_t(u)];
+                        if (pixel == 0)
+                            continue;
+                        selectedPixel = pixel;
+                        break;
+                    }
+
+                    pixels[
+                        size_t(y) * size_t(width)
+                        + size_t(x)] =
+                        selectedPixel;
+                    hasPixel = hasPixel
+                        || selectedPixel != 0;
+                }
+
+                if (!hasPixel)
+                    continue;
+
+                FirstPersonSurface surface =
+                    carrier;
+                surface.image = material;
+                surface.mask = {};
                 surface.solidColour = 0;
                 surface.physicalCoverage = false;
+                surface.persistentBitmap = true;
+                surface.immutablePixels =
+                    std::move(pixels);
+                surface.immutableWidth =
+                    int16_t(width);
+                surface.immutableHeight =
+                    int16_t(height);
 
-                float minU =
-                    std::numeric_limits<float>::infinity();
-                float minV =
-                    std::numeric_limits<float>::infinity();
-                float maxU =
-                    -std::numeric_limits<float>::infinity();
-                float maxV =
-                    -std::numeric_limits<float>::infinity();
-                for (auto& vertex : surface.triangles)
+                uint64_t fingerprint =
+                    14695981039346656037ull;
+                ExtendStableKey(
+                    fingerprint,
+                    material.GetRemap());
+                ExtendStableKey(
+                    fingerprint,
+                    material.HasPrimary()
+                        ? EnumValue(
+                            material.GetPrimary())
+                        : 0xffu);
+                ExtendStableKey(
+                    fingerprint,
+                    material.HasSecondary()
+                        ? EnumValue(
+                            material.GetSecondary())
+                        : 0xffu);
+                ExtendStableKey(
+                    fingerprint,
+                    material.HasTertiary()
+                        ? EnumValue(
+                            material.GetTertiary())
+                        : 0xffu);
+                ExtendStableKey(
+                    fingerprint, layer);
+                ExtendStableKey(
+                    fingerprint, width);
+                ExtendStableKey(
+                    fingerprint, height);
+                for (const auto pixel :
+                     surface.immutablePixels)
                 {
-                    const CoordsXYZ worldPoint{
-                        int32_t(std::lround(vertex.world.x)),
-                        int32_t(std::lround(vertex.world.y)),
-                        int32_t(std::lround(vertex.world.z)),
-                    };
-                    const auto iso =
-                        Translate3DTo2DWithZ(
-                            projection.rotation, worldPoint);
-                    vertex.u =
-                        float(iso.x - isoAnchor.x)
-                        - projection.left;
-                    vertex.v =
-                        float(iso.y - isoAnchor.y)
-                        - projection.top;
-                    minU = std::min(minU, vertex.u);
-                    minV = std::min(minV, vertex.v);
-                    maxU = std::max(maxU, vertex.u);
-                    maxV = std::max(maxV, vertex.v);
+                    fingerprint ^= pixel;
+                    fingerprint *= 1099511628211ull;
                 }
+                surface.immutableFingerprint =
+                    fingerprint;
 
-                constexpr float kProjectionHalo = 1.0f;
-                if (maxU < -kProjectionHalo
-                    || maxV < -kProjectionHalo
-                    || minU
-                        > float(g1->width)
-                            + kProjectionHalo
-                    || minV
-                        > float(g1->height)
-                            + kProjectionHalo)
-                    continue;
-
+                const std::array<
+                    FirstPersonVertex, 4> vertices{ {
+                    { face[0], 0.0f, 0.0f },
+                    { face[1], float(width), 0.0f },
+                    { face[2], float(width),
+                      float(height) },
+                    { face[3], 0.0f,
+                      float(height) },
+                } };
+                EmitQuad(surface, vertices);
                 output.emplace_back(
                     std::move(surface));
             }
