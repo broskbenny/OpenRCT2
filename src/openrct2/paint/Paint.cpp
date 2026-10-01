@@ -24,6 +24,7 @@
 #include "../localisation/LocalisationService.h"
 #include "../paint/Painter.h"
 #include "../profiling/Profiling.h"
+#include "../world/World3DPaint.h"
 #include "Boundbox.h"
 #include "Paint.Entity.h"
 #include "tile_element/Paint.TileElement.h"
@@ -218,6 +219,7 @@ static PaintStruct* CreateNormalPaintStruct(
     ps->Element = session.CurrentlyDrawnTileElement;
     ps->Entity = session.CurrentlyDrawnEntity;
 
+    OpenRCT2::World3D::RecordPaintEvidence(session, image_id, offset, boundBox, *ps);
     return ps;
 }
 
@@ -266,6 +268,7 @@ static PaintStruct* CreateNormalPaintStructHeight(
     ps->Element = session.CurrentlyDrawnTileElement;
     ps->Entity = session.CurrentlyDrawnEntity;
 
+    OpenRCT2::World3D::RecordPaintEvidence(session, imageId, offset, boundBox, *ps, height);
     return ps;
 }
 
