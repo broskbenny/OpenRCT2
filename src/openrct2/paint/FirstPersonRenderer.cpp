@@ -1770,7 +1770,6 @@ namespace OpenRCT2::Paint
         {
             uint64_t lastPainted{};
             uint32_t lastAnimationGeneration{};
-            uint32_t lastSourceProbeGeneration{};
             uint64_t residentFingerprint{};
             uint64_t semanticFingerprint{};
             bool valid = false;
@@ -6398,7 +6397,7 @@ namespace OpenRCT2::Paint
             const auto basis = GetFirstPersonBasis(opt.camera);
             const auto frame = _terrainCache.frame;
             const uint32_t sourceGeneration = getGameState().currentTicks;
-            constexpr uint64_t kMaxStaticAge = 240;
+            constexpr uint64_t kSemanticProbeInterval = 240;
             std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
             for (auto& misses : missesByRotation)
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
@@ -6419,7 +6418,7 @@ namespace OpenRCT2::Paint
                     !cached.valid || cached.dirty || cached.viewFlags != opt.viewFlags;
                 const bool semanticProbeDue = FirstPersonRefreshDue(
                     key ^ 0x9e3779b97f4a7c15ull, sourceGeneration,
-                    cached.lastSemanticGeneration, kMaxStaticAge);
+                    cached.lastSemanticGeneration, kSemanticProbeInterval);
                 uint64_t probedSignature = cached.signature;
                 bool probedAnimated = cached.animated;
                 if (authoritativeInvalidation || semanticProbeDue)
@@ -6475,7 +6474,6 @@ namespace OpenRCT2::Paint
                         variant.valid = false;
                         variant.lastPainted = 0;
                         variant.lastAnimationGeneration = 0;
-                        variant.lastSourceProbeGeneration = 0;
                         variant.residentFingerprint = 0;
                         variant.semanticFingerprint = 0;
                         variant.semanticValid = false;
@@ -6553,13 +6551,17 @@ namespace OpenRCT2::Paint
                     if ((rotationMask & uint8_t(1u << rotation)) == 0)
                         continue;
                     auto& variant = cached.rotations[rotation];
-                    const uint64_t refreshKey = key ^ (uint64_t(rotation + 1) << 60);
-                    const uint32_t animationGeneration = sourceGeneration;
-                    const bool stale = !variant.valid ||
-                        (cached.animated && variant.lastAnimationGeneration != animationGeneration) ||
-                        FirstPersonRefreshDue(
-                            refreshKey, sourceGeneration,
-                            variant.lastSourceProbeGeneration, kMaxStaticAge);
+                    const uint32_t animationGeneration =
+                        sourceGeneration;
+                    // Static variants are invalidated by authoritative map
+                    // invalidation or the staggered semantic signature probe
+                    // above. Do not repaint unchanged static artwork merely
+                    // because time passed.
+                    const bool stale =
+                        !variant.valid
+                        || (cached.animated
+                            && variant.lastAnimationGeneration
+                                != animationGeneration);
                     if (stale)
                     {
                         if (cameraIndependentRefreshKeys
@@ -6571,7 +6573,6 @@ namespace OpenRCT2::Paint
                         variant.valid = true;
                         variant.lastPainted = frame;
                         variant.lastAnimationGeneration = animationGeneration;
-                        variant.lastSourceProbeGeneration = sourceGeneration;
                         variant.residentSurfaces.clear();
                         variant.streamedSurfaces.clear();
                         variant.semanticComponents.clear();
