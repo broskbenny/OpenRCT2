@@ -5151,6 +5151,10 @@ namespace OpenRCT2::Paint
                 for (const auto groupKey :
                      membership->second)
                 {
+                    // Geometry is stable, but inverse-projected material uses
+                    // the reconstruction group's selected native source view.
+                    reconstructionDependencies.insert(
+                        groupKey);
                     const auto trajectory =
                         _trackTrajectoryCache.find(
                             groupKey);
