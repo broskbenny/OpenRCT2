@@ -690,6 +690,37 @@ static void ViewportSurfaceDrawTileSideBottom(
         baseImageId = baseImageId.WithIndexOffset(5);
     }
 
+    const auto paintLandEdgeBand =
+        [&](ImageId imageId, uint8_t bandHeight,
+            const BoundBoxXYZ& boundBox) {
+            const CoordsXYZ artworkOffset{
+                offset,
+                int32_t(bandHeight) * kCoordsZPerTinyZ
+            };
+            if (!isWater)
+            {
+                PublishFirstPersonTerrainEdgeBand(
+                    session, edge, self, neighbour,
+                    neighbourIsClippedAway,
+                    int32_t(bandHeight) * kCoordsZPerTinyZ,
+                    int32_t(bandHeight + 1)
+                        * kCoordsZPerTinyZ,
+                    imageId, artworkOffset);
+                FirstPersonPaintSemanticScope scope(
+                    session,
+                    FirstPersonPaintSemanticRole::terrainEdge);
+                PaintAddImageAsParent(
+                    session, imageId, artworkOffset,
+                    boundBox);
+            }
+            else
+            {
+                PaintAddImageAsParent(
+                    session, imageId, artworkOffset,
+                    boundBox);
+            }
+        };
+
     uint8_t curHeight = std::min(neighbourCornerHeight1, neighbourCornerHeight2);
     if (neighbourCornerHeight2 != neighbourCornerHeight1)
     {
@@ -704,7 +735,8 @@ static void ViewportSurfaceDrawTileSideBottom(
         if (curHeight != cornerHeight1 && curHeight != cornerHeight2)
         {
             auto imageId = baseImageId.WithIndexOffset(image_offset);
-            PaintAddImageAsParent(session, imageId, { offset, curHeight * kCoordsZPerTinyZ }, { bounds, 15 });
+            paintLandEdgeBand(
+                imageId, curHeight, { { bounds, 15 } });
             curHeight++;
         }
     }
@@ -727,7 +759,9 @@ static void ViewportSurfaceDrawTileSideBottom(
         while (curHeight < tunnel.height)
         {
             const auto boundBoxZ = curHeight == tunnel.height - 1 ? tdOriginal.lowerEdgeBoundingBoxZ : kCoordsZPerTinyZ - 1;
-            PaintAddImageAsParent(session, baseImageId, { offset, curHeight * kCoordsZPerTinyZ }, { bounds, boundBoxZ });
+            paintLandEdgeBand(
+                baseImageId, curHeight,
+                { { bounds, boundBoxZ } });
             curHeight++;
         }
 
@@ -779,7 +813,9 @@ static void ViewportSurfaceDrawTileSideBottom(
     // Draw land edges up to the lowest corner
     while (curHeight < lowestCornerHeight)
     {
-        PaintAddImageAsParent(session, baseImageId, { offset, curHeight * kCoordsZPerTinyZ }, { bounds, kCoordsZPerTinyZ - 1 });
+        paintLandEdgeBand(
+            baseImageId, curHeight,
+            { { bounds, kCoordsZPerTinyZ - 1 } });
         curHeight++;
     }
 
@@ -788,7 +824,9 @@ static void ViewportSurfaceDrawTileSideBottom(
     {
         const uint32_t imageOffset = curHeight >= cornerHeight1 ? 2 : 1;
         const auto imageId = baseImageId.WithIndexOffset(imageOffset);
-        PaintAddImageAsParent(session, imageId, { offset, curHeight * kCoordsZPerTinyZ }, { bounds, kCoordsZPerTinyZ - 1 });
+        paintLandEdgeBand(
+            imageId, curHeight,
+            { { bounds, kCoordsZPerTinyZ - 1 } });
     }
 }
 
