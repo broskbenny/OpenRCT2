@@ -445,6 +445,161 @@ static bool TileIsInsideClipView(const TileDescriptor& tile)
     return true;
 }
 
+static uint8_t FirstPersonTerrainEdgeIndex(edge_t edge)
+{
+    switch (edge)
+    {
+        case EDGE_BOTTOMLEFT: return 0;
+        case EDGE_BOTTOMRIGHT: return 1;
+        case EDGE_TOPLEFT: return 2;
+        case EDGE_TOPRIGHT: return 3;
+        default: return 0xFF;
+    }
+}
+
+static uint32_t PublishFirstPersonTerrainEdgeBand(
+    PaintSession& session, edge_t edge,
+    const TileDescriptor& self, const TileDescriptor& neighbour,
+    bool neighbourIsClippedAway, int32_t bandLowZ, int32_t bandHighZ,
+    ImageId image, const CoordsXYZ& artworkOffset)
+{
+    if (session.FirstPersonSemanticComponentSink == nullptr
+        || !image.HasValue() || bandHighZ <= bandLowZ
+        || self.tile_element == nullptr)
+        return 0;
+
+    const auto* selfSurface = self.tile_element->asSurface();
+    if (selfSurface == nullptr)
+        return 0;
+
+    const uint8_t edgeIndex = FirstPersonTerrainEdgeIndex(edge);
+    if (edgeIndex >= 4)
+        return 0;
+    const CoordsXY delta =
+        kNeighbouringTileCoordOffsets[edgeIndex][session.CurrentRotation];
+
+    const auto selfCorners = GetSlopeCornerHeights(
+        selfSurface->getBaseZ(), selfSurface->getSlope());
+
+    const int32_t minimumZ =
+        int32_t(kMinimumLandHeight / 2) * kCoordsZPerTinyZ;
+    TileCornersZ neighbourCorners{
+        minimumZ, minimumZ, minimumZ, minimumZ
+    };
+    if (!neighbourIsClippedAway && neighbour.tile_element != nullptr)
+    {
+        if (const auto* neighbourSurface =
+                neighbour.tile_element->asSurface();
+            neighbourSurface != nullptr)
+        {
+            neighbourCorners = GetSlopeCornerHeights(
+                neighbourSurface->getBaseZ(),
+                neighbourSurface->getSlope());
+        }
+    }
+
+    FirstPersonPaintSemanticVec3 a{};
+    FirstPersonPaintSemanticVec3 b{};
+    int32_t selfA = 0;
+    int32_t selfB = 0;
+    int32_t neighbourA = 0;
+    int32_t neighbourB = 0;
+
+    if (delta.x > 0)
+    {
+        a = { float(kCoordsXYStep), 0.0f, 0.0f };
+        b = {
+            float(kCoordsXYStep),
+            float(kCoordsXYStep), 0.0f
+        };
+        selfA = selfCorners.east;
+        selfB = selfCorners.north;
+        neighbourA = neighbourCorners.south;
+        neighbourB = neighbourCorners.west;
+    }
+    else if (delta.x < 0)
+    {
+        a = {
+            0.0f, float(kCoordsXYStep), 0.0f
+        };
+        b = { 0.0f, 0.0f, 0.0f };
+        selfA = selfCorners.west;
+        selfB = selfCorners.south;
+        neighbourA = neighbourCorners.north;
+        neighbourB = neighbourCorners.east;
+    }
+    else if (delta.y > 0)
+    {
+        a = {
+            float(kCoordsXYStep),
+            float(kCoordsXYStep), 0.0f
+        };
+        b = {
+            0.0f, float(kCoordsXYStep), 0.0f
+        };
+        selfA = selfCorners.north;
+        selfB = selfCorners.west;
+        neighbourA = neighbourCorners.east;
+        neighbourB = neighbourCorners.south;
+    }
+    else if (delta.y < 0)
+    {
+        a = { 0.0f, 0.0f, 0.0f };
+        b = {
+            float(kCoordsXYStep), 0.0f, 0.0f
+        };
+        selfA = selfCorners.south;
+        selfB = selfCorners.east;
+        neighbourA = neighbourCorners.west;
+        neighbourB = neighbourCorners.north;
+    }
+    else
+    {
+        return 0;
+    }
+
+    const auto clippedEndpoint =
+        [&](int32_t selfTop, int32_t neighbourTop) {
+            float low = float(std::max(
+                bandLowZ, neighbourTop));
+            float high = float(std::min(
+                bandHighZ, selfTop));
+            if (selfTop <= neighbourTop || high <= low)
+            {
+                const float z = float(std::clamp(
+                    selfTop, bandLowZ, bandHighZ));
+                low = z;
+                high = z;
+            }
+            return std::pair<float, float>{ low, high };
+        };
+    const auto [aLow, aHigh] =
+        clippedEndpoint(selfA, neighbourA);
+    const auto [bLow, bHigh] =
+        clippedEndpoint(selfB, neighbourB);
+    if (aHigh <= aLow && bHigh <= bLow)
+        return 0;
+
+    a.z = aLow;
+    b.z = bLow;
+    FirstPersonPaintSemanticTransform transform{};
+    transform.origin = {
+        float(session.MapPosition.x),
+        float(session.MapPosition.y), 0.0f
+    };
+    return PaintSessionAddFirstPersonSemanticOrientedQuad(
+        session, FirstPersonPaintSemanticRole::terrainEdge,
+        FirstPersonPaintSemanticPrimitiveKind::plane,
+        transform,
+        { {
+            a,
+            b,
+            { b.x, b.y, bHigh },
+            { a.x, a.y, aHigh },
+        } },
+        image, artworkOffset, 0, false, false);
+}
+
 static void ViewportSurfaceDrawTileSideBottom(
     PaintSession& session, enum edge_t edge, uint16_t height, const TerrainEdgeObject* edgeObject, const TileDescriptor& self,
     const TileDescriptor& neighbour, bool isWater)
