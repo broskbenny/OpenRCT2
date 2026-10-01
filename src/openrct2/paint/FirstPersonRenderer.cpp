@@ -1780,6 +1780,7 @@ namespace OpenRCT2::Paint
             uint64_t residentFingerprint{};
             uint64_t semanticFingerprint{};
             bool valid = false;
+            bool semanticValid = false;
             uint8_t verticalTunnelHeight = 0xFF;
             std::vector<TunnelEntry> leftTunnels;
             std::vector<TunnelEntry> rightTunnels;
@@ -5655,17 +5656,87 @@ namespace OpenRCT2::Paint
                         _staticPaintCache.find(tileKey);
                     supportIt != _staticPaintCache.end()
                     && supportIt->second.valid
-                    && !supportIt->second.dirty
-                    && supportIt->second.hasSelectedRotation)
+                    && !supportIt->second.dirty)
                 {
-                    const auto& semanticVariant =
-                        supportIt->second.rotations[
-                            supportIt->second.selectedRotation & 3u];
-                    if (semanticVariant.valid)
+                    struct SemanticViewGroup
                     {
+                        std::array<
+                            const FirstPersonPaintSemanticComponent*, 4>
+                            views{};
+                    };
+                    std::unordered_map<uint64_t, SemanticViewGroup>
+                        semanticGroups;
+                    for (uint8_t rotation = 0;
+                         rotation < 4; ++rotation)
+                    {
+                        const auto& variant =
+                            supportIt->second.rotations[rotation];
+                        if (!variant.semanticValid)
+                            continue;
+                        std::unordered_map<uint64_t, uint32_t>
+                            occurrences;
                         for (const auto& component :
-                             semanticVariant.semanticComponents)
-                            addSemanticComponent(component);
+                             variant.semanticComponents)
+                        {
+                            const uint64_t physical =
+                                FirstPersonSemanticPhysicalFingerprint(
+                                    component);
+                            const uint32_t occurrence =
+                                occurrences[physical]++;
+                            uint64_t groupKey = physical;
+                            ExtendStableKey(
+                                groupKey, occurrence);
+                            auto& group =
+                                semanticGroups[groupKey];
+                            const uint8_t sourceRotation =
+                                component.artwork.sourceRotation & 3u;
+                            group.views[sourceRotation] =
+                                &component;
+                        }
+                    }
+
+                    for (const auto& [groupKey, group] :
+                         semanticGroups)
+                    {
+                        (void)groupKey;
+                        const FirstPersonPaintSemanticComponent*
+                            canonical = nullptr;
+                        for (const auto* view : group.views)
+                        {
+                            if (view != nullptr)
+                            {
+                                canonical = view;
+                                break;
+                            }
+                        }
+                        if (canonical == nullptr)
+                            continue;
+
+                        const bool moving =
+                            canonical->role
+                                == FirstPersonPaintSemanticRole::movingMachinery
+                            || canonical->role
+                                == FirstPersonPaintSemanticRole::seat;
+                        if (moving)
+                            continue;
+                        const int32_t componentTileX =
+                            canonical->mapPosition.x / kCoordsXYStep;
+                        const int32_t componentTileY =
+                            canonical->mapPosition.y / kCoordsXYStep;
+                        const uint64_t componentRegion =
+                            FirstPersonGpuRegionKey(
+                                componentTileX,
+                                componentTileY);
+                        if (componentRegion != regionKey)
+                            continue;
+                        auto surfaces =
+                            BuildFirstPersonSemanticComponentSurfaces(
+                                *canonical,
+                                componentRegion,
+                                &group.views);
+                        for (const auto& surface :
+                             surfaces)
+                            addSurface(surface);
                     }
                 }
 
@@ -6015,6 +6086,7 @@ namespace OpenRCT2::Paint
                         variant.lastSourceProbeGeneration = 0;
                         variant.residentFingerprint = 0;
                         variant.semanticFingerprint = 0;
+                        variant.semanticValid = false;
                         variant.verticalTunnelHeight = 0xFF;
                         variant.leftTunnels.clear();
                         variant.rightTunnels.clear();
@@ -6030,17 +6102,9 @@ namespace OpenRCT2::Paint
                     ? std::optional<uint8_t>{ cached.selectedRotation }
                     : std::nullopt;
                 const auto tileRotation = PaintRotationForTile(opt.camera, tile, previousRotation);
-                const bool hasSemanticResident =
-                    std::any_of(
-                        cached.rotations.begin(),
-                        cached.rotations.end(),
-                        [](const StaticPaintRotationCache& variant) {
-                            return !variant.semanticComponents.empty();
-                        });
                 if ((!cached.hasSelectedRotation
                         || cached.selectedRotation != tileRotation)
-                    && (cached.hasUngroupedResident
-                        || hasSemanticResident))
+                    && cached.hasUngroupedResident)
                     MarkStaticRegionDirtyForTile(tx, ty);
                 cached.selectedRotation = tileRotation;
                 cached.hasSelectedRotation = true;
@@ -6083,6 +6147,7 @@ namespace OpenRCT2::Paint
                         variant.residentSurfaces.clear();
                         variant.streamedSurfaces.clear();
                         variant.semanticComponents.clear();
+                        variant.semanticValid = false;
                         missesByRotation[rotation].insert(key);
                         ++scene.staticTilePaints;
                     }
@@ -6237,6 +6302,7 @@ namespace OpenRCT2::Paint
                                     variant.semanticFingerprint;
                                 variant.semanticComponents =
                                     std::move(semanticComponents);
+                                variant.semanticValid = true;
                                 variant.semanticFingerprint =
                                     SemanticComponentFingerprint(
                                         variant.semanticComponents);
