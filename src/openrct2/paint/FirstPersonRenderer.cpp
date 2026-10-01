@@ -5270,6 +5270,39 @@ namespace OpenRCT2::Paint
             return result;
         }
 
+        [[nodiscard]] bool SameFirstPersonSemanticFace(
+            const std::array<FirstPersonVec3, 4>& a,
+            const std::array<FirstPersonVec3, 4>& b)
+        {
+            const auto samePoint =
+                [](FirstPersonVec3 p, FirstPersonVec3 q) {
+                    constexpr float kEpsilon = 0.01f;
+                    return std::abs(p.x - q.x) <= kEpsilon
+                        && std::abs(p.y - q.y) <= kEpsilon
+                        && std::abs(p.z - q.z) <= kEpsilon;
+                };
+
+            // Faces can use a different starting corner or winding.
+            for (size_t start = 0; start < 4; ++start)
+            {
+                bool forward = true;
+                bool reverse = true;
+                for (size_t i = 0; i < 4; ++i)
+                {
+                    forward = forward
+                        && samePoint(
+                            a[i], b[(start + i) & 3u]);
+                    reverse = reverse
+                        && samePoint(
+                            a[i],
+                            b[(start + 4u - i) & 3u]);
+                }
+                if (forward || reverse)
+                    return true;
+            }
+            return false;
+        }
+
         [[nodiscard]] uint64_t FirstPersonSemanticPhysicalFingerprint(
             const FirstPersonPaintSemanticComponent& component)
         {
@@ -5531,10 +5564,22 @@ namespace OpenRCT2::Paint
                     const auto peerFaces =
                         BuildFirstPersonSemanticPhysicalFaces(
                             *peer);
-                    depthFaces.insert(
-                        depthFaces.end(),
-                        peerFaces.begin(),
-                        peerFaces.end());
+                    for (const auto& peerFace : peerFaces)
+                    {
+                        const bool coincident =
+                            std::any_of(
+                                faces.begin(), faces.end(),
+                                [&](const auto& targetFace) {
+                                    return SameFirstPersonSemanticFace(
+                                        targetFace, peerFace);
+                                });
+                        // Coplanar decals/host planes describe the same
+                        // physical surface and are allowed to share it. Only
+                        // genuinely distinct geometry participates as an
+                        // occluder.
+                        if (!coincident)
+                            depthFaces.push_back(peerFace);
+                    }
                 }
             }
 
