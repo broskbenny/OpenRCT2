@@ -958,7 +958,7 @@ TEST(FirstPersonPhysicalProxyTest, LargeSceneryCollisionUsesRecoveredFacesNotRes
             { 10.0f, 0.0f, 0.0f },
             { 11.0f, 32.0f, 32.0f },
             FirstPersonPhysicalProxyProvenance::
-                calibratedLargeSceneryArtwork,
+                authoritativeLargeSceneryOccupancy,
             static_cast<uint8_t>(
                 FirstPersonPhysicalProxyCapability::collide),
             groupKey,
