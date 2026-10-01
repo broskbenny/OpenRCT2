@@ -535,6 +535,12 @@ void main() {
         const int32_t width = scene.dimensions.width;
         const int32_t height = scene.dimensions.height;
         if (width <= 0 || height <= 0) return;
+        if (_sceneEpoch != scene.sceneEpoch)
+        {
+            DiscardAllRegionBuffers();
+            textures.ClearFirstPersonPersistentBitmaps();
+            _sceneEpoch = scene.sceneEpoch;
+        }
         textures.ClearFirstPersonTransientBitmaps();
         const auto clip = Paint::IntersectFirstPersonScreenRects(
             ScreenRect{ left, top, left + width, top + height },
@@ -709,15 +715,27 @@ void main() {
             {
                 if (surface.immutableWidth <= 0 || surface.immutableHeight <= 0)
                     return;
-                auto it = immutableTextures.find(surface.immutableFingerprint);
-                if (it == immutableTextures.end())
+                if (surface.persistentBitmap)
                 {
-                    const auto loaded = textures.LoadFirstPersonTransientBitmap(
+                    tex = textures.GetOrLoadFirstPersonPersistentBitmap(
+                        surface.immutableFingerprint,
                         surface.immutablePixels.data(),
-                        size_t(surface.immutableWidth), size_t(surface.immutableHeight));
-                    it = immutableTextures.emplace(surface.immutableFingerprint, loaded).first;
+                        size_t(surface.immutableWidth),
+                        size_t(surface.immutableHeight));
                 }
-                tex = it->second;
+                else
+                {
+                    auto it = immutableTextures.find(surface.immutableFingerprint);
+                    if (it == immutableTextures.end())
+                    {
+                        const auto loaded = textures.LoadFirstPersonTransientBitmap(
+                            surface.immutablePixels.data(),
+                            size_t(surface.immutableWidth), size_t(surface.immutableHeight));
+                        it = immutableTextures.emplace(
+                            surface.immutableFingerprint, loaded).first;
+                    }
+                    tex = it->second;
+                }
                 imageWidth = float(surface.immutableWidth);
                 imageHeight = float(surface.immutableHeight);
             }
