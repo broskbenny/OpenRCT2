@@ -132,20 +132,9 @@ namespace OpenRCT2::Paint
         }
     }
 
-    bool LargeSceneryAssetModelAttempted(
-        const LargeSceneryEntry& entry)
-    {
-        const auto found =
-            _largeSceneryAssetModels.find(&entry);
-        return found
-                != _largeSceneryAssetModels.end()
-            && found->second.attempted;
-    }
-
     const LargeSceneryAssetModel*
         GetLargeSceneryAssetModel(
-            const LargeSceneryEntry& entry,
-            bool allowBuild)
+            const LargeSceneryEntry& entry)
     {
         auto [it, inserted] =
             _largeSceneryAssetModels.try_emplace(
@@ -155,8 +144,6 @@ namespace OpenRCT2::Paint
 
         if (!it->second.attempted)
         {
-            if (!allowBuild)
-                return nullptr;
             it->second =
                 BuildLargeSceneryAssetModel(entry);
         }
