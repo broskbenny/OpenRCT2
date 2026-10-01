@@ -2670,6 +2670,8 @@ namespace OpenRCT2::Paint
                 ExtendStableKey(
                     fingerprint, surface.persistentBitmap ? 1 : 0);
                 ExtendStableKey(
+                    fingerprint, surface.cameraIndependent ? 1 : 0);
+                ExtendStableKey(
                     fingerprint, surface.immutableFingerprint);
                 ExtendStableKey(
                     fingerprint, surface.textureFallbackOnly ? 1 : 0);
@@ -2798,6 +2800,47 @@ namespace OpenRCT2::Paint
                     component.collidable ? 1 : 0);
             }
             return fingerprint;
+        }
+
+        [[nodiscard]] uint64_t CameraIndependentSurfaceKey(
+            const FirstPersonSurface& surface)
+        {
+            uint64_t key = 14695981039346656037ull;
+            ExtendStableKey(key, surface.immutableFingerprint);
+            ExtendStableKey(key, surface.solidColour);
+            ExtendStableKey(key, surface.nativePaintOrdinal);
+            ExtendStableKey(key, surface.image.GetRemap());
+            ExtendStableKey(
+                key,
+                surface.image.HasPrimary()
+                    ? EnumValue(surface.image.GetPrimary())
+                    : 0xffu);
+            ExtendStableKey(
+                key,
+                surface.image.HasSecondary()
+                    ? EnumValue(surface.image.GetSecondary())
+                    : 0xffu);
+            ExtendStableKey(
+                key,
+                surface.image.HasTertiary()
+                    ? EnumValue(surface.image.GetTertiary())
+                    : 0xffu);
+            for (const auto& vertex : surface.triangles)
+            {
+                ExtendStableKey(
+                    key,
+                    uint64_t(int64_t(std::llround(
+                        double(vertex.world.x) * 256.0))));
+                ExtendStableKey(
+                    key,
+                    uint64_t(int64_t(std::llround(
+                        double(vertex.world.y) * 256.0))));
+                ExtendStableKey(
+                    key,
+                    uint64_t(int64_t(std::llround(
+                        double(vertex.world.z) * 256.0))));
+            }
+            return key;
         }
 
         void MarkStaticRegionDirtyForTile(int32_t tileX, int32_t tileY)
@@ -6217,6 +6260,8 @@ namespace OpenRCT2::Paint
                     || cacheIt->second.dirty || cacheIt->second.animated)
                     continue;
                 const auto& cached = cacheIt->second;
+                std::unordered_set<uint64_t>
+                    cameraIndependentSeen;
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
                     const auto& variant = cached.rotations[rotation];
@@ -6225,6 +6270,17 @@ namespace OpenRCT2::Paint
                     for (const auto& surface :
                          variant.residentSurfaces)
                     {
+                        if (surface.cameraIndependent)
+                        {
+                            if (cameraIndependentSeen.insert(
+                                    CameraIndependentSurfaceKey(
+                                        surface)).second)
+                            {
+                                addSurface(surface);
+                            }
+                            continue;
+                        }
+
                         if (surface.reconstructionGroup != 0)
                         {
                             const auto trajectory =
@@ -6942,7 +6998,8 @@ namespace OpenRCT2::Paint
                                     if (IsResidentStaticSurface(surface))
                                     {
                                         variant.residentSurfaces.push_back(surface);
-                                        if (surface.reconstructionGroup == 0)
+                                        if (surface.reconstructionGroup == 0
+                                            && !surface.cameraIndependent)
                                             cacheIt->second.hasUngroupedResident = true;
                                     }
                                     else
