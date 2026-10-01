@@ -426,90 +426,6 @@ namespace OpenRCT2::Paint
             scene.surfaces.emplace_back(std::move(surface));
         }
 
-        // Only painter bounds that encode authored slabs/strips qualify.
-        bool AppendPhysicalPlane(
-            FirstPersonScene& scene, const PaintStruct& ps, ImageId image,
-            const ScreenCoordsXY& spritePos, uint8_t rotation, ImageId mask = {})
-        {
-            if (ps.Element == nullptr)
-                return false;
-
-            const auto type = ps.Element->getType();
-            // Known paths/stations/walls publish semantic geometry upstream.
-            // Do not reinterpret their paint sorting bounds as physical slabs.
-            // This fallback is retained only for native surface/cliff paint.
-            if (type != TileElementType::surface)
-                return false;
-
-            const auto layout = GetSpriteCompositeLayout(image, mask);
-            if (!layout.has_value())
-                return false;
-
-            const float x0 = float(std::min(ps.Bounds.x, ps.Bounds.x_end));
-            const float x1 = float(std::max(ps.Bounds.x, ps.Bounds.x_end));
-            const float y0 = float(std::min(ps.Bounds.y, ps.Bounds.y_end));
-            const float y1 = float(std::max(ps.Bounds.y, ps.Bounds.y_end));
-            const float z0 = float(std::min(ps.Bounds.z, ps.Bounds.z_end));
-            const float z1 = float(std::max(ps.Bounds.z, ps.Bounds.z_end));
-            const float sx = x1 - x0;
-            const float sy = y1 - y0;
-            const float sz = z1 - z0;
-
-            const bool alongX =
-                sx >= 6.0f && sy <= 4.0f && sz >= 5.0f;
-            const bool alongY =
-                sy >= 6.0f && sx <= 4.0f && sz >= 5.0f;
-            if (!alongX && !alongY)
-                return false;
-
-            std::array<FirstPersonVec3, 4> world{};
-            if (alongX)
-            {
-                const float y =
-                    0.5f * (y0 + y1);
-                world = { {
-                    { x0, y, z0 },
-                    { x1, y, z0 },
-                    { x1, y, z1 },
-                    { x0, y, z1 },
-                } };
-            }
-            else
-            {
-                const float x =
-                    0.5f * (x0 + x1);
-                world = { {
-                    { x, y0, z0 },
-                    { x, y1, z0 },
-                    { x, y1, z1 },
-                    { x, y0, z1 },
-                } };
-            }
-            FirstPersonSurface surface{};
-            surface.image = image;
-            surface.mask = mask;
-            surface.physicalCoverage = true;
-            std::array<FirstPersonVertex, 4> vertices{};
-            for (size_t i = 0; i < vertices.size(); ++i)
-            {
-                const auto& p = world[i];
-                const CoordsXYZ loc{
-                    int32_t(std::lround(p.x)),
-                    int32_t(std::lround(p.y)),
-                    int32_t(std::lround(p.z)),
-                };
-                const auto iso =
-                    Translate3DTo2DWithZ(rotation, loc);
-                vertices[i] = {
-                    p,
-                    float(iso.x - spritePos.x - layout->xOffset),
-                    float(iso.y - spritePos.y - layout->yOffset),
-                };
-            }
-            EmitQuad(surface, vertices);
-            scene.surfaces.emplace_back(std::move(surface));
-            return true;
-        }
         [[nodiscard]] uint8_t RotateQuarterMask(uint8_t mask, uint8_t direction)
         {
             mask &= 0x0F;
@@ -1668,10 +1584,6 @@ namespace OpenRCT2::Paint
                     ? id.WithTransparency(Drawing::FilterPaletteID::paletteDarken1)
                     : id;
             };
-            const bool physicallyPlanar =
-                ps.Element != nullptr
-                && ps.Element->getType()
-                    == TileElementType::surface;
             bool suppressCurrentImage =
                 ps.FirstPersonSemanticRole
                     != FirstPersonPaintSemanticRole::none;
@@ -1740,11 +1652,7 @@ namespace OpenRCT2::Paint
                     AppendCalibratedSmallSceneryGeometry(
                         scene, ps, colourify(ps.image_id),
                         ps.ScreenPos, rotation);
-                if (!smallPhysical
-                    && (!physicallyPlanar
-                        || !AppendPhysicalPlane(
-                            scene, ps, colourify(ps.image_id),
-                            ps.ScreenPos, rotation)))
+                if (!smallPhysical)
                 {
                     AppendLayer(
                         scene, anchor, basis, isoAnchor,
@@ -1772,14 +1680,9 @@ namespace OpenRCT2::Paint
                     const auto maskImage = a->IsMasked ? a->image_id : ImageId{};
                     const auto position = ps.ScreenPos + a->RelativePos;
                     const auto surfaceStart = scene.surfaces.size();
-                    if (!physicallyPlanar ||
-                        !AppendPhysicalPlane(
-                            scene, ps, colourImage, position,
-                            rotation, maskImage))
-                    {
-                        AppendLayer(
-                            scene, anchor, basis, isoAnchor, colourImage, position, maskImage);
-                    }
+                    AppendLayer(
+                        scene, anchor, basis, isoAnchor,
+                        colourImage, position, maskImage);
                     if (scene.surfaces.size() > surfaceStart)
                         ApplyImmutablePaintSnapshot(scene.surfaces.back(), a->FirstPersonSnapshot);
                 }
