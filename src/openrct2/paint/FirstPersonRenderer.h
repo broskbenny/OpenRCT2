@@ -14,6 +14,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <memory>
 #include <vector>
 
 namespace OpenRCT2::Drawing { struct RenderTarget; }
@@ -110,6 +111,10 @@ namespace OpenRCT2::Paint
         // pixels here; persistentBitmap distinguishes resident face materials
         // from per-frame snapshot uploads.
         std::vector<uint8_t> immutablePixels;
+        // Persistent baked materials are shared so static transparent faces can
+        // enter the per-frame transparency list without copying their bitmap.
+        std::shared_ptr<const std::vector<uint8_t>>
+            persistentPixels;
         int16_t immutableWidth = 0;
         int16_t immutableHeight = 0;
         uint64_t immutableFingerprint = 0;
