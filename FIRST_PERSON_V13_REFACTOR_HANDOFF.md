@@ -452,7 +452,7 @@ The shared semantic component contract now includes generic structure body, floo
 * facility/toilet painters publish a stable box, foundation and roof plane;
 * ride entrance/exit painters publish an oriented open gate frame with posts/header plus front/back/glass artwork planes, rather than treating native sorting slabs as the physical object.
 
-Artwork is inverse-projected from the native sprite source onto those stable world surfaces. These are uses of the common box/plane/footprint component contract, not first-person billboard special cases.
+Artwork is inverse-projected from the native sprite source onto those stable world surfaces. Geometry is shared semantically, while each cached native quarter-turn keeps its own artwork binding so repainting one view cannot overwrite another. These are uses of the common box/plane/footprint component contract, not first-person billboard special cases.
 
 ### Trajectory-owned track reconstruction
 
@@ -462,7 +462,7 @@ For standard tracked rides, physical rails no longer depend on successful artwor
 * `TrackStyle` supplies a deterministic guideway topology/cross-section baseline;
 * optional verified artwork data may refine dimensions/material but cannot decide whether geometry exists;
 * physical rail segments and walking collision use the same resolved style profile;
-* a separate non-colliding trajectory-following shell carries ties, cross-members and other native track artwork by inverse projection;
+* a separate non-colliding trajectory-following shell carries ties, cross-members and other native track artwork by inverse projection, preserving every relevant native paint layer in paint order;
 * native track PaintStructs become texture evidence once trajectory geometry exists and are not rendered as a second camera-facing track;
 * native source-view selection remains independent of geometry and can change material view without rotating/rebuilding the rails;
 * static region packets track that source-view dependency so material changes refresh the packet without reconstructing trajectory geometry.
