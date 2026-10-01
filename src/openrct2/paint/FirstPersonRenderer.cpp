@@ -3527,20 +3527,19 @@ namespace OpenRCT2::Paint
                     left + g1->width;
                 const int32_t bottom =
                     top + g1->height;
-                size_t overlap = 0;
-                for (const auto pixel :
-                     railSilhouette.pixels)
-                {
-                    const int32_t x =
-                        FirstPersonSilhouettePixelX(pixel);
-                    const int32_t y =
-                        FirstPersonSilhouettePixelY(pixel);
-                    if (x >= left && x < right
-                        && y >= top && y < bottom
-                        && ++overlap >= 3)
-                        break;
-                }
-                if (overlap < 3)
+                constexpr int32_t kArtworkOverlapHalo = 2;
+                if (right
+                        <= railSilhouette.minX
+                            - kArtworkOverlapHalo
+                    || left
+                        >= railSilhouette.maxX
+                            + kArtworkOverlapHalo
+                    || bottom
+                        <= railSilhouette.minY
+                            - kArtworkOverlapHalo
+                    || top
+                        >= railSilhouette.maxY
+                            + kArtworkOverlapHalo)
                     return;
             }
 
