@@ -30,6 +30,7 @@
 #include "../../world/tile_element/SurfaceElement.h"
 #include "../../world/tile_element/TileElement.h"
 #include "../Boundbox.h"
+#include "../FirstPersonTunnelGeometry.h"
 #include "../Paint.SessionFlags.h"
 #include "Paint.TileElement.h"
 #include "Segment.h"
@@ -616,6 +617,74 @@ static uint32_t PublishFirstPersonTerrainEdgeBand(
         image, artworkOffset, 0, isWater, false);
 }
 
+static void PublishFirstPersonTunnelPortalArtwork(
+    PaintSession& session, edge_t edge,
+    const TunnelEntry& sourceTunnel, TunnelType resolvedType,
+    ImageId image, const CoordsXYZ& artworkOffset,
+    uint32_t artworkGroup, bool decal)
+{
+    if (session.FirstPersonSemanticComponentSink == nullptr
+        || !image.HasValue())
+        return;
+
+    FirstPersonTunnelEdge worldEdge{};
+    bool nativeLeft = false;
+    if (edge == EDGE_BOTTOMLEFT)
+    {
+        worldEdge = FirstPersonLeftTunnelWorldEdge(
+            session.CurrentRotation);
+        nativeLeft = true;
+    }
+    else if (edge == EDGE_BOTTOMRIGHT)
+    {
+        worldEdge = FirstPersonRightTunnelWorldEdge(
+            session.CurrentRotation);
+    }
+    else
+    {
+        return;
+    }
+
+    const TunnelEntry resolvedTunnel{
+        sourceTunnel.height, resolvedType
+    };
+    const auto portal = BuildFirstPersonTunnelPortal(
+        session.MapPosition, worldEdge,
+        resolvedTunnel, session.CurrentRotation,
+        nativeLeft);
+    const auto quads =
+        BuildFirstPersonTunnelPortalTerrainWall(portal);
+    if (quads.empty())
+        return;
+
+    FirstPersonPaintSemanticTransform transform{};
+    transform.origin = {
+        float(session.MapPosition.x),
+        float(session.MapPosition.y), 0.0f
+    };
+    for (const auto& quad : quads)
+    {
+        std::array<FirstPersonPaintSemanticVec3, 4>
+            local{};
+        for (size_t i = 0; i < local.size(); ++i)
+        {
+            local[i] = {
+                quad.corners[i].x
+                    - float(session.MapPosition.x),
+                quad.corners[i].y
+                    - float(session.MapPosition.y),
+                quad.corners[i].z,
+            };
+        }
+        PaintSessionAddFirstPersonSemanticOrientedQuad(
+            session,
+            FirstPersonPaintSemanticRole::terrainEdge,
+            FirstPersonPaintSemanticPrimitiveKind::plane,
+            transform, local, image, artworkOffset,
+            artworkGroup, decal, false);
+    }
+}
+
 static void ViewportSurfaceDrawTileSideBottom(
     PaintSession& session, enum edge_t edge, uint16_t height, const TerrainEdgeObject* edgeObject, const TileDescriptor& self,
     const TileDescriptor& neighbour, bool isWater)
@@ -798,23 +867,65 @@ static void ViewportSurfaceDrawTileSideBottom(
             boundBoxLength -= 16;
         }
 
-        auto imageId = GetTunnelImage(edgeObject, tunnelType, edge);
-        PaintAddImageAsParent(
-            session, imageId, { offset, zOffset }, { { 0, 0, boundBoxOffsetZ }, { tunnelBounds, boundBoxLength - 1 } });
+        const uint32_t portalArtworkGroup =
+            PaintSessionBeginFirstPersonSemanticArtworkGroup(
+                session);
+        auto imageId = GetTunnelImage(
+            edgeObject, tunnelType, edge);
+        const CoordsXYZ lowerArtworkOffset{
+            offset, zOffset
+        };
+        PublishFirstPersonTunnelPortalArtwork(
+            session, edge, tunnel, tunnelType,
+            imageId, lowerArtworkOffset,
+            portalArtworkGroup, false);
+        {
+            FirstPersonPaintSemanticScope scope(
+                session,
+                FirstPersonPaintSemanticRole::terrainEdge,
+                portalArtworkGroup);
+            PaintAddImageAsParent(
+                session, imageId, lowerArtworkOffset,
+                { { 0, 0, boundBoxOffsetZ },
+                  { tunnelBounds,
+                    boundBoxLength - 1 } });
+        }
 
-        boundBoxOffsetZ = curHeight * kCoordsZPerTinyZ;
+        boundBoxOffsetZ =
+            curHeight * kCoordsZPerTinyZ;
         boundBoxLength = boundBoxLengthBase;
-        boundBoxOffsetZ += tdOriginal.boundBoxZOffset;
+        boundBoxOffsetZ +=
+            tdOriginal.boundBoxZOffset;
         if (boundBoxOffsetZ == 0)
         {
             boundBoxOffsetZ += 16;
             boundBoxLength -= 16;
         }
 
-        imageId = GetTunnelImage(edgeObject, tunnelType, edge).WithIndexOffset(1);
-        PaintAddImageAsParent(
-            session, imageId, { offset, curHeight * kCoordsZPerTinyZ },
-            { { tunnelTopBoundBoxOffset, boundBoxOffsetZ }, { tunnelBounds, boundBoxLength - 1 } });
+        imageId = GetTunnelImage(
+            edgeObject, tunnelType, edge)
+            .WithIndexOffset(1);
+        const CoordsXYZ upperArtworkOffset{
+            tunnelTopBoundBoxOffset,
+            curHeight * kCoordsZPerTinyZ
+        };
+        PublishFirstPersonTunnelPortalArtwork(
+            session, edge, tunnel, tunnelType,
+            imageId, upperArtworkOffset,
+            portalArtworkGroup, true);
+        {
+            FirstPersonPaintSemanticScope scope(
+                session,
+                FirstPersonPaintSemanticRole::terrainEdge,
+                portalArtworkGroup);
+            PaintAddImageAsParent(
+                session, imageId,
+                upperArtworkOffset,
+                { { tunnelTopBoundBoxOffset,
+                    boundBoxOffsetZ },
+                  { tunnelBounds,
+                    boundBoxLength - 1 } });
+        }
 
         curHeight += td.height;
     }
