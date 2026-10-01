@@ -164,7 +164,14 @@ void main() {
         // buffer; this tolerance belongs only to that opaque comparison.
         const float opaqueDepthEps = 0.00000002;
         float opaqueDepth = texelFetch(uOpaqueDepth,ivec2(gl_FragCoord.xy),0).r;
-        if (logarithmic >= opaqueDepth - opaqueDepthEps) discard;
+        bool coplanarOwner = (fFlags & 4) != 0;
+        if (coplanarOwner) {
+            // Ownership permits the exact same physical layer; it never alters
+            // world/depth coordinates.
+            if (logarithmic > opaqueDepth + opaqueDepthEps) discard;
+        } else {
+            if (logarithmic >= opaqueDepth - opaqueDepthEps) discard;
+        }
 
         uint row = uint(fPalettes.y);
         // Native water mask changes its palette row with the mask texel.
@@ -756,6 +763,7 @@ void main() {
                     (surface.solidColour == 0 && image.IsBlended()
                         ? (image.GetRemap()==static_cast<uint8_t>(Drawing::FilterPaletteID::paletteWater)?3:1)
                         : 0)
+                        | (surface.coplanarOwner ? 4 : 0)
                         | (surface.physicalCoverage ? 8 : 0)
                         | (surface.solidColour != 0 ? 16 : 0)
                         | (surface.textureFallbackOnly ? 32 : 0)
