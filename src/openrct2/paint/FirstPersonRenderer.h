@@ -105,12 +105,15 @@ namespace OpenRCT2::Paint
         // geometry but use only a deliberate material fallback from the sprite.
         bool textureFallbackOnly = false;
         // Some native sprite IDs (notably scrolling text) reference mutable
-        // bitmap slots. When present, these bytes are the immutable content
-        // captured when the native PaintStruct was created.
+        // bitmap slots. Semantic reconstruction also bakes persistent per-face
+        // textures from several native views. Both store immutable indexed
+        // pixels here; persistentBitmap distinguishes resident face materials
+        // from per-frame snapshot uploads.
         std::vector<uint8_t> immutablePixels;
         int16_t immutableWidth = 0;
         int16_t immutableHeight = 0;
         uint64_t immutableFingerprint = 0;
+        bool persistentBitmap = false;
         // Zero means tile-local/unconnected artwork. Nonzero identifies a
         // multi-tile reconstruction group whose native source rotation is
         // selected from one canonical object/track origin.
@@ -146,6 +149,7 @@ namespace OpenRCT2::Paint
     {
         FirstPersonRenderOptions options{};
         FirstPersonResolvedView resolvedView{};
+        uint64_t sceneEpoch = 0;
         ScreenSize dimensions{};
         ScreenCoordsXY screenOrigin{};
         // Nonzero only while the drawing engine is presenting one frame.
