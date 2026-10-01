@@ -461,7 +461,8 @@ uint32_t PaintSessionAddFirstPersonSemanticBox(
     const CoordsXYZ& localLow, const CoordsXYZ& localHigh,
     ImageId image = {}, const CoordsXYZ& artworkOffset = {},
     uint32_t artworkGroup = 0, uint64_t localHullKey = 0,
-    uint16_t repetitionIndex = 0, bool collidable = true);
+    uint16_t repetitionIndex = 0, bool collidable = true,
+    bool decal = false);
 
 uint32_t PaintSessionAddFirstPersonSemanticBeam(
     PaintSession& session, FirstPersonPaintSemanticRole role,
@@ -494,7 +495,8 @@ uint32_t PaintSessionAddFirstPersonSemanticOrientedBox(
     FirstPersonPaintSemanticVec3 localHigh,
     ImageId image = {}, const CoordsXYZ& artworkOffset = {},
     uint32_t artworkGroup = 0, uint64_t localHullKey = 0,
-    uint16_t repetitionIndex = 0, bool collidable = true);
+    uint16_t repetitionIndex = 0, bool collidable = true,
+    bool decal = false);
 
 void PaintSessionPublishFirstPersonPassengerComponentAnchor(
     PaintSession& session, OpenRCT2::EntityBase& entity,
