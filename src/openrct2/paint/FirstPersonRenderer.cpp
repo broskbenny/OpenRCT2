@@ -3729,7 +3729,8 @@ namespace OpenRCT2::Paint
             const auto facePoint =
                 [&](float s, float t) {
                     const auto lerp =
-                        [](FirstPersonVec3 a, FirstPersonVec3 b,
+                        [](FirstPersonVec3 a,
+                           FirstPersonVec3 b,
                            float alpha) {
                             return FirstPersonVec3{
                                 a.x + (b.x - a.x) * alpha,
@@ -3742,23 +3743,31 @@ namespace OpenRCT2::Paint
                         lerp(face[3], face[2], s), t);
                 };
 
+            const int32_t width =
+                std::clamp(
+                    int32_t(std::ceil(std::max(
+                        edgeLength(face[0], face[1]),
+                        edgeLength(face[3], face[2])))),
+                    1, 256);
+            const int32_t height =
+                std::clamp(
+                    int32_t(std::ceil(std::max(
+                        edgeLength(face[0], face[3]),
+                        edgeLength(face[1], face[2])))),
+                    1, 256);
+
             std::array<float, 4> rotationArea{};
-            size_t maximumLayers = 0;
             for (uint8_t rotation = 0;
                  rotation < 4; ++rotation)
             {
-                maximumLayers = std::max(
-                    maximumLayers,
-                    trajectory
-                        .artworkProjections[rotation]
-                        .size());
                 if (trajectory
                         .artworkProjections[rotation]
                         .empty())
                     continue;
                 std::array<ScreenCoordsXY, 4>
                     projected{};
-                for (size_t i = 0; i < face.size(); ++i)
+                for (size_t i = 0;
+                     i < face.size(); ++i)
                 {
                     const auto& p = face[i];
                     projected[i] =
@@ -3784,20 +3793,7 @@ namespace OpenRCT2::Paint
                     std::abs(twiceArea) * 0.5f;
             }
 
-            const int32_t width =
-                std::clamp(
-                    int32_t(std::ceil(std::max(
-                        edgeLength(face[0], face[1]),
-                        edgeLength(face[3], face[2])))),
-                    1, 256);
-            const int32_t height =
-                std::clamp(
-                    int32_t(std::ceil(std::max(
-                        edgeLength(face[0], face[3]),
-                        edgeLength(face[1], face[2])))),
-                    1, 256);
-
-            struct TrackArtworkCandidate
+            struct DecodedTrackProjection
             {
                 const TrackTrajectoryCacheEntry::
                     ArtworkProjection* projection = nullptr;
@@ -3805,88 +3801,124 @@ namespace OpenRCT2::Paint
                 std::vector<uint8_t> pixels;
                 const G1Element* maskG1 = nullptr;
                 std::vector<uint8_t> maskPixels;
-                float score = 0.0f;
+                size_t paintOrder = 0;
             };
-
-            for (size_t layer = 0;
-                 layer < maximumLayers; ++layer)
+            std::array<
+                std::vector<DecodedTrackProjection>, 4>
+                decoded{};
+            for (uint8_t rotation = 0;
+                 rotation < 4; ++rotation)
             {
-                std::vector<TrackArtworkCandidate>
-                    candidates;
-                for (uint8_t rotation = 0;
-                     rotation < 4; ++rotation)
+                const auto& projections =
+                    trajectory
+                        .artworkProjections[rotation];
+                decoded[rotation].reserve(
+                    projections.size());
+                for (size_t index = 0;
+                     index < projections.size();
+                     ++index)
                 {
-                    const auto& projections =
-                        trajectory
-                            .artworkProjections[rotation];
-                    if (layer >= projections.size()
-                        || rotationArea[rotation] <= 0.0f)
-                        continue;
                     const auto& projection =
-                        projections[layer];
+                        projections[index];
                     const auto* g1 =
-                        GfxGetG1Element(projection.image);
-                    if (g1 == nullptr || g1->width <= 0
+                        GfxGetG1Element(
+                            projection.image);
+                    if (g1 == nullptr
+                        || g1->width <= 0
                         || g1->height <= 0)
                         continue;
-                    const auto decoded =
+                    const auto pixels =
                         DecodeFirstPersonSpritePixels(*g1);
-                    if (!decoded.has_value())
+                    if (!pixels.has_value())
                         continue;
 
-                    TrackArtworkCandidate candidate{};
-                    candidate.projection = &projection;
-                    candidate.g1 = g1;
-                    candidate.pixels = *decoded;
-                    candidate.score =
-                        rotationArea[rotation];
+                    DecodedTrackProjection item{};
+                    item.projection = &projection;
+                    item.g1 = g1;
+                    item.pixels = *pixels;
+                    item.paintOrder = index;
                     if (projection.mask.HasValue())
                     {
-                        candidate.maskG1 =
+                        item.maskG1 =
                             GfxGetG1Element(
                                 projection.mask);
-                        if (candidate.maskG1 != nullptr)
+                        if (item.maskG1 != nullptr)
                         {
-                            const auto decodedMask =
+                            const auto maskPixels =
                                 DecodeFirstPersonSpritePixels(
-                                    *candidate.maskG1);
-                            if (decodedMask.has_value())
-                                candidate.maskPixels =
-                                    *decodedMask;
+                                    *item.maskG1);
+                            if (maskPixels.has_value())
+                                item.maskPixels =
+                                    *maskPixels;
                         }
                     }
-                    candidates.emplace_back(
-                        std::move(candidate));
+                    decoded[rotation]
+                        .emplace_back(std::move(item));
                 }
-                if (candidates.empty())
-                    continue;
+            }
 
-                std::sort(
-                    candidates.begin(), candidates.end(),
-                    [](const TrackArtworkCandidate& a,
-                       const TrackArtworkCandidate& b) {
-                        if (a.score != b.score)
-                            return a.score > b.score;
-                        return a.projection->rotation
-                            < b.projection->rotation;
-                    });
-
-                const ImageId material =
-                    candidates.front()
-                        .projection->image;
-                std::vector<uint8_t> pixels(
-                    size_t(width) * size_t(height), 0);
-                bool hasPixel = false;
-
-                for (int32_t y = 0; y < height; ++y)
-                for (int32_t x = 0; x < width; ++x)
+            struct TrackMaterialClass
+            {
+                ImageId material{};
+                size_t order =
+                    std::numeric_limits<size_t>::max();
+            };
+            std::vector<TrackMaterialClass>
+                materials;
+            for (uint8_t rotation = 0;
+                 rotation < 4; ++rotation)
+            {
+                for (const auto& item :
+                     decoded[rotation])
                 {
-                    const auto worldPoint =
-                        facePoint(
-                            (float(x) + 0.5f)
-                                / float(width),
-                            (float(y) + 0.5f)
-                                / float(height));
+                    auto found = std::find_if(
+                        materials.begin(),
+                        materials.end(),
+                        [&](const TrackMaterialClass& material) {
+                            return SameFirstPersonMaterialTemplate(
+                                material.material,
+                                item.projection->image);
+                        });
+                    if (found == materials.end())
+                    {
+                        materials.push_back({
+                            item.projection->image,
+                            item.paintOrder,
+                        });
+                    }
+                    else
+                    {
+                        found->order =
+                            std::min(
+                                found->order,
+                                item.paintOrder);
+                    }
+                }
+            }
+            std::sort(
+                materials.begin(), materials.end(),
+                [](const TrackMaterialClass& a,
+                   const TrackMaterialClass& b) {
+                    if (a.order != b.order)
+                        return a.order < b.order;
+                    return a.material.GetIndex()
+                        < b.material.GetIndex();
+                });
+
+            const auto sampleProjection =
+                [](const DecodedTrackProjection& item,
+                   const FirstPersonVec3& worldPoint)
+                    -> std::optional<uint8_t> {
+                    const auto& projection =
+                        *item.projection;
+                    const CoordsXYZ anchorPoint{
+                        int32_t(std::lround(
+                            projection.anchor.x)),
+                        int32_t(std::lround(
+                            projection.anchor.y)),
+                        int32_t(std::lround(
+                            projection.anchor.z)),
+                    };
                     const CoordsXYZ world{
                         int32_t(std::lround(
                             worldPoint.x)),
@@ -3895,98 +3927,155 @@ namespace OpenRCT2::Paint
                         int32_t(std::lround(
                             worldPoint.z)),
                     };
+                    const auto isoAnchor =
+                        Translate3DTo2DWithZ(
+                            projection.rotation,
+                            anchorPoint);
+                    const auto iso =
+                        Translate3DTo2DWithZ(
+                            projection.rotation,
+                            world);
+                    const int32_t u =
+                        int32_t(std::lround(
+                            float(
+                                iso.x
+                                - isoAnchor.x)
+                            - projection.left));
+                    const int32_t v =
+                        int32_t(std::lround(
+                            float(
+                                iso.y
+                                - isoAnchor.y)
+                            - projection.top));
+                    if (u < 0 || v < 0
+                        || u >= item.g1->width
+                        || v >= item.g1->height)
+                        return std::nullopt;
 
-                    uint8_t selectedPixel = 0;
-                    for (const auto& candidate :
-                         candidates)
+                    if (item.maskG1 != nullptr
+                        && !item.maskPixels.empty())
                     {
-                        if (!SameFirstPersonMaterialTemplate(
-                                material,
-                                candidate
-                                    .projection->image))
-                            continue;
-
-                        const auto& projection =
-                            *candidate.projection;
-                        const CoordsXYZ anchorPoint{
-                            int32_t(std::lround(
-                                projection.anchor.x)),
-                            int32_t(std::lround(
-                                projection.anchor.y)),
-                            int32_t(std::lround(
-                                projection.anchor.z)),
-                        };
-                        const auto isoAnchor =
-                            Translate3DTo2DWithZ(
-                                projection.rotation,
-                                anchorPoint);
-                        const auto iso =
-                            Translate3DTo2DWithZ(
-                                projection.rotation,
-                                world);
-                        const int32_t u =
-                            int32_t(std::lround(
-                                float(
-                                    iso.x
-                                    - isoAnchor.x)
-                                - projection.left));
-                        const int32_t v =
-                            int32_t(std::lround(
-                                float(
-                                    iso.y
-                                    - isoAnchor.y)
-                                - projection.top));
-                        if (u < 0 || v < 0
-                            || u >= candidate.g1->width
-                            || v >= candidate.g1->height)
-                            continue;
-
-                        if (candidate.maskG1 != nullptr
-                            && !candidate
-                                    .maskPixels.empty())
-                        {
-                            if (u >= candidate
-                                    .maskG1->width
-                                || v >= candidate
-                                    .maskG1->height)
-                                continue;
-                            const uint8_t mask =
-                                candidate.maskPixels[
-                                    size_t(v)
-                                        * size_t(
-                                            candidate
-                                                .maskG1->width)
-                                    + size_t(u)];
-                            if (mask == 0)
-                                continue;
-                        }
-
-                        const uint8_t pixel =
-                            candidate.pixels[
+                        if (u >= item.maskG1->width
+                            || v >= item.maskG1->height)
+                            return std::nullopt;
+                        const uint8_t mask =
+                            item.maskPixels[
                                 size_t(v)
                                     * size_t(
-                                        candidate.g1->width)
+                                        item.maskG1->width)
                                 + size_t(u)];
-                        if (pixel == 0)
-                            continue;
-                        selectedPixel = pixel;
-                        break;
+                        if (mask == 0)
+                            return std::nullopt;
+                    }
+
+                    const uint8_t pixel =
+                        item.pixels[
+                            size_t(v)
+                                * size_t(item.g1->width)
+                            + size_t(u)];
+                    if (pixel == 0)
+                        return std::nullopt;
+                    return pixel;
+                };
+
+            for (size_t materialIndex = 0;
+                 materialIndex < materials.size();
+                 ++materialIndex)
+            {
+                const auto& materialClass =
+                    materials[materialIndex];
+                std::vector<uint8_t> rankedRotations;
+                for (uint8_t rotation = 0;
+                     rotation < 4; ++rotation)
+                {
+                    const bool hasCompatible =
+                        std::any_of(
+                            decoded[rotation].begin(),
+                            decoded[rotation].end(),
+                            [&](const DecodedTrackProjection& item) {
+                                return SameFirstPersonMaterialTemplate(
+                                    materialClass.material,
+                                    item.projection->image);
+                            });
+                    if (hasCompatible
+                        && rotationArea[rotation] > 0.0f)
+                    {
+                        rankedRotations.push_back(
+                            rotation);
+                    }
+                }
+                std::sort(
+                    rankedRotations.begin(),
+                    rankedRotations.end(),
+                    [&](uint8_t a, uint8_t b) {
+                        if (rotationArea[a]
+                            != rotationArea[b])
+                            return rotationArea[a]
+                                > rotationArea[b];
+                        return a < b;
+                    });
+                if (rankedRotations.empty())
+                    continue;
+
+                std::vector<uint8_t> pixels(
+                    size_t(width)
+                        * size_t(height),
+                    0);
+                bool hasPixel = false;
+                for (int32_t y = 0;
+                     y < height; ++y)
+                for (int32_t x = 0;
+                     x < width; ++x)
+                {
+                    const auto worldPoint =
+                        facePoint(
+                            (float(x) + 0.5f)
+                                / float(width),
+                            (float(y) + 0.5f)
+                                / float(height));
+                    uint8_t selectedPixel = 0;
+
+                    for (const auto rotation :
+                         rankedRotations)
+                    {
+                        const auto& layers =
+                            decoded[rotation];
+                        // Native paint order is preserved inside each
+                        // rotation. The topmost compatible pixel wins before
+                        // another native view is consulted.
+                        for (auto it = layers.rbegin();
+                             it != layers.rend(); ++it)
+                        {
+                            if (!SameFirstPersonMaterialTemplate(
+                                    materialClass.material,
+                                    it->projection->image))
+                                continue;
+                            const auto sample =
+                                sampleProjection(
+                                    *it, worldPoint);
+                            if (!sample.has_value())
+                                continue;
+                            selectedPixel =
+                                *sample;
+                            break;
+                        }
+                        if (selectedPixel != 0)
+                            break;
                     }
 
                     pixels[
                         size_t(y) * size_t(width)
                         + size_t(x)] =
                         selectedPixel;
-                    hasPixel = hasPixel
-                        || selectedPixel != 0;
+                    hasPixel =
+                        hasPixel || selectedPixel != 0;
                 }
-
                 if (!hasPixel)
                     continue;
 
-                FirstPersonSurface surface =
-                    carrier;
-                surface.image = material;
+                FirstPersonSurface surface = carrier;
+                surface.image =
+                    materialClass.material;
                 surface.mask = {};
                 surface.solidColour = 0;
                 surface.physicalCoverage = false;
@@ -4002,27 +4091,27 @@ namespace OpenRCT2::Paint
                     14695981039346656037ull;
                 ExtendStableKey(
                     fingerprint,
-                    material.GetRemap());
+                    materialClass.material.GetRemap());
                 ExtendStableKey(
                     fingerprint,
-                    material.HasPrimary()
+                    materialClass.material.HasPrimary()
                         ? EnumValue(
-                            material.GetPrimary())
+                            materialClass.material.GetPrimary())
                         : 0xffu);
                 ExtendStableKey(
                     fingerprint,
-                    material.HasSecondary()
+                    materialClass.material.HasSecondary()
                         ? EnumValue(
-                            material.GetSecondary())
+                            materialClass.material.GetSecondary())
                         : 0xffu);
                 ExtendStableKey(
                     fingerprint,
-                    material.HasTertiary()
+                    materialClass.material.HasTertiary()
                         ? EnumValue(
-                            material.GetTertiary())
+                            materialClass.material.GetTertiary())
                         : 0xffu);
                 ExtendStableKey(
-                    fingerprint, layer);
+                    fingerprint, materialIndex);
                 ExtendStableKey(
                     fingerprint, width);
                 ExtendStableKey(
