@@ -56,6 +56,7 @@ namespace OpenRCT2::Ui
         std::unordered_map<uint64_t,RegionBuffer> _staticOpaqueRegions;
         size_t _staticRegionBytes{};
         uint64_t _frame{};
+        uint64_t _sceneEpoch{};
         GLuint _atlasHandle{};
         std::unique_ptr<SwapFramebuffer> _preparedOutput;
         uint64_t _preparedSceneSerial{};
