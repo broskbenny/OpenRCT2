@@ -7598,12 +7598,22 @@ namespace OpenRCT2::Paint
 
             // Once a native painter proves that a tile has semantic geometry,
             // capture the remaining source rotations as ARTWORK EVIDENCE only.
-            // This does not generate legacy billboard surfaces and therefore
-            // does not make camera direction part of the physical model.
+            // Batch those captures by native rotation instead of allocating one
+            // paint session per tile/view: the resulting evidence is identical,
+            // but cold entry does not pay repeated session setup overhead.
+            struct SemanticEvidenceWorkItem
+            {
+                uint64_t key{};
+                CoordsXY position{};
+            };
+            std::array<
+                std::vector<SemanticEvidenceWorkItem>, 4>
+                semanticEvidenceByRotation;
             for (const auto& [key, position] :
                  semanticCompletionWork)
             {
-                auto cacheIt = _staticPaintCache.find(key);
+                const auto cacheIt =
+                    _staticPaintCache.find(key);
                 if (cacheIt == _staticPaintCache.end()
                     || !cacheIt->second.valid
                     || cacheIt->second.dirty)
@@ -7612,59 +7622,112 @@ namespace OpenRCT2::Paint
                 for (uint8_t rotation = 0;
                      rotation < 4; ++rotation)
                 {
-                    auto& variant =
+                    const auto& variant =
                         cacheIt->second.rotations[rotation];
                     if (variant.semanticValid
                         && (!cacheIt->second.animated
                             || variant.lastAnimationGeneration
                                 == sourceGeneration))
                         continue;
+                    semanticEvidenceByRotation[rotation]
+                        .push_back({ key, position });
+                }
+            }
 
-                    auto collection =
-                        makeCollectionTarget(rotation);
+            constexpr size_t
+                kSemanticEvidenceTilesPerSession = 256;
+            for (uint8_t rotation = 0;
+                 rotation < 4; ++rotation)
+            {
+                auto& work =
+                    semanticEvidenceByRotation[rotation];
+                if (work.empty())
+                    continue;
+                auto collection =
+                    makeCollectionTarget(rotation);
+
+                for (size_t offset = 0;
+                     offset < work.size();
+                     offset +=
+                         kSemanticEvidenceTilesPerSession)
+                {
+                    const size_t endOffset =
+                        std::min(
+                            offset
+                                + kSemanticEvidenceTilesPerSession,
+                            work.size());
                     auto* semanticSession =
                         PaintSessionAlloc(
                             collection, opt.viewFlags,
                             rotation);
                     if (semanticSession == nullptr)
-                        continue;
+                        break;
 
                     Drawing::ScrollingText::
                         BeginFirstPersonSnapshotCapture();
-                    std::vector<
-                        FirstPersonPaintSemanticComponent>
-                        semanticComponents;
-                    semanticSession->CurrentSource =
-                        PaintStructSource::tile;
-                    semanticSession
-                        ->FirstPersonSemanticComponentSink =
-                        &semanticComponents;
-                    TileElementPaintSetup(
-                        *semanticSession, position);
-                    semanticSession
-                        ->FirstPersonSemanticComponentSink =
-                        nullptr;
+                    for (size_t i = offset;
+                         i < endOffset; ++i)
+                    {
+                        const auto& item = work[i];
+                        auto cacheIt =
+                            _staticPaintCache.find(item.key);
+                        if (cacheIt
+                                == _staticPaintCache.end()
+                            || !cacheIt->second.valid
+                            || cacheIt->second.dirty)
+                            continue;
+
+                        std::vector<
+                            FirstPersonPaintSemanticComponent>
+                            semanticComponents;
+                        semanticSession
+                            ->CurrentlyDrawnEntity = nullptr;
+                        semanticSession
+                            ->CurrentlyDrawnTileElement = nullptr;
+                        semanticSession->CurrentSource =
+                            PaintStructSource::tile;
+                        semanticSession
+                            ->FirstPersonSemanticComponentSink =
+                            &semanticComponents;
+                        TileElementPaintSetup(
+                            *semanticSession,
+                            item.position);
+                        semanticSession
+                            ->FirstPersonSemanticComponentSink =
+                            nullptr;
+
+                        auto& variant =
+                            cacheIt->second.rotations[
+                                rotation];
+                        const uint64_t
+                            previousFingerprint =
+                                variant
+                                    .semanticFingerprint;
+                        variant.semanticComponents =
+                            std::move(
+                                semanticComponents);
+                        variant.semanticValid = true;
+                        variant.lastAnimationGeneration =
+                            sourceGeneration;
+                        variant.semanticFingerprint =
+                            SemanticComponentFingerprint(
+                                variant
+                                    .semanticComponents);
+                        if (previousFingerprint
+                            != variant
+                                .semanticFingerprint)
+                        {
+                            MarkStaticRegionDirtyForTile(
+                                item.position.x
+                                    / kCoordsXYStep,
+                                item.position.y
+                                    / kCoordsXYStep);
+                        }
+                    }
                     Drawing::ScrollingText::
                         EndFirstPersonSnapshotCapture();
-                    PaintSessionFree(semanticSession);
-
-                    const uint64_t previousFingerprint =
-                        variant.semanticFingerprint;
-                    variant.semanticComponents =
-                        std::move(semanticComponents);
-                    variant.semanticValid = true;
-                    variant.lastAnimationGeneration =
-                        sourceGeneration;
-                    variant.semanticFingerprint =
-                        SemanticComponentFingerprint(
-                            variant.semanticComponents);
-                    if (previousFingerprint
-                        != variant.semanticFingerprint)
-                    {
-                        MarkStaticRegionDirtyForTile(
-                            position.x / kCoordsXYStep,
-                            position.y / kCoordsXYStep);
-                    }
+                    PaintSessionFree(
+                        semanticSession);
                 }
             }
 
