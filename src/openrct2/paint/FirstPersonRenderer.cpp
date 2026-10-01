@@ -6168,6 +6168,8 @@ namespace OpenRCT2::Paint
                 EntityId entity = EntityId::GetNull();
             };
             std::array<std::vector<PaintWorkItem>, 4> workByRotation;
+            std::unordered_map<uint64_t, CoordsXY>
+                semanticCompletionWork;
             for (const auto tile : scene.visibleTiles)
             {
                 const auto key = TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
@@ -6306,11 +6308,13 @@ namespace OpenRCT2::Paint
                                 variant.semanticFingerprint =
                                     SemanticComponentFingerprint(
                                         variant.semanticComponents);
-                                if (cacheIt->second.hasSelectedRotation
-                                    && (cacheIt->second.selectedRotation & 3u)
-                                        == rotation
-                                    && previousSemanticFingerprint
-                                        != variant.semanticFingerprint)
+                                if (!variant.semanticComponents.empty())
+                                {
+                                    semanticCompletionWork.try_emplace(
+                                        item.key, item.position);
+                                }
+                                if (previousSemanticFingerprint
+                                    != variant.semanticFingerprint)
                                 {
                                     MarkStaticRegionDirtyForTile(
                                         item.position.x / kCoordsXYStep,
@@ -6487,6 +6491,73 @@ namespace OpenRCT2::Paint
                     }
                     Drawing::ScrollingText::EndFirstPersonSnapshotCapture();
                     PaintSessionFree(session);
+                }
+            }
+
+            // Once a native painter proves that a tile has semantic geometry,
+            // capture the remaining source rotations as ARTWORK EVIDENCE only.
+            // This does not generate legacy billboard surfaces and therefore
+            // does not make camera direction part of the physical model.
+            for (const auto& [key, position] :
+                 semanticCompletionWork)
+            {
+                auto cacheIt = _staticPaintCache.find(key);
+                if (cacheIt == _staticPaintCache.end()
+                    || !cacheIt->second.valid
+                    || cacheIt->second.dirty)
+                    continue;
+
+                for (uint8_t rotation = 0;
+                     rotation < 4; ++rotation)
+                {
+                    auto& variant =
+                        cacheIt->second.rotations[rotation];
+                    if (variant.semanticValid)
+                        continue;
+
+                    auto collection =
+                        makeCollectionTarget(rotation);
+                    auto* semanticSession =
+                        PaintSessionAlloc(
+                            collection, opt.viewFlags,
+                            rotation);
+                    if (semanticSession == nullptr)
+                        continue;
+
+                    Drawing::ScrollingText::
+                        BeginFirstPersonSnapshotCapture();
+                    std::vector<
+                        FirstPersonPaintSemanticComponent>
+                        semanticComponents;
+                    semanticSession->CurrentSource =
+                        PaintStructSource::tile;
+                    semanticSession
+                        ->FirstPersonSemanticComponentSink =
+                        &semanticComponents;
+                    TileElementPaintSetup(
+                        *semanticSession, position);
+                    semanticSession
+                        ->FirstPersonSemanticComponentSink =
+                        nullptr;
+                    Drawing::ScrollingText::
+                        EndFirstPersonSnapshotCapture();
+                    PaintSessionFree(semanticSession);
+
+                    const uint64_t previousFingerprint =
+                        variant.semanticFingerprint;
+                    variant.semanticComponents =
+                        std::move(semanticComponents);
+                    variant.semanticValid = true;
+                    variant.semanticFingerprint =
+                        SemanticComponentFingerprint(
+                            variant.semanticComponents);
+                    if (previousFingerprint
+                        != variant.semanticFingerprint)
+                    {
+                        MarkStaticRegionDirtyForTile(
+                            position.x / kCoordsXYStep,
+                            position.y / kCoordsXYStep);
+                    }
                 }
             }
 
