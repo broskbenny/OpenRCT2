@@ -1989,7 +1989,12 @@ namespace OpenRCT2::Paint
             int32_t visibilityMinZ = 0;
             int32_t visibilityMaxZ = 0;
             uint32_t lastVisibilityGeneration = 0;
+            uint64_t cameraIndependentFingerprint = 0;
             std::vector<ReconstructionGroupInfo> reconstructionGroups;
+            std::vector<FirstPersonSurface>
+                cameraIndependentResidentSurfaces;
+            std::vector<FirstPersonSurface>
+                cameraIndependentStreamedSurfaces;
             // Keep all four native quarter-turn variants. Crossing a viewpoint
             // boundary can paint a variant once without destroying the previous
             // one, so moving back and forth does not thrash the whole park.
@@ -6442,8 +6447,9 @@ namespace OpenRCT2::Paint
                     || cacheIt->second.dirty || cacheIt->second.animated)
                     continue;
                 const auto& cached = cacheIt->second;
-                std::unordered_set<uint64_t>
-                    cameraIndependentSeen;
+                for (const auto& surface :
+                     cached.cameraIndependentResidentSurfaces)
+                    addSurface(surface);
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
                     const auto& variant = cached.rotations[rotation];
@@ -6452,17 +6458,6 @@ namespace OpenRCT2::Paint
                     for (const auto& surface :
                          variant.residentSurfaces)
                     {
-                        if (surface.cameraIndependent)
-                        {
-                            if (cameraIndependentSeen.insert(
-                                    CameraIndependentSurfaceKey(
-                                        surface)).second)
-                            {
-                                addSurface(surface);
-                            }
-                            continue;
-                        }
-
                         if (surface.reconstructionGroup != 0)
                         {
                             const auto trajectory =
@@ -6692,6 +6687,8 @@ namespace OpenRCT2::Paint
             std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
             for (auto& misses : missesByRotation)
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
+            std::unordered_set<uint64_t>
+                cameraIndependentRefreshKeys;
             const auto& view = scene.resolvedView;
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
@@ -6731,6 +6728,9 @@ namespace OpenRCT2::Paint
                     cached.valid = true;
                     cached.dirty = false;
                     cached.reconstructionGroups.clear();
+                    cached.cameraIndependentResidentSurfaces.clear();
+                    cached.cameraIndependentStreamedSurfaces.clear();
+                    cached.cameraIndependentFingerprint = 0;
                     WithdrawFirstPersonSemanticComponents(tile);
                     cached.hasUngroupedResident = false;
 
@@ -6837,6 +6837,12 @@ namespace OpenRCT2::Paint
                             variant.lastSourceProbeGeneration, kMaxStaticAge);
                     if (stale)
                     {
+                        if (cameraIndependentRefreshKeys
+                                .insert(key).second)
+                        {
+                            cached.cameraIndependentResidentSurfaces.clear();
+                            cached.cameraIndependentStreamedSurfaces.clear();
+                        }
                         variant.valid = true;
                         variant.lastPainted = frame;
                         variant.lastAnimationGeneration = animationGeneration;
@@ -7177,11 +7183,35 @@ namespace OpenRCT2::Paint
                                 for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
                                 {
                                     auto& surface = scene.surfaces[i];
+                                    if (surface.cameraIndependent)
+                                    {
+                                        auto& target =
+                                            IsResidentStaticSurface(surface)
+                                            ? cacheIt->second
+                                                .cameraIndependentResidentSurfaces
+                                            : cacheIt->second
+                                                .cameraIndependentStreamedSurfaces;
+                                        const uint64_t independentKey =
+                                            CameraIndependentSurfaceKey(
+                                                surface);
+                                        const bool duplicate =
+                                            std::any_of(
+                                                target.begin(),
+                                                target.end(),
+                                                [&](const FirstPersonSurface& existing) {
+                                                    return CameraIndependentSurfaceKey(
+                                                        existing)
+                                                        == independentKey;
+                                                });
+                                        if (!duplicate)
+                                            target.push_back(surface);
+                                        continue;
+                                    }
+
                                     if (IsResidentStaticSurface(surface))
                                     {
                                         variant.residentSurfaces.push_back(surface);
-                                        if (surface.reconstructionGroup == 0
-                                            && !surface.cameraIndependent)
+                                        if (surface.reconstructionGroup == 0)
                                             cacheIt->second.hasUngroupedResident = true;
                                     }
                                     else
@@ -7281,6 +7311,28 @@ namespace OpenRCT2::Paint
                 }
             }
 
+            for (const auto key :
+                 cameraIndependentRefreshKeys)
+            {
+                const auto cacheIt =
+                    _staticPaintCache.find(key);
+                if (cacheIt == _staticPaintCache.end())
+                    continue;
+                auto& cached = cacheIt->second;
+                const uint64_t fingerprint =
+                    ResidentStaticSurfaceFingerprint(
+                        cached.cameraIndependentResidentSurfaces);
+                if (cached.cameraIndependentFingerprint
+                    != fingerprint)
+                {
+                    MarkStaticRegionDirtyForTile(
+                        int32_t(key >> 32),
+                        int32_t(key & 0xffffffffu));
+                }
+                cached.cameraIndependentFingerprint =
+                    fingerprint;
+            }
+
             // Repainting a streamed/animated tile is not a resident-geometry
             // change. For non-animated fallback probes, compare the completed
             // resident output and dirty its packet only if that output changed.
@@ -7324,6 +7376,16 @@ namespace OpenRCT2::Paint
                 if (cacheIt == _staticPaintCache.end())
                     continue;
                 const auto& cached = cacheIt->second;
+                for (const auto& staticSurface :
+                     cached.cameraIndependentStreamedSurfaces)
+                {
+                    if (SurfaceMayBeVisible(
+                            staticSurface, worldFrustum))
+                    {
+                        scene.surfaces.emplace_back(
+                            staticSurface);
+                    }
+                }
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
                     const auto& variant = cached.rotations[rotation];
