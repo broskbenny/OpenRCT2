@@ -2776,10 +2776,9 @@ namespace OpenRCT2::Paint
                 ExtendStableKey(
                     fingerprint,
                     uint32_t(component.artwork.screenPos.y));
-                ExtendStableKey(
-                    fingerprint, component.artwork.group);
-                ExtendStableKey(
-                    fingerprint, component.artwork.snapshot);
+                // Artwork group/snapshot handles are paint-session
+                // bookkeeping and can be renumbered when a different subset
+                // of tiles is repainted. They are not semantic world state.
                 ExtendStableKey(
                     fingerprint,
                     component.artwork.sourceRotation);
