@@ -462,7 +462,8 @@ static uint32_t PublishFirstPersonTerrainEdgeBand(
     PaintSession& session, edge_t edge,
     const TileDescriptor& self, const TileDescriptor& neighbour,
     bool neighbourIsClippedAway, int32_t bandLowZ, int32_t bandHighZ,
-    ImageId image, const CoordsXYZ& artworkOffset)
+    ImageId image, const CoordsXYZ& artworkOffset,
+    bool isWater = false, int32_t waterTopZ = 0)
 {
     if (session.FirstPersonSemanticComponentSink == nullptr
         || !image.HasValue() || bandHighZ <= bandLowZ
@@ -559,6 +560,20 @@ static uint32_t PublishFirstPersonTerrainEdgeBand(
         return 0;
     }
 
+    int32_t topA = selfA;
+    int32_t topB = selfB;
+    int32_t bottomA = neighbourA;
+    int32_t bottomB = neighbourB;
+    if (isWater)
+    {
+        const int32_t minimumNeighbour =
+            std::min(neighbourA, neighbourB);
+        bottomA = std::max(selfA, minimumNeighbour);
+        bottomB = std::max(selfB, minimumNeighbour);
+        topA = waterTopZ;
+        topB = waterTopZ;
+    }
+
     const auto clippedEndpoint =
         [&](int32_t selfTop, int32_t neighbourTop) {
             float low = float(std::max(
@@ -575,9 +590,9 @@ static uint32_t PublishFirstPersonTerrainEdgeBand(
             return std::pair<float, float>{ low, high };
         };
     const auto [aLow, aHigh] =
-        clippedEndpoint(selfA, neighbourA);
+        clippedEndpoint(topA, bottomA);
     const auto [bLow, bHigh] =
-        clippedEndpoint(selfB, neighbourB);
+        clippedEndpoint(topB, bottomB);
     if (aHigh <= aLow && bHigh <= bLow)
         return 0;
 
@@ -598,7 +613,7 @@ static uint32_t PublishFirstPersonTerrainEdgeBand(
             { b.x, b.y, bHigh },
             { a.x, a.y, aHigh },
         } },
-        image, artworkOffset, 0, false, false);
+        image, artworkOffset, 0, isWater, false);
 }
 
 static void ViewportSurfaceDrawTileSideBottom(
@@ -698,28 +713,21 @@ static void ViewportSurfaceDrawTileSideBottom(
                 offset,
                 int32_t(bandHeight) * kCoordsZPerTinyZ
             };
-            if (!isWater)
-            {
-                PublishFirstPersonTerrainEdgeBand(
-                    session, edge, self, neighbour,
-                    neighbourIsClippedAway,
-                    int32_t(bandHeight) * kCoordsZPerTinyZ,
-                    int32_t(bandHeight + 1)
-                        * kCoordsZPerTinyZ,
-                    imageId, artworkOffset);
-                FirstPersonPaintSemanticScope scope(
-                    session,
-                    FirstPersonPaintSemanticRole::terrainEdge);
-                PaintAddImageAsParent(
-                    session, imageId, artworkOffset,
-                    boundBoxSize);
-            }
-            else
-            {
-                PaintAddImageAsParent(
-                    session, imageId, artworkOffset,
-                    boundBoxSize);
-            }
+            PublishFirstPersonTerrainEdgeBand(
+                session, edge, self, neighbour,
+                neighbourIsClippedAway,
+                int32_t(bandHeight) * kCoordsZPerTinyZ,
+                int32_t(bandHeight + 1)
+                    * kCoordsZPerTinyZ,
+                imageId, artworkOffset,
+                isWater,
+                int32_t(height) * kCoordsZPerTinyZ);
+            FirstPersonPaintSemanticScope scope(
+                session,
+                FirstPersonPaintSemanticRole::terrainEdge);
+            PaintAddImageAsParent(
+                session, imageId, artworkOffset,
+                boundBoxSize);
         };
 
     uint8_t curHeight = std::min(neighbourCornerHeight1, neighbourCornerHeight2);
@@ -931,21 +939,12 @@ static void ViewportSurfaceDrawTileSideTop(
     const auto paintTopEdgeLayer =
         [&](ImageId imageId, const CoordsXYZ& artworkOffset,
             const CoordsXYZ& boundBoxSize) {
-            if (!isWater)
-            {
-                FirstPersonPaintSemanticScope scope(
-                    session,
-                    FirstPersonPaintSemanticRole::terrainEdge);
-                PaintAddImageAsParent(
-                    session, imageId, artworkOffset,
-                    boundBoxSize);
-            }
-            else
-            {
-                PaintAddImageAsParent(
-                    session, imageId, artworkOffset,
-                    boundBoxSize);
-            }
+            FirstPersonPaintSemanticScope scope(
+                session,
+                FirstPersonPaintSemanticRole::terrainEdge);
+            PaintAddImageAsParent(
+                session, imageId, artworkOffset,
+                boundBoxSize);
         };
 
     uint8_t cur_height = std::min(neighbourCornerHeight2, neighbourCornerHeight1);
