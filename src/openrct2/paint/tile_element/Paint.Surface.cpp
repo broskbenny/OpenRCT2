@@ -1259,6 +1259,90 @@ static void PaintSurfaceConstructionRights(
 /**
  *  rct2: 0x0066062C
  */
+static void PublishFirstPersonParkBoundaryFence(
+    PaintSession& session, size_t boundaryIndex,
+    const SurfaceElement& surface, ImageId image,
+    const CoordsXYZ& artworkOffset)
+{
+    if (session.FirstPersonSemanticComponentSink == nullptr
+        || !image.HasValue() || boundaryIndex >= 4)
+        return;
+
+    // _tileSurfaceBoundaries is ordered bottom-right, bottom-left,
+    // top-left, top-right. The neighbouring-tile table uses bottom-left,
+    // bottom-right, top-left, top-right.
+    static constexpr std::array<uint8_t, 4>
+        kBoundaryToNeighbourIndex{ 1, 0, 2, 3 };
+    const uint8_t neighbourIndex =
+        kBoundaryToNeighbourIndex[boundaryIndex];
+    const CoordsXY delta =
+        kNeighbouringTileCoordOffsets[
+            neighbourIndex][session.CurrentRotation];
+
+    const auto corners = GetSlopeCornerHeights(
+        surface.getBaseZ(), surface.getSlope());
+    FirstPersonPaintSemanticVec3 a{};
+    FirstPersonPaintSemanticVec3 b{};
+
+    if (delta.x > 0)
+    {
+        a = { float(kCoordsXYStep), 0.0f,
+              float(corners.east) };
+        b = { float(kCoordsXYStep),
+              float(kCoordsXYStep),
+              float(corners.north) };
+    }
+    else if (delta.x < 0)
+    {
+        a = { 0.0f, float(kCoordsXYStep),
+              float(corners.west) };
+        b = { 0.0f, 0.0f,
+              float(corners.south) };
+    }
+    else if (delta.y > 0)
+    {
+        a = { float(kCoordsXYStep),
+              float(kCoordsXYStep),
+              float(corners.north) };
+        b = { 0.0f, float(kCoordsXYStep),
+              float(corners.west) };
+    }
+    else if (delta.y < 0)
+    {
+        a = { 0.0f, 0.0f,
+              float(corners.south) };
+        b = { float(kCoordsXYStep), 0.0f,
+              float(corners.east) };
+    }
+    else
+    {
+        return;
+    }
+
+    constexpr float kFenceHeight =
+        float(2 * kCoordsZStep);
+    FirstPersonPaintSemanticTransform transform{};
+    transform.origin = {
+        float(session.MapPosition.x),
+        float(session.MapPosition.y), 0.0f
+    };
+    const uint32_t artworkGroup =
+        PaintSessionBeginFirstPersonSemanticArtworkGroup(
+            session);
+    PaintSessionAddFirstPersonSemanticOrientedQuad(
+        session, FirstPersonPaintSemanticRole::railing,
+        FirstPersonPaintSemanticPrimitiveKind::plane,
+        transform,
+        { {
+            a,
+            b,
+            { b.x, b.y, b.z + kFenceHeight },
+            { a.x, a.y, a.z + kFenceHeight },
+        } },
+        image, artworkOffset, artworkGroup,
+        false, true);
+}
+
 void PaintSurface(PaintSession& session, uint8_t direction, uint16_t height, const SurfaceElement& tileElement)
 {
     PROFILED_FUNCTION();
@@ -1686,9 +1770,14 @@ void PaintSurface(PaintSession& session, uint8_t direction, uint16_t height, con
 
         uint8_t rotatedFences = Numerics::rol4(tileElement.getParkFences(), rotation);
 
-        for (const auto& fenceData : _tileSurfaceBoundaries)
+        for (size_t fenceIndex = 0;
+             fenceIndex < std::size(_tileSurfaceBoundaries);
+             ++fenceIndex)
         {
-            const int32_t edgeHasFence = rotatedFences & 1;
+            const auto& fenceData =
+                _tileSurfaceBoundaries[fenceIndex];
+            const int32_t edgeHasFence =
+                rotatedFences & 1;
             rotatedFences >>= 1;
 
             if (edgeHasFence == 0)
@@ -1739,9 +1828,24 @@ void PaintSurface(PaintSession& session, uint8_t direction, uint16_t height, con
                 continue;
             }
 
-            PaintAddImageAsParent(
-                session, ImageId(image_id), { fenceData.offset, fenceHeight },
-                { { fenceData.Boundbox.offset, fenceHeight + 1 }, { fenceData.Boundbox.length, 9 } });
+            const ImageId fenceImage(image_id);
+            const CoordsXYZ fenceArtworkOffset{
+                fenceData.offset, fenceHeight
+            };
+            PublishFirstPersonParkBoundaryFence(
+                session, fenceIndex, tileElement,
+                fenceImage, fenceArtworkOffset);
+            {
+                FirstPersonPaintSemanticScope scope(
+                    session,
+                    FirstPersonPaintSemanticRole::railing);
+                PaintAddImageAsParent(
+                    session, fenceImage,
+                    fenceArtworkOffset,
+                    { { fenceData.Boundbox.offset,
+                        fenceHeight + 1 },
+                      { fenceData.Boundbox.length, 9 } });
+            }
         }
     }
 
