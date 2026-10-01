@@ -119,6 +119,46 @@ struct FirstPersonPaintSemanticVec3
     float z = 0.0f;
 };
 
+[[nodiscard]] inline std::array<FirstPersonPaintSemanticVec3, 4>
+    FirstPersonWallSemanticCorners(
+        uint8_t direction, uint8_t slope, int32_t height)
+{
+    const float h = float(std::max(0, height));
+    const float step = float(2 * kCoordsZStep);
+    FirstPersonPaintSemanticVec3 a{};
+    FirstPersonPaintSemanticVec3 b{};
+    switch (direction & 3u)
+    {
+        case 0:
+            a = { 0.0f, 0.0f, 0.0f };
+            b = { 0.0f, float(kCoordsXYStep), 0.0f };
+            break;
+        case 1:
+            a = { 0.0f, float(kCoordsXYStep), 0.0f };
+            b = { float(kCoordsXYStep), float(kCoordsXYStep), 0.0f };
+            break;
+        case 2:
+            a = { float(kCoordsXYStep), float(kCoordsXYStep), 0.0f };
+            b = { float(kCoordsXYStep), 0.0f, 0.0f };
+            break;
+        default:
+            a = { float(kCoordsXYStep), 0.0f, 0.0f };
+            b = { 0.0f, 0.0f, 0.0f };
+            break;
+    }
+    if ((slope & 1u) != 0)
+        b.z += step;
+    else if ((slope & 2u) != 0)
+        a.z += step;
+
+    return { {
+        a,
+        b,
+        { b.x, b.y, b.z + h },
+        { a.x, a.y, a.z + h },
+    } };
+}
+
 struct FirstPersonPaintSemanticGeometry
 {
     FirstPersonPaintSemanticPrimitiveKind kind =
