@@ -2678,6 +2678,8 @@ namespace OpenRCT2::Paint
                 ExtendStableKey(
                     fingerprint, surface.physicalCoverage ? 1 : 0);
                 ExtendStableKey(
+                    fingerprint, surface.artworkCarrier ? 1 : 0);
+                ExtendStableKey(
                     fingerprint, surface.textureFallbackOnly ? 1 : 0);
                 ExtendStableKey(
                     fingerprint, surface.reconstructionGroup);
@@ -3553,7 +3555,8 @@ namespace OpenRCT2::Paint
             FirstPersonSurface& surface,
             const TrackTrajectoryCacheEntry& trajectory)
         {
-            if (trajectory.artworkRotation >= 4)
+            if (!surface.artworkCarrier
+                || trajectory.artworkRotation >= 4)
                 return;
             const auto& projections =
                 trajectory.artworkProjections[
@@ -3640,7 +3643,7 @@ namespace OpenRCT2::Paint
             surface.image = best->image;
             surface.mask = best->mask;
             surface.solidColour = 0;
-            surface.physicalCoverage = true;
+            surface.physicalCoverage = false;
             for (auto& vertex : surface.triangles)
             {
                 const CoordsXYZ worldPoint{
@@ -3952,6 +3955,93 @@ namespace OpenRCT2::Paint
             } }, sideColour);
         }
 
+        void AppendTrajectoryArtworkCarrierSegment(
+            TrackTrajectoryCacheEntry& cached, uint64_t groupKey,
+            const FirstPersonTrackTrajectoryPoint& a,
+            const FirstPersonTrackTrajectoryPoint& b,
+            const FirstPersonTrackRailProfile& profile)
+        {
+            const auto centreA = Add(
+                a.position,
+                Mul(a.basis.up, profile.verticalOffset));
+            const auto centreB = Add(
+                b.position,
+                Mul(b.basis.up, profile.verticalOffset));
+            const auto midpoint = Mul(Add(centreA, centreB), 0.5f);
+            const int32_t tileX = int32_t(std::floor(
+                midpoint.x / float(kCoordsXYStep)));
+            const int32_t tileY = int32_t(std::floor(
+                midpoint.y / float(kCoordsXYStep)));
+            const uint64_t gpuRegion =
+                FirstPersonGpuRegionKey(tileX, tileY);
+
+            const float halfAcross =
+                profile.railCount > 1
+                ? std::max(
+                    4.0f,
+                    profile.halfGauge
+                        + profile.halfWidth + 2.0f)
+                : std::max(
+                    4.0f,
+                    profile.halfWidth + 3.0f);
+            const float halfVertical =
+                std::max(
+                    3.0f,
+                    profile.halfHeight + 2.0f);
+            const auto acrossA =
+                Mul(a.basis.right, halfAcross);
+            const auto acrossB =
+                Mul(b.basis.right, halfAcross);
+            const auto upA =
+                Mul(a.basis.up, halfVertical);
+            const auto upB =
+                Mul(b.basis.up, halfVertical);
+
+            const auto emitCarrier =
+                [&](const std::array<FirstPersonVec3, 4>& points) {
+                    FirstPersonSurface surface{};
+                    surface.artworkCarrier = true;
+                    surface.gpuRegion = gpuRegion;
+                    surface.reconstructionGroup = groupKey;
+                    EmitQuad(surface, { {
+                        { points[0], 0.0f, 0.0f },
+                        { points[1], 0.0f, 0.0f },
+                        { points[2], 0.0f, 0.0f },
+                        { points[3], 0.0f, 0.0f },
+                    } });
+                    cached.surfaces.emplace_back(
+                        std::move(surface));
+                };
+
+            // This is deliberately an appearance shell, not collision geometry.
+            // Transparent sprite pixels cut holes; solid trajectory rails remain
+            // underneath as the physical fallback.
+            emitCarrier({ {
+                Add(Sub(centreA, acrossA), upA),
+                Add(Add(centreA, acrossA), upA),
+                Add(Add(centreB, acrossB), upB),
+                Add(Sub(centreB, acrossB), upB),
+            } });
+            emitCarrier({ {
+                Sub(Add(centreA, acrossA), upA),
+                Sub(Add(centreB, acrossB), upB),
+                Add(Add(centreB, acrossB), upB),
+                Add(Add(centreA, acrossA), upA),
+            } });
+            emitCarrier({ {
+                Sub(Sub(centreA, acrossA), upA),
+                Add(Sub(centreA, acrossA), upA),
+                Add(Sub(centreB, acrossB), upB),
+                Sub(Sub(centreB, acrossB), upB),
+            } });
+            emitCarrier({ {
+                Sub(Sub(centreA, acrossA), upA),
+                Sub(Sub(centreB, acrossB), upB),
+                Sub(Add(centreB, acrossB), upB),
+                Sub(Add(centreA, acrossA), upA),
+            } });
+        }
+
         void UpdateTrackTrajectoryBounds(TrackTrajectoryCacheEntry& cached)
         {
             cached.hasBounds = false;
@@ -4049,6 +4139,38 @@ namespace OpenRCT2::Paint
                     topColour, sideColour);
             }
 
+            size_t previousCarrierPoint = 0;
+            for (size_t i = 1;
+                 i < trajectory.points.size(); ++i)
+            {
+                const auto& a =
+                    trajectory.points[previousCarrierPoint];
+                const auto& b =
+                    trajectory.points[i];
+                const float distance =
+                    FirstPersonTrackTrajectoryPointDistance(
+                        a, b);
+                const float forwardDot =
+                    Dot(a.basis.forward, b.basis.forward);
+                const float upDot =
+                    Dot(a.basis.up, b.basis.up);
+                const bool turns =
+                    forwardDot < 0.9914449f
+                    || upDot < 0.9914449f;
+                const bool last =
+                    i + 1 == trajectory.points.size();
+                if (!last
+                    && distance < 3.0f
+                    && !turns)
+                    continue;
+                if (distance > 0.05f)
+                {
+                    AppendTrajectoryArtworkCarrierSegment(
+                        result, groupKey, a, b, profile);
+                }
+                previousCarrierPoint = i;
+            }
+
             const auto& tunnelDescriptor =
                 GetTunnelDescriptor(
                     track.isInverted()
@@ -4140,6 +4262,8 @@ namespace OpenRCT2::Paint
                             appendBridge(-profile.halfGauge);
                             appendBridge(profile.halfGauge);
                         }
+                        AppendTrajectoryArtworkCarrierSegment(
+                            result, groupKey, a, b, profile);
                     }
                 }
                 else
