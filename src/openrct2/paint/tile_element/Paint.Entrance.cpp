@@ -306,17 +306,147 @@ static void PaintRideEntranceExit(PaintSession& session, uint8_t direction, int3
     PaintUtilSetGeneralSupportHeight(session, height);
 }
 
+static FirstPersonPaintSemanticTransform
+    MakeFirstPersonParkEntranceTransform(
+        const PaintSession& session,
+        const EntranceElement& entranceEl)
+{
+    FirstPersonPaintSemanticTransform transform{};
+    transform.origin = {
+        float(session.MapPosition.x + kCoordsXYHalfTile),
+        float(session.MapPosition.y + kCoordsXYHalfTile),
+        0.0f,
+    };
+    switch (static_cast<uint8_t>(
+                entranceEl.getDirection()) & 3u)
+    {
+        case 1:
+            transform.axisX = { 0.0f, 1.0f, 0.0f };
+            transform.axisY = { -1.0f, 0.0f, 0.0f };
+            break;
+        case 2:
+            transform.axisX = { -1.0f, 0.0f, 0.0f };
+            transform.axisY = { 0.0f, -1.0f, 0.0f };
+            break;
+        case 3:
+            transform.axisX = { 0.0f, -1.0f, 0.0f };
+            transform.axisY = { 1.0f, 0.0f, 0.0f };
+            break;
+        default:
+            break;
+    }
+    return transform;
+}
+
+static uint32_t PublishFirstPersonParkEntranceGatePlane(
+    PaintSession& session, const EntranceElement& entranceEl,
+    ImageId image, const CoordsXYZ& artworkOffset,
+    uint32_t artworkGroup,
+    FirstPersonPaintSemanticRole role =
+        FirstPersonPaintSemanticRole::structureBody)
+{
+    if (session.FirstPersonSemanticComponentSink == nullptr)
+        return 0;
+    const float bottom = float(entranceEl.getBaseZ());
+    const float top = float(entranceEl.getClearanceZ());
+    return PaintSessionAddFirstPersonSemanticOrientedQuad(
+        session, role,
+        FirstPersonPaintSemanticPrimitiveKind::plane,
+        MakeFirstPersonParkEntranceTransform(
+            session, entranceEl),
+        { {
+            { -float(kCoordsXYHalfTile), 0.0f, bottom },
+            { float(kCoordsXYHalfTile), 0.0f, bottom },
+            { float(kCoordsXYHalfTile), 0.0f, top },
+            { -float(kCoordsXYHalfTile), 0.0f, top },
+        } },
+        image, artworkOffset, artworkGroup,
+        true, false);
+}
+
+static uint32_t PublishFirstPersonParkEntranceSideBody(
+    PaintSession& session, const EntranceElement& entranceEl,
+    ImageId image, const CoordsXYZ& artworkOffset,
+    uint32_t artworkGroup)
+{
+    if (session.FirstPersonSemanticComponentSink == nullptr)
+        return 0;
+    const float bottom = float(entranceEl.getBaseZ());
+    const float top = float(entranceEl.getClearanceZ());
+    const auto transform =
+        MakeFirstPersonParkEntranceTransform(
+            session, entranceEl);
+    return PaintSessionAddFirstPersonSemanticOrientedBox(
+        session, FirstPersonPaintSemanticRole::structureBody,
+        transform,
+        {
+            -float(kCoordsXYHalfTile),
+            -float(kCoordsXYHalfTile),
+            bottom,
+        },
+        {
+            float(kCoordsXYHalfTile),
+            float(kCoordsXYHalfTile),
+            top,
+        },
+        image, artworkOffset, artworkGroup);
+}
+
+static uint32_t PublishFirstPersonParkEntrancePathDeck(
+    PaintSession& session, const EntranceElement& entranceEl,
+    ImageId image, const CoordsXYZ& artworkOffset,
+    uint32_t artworkGroup)
+{
+    if (session.FirstPersonSemanticComponentSink == nullptr)
+        return 0;
+    FirstPersonPaintSemanticTransform transform{};
+    transform.origin = {
+        float(session.MapPosition.x),
+        float(session.MapPosition.y),
+        0.0f,
+    };
+    const float z = float(entranceEl.getBaseZ());
+    return PaintSessionAddFirstPersonSemanticOrientedQuad(
+        session, FirstPersonPaintSemanticRole::pathDeck,
+        FirstPersonPaintSemanticPrimitiveKind::footprint,
+        transform,
+        { {
+            { 0.0f, 0.0f, z },
+            { float(kCoordsXYStep), 0.0f, z },
+            { float(kCoordsXYStep), float(kCoordsXYStep), z },
+            { 0.0f, float(kCoordsXYStep), z },
+        } },
+        image, artworkOffset, artworkGroup,
+        false, false);
+}
+
 static void PaintParkEntranceScrollingText(
-    PaintSession& session, const EntranceObject& entrance, Direction direction, int32_t height)
+    PaintSession& session, const EntranceObject& entrance,
+    const EntranceElement& entranceEl, Direction direction,
+    int32_t height, uint32_t artworkGroup)
 {
     PROFILED_FUNCTION();
 
+    const auto publishEmpty = [&]() {
+        PublishFirstPersonParkEntranceGatePlane(
+            session, entranceEl, {},
+            { 0, 0, height + entrance.GetTextHeight() },
+            artworkGroup,
+            FirstPersonPaintSemanticRole::sign);
+    };
+
     if ((direction + 1) & (1 << 1))
+    {
+        publishEmpty();
         return;
+    }
 
     auto scrollingMode = entrance.GetScrollingMode();
     if (scrollingMode == kScrollingModeNone)
+    {
+        publishEmpty();
         return;
+    }
 
     auto& gameState = getGameState();
     u8string bannerText;
@@ -330,9 +460,22 @@ static void PaintParkEntranceScrollingText(
         bannerText = LanguageGetString(STR_BANNER_TEXT_CLOSED);
     }
 
-    auto imageIndex = ScrollingText::setup(session, bannerText, scrollingMode + direction / 2, PaletteIndex::transparent);
+    auto imageIndex = ScrollingText::setup(
+        session, bannerText,
+        scrollingMode + direction / 2,
+        PaletteIndex::transparent);
     auto textHeight = height + entrance.GetTextHeight();
-    PaintAddImageAsChild(session, imageIndex, { 0, 0, textHeight }, { { 2, 2, textHeight }, { 28, 28, 47 } });
+    PublishFirstPersonParkEntranceGatePlane(
+        session, entranceEl, imageIndex,
+        { 0, 0, textHeight }, artworkGroup,
+        FirstPersonPaintSemanticRole::sign);
+    FirstPersonPaintSemanticScope scope(
+        session, FirstPersonPaintSemanticRole::sign,
+        artworkGroup);
+    PaintAddImageAsChild(
+        session, imageIndex,
+        { 0, 0, textHeight },
+        { { 2, 2, textHeight }, { 28, 28, 47 } });
 }
 
 static void PaintParkEntranceLightEffects(PaintSession& session)
@@ -378,20 +521,65 @@ static void PaintParkEntrance(PaintSession& session, uint8_t direction, int32_t 
             auto surfaceDescriptor = entranceEl.getPathSurfaceDescriptor();
             if (surfaceDescriptor != nullptr)
             {
-                auto imageIndex = (surfaceDescriptor->image + 5 * (1 + (direction & 1)));
+                auto imageIndex =
+                    surfaceDescriptor->image
+                    + 5 * (1 + (direction & 1));
+                const auto pathImage =
+                    imageTemplate.WithIndex(imageIndex);
+                const uint32_t pathGroup =
+                    PaintSessionBeginFirstPersonSemanticArtworkGroup(
+                        session);
+                PublishFirstPersonParkEntrancePathDeck(
+                    session, entranceEl, pathImage,
+                    { 0, 0, height }, pathGroup);
+                FirstPersonPaintSemanticScope pathScope(
+                    session,
+                    FirstPersonPaintSemanticRole::pathDeck,
+                    pathGroup);
                 PaintAddImageAsParent(
-                    session, imageTemplate.WithIndex(imageIndex), { 0, 0, height }, { { 0, 2, height }, { 32, 28, 0 } });
+                    session, pathImage,
+                    { 0, 0, height },
+                    { { 0, 2, height }, { 32, 28, 0 } });
             }
 
-            // Entrance
+            // Entrance: the centre is an oriented transparent gate plane,
+            // preserving the walk-through opening instead of fabricating a
+            // solid sorting box.
             if (entrance != nullptr)
             {
-                auto imageIndex = entrance->GetImage(sequence, direction);
-                PaintAddImageAsParent(
-                    session, imageTemplate.WithIndex(imageIndex), { 0, 0, height }, { { 2, 2, height + 32 }, { 28, 28, 47 } });
+                auto imageIndex =
+                    entrance->GetImage(sequence, direction);
+                const auto entranceImage =
+                    imageTemplate.WithIndex(imageIndex);
+                const uint32_t bodyGroup =
+                    PaintSessionBeginFirstPersonSemanticArtworkGroup(
+                        session);
+                PublishFirstPersonParkEntranceGatePlane(
+                    session, entranceEl, entranceImage,
+                    { 0, 0, height }, bodyGroup);
+                {
+                    FirstPersonPaintSemanticScope bodyScope(
+                        session,
+                        FirstPersonPaintSemanticRole::structureBody,
+                        bodyGroup);
+                    PaintAddImageAsParent(
+                        session, entranceImage,
+                        { 0, 0, height },
+                        { { 2, 2, height + 32 },
+                          { 28, 28, 47 } });
+                }
 
                 if (!entranceEl.isGhost())
-                    PaintParkEntranceScrollingText(session, *entrance, direction, height);
+                    PaintParkEntranceScrollingText(
+                        session, *entrance, entranceEl,
+                        direction, height, bodyGroup);
+                else
+                    PublishFirstPersonParkEntranceGatePlane(
+                        session, entranceEl, {},
+                        { 0, 0,
+                          height + entrance->GetTextHeight() },
+                        bodyGroup,
+                        FirstPersonPaintSemanticRole::sign);
             }
             break;
         }
@@ -399,9 +587,25 @@ static void PaintParkEntrance(PaintSession& session, uint8_t direction, int32_t 
         case ParkEntranceSequence::right:
             if (entrance != nullptr)
             {
-                auto imageIndex = entrance->GetImage(sequence, direction);
+                auto imageIndex =
+                    entrance->GetImage(sequence, direction);
+                const auto entranceImage =
+                    imageTemplate.WithIndex(imageIndex);
+                const uint32_t bodyGroup =
+                    PaintSessionBeginFirstPersonSemanticArtworkGroup(
+                        session);
+                PublishFirstPersonParkEntranceSideBody(
+                    session, entranceEl, entranceImage,
+                    { 0, 0, height }, bodyGroup);
+                FirstPersonPaintSemanticScope bodyScope(
+                    session,
+                    FirstPersonPaintSemanticRole::structureBody,
+                    bodyGroup);
                 PaintAddImageAsParent(
-                    session, imageTemplate.WithIndex(imageIndex), { 0, 0, height }, { { 3, 3, height }, { 26, 26, 79 } });
+                    session, entranceImage,
+                    { 0, 0, height },
+                    { { 3, 3, height },
+                      { 26, 26, 79 } });
             }
             break;
     }
