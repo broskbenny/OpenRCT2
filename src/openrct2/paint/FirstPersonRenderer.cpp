@@ -2889,7 +2889,6 @@ namespace OpenRCT2::Paint
             // at most one previously unseen asset is attempted per frame, and
             // every success OR fallback decision is cached. No asset restarts
             // identical work forever after missing a wall-clock deadline.
-            size_t assetFitBudget = 1;
             std::unordered_set<uint64_t> seenGroups;
             seenGroups.reserve(scene.visibleTiles.size() / 2 + 1);
 
@@ -2956,15 +2955,11 @@ namespace OpenRCT2::Paint
                         continue;
                     }
 
-                    const bool alreadyAttempted =
-                        LargeSceneryAssetModelAttempted(*entry);
-                    const bool allowBuild =
-                        alreadyAttempted || assetFitBudget > 0;
                     const auto* model =
-                        GetLargeSceneryAssetModel(*entry, allowBuild);
-                    if (!alreadyAttempted && model != nullptr)
-                        --assetFitBudget;
-                    if (model == nullptr || !model->usable)
+                        GetLargeSceneryAssetModel(
+                            *entry, true);
+                    if (model == nullptr
+                        || !model->usable)
                         continue;
 
                     uint64_t signature = group.key;
