@@ -513,7 +513,7 @@ namespace OpenRCT2::Paint
         float halfWidth = 0.0f;
         float halfHeight = 0.0f;
         FirstPersonPhysicalProxyProvenance provenance =
-            FirstPersonPhysicalProxyProvenance::verifiedTrackArtwork;
+            FirstPersonPhysicalProxyProvenance::authoritativeTrackTrajectory;
     };
 
     struct FirstPersonVerifiedTrackProfileEvidence
