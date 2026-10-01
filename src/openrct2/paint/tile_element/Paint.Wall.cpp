@@ -126,19 +126,122 @@ static void PaintWallDoor(
     }
 }
 
+static std::array<FirstPersonPaintSemanticVec3, 4>
+    GetFirstPersonWallSemanticCorners(
+        const WallSceneryEntry& wallEntry,
+        const WallElement& wallElement)
+{
+    const float h =
+        float(int32_t(wallEntry.height) * kCoordsZStep);
+    const float step =
+        float(2 * kCoordsZStep);
+    FirstPersonPaintSemanticVec3 a{};
+    FirstPersonPaintSemanticVec3 b{};
+    switch (static_cast<uint8_t>(
+                wallElement.getDirection()) & 3u)
+    {
+        case 0:
+            a = { 0.0f, 0.0f, 0.0f };
+            b = { 0.0f, float(kCoordsXYStep), 0.0f };
+            break;
+        case 1:
+            a = { 0.0f, float(kCoordsXYStep), 0.0f };
+            b = { float(kCoordsXYStep), float(kCoordsXYStep), 0.0f };
+            break;
+        case 2:
+            a = { float(kCoordsXYStep), float(kCoordsXYStep), 0.0f };
+            b = { float(kCoordsXYStep), 0.0f, 0.0f };
+            break;
+        default:
+            a = { float(kCoordsXYStep), 0.0f, 0.0f };
+            b = { 0.0f, 0.0f, 0.0f };
+            break;
+    }
+
+    // Native wall slope values are 1 = upward along the authored edge,
+    // 2 = downward along it. Keep the exact physical edge in world space;
+    // the current paint rotation must never rotate the wall itself.
+    if (wallElement.getSlope() == 1)
+        b.z += step;
+    else if (wallElement.getSlope() == 2)
+        a.z += step;
+
+    return { {
+        a,
+        b,
+        { b.x, b.y, b.z + h },
+        { a.x, a.y, a.z + h },
+    } };
+}
+
+static uint32_t PublishFirstPersonWallSemanticPlane(
+    PaintSession& session, const WallSceneryEntry& wallEntry,
+    const WallElement& wallElement, ImageId image,
+    const CoordsXYZ& artworkOffset, uint32_t artworkGroup,
+    bool decal, bool collidable)
+{
+    if (session.FirstPersonSemanticComponentSink == nullptr
+        || !image.HasValue())
+        return 0;
+
+    FirstPersonPaintSemanticTransform transform{};
+    transform.origin = {
+        float(session.MapPosition.x),
+        float(session.MapPosition.y),
+        float(wallElement.getBaseZ()),
+    };
+    return PaintSessionAddFirstPersonSemanticOrientedQuad(
+        session, FirstPersonPaintSemanticRole::wall,
+        FirstPersonPaintSemanticPrimitiveKind::plane,
+        transform,
+        GetFirstPersonWallSemanticCorners(
+            wallEntry, wallElement),
+        image, artworkOffset, artworkGroup,
+        decal, collidable);
+}
+
 static void PaintWallWall(
-    PaintSession& session, const WallSceneryEntry& wallEntry, ImageId imageTemplate, uint32_t imageOffset, CoordsXYZ offset,
+    PaintSession& session, const WallSceneryEntry& wallEntry,
+    const WallElement& wallElement, ImageId imageTemplate,
+    uint32_t imageOffset, CoordsXYZ offset,
     BoundBoxXYZ boundBox, bool isGhost)
 {
     PROFILED_FUNCTION();
 
     auto frameNum = wallEntry.flags2.has(WallSceneryFlag2::isAnimated) ? (getGameState().currentTicks & 7) * 2 : 0;
     auto imageIndex = wallEntry.image + imageOffset + frameNum;
-    PaintAddImageAsParent(session, imageTemplate.WithIndex(imageIndex), offset, boundBox);
+    const auto wallImage = imageTemplate.WithIndex(imageIndex);
+    const uint32_t artworkGroup =
+        PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
+    const bool transparentBody =
+        wallEntry.flags.has(WallSceneryFlag::hasGlass)
+        || wallEntry.flags2.has(
+            WallSceneryFlag2::isTransparent);
+    PublishFirstPersonWallSemanticPlane(
+        session, wallEntry, wallElement, wallImage,
+        offset, artworkGroup, transparentBody, true);
+    {
+        FirstPersonPaintSemanticScope scope(
+            session, FirstPersonPaintSemanticRole::wall,
+            artworkGroup);
+        PaintAddImageAsParent(
+            session, wallImage, offset, boundBox);
+    }
+
     if ((wallEntry.flags.has(WallSceneryFlag::hasGlass)) && !isGhost)
     {
-        auto glassImageId = ImageId(imageIndex + 6).WithTransparency(imageTemplate.GetPrimary());
-        PaintAddImageAsChild(session, glassImageId, offset, boundBox);
+        auto glassImageId =
+            ImageId(imageIndex + 6)
+                .WithTransparency(imageTemplate.GetPrimary());
+        PublishFirstPersonWallSemanticPlane(
+            session, wallEntry, wallElement,
+            glassImageId, offset, artworkGroup,
+            true, false);
+        FirstPersonPaintSemanticScope scope(
+            session, FirstPersonPaintSemanticRole::wall,
+            artworkGroup);
+        PaintAddImageAsChild(
+            session, glassImageId, offset, boundBox);
     }
 }
 
@@ -277,7 +380,9 @@ static void PaintWallWall(
             break;
     }
 
-    PaintWallWall(session, wallEntry, imageTemplate, imageOffset, offset, boundBox, isGhost);
+    PaintWallWall(
+        session, wallEntry, wallElement, imageTemplate,
+        imageOffset, offset, boundBox, isGhost);
     PaintWallScrollingText(session, wallEntry, wallElement, direction, height, boundBox.offset, isGhost);
 }
 
