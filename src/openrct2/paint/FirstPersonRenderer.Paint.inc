@@ -1,81 +1,3 @@
-            FirstPersonTerrainEdgeEvidenceNeeded(CoordsXY tile)
-        {
-            const auto* surface =
-                MapGetSurfaceElementAt(tile);
-            if (surface == nullptr)
-                return false;
-            const auto self =
-                GetSlopeCornerHeights(
-                    surface->getBaseZ(),
-                    surface->getSlope());
-
-            const uint16_t waterHeight =
-                surface->getWaterHeight();
-            if (waterHeight > 0)
-            {
-                for (const CoordsXY delta : {
-                         CoordsXY{ kCoordsXYStep, 0 },
-                         CoordsXY{ -kCoordsXYStep, 0 },
-                         CoordsXY{ 0, kCoordsXYStep },
-                         CoordsXY{ 0, -kCoordsXYStep } })
-                {
-                    const CoordsXY neighbourTile =
-                        tile + delta;
-                    const auto* neighbour =
-                        MapIsLocationValid(neighbourTile)
-                        ? MapGetSurfaceElementAt(
-                            neighbourTile)
-                        : nullptr;
-                    if (neighbour == nullptr
-                        || neighbour->getWaterHeight()
-                            != waterHeight)
-                        return true;
-                }
-            }
-
-            const auto exposedAgainst =
-                [&](CoordsXY delta,
-                    int32_t selfA, int32_t selfB,
-                    auto neighbourA, auto neighbourB) {
-                    const CoordsXY neighbourTile =
-                        tile + delta;
-                    if (!MapIsLocationValid(neighbourTile))
-                        return true;
-                    const auto* neighbour =
-                        MapGetSurfaceElementAt(
-                            neighbourTile);
-                    if (neighbour == nullptr)
-                        return true;
-                    const auto other =
-                        GetSlopeCornerHeights(
-                            neighbour->getBaseZ(),
-                            neighbour->getSlope());
-                    return selfA > neighbourA(other)
-                        || selfB > neighbourB(other);
-                };
-
-            return exposedAgainst(
-                       { kCoordsXYStep, 0 },
-                       self.east, self.north,
-                       [](const auto& h) { return h.south; },
-                       [](const auto& h) { return h.west; })
-                || exposedAgainst(
-                       { -kCoordsXYStep, 0 },
-                       self.west, self.south,
-                       [](const auto& h) { return h.north; },
-                       [](const auto& h) { return h.east; })
-                || exposedAgainst(
-                       { 0, kCoordsXYStep },
-                       self.north, self.west,
-                       [](const auto& h) { return h.east; },
-                       [](const auto& h) { return h.south; })
-                || exposedAgainst(
-                       { 0, -kCoordsXYStep },
-                       self.south, self.east,
-                       [](const auto& h) { return h.west; },
-                       [](const auto& h) { return h.north; });
-        }
-
         // Reconstructing original scenery sprites is relatively expensive: the
         // native painter handles track, supports, multi-tile scenery, animation
         // frames, glass and object remapping. Run it ONLY for tiles whose
@@ -141,6 +63,7 @@
                     cached.semanticStreamedSurfaces.clear();
                     WithdrawFirstPersonSemanticComponents(tile);
                     cached.hasUngroupedResident = false;
+                    cached.hasCameraDependentFallback = false;
 
                     auto* element = MapGetFirstElementAt(tile);
                     if (element != nullptr)
@@ -188,17 +111,47 @@
                 cached.hasSelectedRotation = true;
                 cached.lastSeen = frame;
 
-                uint8_t rotationMask = uint8_t(1u << tileRotation);
-                if (FirstPersonTerrainEdgeEvidenceNeeded(tile)
-                    || (opt.viewFlags
-                        & VIEWPORT_FLAG_CLIP_VIEW) != 0)
+                bool hasTerrainEdgeSemantic = false;
+                for (const auto& variant :
+                     cached.rotations)
                 {
-                    // Every world edge is a native "bottom" edge in at least
-                    // one quarter-turn. Capture all four once so cliff geometry
-                    // and face artwork exist before passenger movement can
-                    // influence source-view selection.
-                    rotationMask |= 0x0Fu;
+                    if (!variant.semanticValid)
+                        continue;
+                    if (std::any_of(
+                            variant.semanticComponents.begin(),
+                            variant.semanticComponents.end(),
+                            [](const auto& component) {
+                                return component.role
+                                    == FirstPersonPaintSemanticRole::
+                                        terrainEdge;
+                            }))
+                    {
+                        hasTerrainEdgeSemantic = true;
+                        break;
+                    }
                 }
+                const bool hasAnyValidRotation =
+                    std::any_of(
+                        cached.rotations.begin(),
+                        cached.rotations.end(),
+                        [](const StaticPaintRotationCache& variant) {
+                            return variant.valid;
+                        });
+                const bool selectedTerrainEvidenceMissing =
+                    hasTerrainEdgeSemantic
+                    && !cached.rotations[
+                            tileRotation].semanticValid;
+                const bool needsTileSourceView =
+                    !hasAnyValidRotation
+                    || cached.animated
+                    || cached.hasUngroupedResident
+                    || cached.hasCameraDependentFallback
+                    || selectedTerrainEvidenceMissing;
+                uint8_t rotationMask =
+                    needsTileSourceView
+                    ? uint8_t(1u << tileRotation)
+                    : 0;
+
                 for (const auto& group : cached.reconstructionGroups)
                 {
                     auto& state = _reconstructionRotations[group.key];
@@ -210,13 +163,65 @@
                     state.selectedRotation = selected;
                     state.hasSelectedRotation = true;
                     state.lastSeen = frame;
-                    rotationMask |= uint8_t(1u << selected);
 
-                    // Do not pre-paint every missing native track view here.
-                    // The selected view is enough to render stable trajectory
-                    // geometry now; additional artwork evidence is captured
-                    // lazily when that native view is actually selected later.
+                    bool needsGroupSourceView = true;
+                    if (group.type == TileElementType::track)
+                    {
+                        const auto trajectory =
+                            _trackTrajectoryCache.find(group.key);
+                        if (trajectory != _trackTrajectoryCache.end()
+                            && !trajectory->second.dirty
+                            && !trajectory->second.surfaces.empty())
+                        {
+                            const bool hasArtwork =
+                                std::any_of(
+                                    trajectory->second
+                                        .artworkProjections.begin(),
+                                    trajectory->second
+                                        .artworkProjections.end(),
+                                    [](const auto& views) {
+                                        return !views.empty();
+                                    });
+                            const bool exhausted =
+                                std::all_of(
+                                    trajectory->second
+                                        .artworkCaptureAttempted.begin(),
+                                    trajectory->second
+                                        .artworkCaptureAttempted.end(),
+                                    [](bool attempted) {
+                                        return attempted;
+                                    });
+                            // Trajectory geometry is world-fixed. A missing
+                            // native observation is texture evidence only, so
+                            // acquire at most the currently selected view and
+                            // never prewarm rotations during a camera turn.
+                            needsGroupSourceView =
+                                !hasArtwork
+                                && !exhausted
+                                && rotationMask == 0;
+                        }
+                    }
+                    else if (
+                        group.type
+                            == TileElementType::largeScenery)
+                    {
+                        const auto geometry =
+                            _largeSceneryGeometryCache.find(
+                                group.key);
+                        if (geometry
+                                != _largeSceneryGeometryCache.end()
+                            && !geometry->second.dirty
+                            && !geometry->second.surfaces.empty())
+                        {
+                            needsGroupSourceView = false;
+                        }
+                    }
 
+                    if (needsGroupSourceView)
+                    {
+                        rotationMask |=
+                            uint8_t(1u << selected);
+                    }
                 }
 
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
@@ -456,8 +461,11 @@
                     }
 
                     PaintSessionArrange(*session);
+                    uint32_t nativePaintOrdinal = 1;
                     for (auto* root = session->PaintHead; root; root = root->NextQuadrantEntry)
                     {
+                        const uint32_t rootPaintOrdinal =
+                            nativePaintOrdinal++;
                         const bool dynamic = IsFirstPersonEntityPaintRoot(*root);
                         const uint64_t key = TerrainKey(
                             root->MapPos.x / kCoordsXYStep, root->MapPos.y / kCoordsXYStep);
@@ -477,6 +485,43 @@
                             continue;
                         }
 
+                        if (!dynamic
+                            && root->FirstPersonSemanticRole
+                                != FirstPersonPaintSemanticRole::none)
+                        {
+                            const auto cacheIt =
+                                _staticPaintCache.find(key);
+                            if (cacheIt
+                                    != _staticPaintCache.end()
+                                && rotation < 4)
+                            {
+                                auto& components =
+                                    cacheIt->second
+                                        .rotations[rotation]
+                                        .semanticComponents;
+                                for (auto& component :
+                                     components)
+                                {
+                                    if (component.artwork
+                                            .nativePaintOrdinal
+                                            != 0
+                                        || component.role
+                                            != root
+                                                ->FirstPersonSemanticRole
+                                        || component.mapPosition.x
+                                            != root->MapPos.x
+                                        || component.mapPosition.y
+                                            != root->MapPos.y
+                                        || component.artwork.image
+                                            != root->image_id)
+                                        continue;
+                                    component.artwork
+                                        .nativePaintOrdinal =
+                                        rootPaintOrdinal;
+                                }
+                            }
+                        }
+
                         const auto fallbackAnchor = Anchor(*root);
                         const auto reconstruction = GetSpriteReconstructionFrame(
                             *root, fallbackAnchor);
@@ -492,6 +537,17 @@
                             scene, *root, anchor, basis, isoAnchor,
                             opt.viewFlags, opt.hiddenEntity, opt.hiddenSeatIndex,
                             rotation);
+                        for (size_t i = startSurface;
+                             i < scene.surfaces.size(); ++i)
+                        {
+                            if (scene.surfaces[i]
+                                    .nativePaintOrdinal == 0)
+                            {
+                                scene.surfaces[i]
+                                    .nativePaintOrdinal =
+                                    rootPaintOrdinal;
+                            }
+                        }
                         if (const auto semantic = LargeScenerySemanticBounds(*root); semantic.has_value())
                         {
                             for (size_t i = startSurface; i < scene.surfaces.size(); ++i)
@@ -599,6 +655,14 @@
                                     else
                                     {
                                         variant.streamedSurfaces.push_back(surface);
+                                        if (surface.viewFacing
+                                            && surface.reconstructionGroup
+                                                == 0)
+                                        {
+                                            cacheIt->second
+                                                .hasCameraDependentFallback =
+                                                true;
+                                        }
                                     }
                                 }
                             }

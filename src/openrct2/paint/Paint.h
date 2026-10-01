@@ -191,6 +191,9 @@ struct FirstPersonPaintSemanticArtwork
     int16_t immutableWidth = 0;
     int16_t immutableHeight = 0;
     uint8_t sourceRotation = 0;
+    // Logical order assigned from the arranged native PaintStruct stream.
+    // This is used only to resolve surfaces at the same physical depth.
+    uint32_t nativePaintOrdinal = 0;
     bool decal = false;
 };
 

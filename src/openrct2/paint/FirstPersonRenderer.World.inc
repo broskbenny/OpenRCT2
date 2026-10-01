@@ -1646,6 +1646,8 @@
                 surface.coplanarOwner =
                     FirstPersonSemanticRoleOwnsCoplanarSurface(
                         component.role);
+                surface.nativePaintOrdinal =
+                    component.artwork.nativePaintOrdinal;
 
                 if (!candidates.empty())
                 {

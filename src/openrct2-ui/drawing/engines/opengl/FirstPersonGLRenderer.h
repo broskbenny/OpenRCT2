@@ -51,7 +51,8 @@ namespace OpenRCT2::Ui
             GLuint vao{}, vbo{};
             uint64_t sceneEpoch{}, generation{}, dependencyStamp{}, lastSeen{};
             size_t bytes{};
-            GLsizei count{};
+            GLsizei ordinaryCount{};
+            GLsizei ownerCount{};
         };
         std::unordered_map<uint64_t,RegionBuffer> _staticOpaqueRegions;
         size_t _staticRegionBytes{};

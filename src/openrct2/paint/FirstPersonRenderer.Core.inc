@@ -1736,6 +1736,7 @@
             bool hasSelectedRotation = false;
             uint8_t selectedRotation = 0;
             bool hasUngroupedResident = false;
+            bool hasCameraDependentFallback = false;
             bool visibilityBoundValid = false;
             bool visibilityDirty = true;
             int32_t visibilityMinZ = 0;

@@ -159,6 +159,17 @@ void main() {
     float depth = max(0.0, dot(fWorld - uEye, uForward));
     float logarithmic = log2(1.0 + depth)/log2(1.0 + uNearFar.y);
     gl_FragDepth = logarithmic;
+    if ((fFlags & 4) != 0 && (fFlags & 1) == 0) {
+        // Coplanar ownership is a logical paint relation, not a geometry
+        // offset. Compare against completed ordinary physical depth and snap
+        // only the numerically-equal layer to that exact stored depth.
+        const float opaqueDepthEps = 0.00000002;
+        float opaqueDepth = texelFetch(
+            uOpaqueDepth, ivec2(gl_FragCoord.xy), 0).r;
+        if (logarithmic > opaqueDepth + opaqueDepthEps) discard;
+        if (abs(logarithmic - opaqueDepth) <= opaqueDepthEps)
+            gl_FragDepth = opaqueDepth;
+    }
     if ((fFlags & 1) != 0) {
         // Opaque depth still comes from the renderer's fixed-point depth
         // buffer; this tolerance belongs only to that opaque comparison.
@@ -791,14 +802,34 @@ void main() {
                     maskG1?int32_t(maskTex.index):-1,
                     std::min<uint32_t>(surface.nativePaintOrdinal,0x00ffffffu)});
         };
-        std::vector<GPUVertex> opaqueVertices;
-        // Equal-depth ownership is resolved without changing physical depth:
-        // draw ordinary opaque geometry first, then semantic owners. GL_LEQUAL
-        // lets the later owner replace exactly coplanar terrain pixels.
-        for(const auto* surface:streamedOpaque)
-            if(!surface->coplanarOwner) appendVertices(opaqueVertices,*surface);
-        for(const auto* surface:streamedOpaque)
-            if(surface->coplanarOwner) appendVertices(opaqueVertices,*surface);
+        std::vector<GPUVertex> opaqueOrdinaryVertices;
+        std::vector<GPUVertex> opaqueOwnerVertices;
+        std::vector<const Paint::FirstPersonSurface*>
+            streamedOwners;
+        for (const auto* surface : streamedOpaque)
+        {
+            if (surface->coplanarOwner)
+                streamedOwners.push_back(surface);
+            else
+                appendVertices(
+                    opaqueOrdinaryVertices, *surface);
+        }
+        std::stable_sort(
+            streamedOwners.begin(), streamedOwners.end(),
+            [](const auto* a, const auto* b) {
+                const uint32_t ao =
+                    a->nativePaintOrdinal == 0
+                    ? std::numeric_limits<uint32_t>::max()
+                    : a->nativePaintOrdinal;
+                const uint32_t bo =
+                    b->nativePaintOrdinal == 0
+                    ? std::numeric_limits<uint32_t>::max()
+                    : b->nativePaintOrdinal;
+                return ao < bo;
+            });
+        for (const auto* surface : streamedOwners)
+            appendVertices(
+                opaqueOwnerVertices, *surface);
         std::vector<uint64_t> regionDraws;
         regionDraws.reserve(scene.staticRegions.size());
         for (const auto& packet : scene.staticRegions)
@@ -830,10 +861,38 @@ void main() {
                 continue;
             std::vector<GPUVertex> packed;
             packed.reserve(packet.surfaces->size()*6);
-            for(const auto& surface:*packet.surfaces)
-                if(!surface.coplanarOwner) appendVertices(packed,surface);
-            for(const auto& surface:*packet.surfaces)
-                if(surface.coplanarOwner) appendVertices(packed,surface);
+            for (const auto& surface : *packet.surfaces)
+            {
+                if (!surface.coplanarOwner)
+                    appendVertices(packed, surface);
+            }
+            const GLsizei ordinaryCount =
+                GLsizei(packed.size());
+            std::vector<
+                const Paint::FirstPersonSurface*>
+                owners;
+            for (const auto& surface : *packet.surfaces)
+            {
+                if (surface.coplanarOwner)
+                    owners.push_back(&surface);
+            }
+            std::stable_sort(
+                owners.begin(), owners.end(),
+                [](const auto* a, const auto* b) {
+                    const uint32_t ao =
+                        a->nativePaintOrdinal == 0
+                        ? std::numeric_limits<uint32_t>::max()
+                        : a->nativePaintOrdinal;
+                    const uint32_t bo =
+                        b->nativePaintOrdinal == 0
+                        ? std::numeric_limits<uint32_t>::max()
+                        : b->nativePaintOrdinal;
+                    return ao < bo;
+                });
+            for (const auto* surface : owners)
+                appendVertices(packed, *surface);
+            const GLsizei ownerCount =
+                GLsizei(packed.size()) - ordinaryCount;
             const size_t bytes=packed.size()*sizeof(GPUVertex);
             if(bytes==0) continue;
             const size_t oldBytes=found!=_staticOpaqueRegions.end()?found->second.bytes:0;
@@ -854,7 +913,14 @@ void main() {
                packed.size()>size_t(std::numeric_limits<GLsizei>::max()))
             {
                 if(found!=_staticOpaqueRegions.end()) DiscardRegionBuffer(key);
-                opaqueVertices.insert(opaqueVertices.end(),packed.begin(),packed.end());
+                opaqueOrdinaryVertices.insert(
+                    opaqueOrdinaryVertices.end(),
+                    packed.begin(),
+                    packed.begin() + ordinaryCount);
+                opaqueOwnerVertices.insert(
+                    opaqueOwnerVertices.end(),
+                    packed.begin() + ordinaryCount,
+                    packed.end());
                 continue;
             }
             if(found==_staticOpaqueRegions.end())
@@ -871,7 +937,8 @@ void main() {
             glCall(glBufferData,GL_ARRAY_BUFFER,GLsizeiptr(bytes),packed.data(),GL_STATIC_DRAW);
             _staticRegionBytes=_staticRegionBytes-region.bytes+bytes;
             region.bytes=bytes;
-            region.count=GLsizei(packed.size());
+            region.ordinaryCount=ordinaryCount;
+            region.ownerCount=ownerCount;
             region.sceneEpoch=packet.sceneEpoch;
             region.generation=packet.generation;
             region.dependencyStamp=dependencyStamp;
@@ -888,15 +955,115 @@ void main() {
         for(const auto key:regionDraws)
         {
             const auto& region=_staticOpaqueRegions.at(key);
+            if (region.ordinaryCount <= 0)
+                continue;
             glCall(glBindVertexArray,region.vao);
-            glCall(glDrawArrays,GL_TRIANGLES,0,region.count);
+            glCall(
+                glDrawArrays,GL_TRIANGLES,0,
+                region.ordinaryCount);
         }
         glCall(glBindVertexArray,_vao);
         glCall(glBindBuffer,GL_ARRAY_BUFFER,_vbo);
-        glCall(glBufferData,GL_ARRAY_BUFFER,GLsizeiptr(opaqueVertices.size()*sizeof(GPUVertex)),
-               opaqueVertices.data(),GL_STREAM_DRAW);
-        if(!opaqueVertices.empty())
-            glCall(glDrawArrays,GL_TRIANGLES,0,GLsizei(opaqueVertices.size()));
+        glCall(
+            glBufferData,GL_ARRAY_BUFFER,
+            GLsizeiptr(
+                opaqueOrdinaryVertices.size()
+                    * sizeof(GPUVertex)),
+            opaqueOrdinaryVertices.data(),GL_STREAM_DRAW);
+        if(!opaqueOrdinaryVertices.empty())
+            glCall(
+                glDrawArrays,GL_TRIANGLES,0,
+                GLsizei(opaqueOrdinaryVertices.size()));
+
+        bool haveOpaqueOwners =
+            !opaqueOwnerVertices.empty();
+        if (!haveOpaqueOwners)
+        {
+            for (const auto key : regionDraws)
+            {
+                if (_staticOpaqueRegions.at(key)
+                        .ownerCount > 0)
+                {
+                    haveOpaqueOwners = true;
+                    break;
+                }
+            }
+        }
+
+        if (haveOpaqueOwners)
+        {
+            auto& front = output.GetFinalFramebuffer();
+            if (!_opaqueSnapshot
+                || _opaqueSnapshot->GetWidth()
+                    != GLuint(screenWidth)
+                || _opaqueSnapshot->GetHeight()
+                    != GLuint(screenHeight))
+            {
+                _opaqueSnapshot =
+                    std::make_unique<OpenGLFramebuffer>(
+                        screenWidth, screenHeight,
+                        true, true, false);
+            }
+
+            // Freeze ordinary physical depth once. Owners may replace only
+            // that same physical layer (within depth-buffer quantisation) or
+            // genuinely nearer space; they never receive a world-space bias.
+            _opaqueSnapshot->BindDraw();
+            front.BindRead();
+            glCall(
+                glBlitFramebuffer,
+                0,0,screenWidth,screenHeight,
+                0,0,screenWidth,screenHeight,
+                GL_DEPTH_BUFFER_BIT,GL_NEAREST);
+            front.Bind();
+            glCall(
+                glViewport,left,
+                screenHeight-top-height,
+                width,height);
+            glCall(
+                glScissor,clipLeft,
+                screenHeight-clipBottom,
+                clipWidth,clipHeight);
+            glCall(glEnable,GL_DEPTH_TEST);
+            glCall(glDepthFunc,GL_LEQUAL);
+            glCall(glDepthMask,GL_TRUE);
+            glCall(glUseProgram,_program);
+            OpenGLAPI::SetTexture(
+                2,GL_TEXTURE_2D,
+                _opaqueSnapshot->GetDepthTexture());
+
+            for (const auto key : regionDraws)
+            {
+                const auto& region =
+                    _staticOpaqueRegions.at(key);
+                if (region.ownerCount <= 0)
+                    continue;
+                glCall(
+                    glBindVertexArray,region.vao);
+                glCall(
+                    glDrawArrays,GL_TRIANGLES,
+                    region.ordinaryCount,
+                    region.ownerCount);
+            }
+
+            glCall(glBindVertexArray,_vao);
+            glCall(
+                glBindBuffer,GL_ARRAY_BUFFER,_vbo);
+            glCall(
+                glBufferData,GL_ARRAY_BUFFER,
+                GLsizeiptr(
+                    opaqueOwnerVertices.size()
+                        * sizeof(GPUVertex)),
+                opaqueOwnerVertices.data(),
+                GL_STREAM_DRAW);
+            if (!opaqueOwnerVertices.empty())
+            {
+                glCall(
+                    glDrawArrays,GL_TRIANGLES,0,
+                    GLsizei(
+                        opaqueOwnerVertices.size()));
+            }
+        }
 
         if (!streamedTransparent.empty())
         {
