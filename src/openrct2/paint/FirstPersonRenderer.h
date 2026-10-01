@@ -151,6 +151,10 @@ namespace OpenRCT2::Paint
 
     struct FirstPersonScene
     {
+        // Increments whenever the authoritative first-person world cache is
+        // cleared (park reload/teardown). GPU-resident baked face textures use
+        // this to drop assets that no longer belong to the current park.
+        uint64_t sceneEpoch = 0;
         FirstPersonRenderOptions options{};
         FirstPersonResolvedView resolvedView{};
         uint64_t sceneEpoch = 0;
