@@ -2031,6 +2031,10 @@ namespace OpenRCT2::Paint
                 FirstPersonVec3 anchor{};
                 float left = 0.0f;
                 float top = 0.0f;
+                uint64_t immutableFingerprint = 0;
+                std::vector<uint8_t> immutablePixels;
+                int16_t immutableWidth = 0;
+                int16_t immutableHeight = 0;
                 uint8_t rotation = 0;
             };
 
@@ -3511,24 +3515,58 @@ namespace OpenRCT2::Paint
                 [&](const TrackTrajectoryCacheEntry::ArtworkProjection& p) {
                     return p.image == surface.image
                         && p.mask == surface.mask
-                        && std::abs(p.left - surface.billboardLeft) < 0.01f
-                        && std::abs(p.top - surface.billboardTop) < 0.01f;
+                        && std::abs(
+                               p.left
+                               - surface.billboardLeft)
+                            < 0.01f
+                        && std::abs(
+                               p.top
+                               - surface.billboardTop)
+                            < 0.01f;
                 });
             if (duplicate != projections.end())
+            {
+                if (duplicate->immutableFingerprint
+                    == surface.immutableFingerprint)
+                    return;
+                duplicate->immutableFingerprint =
+                    surface.immutableFingerprint;
+                duplicate->immutablePixels =
+                    surface.immutablePixels;
+                duplicate->immutableWidth =
+                    surface.immutableWidth;
+                duplicate->immutableHeight =
+                    surface.immutableHeight;
+                MarkTrackTrajectoryRegionsDirty(
+                    trajectory);
                 return;
+            }
 
             constexpr size_t kMaximumProjectionLayers = 16;
             if (projections.size() >= kMaximumProjectionLayers)
                 return;
 
-            projections.push_back({
-                surface.image,
-                surface.mask,
-                surface.billboardAnchor,
-                surface.billboardLeft,
-                surface.billboardTop,
-                rotation,
-            });
+            TrackTrajectoryCacheEntry::ArtworkProjection
+                projection{};
+            projection.image = surface.image;
+            projection.mask = surface.mask;
+            projection.anchor =
+                surface.billboardAnchor;
+            projection.left =
+                surface.billboardLeft;
+            projection.top =
+                surface.billboardTop;
+            projection.immutableFingerprint =
+                surface.immutableFingerprint;
+            projection.immutablePixels =
+                surface.immutablePixels;
+            projection.immutableWidth =
+                surface.immutableWidth;
+            projection.immutableHeight =
+                surface.immutableHeight;
+            projection.rotation = rotation;
+            projections.emplace_back(
+                std::move(projection));
             // Geometry stays unchanged; only the resident rail material packet
             // needs to pick up the newly captured native artwork.
             MarkTrackTrajectoryRegionsDirty(trajectory);
@@ -3657,15 +3695,30 @@ namespace OpenRCT2::Paint
                         || g1->width <= 0
                         || g1->height <= 0)
                         continue;
-                    const auto pixels =
-                        DecodeFirstPersonSpritePixels(*g1);
-                    if (!pixels.has_value())
-                        continue;
+                    std::vector<uint8_t> pixels;
+                    if (!projection.immutablePixels.empty()
+                        && projection.immutableWidth
+                            == g1->width
+                        && projection.immutableHeight
+                            == g1->height)
+                    {
+                        pixels =
+                            projection.immutablePixels;
+                    }
+                    else
+                    {
+                        const auto decodedPixels =
+                            DecodeFirstPersonSpritePixels(
+                                *g1);
+                        if (!decodedPixels.has_value())
+                            continue;
+                        pixels = *decodedPixels;
+                    }
 
                     DecodedTrackProjection item{};
                     item.projection = &projection;
                     item.g1 = g1;
-                    item.pixels = *pixels;
+                    item.pixels = std::move(pixels);
                     item.paintOrder = index;
                     if (projection.mask.HasValue())
                     {
