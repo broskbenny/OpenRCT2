@@ -7133,6 +7133,61 @@ namespace OpenRCT2::Paint
             }
         }
 
+        [[nodiscard]] bool
+            FirstPersonTerrainEdgeEvidenceNeeded(CoordsXY tile)
+        {
+            const auto* surface =
+                MapGetSurfaceElementAt(tile);
+            if (surface == nullptr)
+                return false;
+            const auto self =
+                GetSlopeCornerHeights(
+                    surface->getBaseZ(),
+                    surface->getSlope());
+
+            const auto exposedAgainst =
+                [&](CoordsXY delta,
+                    int32_t selfA, int32_t selfB,
+                    auto neighbourA, auto neighbourB) {
+                    const CoordsXY neighbourTile =
+                        tile + delta;
+                    if (!MapIsLocationValid(neighbourTile))
+                        return true;
+                    const auto* neighbour =
+                        MapGetSurfaceElementAt(
+                            neighbourTile);
+                    if (neighbour == nullptr)
+                        return true;
+                    const auto other =
+                        GetSlopeCornerHeights(
+                            neighbour->getBaseZ(),
+                            neighbour->getSlope());
+                    return selfA > neighbourA(other)
+                        || selfB > neighbourB(other);
+                };
+
+            return exposedAgainst(
+                       { kCoordsXYStep, 0 },
+                       self.east, self.north,
+                       [](const auto& h) { return h.south; },
+                       [](const auto& h) { return h.west; })
+                || exposedAgainst(
+                       { -kCoordsXYStep, 0 },
+                       self.west, self.south,
+                       [](const auto& h) { return h.north; },
+                       [](const auto& h) { return h.east; })
+                || exposedAgainst(
+                       { 0, kCoordsXYStep },
+                       self.north, self.west,
+                       [](const auto& h) { return h.east; },
+                       [](const auto& h) { return h.south; })
+                || exposedAgainst(
+                       { 0, -kCoordsXYStep },
+                       self.south, self.east,
+                       [](const auto& h) { return h.west; },
+                       [](const auto& h) { return h.north; });
+        }
+
         // Reconstructing original scenery sprites is relatively expensive: the
         // native painter handles track, supports, multi-tile scenery, animation
         // frames, glass and object remapping. Run it ONLY for tiles whose
@@ -7250,6 +7305,16 @@ namespace OpenRCT2::Paint
                 cached.lastSeen = frame;
 
                 uint8_t rotationMask = uint8_t(1u << tileRotation);
+                if (FirstPersonTerrainEdgeEvidenceNeeded(tile)
+                    || (opt.viewFlags
+                        & VIEWPORT_FLAG_CLIP_VIEW) != 0)
+                {
+                    // Every world edge is a native "bottom" edge in at least
+                    // one quarter-turn. Capture all four once so cliff geometry
+                    // and face artwork exist before passenger movement can
+                    // influence source-view selection.
+                    rotationMask |= 0x0Fu;
+                }
                 for (const auto& group : cached.reconstructionGroups)
                 {
                     auto& state = _reconstructionRotations[group.key];
