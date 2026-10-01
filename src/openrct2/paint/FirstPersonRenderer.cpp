@@ -2278,7 +2278,7 @@ namespace OpenRCT2::Paint
                 result.push_back({
                     low, high,
                     FirstPersonPhysicalProxyProvenance::
-                        calibratedLargeSceneryArtwork,
+                        authoritativeLargeSceneryOccupancy,
                     static_cast<uint8_t>(
                         FirstPersonPhysicalProxyCapability::collide),
                     group.key,
