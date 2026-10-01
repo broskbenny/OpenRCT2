@@ -23,8 +23,8 @@ namespace OpenRCT2::Paint
     bool LargeSceneryAssetEligible(
         const LargeSceneryEntry& entry)
     {
-        return !entry.flags.has(LargeSceneryFlag::isTree)
-            && !entry.tiles.empty() && entry.tiles.size() <= 256;
+        return !entry.tiles.empty()
+            && entry.tiles.size() <= 256;
     }
 
     namespace
