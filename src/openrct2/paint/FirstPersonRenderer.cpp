@@ -5419,13 +5419,35 @@ namespace OpenRCT2::Paint
                 uint64_t gpuRegion,
                 const std::array<
                     const FirstPersonPaintSemanticComponent*, 4>*
-                    artworkViews = nullptr)
+                    artworkViews = nullptr,
+                const std::vector<
+                    const FirstPersonPaintSemanticComponent*>*
+                    depthPeers = nullptr)
         {
             std::vector<FirstPersonSurface> result;
             const auto faces =
                 BuildFirstPersonSemanticPhysicalFaces(component);
             if (faces.empty())
                 return result;
+
+            std::vector<std::array<FirstPersonVec3, 4>>
+                depthFaces = faces;
+            if (depthPeers != nullptr)
+            {
+                for (const auto* peer : *depthPeers)
+                {
+                    if (peer == nullptr
+                        || peer == &component)
+                        continue;
+                    const auto peerFaces =
+                        BuildFirstPersonSemanticPhysicalFaces(
+                            *peer);
+                    depthFaces.insert(
+                        depthFaces.end(),
+                        peerFaces.begin(),
+                        peerFaces.end());
+                }
+            }
 
             std::array<
                 const FirstPersonPaintSemanticComponent*, 4>
@@ -5464,13 +5486,13 @@ namespace OpenRCT2::Paint
                 if (decodedViews[rotation].component == nullptr)
                     continue;
                 for (size_t faceIndex = 0;
-                     faceIndex < faces.size(); ++faceIndex)
+                     faceIndex < depthFaces.size(); ++faceIndex)
                 {
                     std::array<ScreenCoordsXY, 4> screen{};
                     std::array<float, 4> depth{};
                     for (size_t i = 0; i < 4; ++i)
                     {
-                        const auto& p = faces[faceIndex][i];
+                        const auto& p = depthFaces[faceIndex][i];
                         const CoordsXYZ point{
                             int32_t(std::lround(p.x)),
                             int32_t(std::lround(p.y)),
@@ -5501,8 +5523,11 @@ namespace OpenRCT2::Paint
                         twiceArea +=
                             float(a.x * b.y - b.x * a.y);
                     }
-                    projectedAreas[rotation][faceIndex] =
-                        std::abs(twiceArea) * 0.5f;
+                    if (faceIndex < faces.size())
+                    {
+                        projectedAreas[rotation][faceIndex] =
+                            std::abs(twiceArea) * 0.5f;
+                    }
                 }
             }
 
@@ -5981,11 +6006,31 @@ namespace OpenRCT2::Paint
                                 componentTileY);
                         if (componentRegion != regionKey)
                             continue;
+                        std::vector<
+                            const FirstPersonPaintSemanticComponent*>
+                            depthPeers;
+                        if (canonical->artwork.group != 0)
+                        {
+                            for (const auto& peerGroup :
+                                 semanticGroups)
+                            {
+                                const auto* peer =
+                                    peerGroup.canonical;
+                                if (peer != nullptr
+                                    && peer->artwork.group
+                                        == canonical->artwork.group)
+                                {
+                                    depthPeers.push_back(peer);
+                                }
+                            }
+                        }
                         auto surfaces =
                             BuildFirstPersonSemanticComponentSurfaces(
                                 *canonical,
                                 componentRegion,
-                                &group.views);
+                                &group.views,
+                                depthPeers.empty()
+                                    ? nullptr : &depthPeers);
                         for (const auto& surface :
                              surfaces)
                             addSurface(surface);
@@ -6975,10 +7020,30 @@ namespace OpenRCT2::Paint
                                 != FirstPersonPaintSemanticRole::seat))
                         continue;
 
+                    std::vector<
+                        const FirstPersonPaintSemanticComponent*>
+                        depthPeers;
+                    if (canonical->artwork.group != 0)
+                    {
+                        for (const auto& peerGroup :
+                             semanticGroups)
+                        {
+                            const auto* peer =
+                                peerGroup.canonical;
+                            if (peer != nullptr
+                                && peer->artwork.group
+                                    == canonical->artwork.group)
+                            {
+                                depthPeers.push_back(peer);
+                            }
+                        }
+                    }
                     auto surfaces =
                         BuildFirstPersonSemanticComponentSurfaces(
                             *canonical, 0,
-                            &group.views);
+                            &group.views,
+                            depthPeers.empty()
+                                ? nullptr : &depthPeers);
                     for (auto& surface : surfaces)
                     {
                         if (SurfaceMayBeVisible(
