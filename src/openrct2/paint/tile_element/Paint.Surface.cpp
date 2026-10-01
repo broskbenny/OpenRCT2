@@ -627,18 +627,20 @@ static void PublishFirstPersonTunnelPortalArtwork(
         || !image.HasValue())
         return;
 
-    FirstPersonTunnelEdge worldEdge{};
+    OpenRCT2::Paint::FirstPersonTunnelEdge worldEdge{};
     bool nativeLeft = false;
     if (edge == EDGE_BOTTOMLEFT)
     {
-        worldEdge = FirstPersonLeftTunnelWorldEdge(
-            session.CurrentRotation);
+        worldEdge =
+            OpenRCT2::Paint::FirstPersonLeftTunnelWorldEdge(
+                session.CurrentRotation);
         nativeLeft = true;
     }
     else if (edge == EDGE_BOTTOMRIGHT)
     {
-        worldEdge = FirstPersonRightTunnelWorldEdge(
-            session.CurrentRotation);
+        worldEdge =
+            OpenRCT2::Paint::FirstPersonRightTunnelWorldEdge(
+                session.CurrentRotation);
     }
     else
     {
@@ -648,12 +650,14 @@ static void PublishFirstPersonTunnelPortalArtwork(
     const TunnelEntry resolvedTunnel{
         sourceTunnel.height, resolvedType
     };
-    const auto portal = BuildFirstPersonTunnelPortal(
-        session.MapPosition, worldEdge,
-        resolvedTunnel, session.CurrentRotation,
-        nativeLeft);
+    const auto portal =
+        OpenRCT2::Paint::BuildFirstPersonTunnelPortal(
+            session.MapPosition, worldEdge,
+            resolvedTunnel, session.CurrentRotation,
+            nativeLeft);
     const auto quads =
-        BuildFirstPersonTunnelPortalTerrainWall(portal);
+        OpenRCT2::Paint::
+            BuildFirstPersonTunnelPortalTerrainWall(portal);
     if (quads.empty())
         return;
 

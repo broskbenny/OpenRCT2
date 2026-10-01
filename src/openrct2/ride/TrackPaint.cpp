@@ -149,6 +149,15 @@ static PaintStruct* PaintStationFloorAsParent(
         image, offset, physicalBox);
 }
 
+static PaintStruct* PaintStationFloorAsParent(
+    PaintSession& session, ImageId image,
+    const CoordsXYZ& offset, const CoordsXYZ& physicalSize)
+{
+    return PaintStationFloorAsParent(
+        session, image, offset,
+        BoundBoxXYZ{ offset, physicalSize });
+}
+
 static PaintStruct* PaintStationStructuralAsParent(
     PaintSession& session, ImageId image,
     const CoordsXYZ& offset, const BoundBoxXYZ& physicalBox)
@@ -160,6 +169,15 @@ static PaintStruct* PaintStationStructuralAsParent(
         session, role, image, offset, physicalBox);
 }
 
+static PaintStruct* PaintStationStructuralAsParent(
+    PaintSession& session, ImageId image,
+    const CoordsXYZ& offset, const CoordsXYZ& physicalSize)
+{
+    return PaintStationStructuralAsParent(
+        session, image, offset,
+        BoundBoxXYZ{ offset, physicalSize });
+}
+
 static PaintStruct* PaintStationFenceAsParent(
     PaintSession& session, ImageId image,
     const CoordsXYZ& offset, const BoundBoxXYZ& physicalBox)
@@ -167,6 +185,15 @@ static PaintStruct* PaintStationFenceAsParent(
     return PaintStationSemanticBoxAsParent(
         session, FirstPersonPaintSemanticRole::stationFence,
         image, offset, physicalBox);
+}
+
+static PaintStruct* PaintStationFenceAsParent(
+    PaintSession& session, ImageId image,
+    const CoordsXYZ& offset, const CoordsXYZ& physicalSize)
+{
+    return PaintStationFenceAsParent(
+        session, image, offset,
+        BoundBoxXYZ{ offset, physicalSize });
 }
 
 static PaintStruct* PaintStationFenceAsChild(
@@ -195,6 +222,15 @@ static PaintStruct* PaintStationPierAsParent(
     return PaintStationSemanticBoxAsParent(
         session, FirstPersonPaintSemanticRole::pier,
         image, offset, physicalBox);
+}
+
+static PaintStruct* PaintStationPierAsParent(
+    PaintSession& session, ImageId image,
+    const CoordsXYZ& offset, const CoordsXYZ& physicalSize)
+{
+    return PaintStationPierAsParent(
+        session, image, offset,
+        BoundBoxXYZ{ offset, physicalSize });
 }
 
 static void PublishIntegratedStationPlatformFence(
@@ -254,6 +290,18 @@ static PaintStruct* PaintIntegratedStationPlatformAsParent(
             session, image, offset, floorBox);
     session.FirstPersonSemanticArtworkGroup = 0;
     return result;
+}
+
+static PaintStruct* PaintIntegratedStationPlatformAsParent(
+    PaintSession& session, ImageId image,
+    const CoordsXYZ& offset, const CoordsXYZ& floorSize,
+    bool hasFence, Direction direction, edge_t edge,
+    int32_t fenceZ)
+{
+    return PaintIntegratedStationPlatformAsParent(
+        session, image, offset,
+        BoundBoxXYZ{ offset, floorSize },
+        hasFence, direction, edge, fenceZ);
 }
 
 bool TrackPaintUtilHasFence(

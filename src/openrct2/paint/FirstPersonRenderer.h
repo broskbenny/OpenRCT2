@@ -162,7 +162,6 @@ namespace OpenRCT2::Paint
         uint64_t sceneEpoch = 0;
         FirstPersonRenderOptions options{};
         FirstPersonResolvedView resolvedView{};
-        uint64_t sceneEpoch = 0;
         ScreenSize dimensions{};
         ScreenCoordsXY screenOrigin{};
         // Nonzero only while the drawing engine is presenting one frame.

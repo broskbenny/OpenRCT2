@@ -422,8 +422,10 @@ static void PaintRepeatedWoodenSupports(
     const SupportsIdDescriptor supportImages, const ImageId& imageTemplate, int16_t heightSteps, PaintSession& session,
     uint16_t& baseHeight, bool& hasSupports)
 {
-    FirstPersonWoodenSupportRoleScope
-        firstPersonRole(session);
+    FirstPersonPaintSemanticScope
+        firstPersonRole(
+            session,
+            FirstPersonPaintSemanticRole::support);
     while (heightSteps > 0)
     {
         const bool isHalf = baseHeight & 0x10 || heightSteps == 1 || baseHeight + kWaterHeightStep == session.WaterHeight;

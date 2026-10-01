@@ -199,7 +199,10 @@ PaintSession* Painter::CreateSession(RenderTarget& rt, uint32_t viewFlags, uint8
     session->FirstPersonPassengerAnchorEntity = nullptr;
     session->FirstPersonPassengerAnchorSeatIndex = 0xFF;
     session->FirstPersonPassengerInterpolation = {};
-    session->FirstPersonPhysicalPrimitiveSink = nullptr;
+    session->FirstPersonSemanticArtworkGroup = 0;
+    session->FirstPersonSemanticNextArtworkGroup = 1;
+    session->FirstPersonSemanticNextComponentId = 1;
+    session->FirstPersonSemanticComponentSink = nullptr;
     session->Surface = nullptr;
     session->SelectedElement = TileInspector::GetSelectedElement();
     session->InteractionType = ViewportInteractionItem::none;

@@ -670,9 +670,6 @@ namespace OpenRCT2::Ui::FirstPerson
             const Paint::FirstPersonVec3& from,
             const Paint::FirstPersonVec3& to)
         {
-            if (!Paint::FirstPersonHasVerifiedTrackProfiles())
-                return false;
-
             const int32_t minX = std::max(
                 0, int32_t(std::floor(
                     std::min(from.x, to.x) / kCoordsXYStep)) - 2);

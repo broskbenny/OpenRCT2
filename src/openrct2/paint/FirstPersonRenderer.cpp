@@ -78,6 +78,11 @@ namespace OpenRCT2::Paint
         static std::unordered_map<uint16_t, CoordsXY>
             _passengerAnchorSourceTiles;
 
+        [[nodiscard]] std::optional<std::vector<uint8_t>>
+            DecodeFirstPersonSpritePixels(const G1Element& g1);
+
+        [[nodiscard]] bool SameFirstPersonMaterialTemplate(
+            ImageId a, ImageId b);
 
         float Dot(FirstPersonVec3 a, FirstPersonVec3 b)
         {
@@ -2405,8 +2410,15 @@ namespace OpenRCT2::Paint
                         dx * dx + dy * dy + dz * dz);
                 };
             const auto facePoint =
-                [](const std::array<FirstPersonVec3, 4>& face,
-                   float s, float t) {
+                [](const auto& face, float s, float t) {
+                    const auto toVec3 =
+                        [](const auto& point) {
+                            return FirstPersonVec3{
+                                float(point.x),
+                                float(point.y),
+                                float(point.z),
+                            };
+                        };
                     const auto lerp =
                         [](FirstPersonVec3 a, FirstPersonVec3 b,
                            float alpha) {
@@ -2417,8 +2429,13 @@ namespace OpenRCT2::Paint
                             };
                         };
                     return lerp(
-                        lerp(face[0], face[1], s),
-                        lerp(face[3], face[2], s), t);
+                        lerp(
+                            toVec3(face[0]),
+                            toVec3(face[1]), s),
+                        lerp(
+                            toVec3(face[3]),
+                            toVec3(face[2]), s),
+                        t);
                 };
             const auto ownedNear =
                 [&](uint8_t direction, uint32_t owner,
@@ -4345,6 +4362,42 @@ namespace OpenRCT2::Paint
             }
         }
 
+        [[nodiscard]] TileElement*
+            FindFirstPersonTrackOriginElement(
+                const CoordsXYZ& sampleOrigin,
+                const TrackElement& reference)
+        {
+            auto* element =
+                MapGetFirstElementAt(sampleOrigin);
+            if (element == nullptr)
+                return nullptr;
+
+            do
+            {
+                auto* candidate = element->asTrack();
+                if (candidate == nullptr)
+                    continue;
+                if (candidate->getBaseZ()
+                    != sampleOrigin.z)
+                    continue;
+                if (candidate->getDirection()
+                    != reference.getDirection())
+                    continue;
+                if (candidate->getTrackType()
+                    != reference.getTrackType())
+                    continue;
+                if (candidate->getSequenceIndex() != 0)
+                    continue;
+                if (candidate->getRideIndex()
+                    != reference.getRideIndex())
+                    continue;
+
+                return element;
+            } while (!(element++)->isLastForTile());
+
+            return nullptr;
+        }
+
         [[nodiscard]] std::optional<FirstPersonTrackTrajectory> NextFirstPersonTrackTrajectory(
             const Ride& ride, const CoordsXYZ& sampleOrigin, TileElement* originElement)
         {
@@ -6154,21 +6207,10 @@ namespace OpenRCT2::Paint
                 if (cacheIt == _staticPaintCache.end() || !cacheIt->second.valid
                     || cacheIt->second.dirty || cacheIt->second.animated)
                     continue;
-                const auto& cached = cacheIt->second;
+                auto& cached = cacheIt->second;
                 for (const auto& surface :
                      cached.cameraIndependentResidentSurfaces)
                     addSurface(surface);
-
-                EnsureFirstPersonSemanticSurfaceCache(cached);
-                for (const auto& surface :
-                     cached.semanticStreamedSurfaces)
-                {
-                    if (SurfaceMayBeVisible(
-                            surface, worldFrustum))
-                    {
-                        scene.surfaces.push_back(surface);
-                    }
-                }
 
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
@@ -7232,7 +7274,21 @@ namespace OpenRCT2::Paint
                 const auto cacheIt = _staticPaintCache.find(key);
                 if (cacheIt == _staticPaintCache.end())
                     continue;
-                const auto& cached = cacheIt->second;
+                auto& cached = cacheIt->second;
+
+                EnsureFirstPersonSemanticSurfaceCache(cached);
+
+                for (const auto& semanticSurface :
+                     cached.semanticStreamedSurfaces)
+                {
+                    if (SurfaceMayBeVisible(
+                            semanticSurface, worldFrustum))
+                    {
+                        scene.surfaces.emplace_back(
+                            semanticSurface);
+                    }
+                }
+
                 for (const auto& staticSurface :
                      cached.cameraIndependentStreamedSurfaces)
                 {
