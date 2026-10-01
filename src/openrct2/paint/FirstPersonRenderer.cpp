@@ -2032,21 +2032,6 @@ namespace OpenRCT2::Paint
                 uint8_t rotation = 0;
             };
 
-            struct MaskedArtwork
-            {
-                ImageIndex image = kImageIndexUndefined;
-                int32_t left = 0;
-                int32_t top = 0;
-                int16_t width = 0;
-                int16_t height = 0;
-                uint8_t rotation = 0;
-                uint8_t channelMask = 0;
-                uint8_t imageChannelFlags = 0;
-                bool changed = false;
-                uint64_t fingerprint = 0;
-                std::vector<uint8_t> pixels;
-            };
-
             uint64_t signature{};
             uint64_t lastSeen{};
             bool dirty = false;
@@ -2057,7 +2042,6 @@ namespace OpenRCT2::Paint
             uint8_t artworkRotation = 0xFF;
             std::array<FirstPersonSilhouette, 4> railSilhouettes{};
             std::array<std::vector<ArtworkProjection>, 4> artworkProjections{};
-            std::unordered_map<uint64_t, MaskedArtwork> maskedArtwork;
             std::unordered_map<uint64_t, std::vector<size_t>>
                 regionSurfaceIndices;
             std::vector<FirstPersonSurface> surfaces;
@@ -3703,142 +3687,6 @@ namespace OpenRCT2::Paint
                     float(iso.y - isoAnchor.y)
                     - best->top;
             }
-        }
-
-        void ApplyFirstPersonTrackRailArtworkMask(
-            FirstPersonSurface& surface, uint8_t rotation,
-            TrackTrajectoryCacheEntry& trajectory)
-        {
-            if (rotation >= 4 || trajectory.sourceChannelMask == 0
-                || trajectory.railSilhouettes[rotation].empty()
-                || !surface.viewFacing || !surface.image.HasValue()
-                || surface.image.IsBlended() || surface.mask.HasValue()
-                || !surface.immutablePixels.empty())
-                return;
-            const auto* g1 = GfxGetG1Element(surface.image);
-            if (g1 == nullptr)
-                return;
-
-            const int32_t left =
-                int32_t(std::lround(surface.billboardLeft));
-            const int32_t top =
-                int32_t(std::lround(surface.billboardTop));
-            uint8_t imageChannelFlags = 0;
-            if (surface.image.HasPrimary())
-                imageChannelFlags |= 1u << 0;
-            if (surface.image.HasSecondary())
-                imageChannelFlags |= 1u << 1;
-            if (surface.image.HasTertiary())
-                imageChannelFlags |= 1u << 2;
-
-            uint64_t key = 1469598103934665603ull;
-            const auto extendKey = [&](uint64_t value) {
-                key ^= value;
-                key *= 1099511628211ull;
-            };
-            extendKey(surface.image.GetIndex());
-            extendKey(uint32_t(left));
-            extendKey(uint32_t(top));
-            extendKey(rotation);
-            extendKey(trajectory.sourceChannelMask);
-            extendKey(imageChannelFlags);
-
-            const auto applyCached =
-                [&](const TrackTrajectoryCacheEntry::MaskedArtwork& cached) {
-                    if (!cached.changed)
-                        return;
-                    surface.immutablePixels = cached.pixels;
-                    surface.immutableWidth = cached.width;
-                    surface.immutableHeight = cached.height;
-                    surface.immutableFingerprint = cached.fingerprint;
-                };
-
-            if (const auto found = trajectory.maskedArtwork.find(key);
-                found != trajectory.maskedArtwork.end()
-                    && found->second.image == surface.image.GetIndex()
-                    && found->second.left == left
-                    && found->second.top == top
-                    && found->second.rotation == rotation
-                    && found->second.channelMask
-                        == trajectory.sourceChannelMask
-                    && found->second.imageChannelFlags == imageChannelFlags)
-            {
-                applyCached(found->second);
-                return;
-            }
-
-            TrackTrajectoryCacheEntry::MaskedArtwork cached{};
-            cached.image = surface.image.GetIndex();
-            cached.left = left;
-            cached.top = top;
-            cached.width = g1->width;
-            cached.height = g1->height;
-            cached.rotation = rotation;
-            cached.channelMask = trajectory.sourceChannelMask;
-            cached.imageChannelFlags = imageChannelFlags;
-
-            auto pixels = DecodeFirstPersonTrackSprite(*g1);
-            if (!pixels.has_value())
-            {
-                trajectory.maskedArtwork[key] = std::move(cached);
-                return;
-            }
-
-            const auto& railSilhouette =
-                trajectory.railSilhouettes[rotation];
-            for (int32_t y = 0; y < g1->height; ++y)
-            for (int32_t x = 0; x < g1->width; ++x)
-            {
-                auto& pixel =
-                    (*pixels)[size_t(y) * size_t(g1->width) + size_t(x)];
-                if (pixel == 0)
-                    continue;
-
-                uint8_t pixelMask = 0;
-                for (size_t channelIndex = 0;
-                     channelIndex < kFirstPersonTrackPixelChannelCount;
-                     ++channelIndex)
-                {
-                    const auto channel =
-                        static_cast<FirstPersonTrackPixelChannel>(
-                            channelIndex);
-                    if (FirstPersonTrackChannelEnabledForImage(
-                            surface.image, channel)
-                        && FirstPersonTrackPixelMatchesChannel(
-                            pixel, channel))
-                    {
-                        pixelMask |=
-                            FirstPersonTrackPixelChannelBit(channel);
-                    }
-                }
-                if ((pixelMask & trajectory.sourceChannelMask) == 0
-                    || !FirstPersonTrackSilhouetteContainsNear(
-                        railSilhouette, left + x, top + y, 1))
-                    continue;
-                pixel = 0;
-                cached.changed = true;
-            }
-
-            if (cached.changed)
-            {
-                cached.pixels = std::move(*pixels);
-                uint64_t fingerprint = 1469598103934665603ull;
-                const auto extendFingerprint = [&](uint64_t value) {
-                    fingerprint ^= value;
-                    fingerprint *= 1099511628211ull;
-                };
-                extendFingerprint(surface.image.GetIndex());
-                extendFingerprint(rotation);
-                for (const auto pixel : cached.pixels)
-                    extendFingerprint(pixel);
-                cached.fingerprint = fingerprint;
-            }
-
-            auto [inserted, ignored] =
-                trajectory.maskedArtwork.insert_or_assign(
-                    key, std::move(cached));
-            (void)ignored;
-            applyCached(inserted->second);
         }
 
         [[nodiscard]] uint8_t FirstPersonColourShade(
@@ -5952,19 +5800,6 @@ namespace OpenRCT2::Paint
                                 continue;
 
                             auto surface = staticSurface;
-                            if (surface.reconstructionGroup != 0)
-                            {
-                                const auto trajectory =
-                                    _trackTrajectoryCache.find(
-                                        surface.reconstructionGroup);
-                                if (trajectory != _trackTrajectoryCache.end()
-                                    && !trajectory->second.dirty
-                                    && trajectory->second.lastSeen == frame)
-                                {
-                                    ApplyFirstPersonTrackRailArtworkMask(
-                                        surface, rotation, trajectory->second);
-                                }
-                            }
                             ReorientBillboard(surface, opt.camera.position, basis.right);
                             if (SurfaceMayBeVisible(surface, worldFrustum))
                                 scene.surfaces.emplace_back(std::move(surface));
