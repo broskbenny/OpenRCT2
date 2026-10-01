@@ -114,6 +114,10 @@ namespace OpenRCT2::Paint
         int16_t immutableHeight = 0;
         uint64_t immutableFingerprint = 0;
         bool persistentBitmap = false;
+        // True when geometry/material was reconstructed from authoritative
+        // geometry plus all available native observations and therefore does
+        // not depend on the passenger-selected native source rotation.
+        bool cameraIndependent = false;
         // Zero means tile-local/unconnected artwork. Nonzero identifies a
         // multi-tile reconstruction group whose native source rotation is
         // selected from one canonical object/track origin.
