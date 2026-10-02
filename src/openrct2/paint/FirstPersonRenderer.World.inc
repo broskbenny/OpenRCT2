@@ -1865,8 +1865,13 @@
                 surface.gpuRegion = gpuRegion;
                 surface.physicalCoverage =
                     !component.artwork.decal;
+                // A decal is explicitly appearance layered onto an existing
+                // physical plane. Give it the same equal-depth paint-order
+                // ownership used by floors/decks instead of making coincident
+                // artwork compete in the depth buffer.
                 surface.coplanarOwner =
-                    FirstPersonSemanticRoleOwnsCoplanarSurface(
+                    component.artwork.decal
+                    || FirstPersonSemanticRoleOwnsCoplanarSurface(
                         component.role);
                 surface.nativePaintOrdinal =
                     component.artwork.nativePaintOrdinal;
