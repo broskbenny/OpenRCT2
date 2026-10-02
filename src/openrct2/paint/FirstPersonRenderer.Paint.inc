@@ -557,6 +557,24 @@
                                     .nativePaintOrdinal =
                                     rootPaintOrdinal;
                             }
+                            // Any world-fixed opaque surface carrying native
+                            // artwork participates in the same equal-depth
+                            // ordering contract. This is not a path/wall role
+                            // rule: physical depth wins normally, and native
+                            // arranged order is replayed only at the matching
+                            // physical layer.
+                            const auto surfaceImage =
+                                scene.surfaces[i].image;
+                            if (!scene.surfaces[i].viewFacing
+                                && surfaceImage.HasValue()
+                                && !surfaceImage.IsBlended()
+                                && scene.surfaces[i]
+                                       .nativePaintOrdinal
+                                    != 0)
+                            {
+                                scene.surfaces[i]
+                                    .coplanarOwner = true;
+                            }
                         }
                         if (const auto semantic = LargeScenerySemanticBounds(*root); semantic.has_value())
                         {
