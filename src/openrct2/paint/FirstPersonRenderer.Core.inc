@@ -7,6 +7,19 @@
         [[nodiscard]] bool SameFirstPersonMaterialTemplate(
             ImageId a, ImageId b);
 
+        [[nodiscard]] constexpr uint8_t
+            FirstPersonMissingMaterialPixel(int32_t x, int32_t y)
+        {
+            // Deliberately unmistakable indexed checkerboard for genuinely
+            // unknown material. Transparent source pixels never use this.
+            constexpr uint8_t dark =
+                static_cast<uint8_t>(Drawing::PaletteIndex::pi10);
+            constexpr uint8_t marker =
+                static_cast<uint8_t>(Drawing::PaletteIndex::hotPink8);
+            return (((x >> 2) ^ (y >> 2)) & 1) != 0
+                ? marker : dark;
+        }
+
         float Dot(FirstPersonVec3 a, FirstPersonVec3 b)
         {
             return a.x * b.x + a.y * b.y + a.z * b.z;
