@@ -595,7 +595,13 @@
                                     CaptureFirstPersonTrackArtworkProjection(
                                         scene.surfaces[i], rotation);
                                 }
-                                if (!scene.surfaces[i].immutablePixels.empty())
+                                // Mutable snapshot pixels (for example
+                                // scrolling text) must remain streamed and
+                                // refreshed. Persistent reconstructed materials
+                                // are world-fixed and belong in resident static
+                                // regions just like ordinary opaque textures.
+                                if (!scene.surfaces[i].immutablePixels.empty()
+                                    && !scene.surfaces[i].persistentBitmap)
                                 {
                                     scene.surfaces[i].gpuRegion = 0;
                                     if (cacheIt != _staticPaintCache.end() && !cacheIt->second.animated)
