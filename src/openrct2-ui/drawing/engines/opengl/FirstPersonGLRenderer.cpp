@@ -101,6 +101,23 @@ flat in vec2 fMaskSize;
 flat in int fMaskLayer;
 flat in uint fPaintOrdinal;
 layout(location=0) out uint oIndex;
+
+float CoplanarDepthTolerance(float physicalDepth) {
+    // Convert a tiny world-space equality tolerance through the same
+    // logarithmic depth transform used for gl_FragDepth. This keeps
+    // "same physical plane" stable with distance without moving geometry.
+    const float worldTolerance = 0.125;
+    const float fixedDepthUlpAllowance = 0.00000048;
+    float denominator = log2(1.0 + max(uNearFar.y, 1.0));
+    float here = log2(1.0 + physicalDepth) / denominator;
+    float nearby =
+        log2(1.0 + physicalDepth + worldTolerance)
+        / denominator;
+    return max(
+        fixedDepthUlpAllowance,
+        nearby - here);
+}
+
 void main() {
     uint col = 0u;
     if ((fFlags & 16) != 0) {
@@ -163,25 +180,38 @@ void main() {
         // Coplanar ownership is a logical paint relation, not a geometry
         // offset. Compare against completed ordinary physical depth and snap
         // only the numerically-equal layer to that exact stored depth.
-        const float opaqueDepthEps = 0.00000002;
+        float opaqueDepthEps =
+            CoplanarDepthTolerance(depth);
         float opaqueDepth = texelFetch(
             uOpaqueDepth, ivec2(gl_FragCoord.xy), 0).r;
         if (logarithmic > opaqueDepth + opaqueDepthEps) discard;
         if (abs(logarithmic - opaqueDepth) <= opaqueDepthEps)
+        {
+            logarithmic = opaqueDepth;
             gl_FragDepth = opaqueDepth;
+        }
     }
     if ((fFlags & 1) != 0) {
-        // Opaque depth still comes from the renderer's fixed-point depth
-        // buffer; this tolerance belongs only to that opaque comparison.
-        const float opaqueDepthEps = 0.00000002;
-        float opaqueDepth = texelFetch(uOpaqueDepth,ivec2(gl_FragCoord.xy),0).r;
+        float opaqueDepth = texelFetch(
+            uOpaqueDepth,ivec2(gl_FragCoord.xy),0).r;
         bool coplanarOwner = (fFlags & 4) != 0;
         if (coplanarOwner) {
-            // Ownership permits the exact same physical layer; it never alters
-            // world/depth coordinates.
-            if (logarithmic > opaqueDepth + opaqueDepthEps) discard;
+            // Ownership permits only the same physical layer. Use the same
+            // world-space equality test as opaque semantic owners and snap the
+            // numerical key when it is genuinely coplanar.
+            float opaqueDepthEps =
+                CoplanarDepthTolerance(depth);
+            if (logarithmic > opaqueDepth + opaqueDepthEps)
+                discard;
+            if (abs(logarithmic - opaqueDepth)
+                <= opaqueDepthEps)
+                logarithmic = opaqueDepth;
         } else {
-            if (logarithmic >= opaqueDepth - opaqueDepthEps) discard;
+            // Non-owners remain strict: this is occlusion, not ownership.
+            const float opaqueDepthEps = 0.00000002;
+            if (logarithmic
+                >= opaqueDepth - opaqueDepthEps)
+                discard;
         }
 
         uint row = uint(fPalettes.y);

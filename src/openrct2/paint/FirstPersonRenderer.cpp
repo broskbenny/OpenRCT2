@@ -18,6 +18,7 @@
 #include "Paint.Entity.h"
 
 #include "../Context.h"
+#include "../Diagnostic.h"
 #include "../GameState.h"
 #include "../drawing/Drawing.Sprite.h"
 #include "../drawing/Colour.h"
@@ -554,7 +555,73 @@ namespace OpenRCT2::Paint
         auto* context =
             rt.DrawingEngine->GetDrawingContext();
         if (context != nullptr)
+        {
             context->DrawFirstPersonScene(rt, *scene);
+
+            // Sparse passive diagnostics: distinguish CPU scene construction
+            // from actual GPU submission/compositing before changing either.
+            static uint64_t lastDiagnosticSerial = 0;
+            const uint64_t serial =
+                scene->presentationFrameSerial;
+            if (serial != 0
+                && serial != lastDiagnosticSerial
+                && serial % 120 == 0)
+            {
+                lastDiagnosticSerial = serial;
+                size_t viewFacing = 0;
+                size_t blended = 0;
+                size_t cameraIndependent = 0;
+                for (const auto& surface :
+                     scene->surfaces)
+                {
+                    if (surface.viewFacing)
+                        ++viewFacing;
+                    if (surface.image.HasValue()
+                        && surface.image.IsBlended())
+                        ++blended;
+                    if (surface.cameraIndependent)
+                        ++cameraIndependent;
+                }
+
+                size_t staticSurfaces = 0;
+                for (const auto& region :
+                     scene->staticRegions)
+                {
+                    if (region.surfaces != nullptr)
+                        staticSurfaces +=
+                            region.surfaces->size();
+                }
+
+                LOG_INFO(
+                    "[RCTFP PERF] serial=%llu tiles=%zu regions=%zu "
+                    "staticSurfaces=%zu streamed=%zu viewFacing=%zu "
+                    "blended=%zu cameraIndependent=%zu staticPaints=%u "
+                    "cacheHits=%u trackBuilds=%u trackHits=%u "
+                    "dynamicQueries=%u dynamicPainted=%u "
+                    "cpuMs{vis=%.2f terrain=%.2f track=%.2f paint=%.2f total=%.2f} "
+                    "gpuMs=%.2f",
+                    static_cast<unsigned long long>(serial),
+                    scene->visibleTiles.size(),
+                    scene->staticRegions.size(),
+                    staticSurfaces,
+                    scene->surfaces.size(),
+                    viewFacing,
+                    blended,
+                    cameraIndependent,
+                    scene->staticTilePaints,
+                    scene->staticTileCacheHits,
+                    scene->trackGeometryBuilds,
+                    scene->trackGeometryCacheHits,
+                    scene->dynamicTileQueries,
+                    scene->dynamicTilesPainted,
+                    scene->visibilityCpuMs,
+                    scene->terrainCpuMs,
+                    scene->trackCpuMs,
+                    scene->paintCpuMs,
+                    scene->prepareCpuMs,
+                    context->GetFirstPersonGpuTimeMs());
+            }
+        }
     }
 } // namespace OpenRCT2::Paint
 
