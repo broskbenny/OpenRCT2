@@ -52,6 +52,13 @@ namespace OpenRCT2::Ui
             GLsizei ownerCount{};
         };
         std::unordered_map<uint64_t,RegionBuffer> _staticOpaqueRegions;
+        struct CoverageFallbackCacheEntry
+        {
+            uint64_t imageRevision{};
+            uint8_t paletteIndex{};
+        };
+        std::unordered_map<uint32_t, CoverageFallbackCacheEntry>
+            _coverageFallbackCache;
         size_t _staticRegionBytes{};
         uint64_t _frame{};
         uint64_t _sceneEpoch{};

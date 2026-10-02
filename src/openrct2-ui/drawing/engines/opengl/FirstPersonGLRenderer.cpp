@@ -785,12 +785,11 @@ void main() {
         if(_atlasHandle!=currentAtlas)
         {
             DiscardAllRegionBuffers();
+            _coverageFallbackCache.clear();
             _atlasHandle=currentAtlas;
         }
         std::unordered_map<uint64_t, BasicTextureInfo> immutableTextures;
         immutableTextures.reserve(scene.surfaces.size() / 16 + 1);
-        std::unordered_map<uint32_t, uint8_t> coverageFallbacks;
-        coverageFallbacks.reserve(64);
         auto appendVertices = [&](std::vector<GPUVertex>& vertices, const Paint::FirstPersonSurface& surface) {
             const auto image=surface.image;
             const auto* g1=surface.solidColour == 0 ? GfxGetG1Element(image) : nullptr;
@@ -840,11 +839,23 @@ void main() {
             int32_t coverageFallback = 0;
             if (surface.physicalCoverage && g1 != nullptr)
             {
+                const auto imageIndex = image.GetIndex();
+                const uint64_t imageRevision =
+                    textures.GetImageTextureRevision(imageIndex);
                 auto [it, inserted] =
-                    coverageFallbacks.try_emplace(image.GetIndex(), 0);
-                if (inserted)
-                    it->second = DominantOpaqueSpritePixel(*g1);
-                coverageFallback = int32_t(it->second);
+                    _coverageFallbackCache.try_emplace(
+                        imageIndex);
+                if (inserted
+                    || it->second.imageRevision
+                        != imageRevision)
+                {
+                    it->second.imageRevision =
+                        imageRevision;
+                    it->second.paletteIndex =
+                        DominantOpaqueSpritePixel(*g1);
+                }
+                coverageFallback =
+                    int32_t(it->second.paletteIndex);
             }
             BasicTextureInfo maskTex{};
             const auto* maskG1=surface.mask.HasValue()?GfxGetG1Element(surface.mask):nullptr;
