@@ -1587,27 +1587,21 @@
             return std::sqrt(dx * dx + dy * dy + dz * dz);
         }
 
-        [[nodiscard]] uint8_t FirstPersonSemanticFallbackPixel(
-            const FirstPersonSemanticArtworkView& view)
+        enum class FirstPersonSemanticArtworkSampleKind : uint8_t
         {
-            std::array<uint32_t, 256> counts{};
-            for (const auto pixel : view.pixels)
-                if (pixel != 0)
-                    ++counts[pixel];
-            uint8_t best = 0;
-            uint32_t bestCount = 0;
-            for (size_t i = 1; i < counts.size(); ++i)
-            {
-                if (counts[i] > bestCount)
-                {
-                    best = uint8_t(i);
-                    bestCount = counts[i];
-                }
-            }
-            return best;
-        }
+            unknown,
+            transparent,
+            colour,
+        };
 
-        [[nodiscard]] std::optional<uint8_t>
+        struct FirstPersonSemanticArtworkSample
+        {
+            FirstPersonSemanticArtworkSampleKind kind =
+                FirstPersonSemanticArtworkSampleKind::unknown;
+            uint8_t pixel = 0;
+        };
+
+        [[nodiscard]] FirstPersonSemanticArtworkSample
             SampleFirstPersonSemanticArtwork(
                 const FirstPersonSemanticArtworkView& view,
                 const FirstPersonVec3& worldPoint,
@@ -1615,7 +1609,7 @@
         {
             if (view.component == nullptr || view.g1 == nullptr
                 || view.pixels.empty())
-                return std::nullopt;
+                return {};
 
             const CoordsXYZ point{
                 int32_t(std::lround(worldPoint.x)),
@@ -1633,7 +1627,7 @@
             if (u < 0 || v < 0
                 || u >= view.g1->width
                 || v >= view.g1->height)
-                return std::nullopt;
+                return {};
 
             if (view.maskG1 != nullptr
                 && !view.maskPixels.empty())
@@ -1647,22 +1641,35 @@
                 if (mu < 0 || mv < 0
                     || mu >= view.maskG1->width
                     || mv >= view.maskG1->height)
-                    return std::nullopt;
+                    return {};
                 const uint8_t mask =
                     view.maskPixels[
                         size_t(mv) * size_t(view.maskG1->width)
                         + size_t(mu)];
                 if (mask == 0)
-                    return std::nullopt;
+                {
+                    return {
+                        FirstPersonSemanticArtworkSampleKind::transparent,
+                        0
+                    };
+                }
             }
 
             const uint8_t pixel =
                 view.pixels[
                     size_t(v) * size_t(view.g1->width)
                     + size_t(u)];
-            return pixel != 0
-                ? std::optional<uint8_t>{ pixel }
-                : std::nullopt;
+            if (pixel == 0)
+            {
+                return {
+                    FirstPersonSemanticArtworkSampleKind::transparent,
+                    0
+                };
+            }
+            return {
+                FirstPersonSemanticArtworkSampleKind::colour,
+                pixel
+            };
         }
 
         [[nodiscard]] std::vector<FirstPersonSurface>
@@ -1791,17 +1798,6 @@
                 }
             }
 
-            uint8_t fallbackColour = static_cast<uint8_t>(
-                Drawing::PaletteIndex::trackRails1);
-            if (component.artwork.image.HasPrimary())
-            {
-                const auto colour =
-                    component.artwork.image.GetPrimary();
-                if (Drawing::colourIsValid(colour))
-                    fallbackColour = static_cast<uint8_t>(
-                        Drawing::getColourMap(colour).midDark);
-            }
-
             for (size_t faceIndex = 0;
                  faceIndex < faces.size(); ++faceIndex)
             {
@@ -1863,8 +1859,10 @@
 
                 FirstPersonSurface surface{};
                 surface.gpuRegion = gpuRegion;
-                surface.physicalCoverage =
-                    !component.artwork.decal;
+                // Geometry/collision and visible material are independent.
+                // Palette index zero is explicit native transparency, not a
+                // hole to fill merely because this component has a 3D shape.
+                surface.physicalCoverage = false;
                 // A decal is explicitly appearance layered onto an existing
                 // physical plane. Give it the same equal-depth paint-order
                 // ownership used by floors/decks instead of making coincident
@@ -1876,180 +1874,207 @@
                 surface.nativePaintOrdinal =
                     component.artwork.nativePaintOrdinal;
 
+                ImageId fallbackImage{};
+                for (const auto& view : decodedViews)
+                {
+                    if (view.component != nullptr
+                        && view.component->artwork.image.HasValue())
+                    {
+                        fallbackImage =
+                            view.component->artwork.image;
+                        break;
+                    }
+                }
                 if (!candidates.empty())
                 {
-                    const auto& anchor =
+                    fallbackImage =
                         decodedViews[
-                            candidates.front().rotation];
-                    surface.image =
-                        anchor.component->artwork.image;
-                    const int32_t width =
-                        std::clamp(
-                            int32_t(std::ceil(std::max(
-                                FirstPersonSemanticEdgeLength(
-                                    face[0], face[1]),
-                                FirstPersonSemanticEdgeLength(
-                                    face[3], face[2])))),
-                            1, 256);
-                    const int32_t height =
-                        std::clamp(
-                            int32_t(std::ceil(std::max(
-                                FirstPersonSemanticEdgeLength(
-                                    face[0], face[3]),
-                                FirstPersonSemanticEdgeLength(
-                                    face[1], face[2])))),
-                            1, 256);
+                            candidates.front().rotation]
+                            .component->artwork.image;
+                }
+                if (!fallbackImage.HasValue())
+                    continue;
 
-                    std::vector<uint8_t> pixels(
-                        size_t(width) * size_t(height), 0);
-                    const uint8_t materialFallback =
-                        FirstPersonSemanticFallbackPixel(anchor);
-                    for (int32_t y = 0; y < height; ++y)
-                    for (int32_t x = 0; x < width; ++x)
+                surface.image = fallbackImage;
+                const int32_t width =
+                    std::clamp(
+                        int32_t(std::ceil(std::max(
+                            FirstPersonSemanticEdgeLength(
+                                face[0], face[1]),
+                            FirstPersonSemanticEdgeLength(
+                                face[3], face[2])))),
+                        1, 256);
+                const int32_t height =
+                    std::clamp(
+                        int32_t(std::ceil(std::max(
+                            FirstPersonSemanticEdgeLength(
+                                face[0], face[3]),
+                            FirstPersonSemanticEdgeLength(
+                                face[1], face[2])))),
+                        1, 256);
+
+                std::vector<uint8_t> pixels(
+                    size_t(width) * size_t(height), 0);
+                bool haveKnownMaterial = false;
+                bool haveUnknownMaterial = false;
+                for (int32_t y = 0; y < height; ++y)
+                for (int32_t x = 0; x < width; ++x)
+                {
+                    const float s =
+                        (float(x) + 0.5f)
+                        / float(width);
+                    const float t =
+                        (float(y) + 0.5f)
+                        / float(height);
+                    const auto worldPoint =
+                        FirstPersonSemanticFacePoint(
+                            face, s, t);
+
+                    bool texelKnown = false;
+                    bool texelUnknown = candidates.empty();
+                    uint8_t selectedPixel = 0;
+                    for (const auto& candidate :
+                         candidates)
                     {
-                        const float s =
-                            (float(x) + 0.5f)
-                            / float(width);
-                        const float t =
-                            (float(y) + 0.5f)
-                            / float(height);
-                        const auto worldPoint =
-                            FirstPersonSemanticFacePoint(
-                                face, s, t);
+                        const auto& view =
+                            decodedViews[
+                                candidate.rotation];
+                        if (!SameFirstPersonMaterialTemplate(
+                                surface.image,
+                                view.component->artwork.image))
+                            continue;
 
-                        uint8_t selectedPixel = 0;
-                        for (const auto& candidate :
-                             candidates)
+                        const CoordsXYZ point{
+                            int32_t(std::lround(
+                                worldPoint.x)),
+                            int32_t(std::lround(
+                                worldPoint.y)),
+                            int32_t(std::lround(
+                                worldPoint.z)),
+                        };
+                        const auto iso =
+                            Translate3DTo2DWithZ(
+                                candidate.rotation,
+                                point);
+                        if (!FirstPersonSemanticFaceOwnedNear(
+                                depthOwners[
+                                    candidate.rotation],
+                                uint32_t(faceIndex),
+                                iso.x, iso.y))
+                            continue;
+
+                        const auto sample =
+                            SampleFirstPersonSemanticArtwork(
+                                view, worldPoint,
+                                candidate.rotation);
+                        if (sample.kind
+                            == FirstPersonSemanticArtworkSampleKind::unknown)
                         {
-                            const auto& view =
-                                decodedViews[
-                                    candidate.rotation];
-                            if (!SameFirstPersonMaterialTemplate(
-                                    surface.image,
-                                    view.component->artwork.image))
-                                continue;
-
-                            const CoordsXYZ point{
-                                int32_t(std::lround(
-                                    worldPoint.x)),
-                                int32_t(std::lround(
-                                    worldPoint.y)),
-                                int32_t(std::lround(
-                                    worldPoint.z)),
-                            };
-                            const auto iso =
-                                Translate3DTo2DWithZ(
-                                    candidate.rotation,
-                                    point);
-                            if (!FirstPersonSemanticFaceOwnedNear(
-                                    depthOwners[
-                                        candidate.rotation],
-                                    uint32_t(faceIndex),
-                                    iso.x, iso.y))
-                                continue;
-
-                            const auto sample =
-                                SampleFirstPersonSemanticArtwork(
-                                    view, worldPoint,
-                                    candidate.rotation);
-                            if (!sample.has_value())
-                                continue;
-                            selectedPixel = *sample;
-                            break;
+                            texelUnknown = true;
+                            continue;
                         }
 
-                        if (selectedPixel == 0
-                            && surface.physicalCoverage)
-                        {
-                            selectedPixel =
-                                materialFallback != 0
-                                ? materialFallback
-                                : fallbackColour;
-                        }
-                        pixels[
-                            size_t(y) * size_t(width)
-                            + size_t(x)] =
-                            selectedPixel;
+                        // A trustworthy transparent texel is real evidence.
+                        // Do not search another view for a colour just to make
+                        // the physical face look filled.
+                        texelKnown = true;
+                        selectedPixel =
+                            sample.kind
+                                == FirstPersonSemanticArtworkSampleKind::colour
+                            ? sample.pixel : 0;
+                        break;
                     }
 
-                    bool hasPixel = false;
-                    for (const auto pixel : pixels)
+                    if (texelKnown)
                     {
-                        if (pixel != 0)
-                        {
-                            hasPixel = true;
-                            break;
-                        }
+                        haveKnownMaterial = true;
+                    }
+                    else if (texelUnknown)
+                    {
+                        haveUnknownMaterial = true;
+                        selectedPixel =
+                            FirstPersonMissingMaterialPixel(x, y);
                     }
 
-                    if (hasPixel)
+                    pixels[
+                        size_t(y) * size_t(width)
+                        + size_t(x)] =
+                        selectedPixel;
+                }
+
+                bool hasPixel = false;
+                for (const auto pixel : pixels)
+                {
+                    if (pixel != 0)
                     {
-                        surface.immutablePixels =
-                            std::move(pixels);
-                        surface.immutableWidth =
-                            int16_t(width);
-                        surface.immutableHeight =
-                            int16_t(height);
-                        surface.persistentBitmap = true;
-
-                        uint64_t fingerprint =
-                            14695981039346656037ull;
-                        ExtendStableKey(
-                            fingerprint,
-                            surface.image.GetRemap());
-                        ExtendStableKey(
-                            fingerprint,
-                            surface.image.HasPrimary()
-                                ? EnumValue(
-                                    surface.image.GetPrimary())
-                                : 0xffu);
-                        ExtendStableKey(
-                            fingerprint,
-                            surface.image.HasSecondary()
-                                ? EnumValue(
-                                    surface.image.GetSecondary())
-                                : 0xffu);
-                        ExtendStableKey(
-                            fingerprint,
-                            surface.image.HasTertiary()
-                                ? EnumValue(
-                                    surface.image.GetTertiary())
-                                : 0xffu);
-                        ExtendStableKey(
-                            fingerprint, width);
-                        ExtendStableKey(
-                            fingerprint, height);
-                        for (const auto pixel :
-                             surface.immutablePixels)
-                        {
-                            fingerprint ^= pixel;
-                            fingerprint *= 1099511628211ull;
-                        }
-                        surface.immutableFingerprint =
-                            fingerprint;
-
-                        const std::array<
-                            FirstPersonVertex, 4> vertices{ {
-                            { face[0], 0.0f, 0.0f },
-                            { face[1], float(width), 0.0f },
-                            { face[2], float(width), float(height) },
-                            { face[3], 0.0f, float(height) },
-                        } };
-                        EmitQuad(surface, vertices);
-                        result.emplace_back(
-                            std::move(surface));
-                        continue;
+                        hasPixel = true;
+                        break;
                     }
                 }
 
-                surface.solidColour =
-                    fallbackColour != 0
-                    ? fallbackColour : 1;
-                std::array<FirstPersonVertex, 4> vertices{};
-                for (size_t i = 0; i < face.size(); ++i)
-                    vertices[i].world = face[i];
+                // A fully known-transparent face has no visible material.
+                // Its physical/collision representation remains independent.
+                if (!hasPixel && haveKnownMaterial
+                    && !haveUnknownMaterial)
+                    continue;
+
+                if (!hasPixel)
+                    continue;
+
+                surface.immutablePixels =
+                    std::move(pixels);
+                surface.immutableWidth =
+                    int16_t(width);
+                surface.immutableHeight =
+                    int16_t(height);
+                surface.persistentBitmap = true;
+
+                uint64_t fingerprint =
+                    14695981039346656037ull;
+                ExtendStableKey(
+                    fingerprint,
+                    surface.image.GetRemap());
+                ExtendStableKey(
+                    fingerprint,
+                    surface.image.HasPrimary()
+                        ? EnumValue(
+                            surface.image.GetPrimary())
+                        : 0xffu);
+                ExtendStableKey(
+                    fingerprint,
+                    surface.image.HasSecondary()
+                        ? EnumValue(
+                            surface.image.GetSecondary())
+                        : 0xffu);
+                ExtendStableKey(
+                    fingerprint,
+                    surface.image.HasTertiary()
+                        ? EnumValue(
+                            surface.image.GetTertiary())
+                        : 0xffu);
+                ExtendStableKey(
+                    fingerprint, width);
+                ExtendStableKey(
+                    fingerprint, height);
+                for (const auto pixel :
+                     surface.immutablePixels)
+                {
+                    fingerprint ^= pixel;
+                    fingerprint *= 1099511628211ull;
+                }
+                surface.immutableFingerprint =
+                    fingerprint;
+
+                const std::array<
+                    FirstPersonVertex, 4> vertices{ {
+                    { face[0], 0.0f, 0.0f },
+                    { face[1], float(width), 0.0f },
+                    { face[2], float(width), float(height) },
+                    { face[3], 0.0f, float(height) },
+                } };
                 EmitQuad(surface, vertices);
-                result.emplace_back(std::move(surface));
+                result.emplace_back(
+                    std::move(surface));
             }
             return result;
         }
