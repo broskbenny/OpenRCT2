@@ -1315,27 +1315,6 @@
 
                     uint64_t fingerprint =
                         14695981039346656037ull;
-                    ExtendStableKey(
-                        fingerprint,
-                        surface.image.GetRemap());
-                    ExtendStableKey(
-                        fingerprint,
-                        surface.image.HasPrimary()
-                            ? EnumValue(
-                                surface.image.GetPrimary())
-                            : 0xffu);
-                    ExtendStableKey(
-                        fingerprint,
-                        surface.image.HasSecondary()
-                            ? EnumValue(
-                                surface.image.GetSecondary())
-                            : 0xffu);
-                    ExtendStableKey(
-                        fingerprint,
-                        surface.image.HasTertiary()
-                            ? EnumValue(
-                                surface.image.GetTertiary())
-                            : 0xffu);
                     ExtendStableKey(fingerprint, width);
                     ExtendStableKey(fingerprint, height);
                     for (const auto pixel :
@@ -2765,27 +2744,6 @@
                     uint64_t fingerprint =
                         14695981039346656037ull;
                     ExtendStableKey(
-                        fingerprint,
-                        surface.image.GetRemap());
-                    ExtendStableKey(
-                        fingerprint,
-                        surface.image.HasPrimary()
-                            ? EnumValue(
-                                surface.image.GetPrimary())
-                            : 0xffu);
-                    ExtendStableKey(
-                        fingerprint,
-                        surface.image.HasSecondary()
-                            ? EnumValue(
-                                surface.image.GetSecondary())
-                            : 0xffu);
-                    ExtendStableKey(
-                        fingerprint,
-                        surface.image.HasTertiary()
-                            ? EnumValue(
-                                surface.image.GetTertiary())
-                            : 0xffu);
-                    ExtendStableKey(
                         fingerprint, width);
                     ExtendStableKey(
                         fingerprint, height);
@@ -3988,29 +3946,6 @@
 
                 uint64_t fingerprint =
                     14695981039346656037ull;
-                ExtendStableKey(
-                    fingerprint,
-                    materialClass.material.GetRemap());
-                ExtendStableKey(
-                    fingerprint,
-                    materialClass.material.HasPrimary()
-                        ? EnumValue(
-                            materialClass.material.GetPrimary())
-                        : 0xffu);
-                ExtendStableKey(
-                    fingerprint,
-                    materialClass.material.HasSecondary()
-                        ? EnumValue(
-                            materialClass.material.GetSecondary())
-                        : 0xffu);
-                ExtendStableKey(
-                    fingerprint,
-                    materialClass.material.HasTertiary()
-                        ? EnumValue(
-                            materialClass.material.GetTertiary())
-                        : 0xffu);
-                ExtendStableKey(
-                    fingerprint, materialIndex);
                 ExtendStableKey(
                     fingerprint, width);
                 ExtendStableKey(
