@@ -1086,6 +1086,8 @@
             const float tileX = float(ps.MapPos.x);
             const float tileY = float(ps.MapPos.y);
             const float baseZ = float(small->getBaseZ());
+            const size_t surfaceStart = scene.surfaces.size();
+            size_t emittedFaces = 0;
             for (size_t faceIndex = 0;
                  faceIndex < faces.size(); ++faceIndex)
             {
@@ -1187,7 +1189,9 @@
                     });
 
                 FirstPersonSurface surface{};
-                surface.physicalCoverage = true;
+                // The hull is physical/collision evidence; its sprite material
+                // is still alpha-tested artwork. Do not turn transparent sprite
+                // pixels into visible matter merely because a hull face exists.
                 surface.cameraIndependent = true;
 
                 if (!candidates.empty())
@@ -1214,27 +1218,9 @@
                                     face.corners[2])))),
                             1, 256);
 
-                    std::array<uint32_t, 256> fallbackCounts{};
-                    for (const auto pixel :
-                         candidates.front().pixels)
-                    {
-                        if (pixel != 0)
-                            ++fallbackCounts[pixel];
-                    }
-                    uint8_t fallbackPixel = 0;
-                    uint32_t fallbackCount = 0;
-                    for (size_t i = 1;
-                         i < fallbackCounts.size(); ++i)
-                    {
-                        if (fallbackCounts[i] > fallbackCount)
-                        {
-                            fallbackPixel = uint8_t(i);
-                            fallbackCount = fallbackCounts[i];
-                        }
-                    }
-
                     std::vector<uint8_t> pixels(
                         size_t(width) * size_t(height), 0);
+                    size_t visiblePixelCount = 0;
                     for (int32_t y = 0; y < height; ++y)
                     for (int32_t x = 0; x < width; ++x)
                     {
@@ -1304,13 +1290,20 @@
                             break;
                         }
 
-                        if (selectedPixel == 0)
-                            selectedPixel = fallbackPixel;
+                        // Zero is meaningful visual evidence: the native
+                        // sprite has no material at this projected point.
+                        // Preserve it instead of painting the hull/collision
+                        // volume with a guessed dominant colour.
                         pixels[
                             size_t(y) * size_t(width)
                             + size_t(x)] =
                             selectedPixel;
+                        if (selectedPixel != 0)
+                            ++visiblePixelCount;
                     }
+
+                    if (visiblePixelCount == 0)
+                        continue;
 
                     surface.immutablePixels =
                         std::move(pixels);
@@ -1384,45 +1377,25 @@
                     EmitQuad(surface, vertices);
                     scene.surfaces.emplace_back(
                         std::move(surface));
+                    ++emittedFaces;
                     continue;
                 }
 
                 // Native sprites normally provide no underside observation.
-                // Keep the authoritative hull face and use one native material
-                // only as a palette/remap fallback; geometry is still exact.
-                for (const auto& view : hull->textureViews)
-                {
-                    const auto sourceImage =
-                        image.WithIndex(view.image);
-                    const auto* g1 =
-                        GfxGetG1Element(sourceImage);
-                    if (g1 == nullptr
-                        || g1->width <= 0
-                        || g1->height <= 0)
-                        continue;
-                    surface.image = sourceImage;
-                    surface.textureFallbackOnly = true;
-                    break;
-                }
-                if (!surface.image.HasValue())
-                    return false;
+                // An unobserved bottom face may exist physically for collision,
+                // but inventing a flat material for it is not visual evidence.
+                if (face.kind
+                    == FirstPersonVisualHullFaceKind::bottom)
+                    continue;
 
-                std::array<FirstPersonVertex, 4> vertices{};
-                for (size_t i = 0;
-                     i < vertices.size(); ++i)
-                {
-                    const auto& point = face.corners[i];
-                    vertices[i].world = {
-                        tileX + point.x,
-                        tileY + point.y,
-                        baseZ + point.z,
-                    };
-                }
-                EmitQuad(surface, vertices);
-                scene.surfaces.emplace_back(
-                    std::move(surface));
+                // A normally visible face with no native-view material means
+                // reconstruction is incomplete. Roll back this object's partial
+                // mesh and preserve the ordinary native sprite fallback rather
+                // than showing guessed solid-colour geometry.
+                scene.surfaces.resize(surfaceStart);
+                return false;
             }
-            return true;
+            return emittedFaces != 0;
         }
 
         [[nodiscard]] bool IsHiddenPassengerTileComponent(

@@ -95,8 +95,11 @@ namespace OpenRCT2::Paint
         // depth so path/deck/floor artwork replaces covered terrain without
         // moving either surface.
         bool coplanarOwner = false;
-        // Physical surfaces take coverage from world geometry. Sprite
-        // transparency supplies appearance only; explicit masks still cut holes.
+        // Visual coverage may deliberately follow known-solid world geometry
+        // instead of sprite alpha (terrain, rails, structural faces). This is a
+        // rendering/material rule only, never a collision flag: foliage and
+        // other cutout artwork must leave this false so transparent pixels stay
+        // transparent even when their collision/hull geometry is solid.
         bool physicalCoverage = false;
         // Non-physical appearance carriers follow authoritative geometry but
         // exist only to receive inverse-projected native artwork (for example
