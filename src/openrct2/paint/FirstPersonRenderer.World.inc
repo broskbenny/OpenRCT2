@@ -1450,7 +1450,7 @@
                 fingerprint, component.repetitionIndex);
             ExtendStableKey(
                 fingerprint, component.collidable ? 1 : 0);
-            const auto faces =
+            auto faces =
                 BuildFirstPersonSemanticPhysicalFaces(component);
             ExtendStableKey(fingerprint, faces.size());
 
@@ -1689,6 +1689,332 @@
             if (faces.empty())
                 return result;
 
+            std::array<
+                const FirstPersonPaintSemanticComponent*, 4>
+                observations = artworkViews;
+            if (component.artwork.sourceRotation < 4
+                && observations[
+                       component.artwork.sourceRotation]
+                    == nullptr)
+            {
+                observations[
+                    component.artwork.sourceRotation] =
+                    &component;
+            }
+
+            std::array<FirstPersonSemanticArtworkView, 4>
+                decodedViews{};
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
+            {
+                decodedViews[rotation] =
+                    DecodeFirstPersonSemanticArtworkView(
+                        observations[rotation]);
+            }
+
+            // For cardinal semantic boxes (path fixtures, entrance bodies,
+            // benches, bins, lamps, etc.), use the authoritative box only as
+            // an envelope. When all four native observations are available,
+            // carve visible geometry by intersecting their silhouettes. The
+            // original semantic component remains the collision contract.
+            const auto cardinalAxis =
+                [](FirstPersonPaintSemanticVec3 axis) {
+                    const std::array<float, 3> values{
+                        std::abs(axis.x),
+                        std::abs(axis.y),
+                        std::abs(axis.z),
+                    };
+                    int unit = 0;
+                    for (const float value : values)
+                    {
+                        if (std::abs(value - 1.0f) < 0.001f)
+                            ++unit;
+                        else if (value > 0.001f)
+                            return false;
+                    }
+                    return unit == 1;
+                };
+            const bool carveBox =
+                component.geometry.kind
+                    == FirstPersonPaintSemanticPrimitiveKind::box
+                && component.geometry.pointCount >= 2
+                && !component.artwork.decal
+                && cardinalAxis(component.transform.axisX)
+                && cardinalAxis(component.transform.axisY)
+                && cardinalAxis(component.transform.axisZ);
+            if (carveBox)
+            {
+                bool haveAllViews = true;
+                std::vector<FirstPersonVisualHullView>
+                    hullViews;
+                hullViews.reserve(4);
+                for (uint8_t rotation = 0;
+                     rotation < 4; ++rotation)
+                {
+                    const auto& view =
+                        decodedViews[rotation];
+                    if (view.component == nullptr
+                        || view.g1 == nullptr
+                        || view.pixels.empty())
+                    {
+                        haveAllViews = false;
+                        break;
+                    }
+
+                    FirstPersonVisualHullView hullView{};
+                    hullView.imageDirection = rotation;
+                    hullView.image =
+                        view.component->artwork.image.GetIndex();
+                    for (int32_t y = 0;
+                         y < view.g1->height; ++y)
+                    for (int32_t x = 0;
+                         x < view.g1->width; ++x)
+                    {
+                        const uint8_t pixel =
+                            view.pixels[
+                                size_t(y)
+                                    * size_t(view.g1->width)
+                                + size_t(x)];
+                        if (pixel == 0)
+                            continue;
+
+                        const int32_t screenX =
+                            view.component->artwork.screenPos.x
+                            + view.g1->xOffset + x;
+                        const int32_t screenY =
+                            view.component->artwork.screenPos.y
+                            + view.g1->yOffset + y;
+                        if (view.maskG1 != nullptr
+                            && !view.maskPixels.empty())
+                        {
+                            const int32_t mx =
+                                screenX
+                                - view.component->artwork.screenPos.x
+                                - view.maskG1->xOffset;
+                            const int32_t my =
+                                screenY
+                                - view.component->artwork.screenPos.y
+                                - view.maskG1->yOffset;
+                            if (mx < 0 || my < 0
+                                || mx >= view.maskG1->width
+                                || my >= view.maskG1->height
+                                || view.maskPixels[
+                                    size_t(my)
+                                        * size_t(
+                                            view.maskG1->width)
+                                    + size_t(mx)]
+                                    == 0)
+                                continue;
+                        }
+                        hullView.observed.add(
+                            screenX, screenY);
+                    }
+                    if (hullView.observed.empty())
+                    {
+                        haveAllViews = false;
+                        break;
+                    }
+                    hullViews.emplace_back(
+                        std::move(hullView));
+                }
+
+                if (haveAllViews)
+                {
+                    FirstPersonVec3 low =
+                        faces.front()[0];
+                    FirstPersonVec3 high = low;
+                    for (const auto& face : faces)
+                    for (const auto& point : face)
+                    {
+                        low.x = std::min(low.x, point.x);
+                        low.y = std::min(low.y, point.y);
+                        low.z = std::min(low.z, point.z);
+                        high.x = std::max(high.x, point.x);
+                        high.y = std::max(high.y, point.y);
+                        high.z = std::max(high.z, point.z);
+                    }
+
+                    float step = 2.0f;
+                    while (true)
+                    {
+                        const int32_t nx =
+                            int32_t(std::ceil(
+                                (high.x - low.x) / step));
+                        const int32_t ny =
+                            int32_t(std::ceil(
+                                (high.y - low.y) / step));
+                        const int32_t nz =
+                            int32_t(std::ceil(
+                                (high.z - low.z) / step));
+                        const size_t count =
+                            nx > 0 && ny > 0 && nz > 0
+                            ? size_t(nx) * size_t(ny)
+                                * size_t(nz)
+                            : 0;
+                        if (nx > 0 && ny > 0 && nz > 0
+                            && nx <= 96 && ny <= 96
+                            && nz <= 96
+                            && count <= 65536)
+                            break;
+                        step *= 2.0f;
+                        if (step > 16.0f)
+                        {
+                            haveAllViews = false;
+                            break;
+                        }
+                    }
+
+                    if (haveAllViews)
+                    {
+                        FirstPersonVisualHullConfig config{};
+                        config.minimumViews = 4;
+                        config.minimumOccupiedCells = 1;
+                        config.maximumOccupiedCells = 65536;
+                        config.maximumGridCells = 65536;
+                        config.maximumAxisCells = 96;
+                        config.minimumCandidateCoverage = 0.0f;
+                        config.minimumObservedCoverage = 0.0f;
+                        config.maximumEdgeError =
+                            std::numeric_limits<int32_t>::max();
+
+                        const auto projectPoint =
+                            [](uint8_t rotation,
+                               FirstPersonVec3 point) {
+                                const auto projected =
+                                    Translate3DTo2DWithZ(
+                                        rotation,
+                                        {
+                                            int32_t(std::lround(
+                                                point.x)),
+                                            int32_t(std::lround(
+                                                point.y)),
+                                            int32_t(std::lround(
+                                                point.z)),
+                                        });
+                                return std::array<float, 2>{
+                                    float(projected.x),
+                                    float(projected.y)
+                                };
+                            };
+                        const auto pointSupported =
+                            [&](const FirstPersonVisualHullView& hullView,
+                                FirstPersonVec3 point) {
+                                const auto& view =
+                                    decodedViews[
+                                        hullView.imageDirection];
+                                const auto projected =
+                                    Translate3DTo2DWithZ(
+                                        hullView.imageDirection,
+                                        {
+                                            int32_t(std::lround(
+                                                point.x)),
+                                            int32_t(std::lround(
+                                                point.y)),
+                                            int32_t(std::lround(
+                                                point.z)),
+                                        });
+                                for (int32_t dy = -1;
+                                     dy <= 1; ++dy)
+                                for (int32_t dx = -1;
+                                     dx <= 1; ++dx)
+                                {
+                                    const int32_t screenX =
+                                        projected.x + dx;
+                                    const int32_t screenY =
+                                        projected.y + dy;
+                                    const int32_t u =
+                                        screenX
+                                        - view.component
+                                              ->artwork.screenPos.x
+                                        - view.g1->xOffset;
+                                    const int32_t v =
+                                        screenY
+                                        - view.component
+                                              ->artwork.screenPos.y
+                                        - view.g1->yOffset;
+                                    if (u < 0 || v < 0
+                                        || u >= view.g1->width
+                                        || v >= view.g1->height)
+                                        continue;
+                                    if (view.pixels[
+                                            size_t(v)
+                                                * size_t(
+                                                    view.g1->width)
+                                            + size_t(u)]
+                                        == 0)
+                                        continue;
+                                    if (view.maskG1 != nullptr
+                                        && !view.maskPixels.empty())
+                                    {
+                                        const int32_t mu =
+                                            screenX
+                                            - view.component
+                                                  ->artwork.screenPos.x
+                                            - view.maskG1->xOffset;
+                                        const int32_t mv =
+                                            screenY
+                                            - view.component
+                                                  ->artwork.screenPos.y
+                                            - view.maskG1->yOffset;
+                                        if (mu < 0 || mv < 0
+                                            || mu >= view.maskG1->width
+                                            || mv >= view.maskG1->height
+                                            || view.maskPixels[
+                                                size_t(mv)
+                                                    * size_t(
+                                                        view.maskG1
+                                                            ->width)
+                                                + size_t(mu)]
+                                                == 0)
+                                            continue;
+                                    }
+                                    return true;
+                                }
+                                return false;
+                            };
+                        const auto occupancy =
+                            [low, high](FirstPersonVec3 point) {
+                                return point.x >= low.x
+                                    && point.x < high.x
+                                    && point.y >= low.y
+                                    && point.y < high.y
+                                    && point.z >= low.z
+                                    && point.z < high.z;
+                            };
+                        const auto hull =
+                            BuildFirstPersonVisualHull(
+                                hullViews,
+                                {
+                                    low.x, high.x,
+                                    low.y, high.y,
+                                    low.z, high.z,
+                                    step,
+                                },
+                                config,
+                                projectPoint,
+                                occupancy,
+                                pointSupported);
+                        if (hull.valid)
+                        {
+                            const auto carved =
+                                BuildFirstPersonVisualHullBoundaryFaces(
+                                    hull);
+                            if (!carved.empty())
+                            {
+                                faces.clear();
+                                faces.reserve(
+                                    carved.size());
+                                for (const auto& face :
+                                     carved)
+                                {
+                                    faces.push_back(
+                                        face.corners);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             std::vector<std::array<FirstPersonVec3, 4>>
                 depthFaces = faces;
             if (depthPeers != nullptr)
@@ -1718,28 +2044,6 @@
                             depthFaces.push_back(peerFace);
                     }
                 }
-            }
-
-            std::array<
-                const FirstPersonPaintSemanticComponent*, 4>
-                observations = artworkViews;
-            if (component.artwork.sourceRotation < 4
-                && observations[
-                       component.artwork.sourceRotation]
-                    == nullptr)
-            {
-                observations[
-                    component.artwork.sourceRotation] =
-                    &component;
-            }
-
-            std::array<FirstPersonSemanticArtworkView, 4>
-                decodedViews{};
-            for (uint8_t rotation = 0; rotation < 4; ++rotation)
-            {
-                decodedViews[rotation] =
-                    DecodeFirstPersonSemanticArtworkView(
-                        observations[rotation]);
             }
 
             std::array<FirstPersonDepthOwnerMap, 4>
