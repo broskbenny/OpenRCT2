@@ -2674,6 +2674,7 @@
                 uint8_t nativeDirection = 0;
                 uint8_t sourceRotation = 0;
                 ScreenCoordsXY spritePos{};
+                float nativeDepth = 0.0f;
                 std::vector<uint8_t> pixels;
             };
             std::vector<LargeSceneryDecodedView>
@@ -2750,6 +2751,14 @@
                         Translate3DTo2DWithZ(
                             decoded.sourceRotation,
                             { spriteOrigin, tileBaseZ });
+                    decoded.nativeDepth =
+                        FirstPersonIsoDepth(
+                            decoded.sourceRotation,
+                            {
+                                tileWorld.x + kCoordsXYHalfTile,
+                                tileWorld.y + kCoordsXYHalfTile,
+                                tileBaseZ,
+                            });
                     return &decoded;
                 };
 
@@ -3049,62 +3058,25 @@
             const auto pointSupported =
                 [&](const FirstPersonVisualHullView& view,
                     FirstPersonVec3 point) {
-                    const uint8_t rotation =
-                        view.imageDirection;
-                    const uint8_t nativeDirection =
-                        nativeDirectionForRotation[
-                            rotation];
                     const auto projected =
                         Translate3DTo2DWithZ(
-                            rotation,
+                            view.imageDirection,
                             {
-                                int32_t(std::lround(
-                                    point.x)),
-                                int32_t(std::lround(
-                                    point.y)),
-                                int32_t(std::lround(
-                                    point.z)),
+                                int32_t(std::lround(point.x)),
+                                int32_t(std::lround(point.y)),
+                                int32_t(std::lround(point.z)),
                             });
-
-                    for (const auto& cell :
-                         occupancyCells)
+                    // Carving asks whether the WHOLE multi-tile object is
+                    // visually present in this native view. A particular
+                    // sequence sprite being transparent does not prove empty
+                    // space: another tile sprite may own that visible pixel.
+                    for (int32_t dy = -1; dy <= 1; ++dy)
+                    for (int32_t dx = -1; dx <= 1; ++dx)
                     {
-                        if (!pointInCell(
-                                point, cell, 0.001f))
-                            continue;
-                        const auto* source =
-                            decodedView(
-                                cell.sequence,
-                                nativeDirection);
-                        if (source == nullptr)
-                            continue;
-                        const int32_t u =
-                            projected.x
-                            - source->spritePos.x
-                            - source->g1->xOffset;
-                        const int32_t v =
-                            projected.y
-                            - source->spritePos.y
-                            - source->g1->yOffset;
-                        for (int32_t dy = -1;
-                             dy <= 1; ++dy)
-                        for (int32_t dx = -1;
-                             dx <= 1; ++dx)
-                        {
-                            const int32_t sx = u + dx;
-                            const int32_t sy = v + dy;
-                            if (sx < 0 || sy < 0
-                                || sx >= source->g1->width
-                                || sy >= source->g1->height)
-                                continue;
-                            if (source->pixels[
-                                    size_t(sy)
-                                        * size_t(
-                                            source->g1->width)
-                                    + size_t(sx)]
-                                != 0)
-                                return true;
-                        }
+                        if (view.observed.contains(
+                                projected.x + dx,
+                                projected.y + dy))
+                            return true;
                     }
                     return false;
                 };
@@ -3258,27 +3230,82 @@
                     }
                     return false;
                 };
-            const auto sequenceForFacePoint =
-                [&](FirstPersonVec3 point,
-                    FirstPersonVec3 normal)
-                    -> std::optional<size_t> {
-                    const float inset =
-                        std::max(
-                            0.5f,
-                            hull.step * 0.25f);
-                    const FirstPersonVec3 inside{
-                        point.x - normal.x * inset,
-                        point.y - normal.y * inset,
-                        point.z - normal.z * inset,
-                    };
-                    for (const auto& cell :
-                         occupancyCells)
+            enum class LargeSceneryCompositeSampleKind : uint8_t
+            {
+                unknown,
+                transparent,
+                colour,
+            };
+            struct LargeSceneryCompositeSample
+            {
+                LargeSceneryCompositeSampleKind kind =
+                    LargeSceneryCompositeSampleKind::unknown;
+                uint8_t pixel = 0;
+                ImageId image{};
+            };
+            const auto sampleComposite =
+                [&](uint8_t rotation,
+                    uint8_t nativeDirection,
+                    ScreenCoordsXY projected)
+                    -> LargeSceneryCompositeSample {
+                    bool coveredByAnySprite = false;
+                    const LargeSceneryDecodedView*
+                        bestSource = nullptr;
+                    uint8_t bestPixel = 0;
+                    for (size_t sequence = 0;
+                         sequence < entry.tiles.size();
+                         ++sequence)
                     {
-                        if (pointInCell(
-                                inside, cell, 0.05f))
-                            return cell.sequence;
+                        const auto* source =
+                            decodedView(
+                                sequence, nativeDirection);
+                        if (source == nullptr)
+                            continue;
+                        const int32_t u =
+                            projected.x
+                            - source->spritePos.x
+                            - source->g1->xOffset;
+                        const int32_t v =
+                            projected.y
+                            - source->spritePos.y
+                            - source->g1->yOffset;
+                        if (u < 0 || v < 0
+                            || u >= source->g1->width
+                            || v >= source->g1->height)
+                            continue;
+                        coveredByAnySprite = true;
+                        const uint8_t pixel =
+                            source->pixels[
+                                size_t(v)
+                                    * size_t(source->g1->width)
+                                + size_t(u)];
+                        if (pixel == 0)
+                            continue;
+                        if (bestSource == nullptr
+                            || source->nativeDepth
+                                > bestSource->nativeDepth)
+                        {
+                            bestSource = source;
+                            bestPixel = pixel;
+                        }
                     }
-                    return std::nullopt;
+                    if (bestSource != nullptr)
+                    {
+                        return {
+                            LargeSceneryCompositeSampleKind::colour,
+                            bestPixel,
+                            bestSource->image,
+                        };
+                    }
+                    if (coveredByAnySprite)
+                    {
+                        return {
+                            LargeSceneryCompositeSampleKind::transparent,
+                            0,
+                            {},
+                        };
+                    }
+                    return {};
                 };
 
             bool haveBounds = false;
@@ -3391,50 +3418,23 @@
                     });
 
                 ImageId fallbackImage{};
-                if (const auto sequence =
-                        sequenceForFacePoint(
-                            faceCenter,
-                            face.normal);
-                    sequence.has_value())
+                for (const auto& candidate : candidates)
                 {
-                    for (const auto& candidate :
-                         candidates)
+                    for (size_t sequence = 0;
+                         sequence < entry.tiles.size();
+                         ++sequence)
                     {
                         const auto* source =
                             decodedView(
-                                *sequence,
-                                candidate
-                                    .nativeDirection);
+                                sequence,
+                                candidate.nativeDirection);
                         if (source == nullptr)
                             continue;
-                        fallbackImage =
-                            source->image;
+                        fallbackImage = source->image;
                         break;
                     }
-                }
-                if (!fallbackImage.HasValue())
-                {
-                    for (uint8_t nativeDirection = 0;
-                         nativeDirection < 4
-                         && !fallbackImage.HasValue();
-                         ++nativeDirection)
-                    {
-                        for (size_t sequence = 0;
-                             sequence
-                                < entry.tiles.size();
-                             ++sequence)
-                        {
-                            const auto* source =
-                                decodedView(
-                                    sequence,
-                                    nativeDirection);
-                            if (source == nullptr)
-                                continue;
-                            fallbackImage =
-                                source->image;
-                            break;
-                        }
-                    }
+                    if (fallbackImage.HasValue())
+                        break;
                 }
                 if (!fallbackImage.HasValue())
                     continue;
@@ -3492,86 +3492,50 @@
                                 / float(width),
                             (float(y) + 0.5f)
                                 / float(height));
-                    const auto sequence =
-                        sequenceForFacePoint(
-                            worldPoint,
-                            face.normal);
-
                     bool texelKnown = false;
-                    bool texelUnknown =
-                        !sequence.has_value()
-                        || candidates.empty();
+                    bool texelUnknown = candidates.empty();
                     uint8_t selectedPixel = 0;
-                    if (sequence.has_value())
+                    for (const auto& candidate :
+                         candidates)
                     {
-                        for (const auto& candidate :
-                             candidates)
+                        const auto projected =
+                            Translate3DTo2DWithZ(
+                                candidate.rotation,
+                                {
+                                    int32_t(std::lround(
+                                        worldPoint.x)),
+                                    int32_t(std::lround(
+                                        worldPoint.y)),
+                                    int32_t(std::lround(
+                                        worldPoint.z)),
+                                });
+                        if (!ownedNear(
+                                candidate.rotation,
+                                uint32_t(faceIndex),
+                                projected.x,
+                                projected.y))
+                            continue;
+
+                        const auto sample =
+                            sampleComposite(
+                                candidate.rotation,
+                                candidate.nativeDirection,
+                                projected);
+                        if (sample.kind
+                            == LargeSceneryCompositeSampleKind::unknown)
                         {
-                            const auto* source =
-                                decodedView(
-                                    *sequence,
-                                    candidate
-                                        .nativeDirection);
-                            if (source == nullptr)
-                            {
-                                texelUnknown = true;
-                                continue;
-                            }
-
-                            const auto projected =
-                                Translate3DTo2DWithZ(
-                                    candidate.rotation,
-                                    {
-                                        int32_t(
-                                            std::lround(
-                                                worldPoint.x)),
-                                        int32_t(
-                                            std::lround(
-                                                worldPoint.y)),
-                                        int32_t(
-                                            std::lround(
-                                                worldPoint.z)),
-                                    });
-                            if (!ownedNear(
-                                    candidate.rotation,
-                                    uint32_t(faceIndex),
-                                    projected.x,
-                                    projected.y))
-                                continue;
-
-                            const int32_t u =
-                                projected.x
-                                - source->spritePos.x
-                                - source->g1->xOffset;
-                            const int32_t v =
-                                projected.y
-                                - source->spritePos.y
-                                - source->g1->yOffset;
-                            if (u < 0 || v < 0
-                                || u
-                                    >= source->g1
-                                           ->width
-                                || v
-                                    >= source->g1
-                                           ->height)
-                            {
-                                texelUnknown = true;
-                                continue;
-                            }
-
-                            texelKnown = true;
-                            selectedPixel =
-                                source->pixels[
-                                    size_t(v)
-                                        * size_t(
-                                            source->g1
-                                                ->width)
-                                    + size_t(u)];
-                            // Zero is trustworthy transparency. It is
-                            // evidence, not a request to borrow a colour
-                            // from another view.
-                            break;
+                            texelUnknown = true;
+                            continue;
                         }
+                        texelKnown = true;
+                        selectedPixel =
+                            sample.kind
+                                == LargeSceneryCompositeSampleKind::colour
+                            ? sample.pixel : 0;
+                        // Whole-object transparency is trustworthy evidence.
+                        // Do not borrow a colour from another view merely to
+                        // fill a carved physical face.
+                        break;
                     }
 
                     if (texelKnown)
