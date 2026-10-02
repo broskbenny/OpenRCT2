@@ -36,6 +36,8 @@ namespace OpenRCT2::Paint
         static std::unordered_map<
             const LargeSceneryEntry*, LargeSceneryAssetModel>
             _largeSceneryAssetModels;
+        static uint64_t
+            _largeSceneryReconstructionGeneration = 1;
 
         [[nodiscard]] std::optional<
             std::vector<LargeSceneryAssetCell>>
@@ -150,8 +152,17 @@ namespace OpenRCT2::Paint
         return &it->second;
     }
 
+    uint64_t
+        FirstPersonLargeSceneryReconstructionGeneration()
+    {
+        return _largeSceneryReconstructionGeneration;
+    }
+
     void ClearLargeSceneryAssetModelCache()
     {
         _largeSceneryAssetModels.clear();
+        ++_largeSceneryReconstructionGeneration;
+        if (_largeSceneryReconstructionGeneration == 0)
+            _largeSceneryReconstructionGeneration = 1;
     }
 }

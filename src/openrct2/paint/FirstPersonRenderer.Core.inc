@@ -2450,6 +2450,143 @@
                 BuildFirstPersonLargeSceneryCollisionProxies(
                     entry, model, group, objectDirection);
 
+            struct BakedLargeSceneryKey
+            {
+                const LargeSceneryEntry* entry{};
+                uint8_t objectDirection{};
+                bool operator==(const BakedLargeSceneryKey&) const = default;
+            };
+            struct BakedLargeSceneryKeyHash
+            {
+                size_t operator()(const BakedLargeSceneryKey& key) const
+                {
+                    return (reinterpret_cast<uintptr_t>(key.entry) >> 4)
+                        ^ (size_t(key.objectDirection) << 1);
+                }
+            };
+            struct BakedLargeSceneryEntry
+            {
+                uint64_t generation{};
+                bool usable = false;
+                FirstPersonVec3 localLow{};
+                FirstPersonVec3 localHigh{};
+                std::vector<FirstPersonSurface> localSurfaces;
+            };
+            static std::unordered_map<
+                BakedLargeSceneryKey,
+                BakedLargeSceneryEntry,
+                BakedLargeSceneryKeyHash>
+                bakedCache;
+
+            const BakedLargeSceneryKey bakedKey{
+                &entry, objectDirection
+            };
+            const uint64_t bakedGeneration =
+                FirstPersonLargeSceneryReconstructionGeneration();
+            if (const auto bakedIt = bakedCache.find(bakedKey);
+                bakedIt != bakedCache.end()
+                && bakedIt->second.generation
+                    == bakedGeneration
+                && bakedIt->second.usable)
+            {
+                const auto& baked = bakedIt->second;
+                result.surfaces.reserve(
+                    baked.localSurfaces.size());
+                for (const auto& localSurface :
+                     baked.localSurfaces)
+                {
+                    auto surface = localSurface;
+                    surface.image =
+                        imageTemplate.WithIndex(
+                            localSurface.image.GetIndex());
+                    surface.reconstructionGroup = group.key;
+                    for (auto& vertex : surface.triangles)
+                    {
+                        vertex.world.x += group.anchor.x;
+                        vertex.world.y += group.anchor.y;
+                        vertex.world.z += group.anchor.z;
+                    }
+                    // Two-triangle quad vertices repeat two corners, so use
+                    // the actual face bounds for a stable region assignment.
+                    FirstPersonVec3 faceLow =
+                        surface.triangles[0].world;
+                    FirstPersonVec3 faceHigh = faceLow;
+                    for (const auto& vertex :
+                         surface.triangles)
+                    {
+                        faceLow.x = std::min(
+                            faceLow.x, vertex.world.x);
+                        faceLow.y = std::min(
+                            faceLow.y, vertex.world.y);
+                        faceLow.z = std::min(
+                            faceLow.z, vertex.world.z);
+                        faceHigh.x = std::max(
+                            faceHigh.x, vertex.world.x);
+                        faceHigh.y = std::max(
+                            faceHigh.y, vertex.world.y);
+                        faceHigh.z = std::max(
+                            faceHigh.z, vertex.world.z);
+                    }
+                    const FirstPersonVec3 faceCenter{
+                        0.5f * (faceLow.x + faceHigh.x),
+                        0.5f * (faceLow.y + faceHigh.y),
+                        0.5f * (faceLow.z + faceHigh.z),
+                    };
+                    surface.gpuRegion =
+                        FirstPersonGpuRegionKey(
+                            int32_t(std::floor(
+                                faceCenter.x
+                                / float(kCoordsXYStep))),
+                            int32_t(std::floor(
+                                faceCenter.y
+                                / float(kCoordsXYStep))));
+                    result.surfaces.emplace_back(
+                        std::move(surface));
+                }
+
+                const FirstPersonVec3 low{
+                    group.anchor.x + baked.localLow.x,
+                    group.anchor.y + baked.localLow.y,
+                    group.anchor.z + baked.localLow.z,
+                };
+                const FirstPersonVec3 high{
+                    group.anchor.x + baked.localHigh.x,
+                    group.anchor.y + baked.localHigh.y,
+                    group.anchor.z + baked.localHigh.z,
+                };
+                result.hasBounds = true;
+                result.minTileX = int32_t(
+                    std::floor(low.x / float(kCoordsXYStep)));
+                result.minTileY = int32_t(
+                    std::floor(low.y / float(kCoordsXYStep)));
+                result.maxTileX = int32_t(
+                    std::floor(high.x / float(kCoordsXYStep)));
+                result.maxTileY = int32_t(
+                    std::floor(high.y / float(kCoordsXYStep)));
+                const FirstPersonVec3 center{
+                    0.5f * (low.x + high.x),
+                    0.5f * (low.y + high.y),
+                    0.5f * (low.z + high.z),
+                };
+                const float hx =
+                    0.5f * (high.x - low.x);
+                const float hy =
+                    0.5f * (high.y - low.y);
+                const float hz =
+                    0.5f * (high.z - low.z);
+                const float radius =
+                    std::sqrt(
+                        hx * hx + hy * hy + hz * hz)
+                    + 2.0f;
+                for (auto& surface : result.surfaces)
+                {
+                    surface.hasSemanticBounds = true;
+                    surface.semanticCenter = center;
+                    surface.semanticRadius = radius;
+                }
+                return result;
+            }
+
             const auto faceVisible =
                 [](LargeSceneryAssetFaceKind kind,
                    uint8_t nativeDirection) {
@@ -2953,6 +3090,42 @@
                     surface.semanticCenter = center;
                     surface.semanticRadius = radius;
                 }
+
+                BakedLargeSceneryEntry baked{};
+                baked.generation = bakedGeneration;
+                baked.usable = true;
+                baked.localLow = {
+                    low.x - group.anchor.x,
+                    low.y - group.anchor.y,
+                    low.z - group.anchor.z,
+                };
+                baked.localHigh = {
+                    high.x - group.anchor.x,
+                    high.y - group.anchor.y,
+                    high.z - group.anchor.z,
+                };
+                baked.localSurfaces.reserve(
+                    result.surfaces.size());
+                for (const auto& sourceSurface :
+                     result.surfaces)
+                {
+                    auto local = sourceSurface;
+                    local.reconstructionGroup = 0;
+                    local.gpuRegion = 0;
+                    local.hasSemanticBounds = false;
+                    local.semanticCenter = {};
+                    local.semanticRadius = 0.0f;
+                    for (auto& vertex : local.triangles)
+                    {
+                        vertex.world.x -= group.anchor.x;
+                        vertex.world.y -= group.anchor.y;
+                        vertex.world.z -= group.anchor.z;
+                    }
+                    baked.localSurfaces.emplace_back(
+                        std::move(local));
+                }
+                bakedCache[bakedKey] =
+                    std::move(baked);
             }
             return result;
         }

@@ -35,5 +35,7 @@ namespace OpenRCT2::Paint
     [[nodiscard]] const LargeSceneryAssetModel*
         GetLargeSceneryAssetModel(
             const LargeSceneryEntry& entry);
+    [[nodiscard]] uint64_t
+        FirstPersonLargeSceneryReconstructionGeneration();
     void ClearLargeSceneryAssetModelCache();
 }
