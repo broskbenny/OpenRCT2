@@ -305,13 +305,25 @@ namespace OpenRCT2::Paint
     {
         return ProjectFirstPersonMath(c, p, size.width, size.height, fov, nearClip);
     }
-    FirstPersonScene CollectFirstPersonScene(
-        const FirstPersonRenderOptions& opt, const ScreenSize& dimensions)
+    static void CollectFirstPersonSceneInto(
+        FirstPersonScene& scene,
+        const FirstPersonRenderOptions& opt,
+        const ScreenSize& dimensions)
     {
-        FirstPersonScene scene{};
+        // Reuse the prepared scene's backing allocations between presentation
+        // frames. Every semantic value is rebuilt below; only vector capacity is
+        // retained.
+        scene.surfaces.clear();
+        scene.staticRegions.clear();
+        scene.visibleTiles.clear();
+        scene.activeTrackRegions.clear();
         scene.sceneEpoch = _sceneEpoch;
         scene.options = opt;
+        scene.resolvedView = {};
         scene.dimensions = dimensions;
+        scene.screenOrigin = {};
+        scene.presentationFrameSerial = 0;
+
         const auto map = getGameState().mapSize;
         scene.resolvedView = ResolveFirstPersonView(
             opt.camera, dimensions.width, dimensions.height, map.x, map.y,
@@ -321,6 +333,14 @@ namespace OpenRCT2::Paint
         DiscoverVisibleTiles(scene);
         CollectTerrain(scene);
         CollectTrackTrajectories(scene);
+    }
+
+    FirstPersonScene CollectFirstPersonScene(
+        const FirstPersonRenderOptions& opt, const ScreenSize& dimensions)
+    {
+        FirstPersonScene scene{};
+        CollectFirstPersonSceneInto(
+            scene, opt, dimensions);
         // This remains an explicitly identified compatibility bridge for complex sprite selection.
         return scene;
     }
@@ -481,7 +501,9 @@ namespace OpenRCT2::Paint
     {
         _preparedFrame.active = true;
         _preparedFrame.valid = false;
-        _preparedFrame.scene = {};
+        // Keep the previous scene's vector capacities. The first POV render of
+        // this presentation repopulates the same buffers from authoritative
+        // state.
         ++_preparedFrame.serial;
         if (_preparedFrame.serial == 0)
             ++_preparedFrame.serial;
@@ -492,7 +514,8 @@ namespace OpenRCT2::Paint
         _preparedFrame.active = false;
         _preparedFrame.valid = false;
         _preparedFrame.drawingEngine = nullptr;
-        _preparedFrame.scene = {};
+        // Retain scene storage for the next presentation. A real POV teardown
+        // calls ResetFirstPersonPresentationCache(), which releases it.
     }
 
     void RenderFirstPerson(
@@ -539,13 +562,25 @@ namespace OpenRCT2::Paint
                     ++_preparedFrame.serial;
             }
 
-            localScene =
-                CollectFirstPersonScene(opt, dimensions);
-            localScene.screenOrigin = screenOrigin;
-            localScene.presentationFrameSerial =
+            if (_preparedFrame.active)
+            {
+                scene = &_preparedFrame.scene;
+                CollectFirstPersonSceneInto(
+                    *scene, opt, dimensions);
+            }
+            else
+            {
+                localScene =
+                    CollectFirstPersonScene(
+                        opt, dimensions);
+                scene = &localScene;
+            }
+
+            scene->screenOrigin = screenOrigin;
+            scene->presentationFrameSerial =
                 _preparedFrame.active
                     ? _preparedFrame.serial : 0;
-            CollectPaintSprites(localScene, rt);
+            CollectPaintSprites(*scene, rt);
 
             if (_preparedFrame.active)
             {
@@ -554,14 +589,7 @@ namespace OpenRCT2::Paint
                 _preparedFrame.screenOrigin = screenOrigin;
                 _preparedFrame.drawingEngine =
                     rt.DrawingEngine;
-                _preparedFrame.scene =
-                    std::move(localScene);
                 _preparedFrame.valid = true;
-                scene = &_preparedFrame.scene;
-            }
-            else
-            {
-                scene = &localScene;
             }
         }
 
