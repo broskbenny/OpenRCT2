@@ -1158,9 +1158,41 @@ void main() {
 
         if (!streamedTransparent.empty())
         {
+            // Material/atlas resolution is independent of screen-tile binning.
+            // Pack every transparent surface once; a surface crossing several
+            // 128x128 tiles should not redo G1 lookup, remap resolution and
+            // immutable-bitmap lookup once per tile.
+            std::vector<GPUVertex> packedTransparentVertices;
+            packedTransparentVertices.reserve(
+                streamedTransparent.size() * 6);
+            std::unordered_map<
+                const Paint::FirstPersonSurface*,
+                std::pair<size_t, size_t>>
+                transparentVertexRanges;
+            transparentVertexRanges.reserve(
+                streamedTransparent.size());
+            for (const auto* surface : streamedTransparent)
+            {
+                const size_t first =
+                    packedTransparentVertices.size();
+                appendVertices(
+                    packedTransparentVertices, *surface);
+                const size_t count =
+                    packedTransparentVertices.size()
+                    - first;
+                if (count != 0)
+                {
+                    transparentVertexRanges.emplace(
+                        surface,
+                        std::pair<size_t, size_t>{
+                            first, count });
+                }
+            }
+
             struct TransparentTileCandidate
             {
-                const Paint::FirstPersonSurface* surface{};
+                size_t vertexOffset{};
+                size_t vertexCount{};
                 int32_t x0{}, y0{}, x1{}, y1{};
             };
             struct TransparentScreenTile
@@ -1238,6 +1270,12 @@ void main() {
             // viewport merely because one original vertex was behind the eye.
             for (const auto* surface : streamedTransparent)
             {
+                const auto packedRange =
+                    transparentVertexRanges.find(surface);
+                if (packedRange
+                    == transparentVertexRanges.end())
+                    continue;
+
                 float minX =
                     std::numeric_limits<float>::infinity();
                 float minY =
@@ -1356,7 +1394,8 @@ void main() {
                             size_t(ty) * size_t(tileColumns)
                             + size_t(tx)];
                     tile.candidates.push_back({
-                        surface,
+                        packedRange->second.first,
+                        packedRange->second.second,
                         std::max(x0, tile.x0),
                         std::max(y0, tile.y0),
                         std::min(x1, tile.x1),
@@ -1449,13 +1488,23 @@ void main() {
                     continue;
 
                 std::vector<GPUVertex> tileVertices;
-                tileVertices.reserve(
-                    tile.candidates.size() * 6);
+                size_t tileVertexCount = 0;
                 for (const auto& candidate :
                      tile.candidates)
                 {
-                    appendVertices(
-                        tileVertices, *candidate.surface);
+                    tileVertexCount +=
+                        candidate.vertexCount;
+                }
+                tileVertices.reserve(tileVertexCount);
+                for (const auto& candidate :
+                     tile.candidates)
+                {
+                    const auto first =
+                        packedTransparentVertices.begin()
+                        + candidate.vertexOffset;
+                    tileVertices.insert(
+                        tileVertices.end(), first,
+                        first + candidate.vertexCount);
                 }
                 if (tileVertices.empty())
                     continue;
