@@ -1684,7 +1684,7 @@
                     depthPeers = nullptr)
         {
             std::vector<FirstPersonSurface> result;
-            const auto faces =
+            auto faces =
                 BuildFirstPersonSemanticPhysicalFaces(component);
             if (faces.empty())
                 return result;
