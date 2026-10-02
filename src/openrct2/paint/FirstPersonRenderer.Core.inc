@@ -3325,11 +3325,9 @@
                 LargeSceneryCompositeSampleKind kind =
                     LargeSceneryCompositeSampleKind::unknown;
                 uint8_t pixel = 0;
-                ImageId image{};
             };
             const auto sampleComposite =
-                [&](uint8_t rotation,
-                    uint8_t nativeDirection,
+                [&](uint8_t nativeDirection,
                     ScreenCoordsXY projected)
                     -> LargeSceneryCompositeSample {
                     bool coveredByAnySprite = false;
@@ -3378,7 +3376,6 @@
                         return {
                             LargeSceneryCompositeSampleKind::colour,
                             bestPixel,
-                            bestSource->image,
                         };
                     }
                     if (coveredByAnySprite)
@@ -3386,7 +3383,6 @@
                         return {
                             LargeSceneryCompositeSampleKind::transparent,
                             0,
-                            {},
                         };
                     }
                     return {};
@@ -3602,7 +3598,6 @@
 
                         const auto sample =
                             sampleComposite(
-                                candidate.rotation,
                                 candidate.nativeDirection,
                                 projected);
                         if (sample.kind
