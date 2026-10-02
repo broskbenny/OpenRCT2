@@ -1103,8 +1103,10 @@ void main() {
             front.BindRead();
             glCall(
                 glBlitFramebuffer,
-                0,0,screenWidth,screenHeight,
-                0,0,screenWidth,screenHeight,
+                clipLeft, screenHeight - clipBottom,
+                clipRight, screenHeight - clipTop,
+                clipLeft, screenHeight - clipBottom,
+                clipRight, screenHeight - clipTop,
                 GL_DEPTH_BUFFER_BIT,GL_NEAREST);
             front.Bind();
             glCall(
@@ -1434,8 +1436,14 @@ void main() {
             // palette compositions may be committed independently.
             _opaqueSnapshot->BindDraw();
             front.BindRead();
-            glCall(glBlitFramebuffer,0,0,screenWidth,screenHeight,
-                   0,0,screenWidth,screenHeight,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,GL_NEAREST);
+            glCall(
+                glBlitFramebuffer,
+                clipLeft, screenHeight - clipBottom,
+                clipRight, screenHeight - clipTop,
+                clipLeft, screenHeight - clipBottom,
+                clipRight, screenHeight - clipTop,
+                GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
+                GL_NEAREST);
 
             const int32_t viewportBottom = screenHeight - top - height;
             const auto tileClip =
