@@ -876,7 +876,9 @@
                 0, 0, map.x, map.y);
         }
 
-        FirstPersonRegionSphere CachedRegionBounds(int32_t x0, int32_t y0, int32_t x1, int32_t y1)
+        FirstPersonRegionBounds CachedRegionBounds(
+            int32_t x0, int32_t y0,
+            int32_t x1, int32_t y1)
         {
             constexpr float kTile = float(kCoordsXYStep);
             float low = -512.0f;
@@ -912,14 +914,31 @@
                 low = float(entry.minZ);
                 high = float(entry.maxZ);
             }
-            const float dx = float(x1-x0)*0.5f*kTile;
-            const float dy = float(y1-y0)*0.5f*kTile;
-            const float dz = (high-low)*0.5f;
-            // Occupancy/paint bounds can underestimate art overhang. Reserve
-            // one conservative halo for tall sprite components and entities.
-            const float halo = (x1-x0 <= 16 && y1-y0 <= 16) ? 512.0f : 0.0f;
-            return {{float(x0+x1)*0.5f*kTile,float(y0+y1)*0.5f*kTile,(high+low)*0.5f},
-                     std::sqrt(dx*dx+dy*dy+dz*dz)+halo,populated};
+            const float dx =
+                float(x1-x0)*0.5f*kTile;
+            const float dy =
+                float(y1-y0)*0.5f*kTile;
+            const float dz =
+                std::max(0.0f, (high-low)*0.5f);
+            // Occupancy/paint bounds can underestimate source-art overhang.
+            // Keep the existing conservative 512-unit allowance, but express
+            // the region as its actual world box instead of an enclosing sphere.
+            // Applying the halo at every hierarchy level also prevents a coarse
+            // parent from culling artwork that extends beyond a child tile.
+            constexpr float kArtworkHalo = 512.0f;
+            return {
+                {
+                    float(x0+x1)*0.5f*kTile,
+                    float(y0+y1)*0.5f*kTile,
+                    (high+low)*0.5f
+                },
+                {
+                    dx + kArtworkHalo,
+                    dy + kArtworkHalo,
+                    dz + kArtworkHalo
+                },
+                populated
+            };
         }
 
         std::optional<FirstPersonSemanticSphere> CachedTileVisibilityBounds(

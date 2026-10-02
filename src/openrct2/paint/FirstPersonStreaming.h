@@ -55,6 +55,95 @@ namespace OpenRCT2::Paint
                 return false;
             return true;
         }
+
+        // Exact plane support test for an axis-aligned world box. This is
+        // tighter than testing the box's enclosing sphere, especially for
+        // large rectangular map regions, while remaining fully conservative.
+        [[nodiscard]] bool visibleAabb(
+            FirstPersonVec3 center,
+            FirstPersonVec3 halfExtents) const
+        {
+            const FirstPersonVec3 d{
+                center.x - eye.x,
+                center.y - eye.y,
+                center.z - eye.z,
+            };
+            const float x = FpDot(d, basis.right);
+            const float y = FpDot(d, basis.up);
+            const float z = FpDot(d, basis.forward);
+            const auto support =
+                [&](FirstPersonVec3 normal) {
+                    return std::abs(normal.x)
+                            * halfExtents.x
+                        + std::abs(normal.y)
+                            * halfExtents.y
+                        + std::abs(normal.z)
+                            * halfExtents.z;
+                };
+
+            const float forwardRadius =
+                support(basis.forward);
+            if (z + forwardRadius < nearDistance
+                || z - forwardRadius > farDistance)
+                return false;
+
+            const FirstPersonVec3 rightPlane{
+                basis.right.x
+                    - basis.forward.x
+                        * tanHalfHorizontal,
+                basis.right.y
+                    - basis.forward.y
+                        * tanHalfHorizontal,
+                basis.right.z
+                    - basis.forward.z
+                        * tanHalfHorizontal,
+            };
+            const FirstPersonVec3 leftPlane{
+                -basis.right.x
+                    - basis.forward.x
+                        * tanHalfHorizontal,
+                -basis.right.y
+                    - basis.forward.y
+                        * tanHalfHorizontal,
+                -basis.right.z
+                    - basis.forward.z
+                        * tanHalfHorizontal,
+            };
+            if (x - z * tanHalfHorizontal
+                    > support(rightPlane)
+                || -x - z * tanHalfHorizontal
+                    > support(leftPlane))
+                return false;
+
+            const FirstPersonVec3 topPlane{
+                basis.up.x
+                    - basis.forward.x
+                        * tanHalfVertical,
+                basis.up.y
+                    - basis.forward.y
+                        * tanHalfVertical,
+                basis.up.z
+                    - basis.forward.z
+                        * tanHalfVertical,
+            };
+            const FirstPersonVec3 bottomPlane{
+                -basis.up.x
+                    - basis.forward.x
+                        * tanHalfVertical,
+                -basis.up.y
+                    - basis.forward.y
+                        * tanHalfVertical,
+                -basis.up.z
+                    - basis.forward.z
+                        * tanHalfVertical,
+            };
+            if (y - z * tanHalfVertical
+                    > support(topPlane)
+                || -y - z * tanHalfVertical
+                    > support(bottomPlane))
+                return false;
+            return true;
+        }
     };
 
     // The default 32,768-unit far plane cannot include the opposite corner
@@ -127,10 +216,10 @@ namespace OpenRCT2::Paint
     // a fixed camera-centred ring. Bounds are deliberately conservative until
     // OpenRCT2 exposes authoritative region invalidation and accurate bounds.
     // In particular, raised track is NOT culled by the terrain height below it.
-    struct FirstPersonRegionSphere
+    struct FirstPersonRegionBounds
     {
         FirstPersonVec3 center{};
-        float radius{};
+        FirstPersonVec3 halfExtents{};
         bool populated = true;
     };
 
@@ -141,8 +230,11 @@ namespace OpenRCT2::Paint
     {
         if (minX >= maxX || minY >= maxY)
             return;
-        const FirstPersonRegionSphere region = bounds(minX,minY,maxX,maxY);
-        if (!region.populated || !frustum.visible(region.center,region.radius))
+        const FirstPersonRegionBounds region =
+            bounds(minX, minY, maxX, maxY);
+        if (!region.populated
+            || !frustum.visibleAabb(
+                region.center, region.halfExtents))
             return;
         if (maxX - minX <= 16 && maxY - minY <= 16)
         {
@@ -174,9 +266,19 @@ namespace OpenRCT2::Paint
             const float halfX = float(x1-x0)*0.5f*kTile;
             const float halfY = float(y1-y0)*0.5f*kTile;
             const float halfZ = (4096.0f + 512.0f)*0.5f;
-            return FirstPersonRegionSphere{
-                {float(x0+x1)*0.5f*kTile,float(y0+y1)*0.5f*kTile,(4096.0f-512.0f)*0.5f},
-                std::sqrt(halfX*halfX + halfY*halfY + halfZ*halfZ)};
+            constexpr float kArtworkHalo = 512.0f;
+            return FirstPersonRegionBounds{
+                {
+                    float(x0+x1)*0.5f*kTile,
+                    float(y0+y1)*0.5f*kTile,
+                    (4096.0f-512.0f)*0.5f
+                },
+                {
+                    halfX + kArtworkHalo,
+                    halfY + kArtworkHalo,
+                    halfZ + kArtworkHalo
+                }
+            };
         };
         VisitFirstPersonRegions(frustum,minX,minY,maxX,maxY,visitor,conservative);
     }
