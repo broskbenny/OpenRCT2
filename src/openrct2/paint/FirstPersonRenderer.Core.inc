@@ -2518,7 +2518,8 @@
                     });
 
                 FirstPersonSurface surface{};
-                surface.physicalCoverage = true;
+                // The occupancy model defines geometry/collision, not a license
+                // to paint over transparent native artwork on that geometry.
                 surface.cameraIndependent = true;
                 surface.reconstructionGroup = group.key;
                 surface.gpuRegion =
@@ -2555,32 +2556,10 @@
                                     worldFace[2])))),
                             1, 256);
 
-                    std::array<uint32_t, 256>
-                        fallbackCounts{};
-                    for (const auto pixel :
-                         candidates.front().pixels)
-                    {
-                        if (pixel != 0)
-                            ++fallbackCounts[pixel];
-                    }
-                    uint8_t fallbackPixel = 0;
-                    uint32_t fallbackCount = 0;
-                    for (size_t i = 1;
-                         i < fallbackCounts.size(); ++i)
-                    {
-                        if (fallbackCounts[i]
-                            > fallbackCount)
-                        {
-                            fallbackPixel =
-                                uint8_t(i);
-                            fallbackCount =
-                                fallbackCounts[i];
-                        }
-                    }
-
                     std::vector<uint8_t> pixels(
                         size_t(width)
                             * size_t(height), 0);
+                    size_t visiblePixelCount = 0;
                     for (int32_t y = 0;
                          y < height; ++y)
                     for (int32_t x = 0;
@@ -2662,13 +2641,19 @@
                             selectedPixel = pixel;
                             break;
                         }
-                        if (selectedPixel == 0)
-                            selectedPixel = fallbackPixel;
+                        // Preserve native cutouts/holes. Geometry and collision
+                        // remain authoritative even when this material texel is
+                        // transparent.
                         pixels[
                             size_t(y) * size_t(width)
                             + size_t(x)] =
                             selectedPixel;
+                        if (selectedPixel != 0)
+                            ++visiblePixelCount;
                     }
+
+                    if (visiblePixelCount == 0)
+                        return {};
 
                     surface.immutablePixels =
                         std::move(pixels);
@@ -2728,42 +2713,14 @@
                 }
                 else
                 {
-                    // Native artwork has no underside view. Preserve the
-                    // occupancy/hull face and use a native material only for
-                    // stable palette/remap fallback.
-                    for (uint8_t direction = 0;
-                         direction < 4; ++direction)
-                    {
-                        const ImageIndex imageIndex =
-                            entry.image + 4
-                            + (ImageIndex(face.sequence)
-                                << 2)
-                            + direction;
-                        const auto sourceImage =
-                            imageTemplate.WithIndex(
-                                imageIndex);
-                        const auto* g1 =
-                            GfxGetG1Element(sourceImage);
-                        if (g1 != nullptr
-                            && g1->width > 0
-                            && g1->height > 0)
-                        {
-                            surface.image =
-                                sourceImage;
-                            surface.textureFallbackOnly =
-                                true;
-                            break;
-                        }
-                    }
-                    if (!surface.image.HasValue())
+                    // Native sprites do not observe undersides. Keep those
+                    // physical faces for collision without fabricating visible
+                    // material. Any other unmapped face makes the reconstruction
+                    // incomplete, so retain the native sprite body instead.
+                    if (face.kind
+                        == LargeSceneryAssetFaceKind::bottom)
                         continue;
-                    std::array<
-                        FirstPersonVertex, 4> vertices{};
-                    for (size_t i = 0;
-                         i < vertices.size(); ++i)
-                        vertices[i].world =
-                            worldFace[i];
-                    EmitQuad(surface, vertices);
+                    return {};
                 }
 
                 result.surfaces.emplace_back(
