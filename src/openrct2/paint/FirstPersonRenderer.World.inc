@@ -1672,6 +1672,505 @@
             };
         }
 
+        struct FirstPersonSemanticVisualHullTemplate
+        {
+            bool usable = false;
+            std::vector<std::array<
+                FirstPersonPaintSemanticVec3, 4>> localFaces;
+        };
+
+        [[nodiscard]] bool FirstPersonSemanticTransformIsOrthonormal(
+            const FirstPersonPaintSemanticTransform& transform)
+        {
+            const auto dot =
+                [](FirstPersonPaintSemanticVec3 a,
+                   FirstPersonPaintSemanticVec3 b) {
+                    return a.x * b.x + a.y * b.y + a.z * b.z;
+                };
+            constexpr float kTolerance = 0.01f;
+            const float xx = dot(transform.axisX, transform.axisX);
+            const float yy = dot(transform.axisY, transform.axisY);
+            const float zz = dot(transform.axisZ, transform.axisZ);
+            return std::abs(xx - 1.0f) <= kTolerance
+                && std::abs(yy - 1.0f) <= kTolerance
+                && std::abs(zz - 1.0f) <= kTolerance
+                && std::abs(dot(transform.axisX, transform.axisY))
+                    <= kTolerance
+                && std::abs(dot(transform.axisX, transform.axisZ))
+                    <= kTolerance
+                && std::abs(dot(transform.axisY, transform.axisZ))
+                    <= kTolerance;
+        }
+
+        [[nodiscard]] FirstPersonPaintSemanticVec3
+            FirstPersonSemanticLocalPoint(
+                const FirstPersonPaintSemanticTransform& transform,
+                FirstPersonVec3 world)
+        {
+            const FirstPersonVec3 delta{
+                world.x - transform.origin.x,
+                world.y - transform.origin.y,
+                world.z - transform.origin.z,
+            };
+            return {
+                delta.x * transform.axisX.x
+                    + delta.y * transform.axisX.y
+                    + delta.z * transform.axisX.z,
+                delta.x * transform.axisY.x
+                    + delta.y * transform.axisY.y
+                    + delta.z * transform.axisY.z,
+                delta.x * transform.axisZ.x
+                    + delta.y * transform.axisZ.y
+                    + delta.z * transform.axisZ.z,
+            };
+        }
+
+        [[nodiscard]] uint64_t
+            FirstPersonSemanticVisualHullKey(
+                const FirstPersonPaintSemanticComponent& component,
+                const std::array<
+                    FirstPersonSemanticArtworkView, 4>& views)
+        {
+            uint64_t key = 14695981039346656037ull;
+            ExtendStableKey(
+                key, EnumValue(component.geometry.kind));
+            ExtendStableKey(key, component.geometry.pointCount);
+            ExtendStableKey(key, component.geometry.localHullKey);
+            for (size_t i = 0;
+                 i < component.geometry.pointCount
+                    && i < component.geometry.points.size();
+                 ++i)
+            {
+                const auto& point =
+                    component.geometry.points[i];
+                ExtendStableKey(
+                    key, uint64_t(int64_t(std::llround(
+                        double(point.x) * 256.0))));
+                ExtendStableKey(
+                    key, uint64_t(int64_t(std::llround(
+                        double(point.y) * 256.0))));
+                ExtendStableKey(
+                    key, uint64_t(int64_t(std::llround(
+                        double(point.z) * 256.0))));
+            }
+            ExtendStableKey(
+                key, uint64_t(int64_t(std::llround(
+                    double(component.geometry.halfWidth)
+                    * 256.0))));
+            ExtendStableKey(
+                key, uint64_t(int64_t(std::llround(
+                    double(component.geometry.halfHeight)
+                    * 256.0))));
+            for (const auto axis : {
+                     component.transform.axisX,
+                     component.transform.axisY,
+                     component.transform.axisZ })
+            {
+                ExtendStableKey(
+                    key, uint64_t(int64_t(std::llround(
+                        double(axis.x) * 256.0))));
+                ExtendStableKey(
+                    key, uint64_t(int64_t(std::llround(
+                        double(axis.y) * 256.0))));
+                ExtendStableKey(
+                    key, uint64_t(int64_t(std::llround(
+                        double(axis.z) * 256.0))));
+            }
+            for (uint8_t rotation = 0;
+                 rotation < 4; ++rotation)
+            {
+                const auto& view = views[rotation];
+                ExtendStableKey(
+                    key,
+                    view.component != nullptr
+                        ? view.component->artwork.image.GetIndex()
+                        : 0u);
+                ExtendStableKey(
+                    key,
+                    view.component != nullptr
+                            && view.component->artwork.mask.HasValue()
+                        ? view.component->artwork.mask.GetIndex()
+                        : 0u);
+                ExtendStableKey(
+                    key,
+                    reinterpret_cast<uintptr_t>(view.g1));
+                ExtendStableKey(
+                    key,
+                    reinterpret_cast<uintptr_t>(view.maskG1));
+            }
+            return key;
+        }
+
+        [[nodiscard]] std::optional<
+            std::vector<std::array<FirstPersonVec3, 4>>>
+            BuildFirstPersonSemanticVisualHullFaces(
+                const FirstPersonPaintSemanticComponent& component,
+                const std::array<
+                    FirstPersonSemanticArtworkView, 4>& views)
+        {
+            if (component.artwork.decal
+                || (component.geometry.kind
+                        != FirstPersonPaintSemanticPrimitiveKind::box
+                    && component.geometry.kind
+                        != FirstPersonPaintSemanticPrimitiveKind::localHull)
+                || component.geometry.pointCount < 2
+                || !FirstPersonSemanticTransformIsOrthonormal(
+                    component.transform))
+                return std::nullopt;
+
+            for (const auto& view : views)
+            {
+                if (view.component == nullptr
+                    || view.g1 == nullptr
+                    || view.pixels.empty())
+                    return std::nullopt;
+            }
+
+            static std::unordered_map<
+                uint64_t, FirstPersonSemanticVisualHullTemplate>
+                cache;
+            if (cache.size() > 4096)
+                cache.clear();
+
+            const uint64_t key =
+                FirstPersonSemanticVisualHullKey(
+                    component, views);
+            const auto instantiate =
+                [&](const FirstPersonSemanticVisualHullTemplate&
+                        cached)
+                    -> std::optional<
+                        std::vector<std::array<
+                            FirstPersonVec3, 4>>> {
+                    if (!cached.usable)
+                        return std::vector<
+                            std::array<FirstPersonVec3, 4>>{};
+                    std::vector<std::array<
+                        FirstPersonVec3, 4>> result;
+                    result.reserve(cached.localFaces.size());
+                    for (const auto& localFace :
+                         cached.localFaces)
+                    {
+                        std::array<FirstPersonVec3, 4>
+                            face{};
+                        for (size_t i = 0;
+                             i < face.size(); ++i)
+                        {
+                            face[i] =
+                                FirstPersonSemanticWorldPoint(
+                                    component.transform,
+                                    localFace[i]);
+                        }
+                        result.push_back(face);
+                    }
+                    return result;
+                };
+
+            if (const auto found = cache.find(key);
+                found != cache.end())
+                return instantiate(found->second);
+
+            FirstPersonSemanticVisualHullTemplate
+                cached{};
+            const auto physicalFaces =
+                BuildFirstPersonSemanticPhysicalFaces(
+                    component);
+            if (physicalFaces.empty())
+            {
+                cache.emplace(key, std::move(cached));
+                return std::vector<
+                    std::array<FirstPersonVec3, 4>>{};
+            }
+
+            FirstPersonVec3 low =
+                physicalFaces.front().front();
+            FirstPersonVec3 high = low;
+            for (const auto& face : physicalFaces)
+            for (const auto& point : face)
+            {
+                low.x = std::min(low.x, point.x);
+                low.y = std::min(low.y, point.y);
+                low.z = std::min(low.z, point.z);
+                high.x = std::max(high.x, point.x);
+                high.y = std::max(high.y, point.y);
+                high.z = std::max(high.z, point.z);
+            }
+
+            float step = 1.0f;
+            while (true)
+            {
+                const int32_t nx = int32_t(std::ceil(
+                    (high.x - low.x) / step));
+                const int32_t ny = int32_t(std::ceil(
+                    (high.y - low.y) / step));
+                const int32_t nz = int32_t(std::ceil(
+                    (high.z - low.z) / step));
+                const size_t count =
+                    nx > 0 && ny > 0 && nz > 0
+                    ? size_t(nx) * size_t(ny)
+                        * size_t(nz)
+                    : 0;
+                if (nx > 0 && ny > 0 && nz > 0
+                    && nx <= 96 && ny <= 96
+                    && nz <= 96 && count <= 65536)
+                    break;
+                step *= 2.0f;
+                if (step > 16.0f)
+                {
+                    cache.emplace(key, std::move(cached));
+                    return std::vector<
+                        std::array<FirstPersonVec3, 4>>{};
+                }
+            }
+
+            std::vector<FirstPersonVisualHullView>
+                hullViews;
+            hullViews.reserve(4);
+            for (uint8_t rotation = 0;
+                 rotation < 4; ++rotation)
+            {
+                const auto& source = views[rotation];
+                FirstPersonVisualHullView hullView{};
+                hullView.imageDirection = rotation;
+                hullView.image =
+                    source.component->artwork.image.GetIndex();
+                hullView.g1 = source.g1;
+                for (int32_t y = 0;
+                     y < source.g1->height; ++y)
+                for (int32_t x = 0;
+                     x < source.g1->width; ++x)
+                {
+                    if (source.pixels[
+                            size_t(y)
+                                * size_t(source.g1->width)
+                            + size_t(x)]
+                        == 0)
+                        continue;
+                    const int32_t screenX =
+                        source.component->artwork.screenPos.x
+                        + source.g1->xOffset + x;
+                    const int32_t screenY =
+                        source.component->artwork.screenPos.y
+                        + source.g1->yOffset + y;
+                    if (source.maskG1 != nullptr
+                        && !source.maskPixels.empty())
+                    {
+                        const int32_t mx =
+                            screenX
+                            - source.component
+                                  ->artwork.screenPos.x
+                            - source.maskG1->xOffset;
+                        const int32_t my =
+                            screenY
+                            - source.component
+                                  ->artwork.screenPos.y
+                            - source.maskG1->yOffset;
+                        if (mx < 0 || my < 0
+                            || mx >= source.maskG1->width
+                            || my >= source.maskG1->height
+                            || source.maskPixels[
+                                size_t(my)
+                                    * size_t(
+                                        source.maskG1->width)
+                                + size_t(mx)]
+                                == 0)
+                            continue;
+                    }
+                    hullView.observed.add(
+                        screenX, screenY);
+                }
+                if (hullView.observed.empty())
+                {
+                    cache.emplace(key, std::move(cached));
+                    return std::vector<
+                        std::array<FirstPersonVec3, 4>>{};
+                }
+                hullViews.push_back(std::move(hullView));
+            }
+
+            const auto localLow =
+                component.geometry.points[0];
+            const auto localHigh =
+                component.geometry.points[1];
+            const auto occupancy =
+                [&](FirstPersonVec3 world) {
+                    const auto local =
+                        FirstPersonSemanticLocalPoint(
+                            component.transform, world);
+                    constexpr float epsilon = 0.001f;
+                    return local.x
+                            >= std::min(
+                                localLow.x, localHigh.x)
+                                - epsilon
+                        && local.x
+                            < std::max(
+                                localLow.x, localHigh.x)
+                                + epsilon
+                        && local.y
+                            >= std::min(
+                                localLow.y, localHigh.y)
+                                - epsilon
+                        && local.y
+                            < std::max(
+                                localLow.y, localHigh.y)
+                                + epsilon
+                        && local.z
+                            >= std::min(
+                                localLow.z, localHigh.z)
+                                - epsilon
+                        && local.z
+                            < std::max(
+                                localLow.z, localHigh.z)
+                                + epsilon;
+                };
+            const auto projectPoint =
+                [](uint8_t rotation,
+                   FirstPersonVec3 point) {
+                    const auto projected =
+                        Translate3DTo2DWithZ(
+                            rotation,
+                            {
+                                int32_t(std::lround(point.x)),
+                                int32_t(std::lround(point.y)),
+                                int32_t(std::lround(point.z)),
+                            });
+                    return std::array<float, 2>{
+                        float(projected.x),
+                        float(projected.y)
+                    };
+                };
+            const auto pointSupported =
+                [&](const FirstPersonVisualHullView& hullView,
+                    FirstPersonVec3 point) {
+                    const auto& source =
+                        views[hullView.imageDirection];
+                    const auto projected =
+                        Translate3DTo2DWithZ(
+                            hullView.imageDirection,
+                            {
+                                int32_t(std::lround(point.x)),
+                                int32_t(std::lround(point.y)),
+                                int32_t(std::lround(point.z)),
+                            });
+                    for (int32_t dy = -1; dy <= 1; ++dy)
+                    for (int32_t dx = -1; dx <= 1; ++dx)
+                    {
+                        const int32_t screenX =
+                            projected.x + dx;
+                        const int32_t screenY =
+                            projected.y + dy;
+                        const int32_t u =
+                            screenX
+                            - source.component
+                                  ->artwork.screenPos.x
+                            - source.g1->xOffset;
+                        const int32_t v =
+                            screenY
+                            - source.component
+                                  ->artwork.screenPos.y
+                            - source.g1->yOffset;
+                        if (u < 0 || v < 0
+                            || u >= source.g1->width
+                            || v >= source.g1->height)
+                            continue;
+                        if (source.pixels[
+                                size_t(v)
+                                    * size_t(source.g1->width)
+                                + size_t(u)]
+                            == 0)
+                            continue;
+                        if (source.maskG1 != nullptr
+                            && !source.maskPixels.empty())
+                        {
+                            const int32_t mu =
+                                screenX
+                                - source.component
+                                      ->artwork.screenPos.x
+                                - source.maskG1->xOffset;
+                            const int32_t mv =
+                                screenY
+                                - source.component
+                                      ->artwork.screenPos.y
+                                - source.maskG1->yOffset;
+                            if (mu < 0 || mv < 0
+                                || mu >= source.maskG1->width
+                                || mv >= source.maskG1->height
+                                || source.maskPixels[
+                                    size_t(mv)
+                                        * size_t(
+                                            source.maskG1->width)
+                                    + size_t(mu)]
+                                    == 0)
+                                continue;
+                        }
+                        return true;
+                    }
+                    return false;
+                };
+
+            FirstPersonVisualHullConfig config{};
+            config.minimumViews = 4;
+            config.minimumOccupiedCells = 1;
+            config.maximumOccupiedCells = 65536;
+            config.maximumGridCells = 65536;
+            config.maximumAxisCells = 96;
+            config.minimumCandidateCoverage = 0.0f;
+            config.minimumObservedCoverage = 0.0f;
+            config.maximumEdgeError =
+                std::numeric_limits<int32_t>::max();
+
+            const auto hull =
+                BuildFirstPersonVisualHull(
+                    hullViews,
+                    {
+                        low.x, high.x,
+                        low.y, high.y,
+                        low.z, high.z,
+                        step,
+                    },
+                    config,
+                    projectPoint,
+                    occupancy,
+                    pointSupported);
+            if (!hull.valid)
+            {
+                cache.emplace(key, std::move(cached));
+                return std::vector<
+                    std::array<FirstPersonVec3, 4>>{};
+            }
+
+            const auto carved =
+                BuildFirstPersonVisualHullBoundaryFaces(
+                    hull);
+            if (carved.empty())
+            {
+                cache.emplace(key, std::move(cached));
+                return std::vector<
+                    std::array<FirstPersonVec3, 4>>{};
+            }
+
+            cached.usable = true;
+            cached.localFaces.reserve(carved.size());
+            for (const auto& face : carved)
+            {
+                std::array<
+                    FirstPersonPaintSemanticVec3, 4>
+                    local{};
+                for (size_t i = 0;
+                     i < local.size(); ++i)
+                {
+                    local[i] =
+                        FirstPersonSemanticLocalPoint(
+                            component.transform,
+                            face.corners[i]);
+                }
+                cached.localFaces.push_back(local);
+            }
+            auto [inserted, ok] =
+                cache.emplace(key, std::move(cached));
+            (void)ok;
+            return instantiate(inserted->second);
+        }
+
         [[nodiscard]] std::vector<FirstPersonSurface>
             BuildFirstPersonSemanticComponentSurfaces(
                 const FirstPersonPaintSemanticComponent& component,
@@ -1684,10 +2183,40 @@
                     depthPeers = nullptr)
         {
             std::vector<FirstPersonSurface> result;
-            const auto faces =
+            auto faces =
                 BuildFirstPersonSemanticPhysicalFaces(component);
             if (faces.empty())
                 return result;
+
+            std::array<
+                const FirstPersonPaintSemanticComponent*, 4>
+                observations = artworkViews;
+            if (component.artwork.sourceRotation < 4
+                && observations[
+                       component.artwork.sourceRotation]
+                    == nullptr)
+            {
+                observations[
+                    component.artwork.sourceRotation] =
+                    &component;
+            }
+
+            std::array<FirstPersonSemanticArtworkView, 4>
+                decodedViews{};
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
+            {
+                decodedViews[rotation] =
+                    DecodeFirstPersonSemanticArtworkView(
+                        observations[rotation]);
+            }
+
+            if (const auto carved =
+                    BuildFirstPersonSemanticVisualHullFaces(
+                        component, decodedViews);
+                carved.has_value() && !carved->empty())
+            {
+                faces = *carved;
+            }
 
             std::vector<std::array<FirstPersonVec3, 4>>
                 depthFaces = faces;
@@ -1710,36 +2239,13 @@
                                     return SameFirstPersonSemanticFace(
                                         targetFace, peerFace);
                                 });
-                        // Coplanar decals/host planes describe the same
-                        // physical surface and are allowed to share it. Only
-                        // genuinely distinct geometry participates as an
-                        // occluder.
+                        // Peers remain authoritative physical occluders. The
+                        // visual hull only refines where this component shows
+                        // material; it never changes collision/placement.
                         if (!coincident)
                             depthFaces.push_back(peerFace);
                     }
                 }
-            }
-
-            std::array<
-                const FirstPersonPaintSemanticComponent*, 4>
-                observations = artworkViews;
-            if (component.artwork.sourceRotation < 4
-                && observations[
-                       component.artwork.sourceRotation]
-                    == nullptr)
-            {
-                observations[
-                    component.artwork.sourceRotation] =
-                    &component;
-            }
-
-            std::array<FirstPersonSemanticArtworkView, 4>
-                decodedViews{};
-            for (uint8_t rotation = 0; rotation < 4; ++rotation)
-            {
-                decodedViews[rotation] =
-                    DecodeFirstPersonSemanticArtworkView(
-                        observations[rotation]);
             }
 
             std::array<FirstPersonDepthOwnerMap, 4>
@@ -1869,8 +2375,7 @@
                 // artwork compete in the depth buffer.
                 surface.coplanarOwner =
                     component.artwork.decal
-                    || FirstPersonSemanticRoleOwnsCoplanarSurface(
-                        component.role);
+                    || component.artwork.nativePaintOrdinal != 0;
                 surface.nativePaintOrdinal =
                     component.artwork.nativePaintOrdinal;
 
@@ -2154,8 +2659,9 @@
                 const auto& variant =
                     cached.rotations[rotation];
                 if (!variant.semanticValid
-                    || variant.lastAnimationGeneration
-                        != canonicalGeneration)
+                    || (cached.animated
+                        && variant.lastAnimationGeneration
+                            != canonicalGeneration))
                     continue;
                 std::unordered_map<uint64_t, uint32_t>
                     occurrences;
