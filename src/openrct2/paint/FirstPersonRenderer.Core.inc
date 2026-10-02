@@ -1152,12 +1152,42 @@
                 }
             }
 
-            struct SmallSceneryFaceView
+            struct SmallSceneryDecodedView
             {
                 ImageId image{};
                 const G1Element* g1 = nullptr;
                 uint8_t rotation = 0;
                 std::vector<uint8_t> pixels;
+            };
+            std::vector<SmallSceneryDecodedView>
+                decodedViews;
+            decodedViews.reserve(
+                hull->textureViews.size());
+            for (const auto& view : hull->textureViews)
+            {
+                const auto sourceImage =
+                    image.WithIndex(view.image);
+                const auto* g1 =
+                    GfxGetG1Element(sourceImage);
+                if (g1 == nullptr
+                    || g1->width <= 0
+                    || g1->height <= 0)
+                    continue;
+                auto decoded =
+                    DecodeFirstPersonSpritePixels(*g1);
+                if (!decoded.has_value())
+                    continue;
+                decodedViews.push_back({
+                    sourceImage,
+                    g1,
+                    view.imageDirection,
+                    std::move(*decoded),
+                });
+            }
+
+            struct SmallSceneryFaceView
+            {
+                const SmallSceneryDecodedView* source = nullptr;
                 float ownership = 0.0f;
                 float sourceCoverage = 0.0f;
                 float score = 0.0f;
@@ -1212,23 +1242,11 @@
             {
                 const auto& face = faces[faceIndex];
                 std::vector<SmallSceneryFaceView> candidates;
-                for (const auto& view : hull->textureViews)
+                for (const auto& source : decodedViews)
                 {
-                    const auto sourceImage =
-                        image.WithIndex(view.image);
-                    const auto* g1 =
-                        GfxGetG1Element(sourceImage);
-                    if (g1 == nullptr
-                        || g1->width <= 0
-                        || g1->height <= 0
-                        || !faceVisible(
+                    if (!faceVisible(
                             face.normal,
-                            view.imageDirection))
-                        continue;
-
-                    const auto decoded =
-                        DecodeFirstPersonSpritePixels(*g1);
-                    if (!decoded.has_value())
+                            source.rotation))
                         continue;
 
                     std::array<ScreenCoordsXY, 4> projected{};
@@ -1237,7 +1255,7 @@
                     {
                         projected[i] =
                             Translate3DTo2DWithZ(
-                                view.imageDirection,
+                                source.rotation,
                                 {
                                     int32_t(std::lround(
                                         face.corners[i].x)),
@@ -1252,8 +1270,7 @@
                         silhouette, projected);
                     const float ownership =
                         FirstPersonDepthOwnerCoverage(
-                            depthOwners[
-                                view.imageDirection],
+                            depthOwners[source.rotation],
                             uint32_t(faceIndex),
                             silhouette);
                     if (ownership < 0.20f)
@@ -1262,21 +1279,33 @@
                     const auto paintOffset =
                         FirstPersonSmallSceneryPaintOffset(
                             *entry, *small,
-                            view.imageDirection);
+                            source.rotation);
                     const auto sourceOrigin =
                         Translate3DTo2DWithZ(
-                            view.imageDirection,
+                            source.rotation,
                             { paintOffset, 0 });
                     const float sourceCoverage =
                         FirstPersonSilhouettePredicateCoverage(
                             silhouette,
                             [&](int32_t x, int32_t y) {
-                                return FirstPersonVisualHullPixelOpaque(
-                                    *g1,
+                                const int32_t u =
                                     x - sourceOrigin.x
-                                        - g1->xOffset,
+                                    - source.g1->xOffset;
+                                const int32_t v =
                                     y - sourceOrigin.y
-                                        - g1->yOffset);
+                                    - source.g1->yOffset;
+                                if (u < 0 || v < 0
+                                    || u >= source.g1->width
+                                    || v >= source.g1->height)
+                                    return false;
+                                if (!source.g1->flags.has(
+                                        G1Flag::hasTransparency))
+                                    return true;
+                                return source.pixels[
+                                    size_t(v)
+                                        * size_t(
+                                            source.g1->width)
+                                    + size_t(u)] != 0;
                             });
                     if (sourceCoverage <= 0.0f)
                         continue;
@@ -1285,10 +1314,7 @@
                         FirstPersonTextureReprojectionIsReliable(
                             ownership, sourceCoverage);
                     candidates.push_back({
-                        sourceImage,
-                        g1,
-                        view.imageDirection,
-                        *decoded,
+                        &source,
                         ownership,
                         sourceCoverage,
                         (reliable ? 1000.0f : 0.0f)
@@ -1304,7 +1330,8 @@
                        const SmallSceneryFaceView& b) {
                         if (a.score != b.score)
                             return a.score > b.score;
-                        return a.rotation < b.rotation;
+                        return a.source->rotation
+                            < b.source->rotation;
                     });
 
                 FirstPersonSurface surface{};
@@ -1315,7 +1342,8 @@
 
                 if (!candidates.empty())
                 {
-                    surface.image = candidates.front().image;
+                    surface.image =
+                        candidates.front().source->image;
                     const int32_t width =
                         std::clamp(
                             int32_t(std::ceil(std::max(
@@ -1355,14 +1383,16 @@
                         for (const auto& candidate :
                              candidates)
                         {
+                            const auto& sourceView =
+                                *candidate.source;
                             if (!SameFirstPersonMaterialTemplate(
                                     surface.image,
-                                    candidate.image))
+                                    sourceView.image))
                                 continue;
 
                             const auto projected =
                                 Translate3DTo2DWithZ(
-                                    candidate.rotation,
+                                    sourceView.rotation,
                                     {
                                         int32_t(std::lround(
                                             point.x)),
@@ -1372,7 +1402,7 @@
                                             point.z)),
                                     });
                             if (!ownedNear(
-                                    candidate.rotation,
+                                    sourceView.rotation,
                                     uint32_t(faceIndex),
                                     projected.x,
                                     projected.y))
@@ -1381,27 +1411,27 @@
                             const auto paintOffset =
                                 FirstPersonSmallSceneryPaintOffset(
                                     *entry, *small,
-                                    candidate.rotation);
+                                    sourceView.rotation);
                             const auto sourceOrigin =
                                 Translate3DTo2DWithZ(
-                                    candidate.rotation,
+                                    sourceView.rotation,
                                     { paintOffset, 0 });
                             const int32_t u =
                                 projected.x - sourceOrigin.x
-                                - candidate.g1->xOffset;
+                                - sourceView.g1->xOffset;
                             const int32_t v =
                                 projected.y - sourceOrigin.y
-                                - candidate.g1->yOffset;
+                                - sourceView.g1->yOffset;
                             if (u < 0 || v < 0
-                                || u >= candidate.g1->width
-                                || v >= candidate.g1->height)
+                                || u >= sourceView.g1->width
+                                || v >= sourceView.g1->height)
                                 continue;
 
                             const uint8_t pixel =
-                                candidate.pixels[
+                                sourceView.pixels[
                                     size_t(v)
                                         * size_t(
-                                            candidate.g1->width)
+                                            sourceView.g1->width)
                                     + size_t(u)];
                             if (pixel == 0)
                                 continue;
@@ -2713,6 +2743,91 @@
                     return false;
                 };
 
+            struct LargeSceneryDecodedView
+            {
+                bool attempted = false;
+                ImageId image{};
+                const G1Element* g1 = nullptr;
+                uint8_t direction = 0;
+                uint8_t sourceRotation = 0;
+                ScreenCoordsXY spritePos{};
+                std::vector<uint8_t> pixels;
+            };
+            std::vector<LargeSceneryDecodedView>
+                decodedViews(entry.tiles.size() * 4u);
+            const auto decodedView =
+                [&](size_t sequence, uint8_t direction)
+                    -> const LargeSceneryDecodedView* {
+                    if (sequence >= entry.tiles.size()
+                        || direction >= 4)
+                        return nullptr;
+                    auto& decoded =
+                        decodedViews[
+                            sequence * 4u + direction];
+                    if (decoded.attempted)
+                        return decoded.g1 != nullptr
+                            ? &decoded : nullptr;
+                    decoded.attempted = true;
+
+                    const ImageIndex imageIndex =
+                        entry.image + 4
+                        + (ImageIndex(sequence) << 2)
+                        + direction;
+                    decoded.image =
+                        imageTemplate.WithIndex(imageIndex);
+                    decoded.g1 =
+                        GfxGetG1Element(decoded.image);
+                    if (decoded.g1 == nullptr
+                        || decoded.g1->width <= 0
+                        || decoded.g1->height <= 0)
+                    {
+                        decoded.g1 = nullptr;
+                        return nullptr;
+                    }
+                    auto pixels =
+                        DecodeFirstPersonSpritePixels(
+                            *decoded.g1);
+                    if (!pixels.has_value())
+                    {
+                        decoded.g1 = nullptr;
+                        return nullptr;
+                    }
+                    decoded.pixels = std::move(*pixels);
+                    decoded.direction = direction;
+                    decoded.sourceRotation =
+                        FirstPersonViewportRotationForNativeView(
+                            objectDirection, direction);
+
+                    const auto& tile =
+                        entry.tiles[sequence];
+                    const CoordsXY tileOffset =
+                        CoordsXY{
+                            tile.offset.x,
+                            tile.offset.y
+                        }.rotate(objectDirection);
+                    const CoordsXY tileWorld{
+                        int32_t(std::lround(
+                            group.anchor.x))
+                            + tileOffset.x,
+                        int32_t(std::lround(
+                            group.anchor.y))
+                            + tileOffset.y,
+                    };
+                    const int32_t tileBaseZ =
+                        int32_t(std::lround(
+                            group.anchor.z))
+                        + tile.offset.z;
+                    const auto spriteOrigin =
+                        GetTileElementPaintSpritePosition(
+                            tileWorld,
+                            decoded.sourceRotation);
+                    decoded.spritePos =
+                        Translate3DTo2DWithZ(
+                            decoded.sourceRotation,
+                            { spriteOrigin, tileBaseZ });
+                    return &decoded;
+                };
+
             bool haveBounds = false;
             FirstPersonVec3 low{}, high{};
             for (size_t faceIndex = 0;
@@ -2723,19 +2838,6 @@
                 if (face.sequence >= entry.tiles.size())
                     continue;
                 const auto& tile = entry.tiles[face.sequence];
-                const CoordsXY tileOffset =
-                    CoordsXY{
-                        tile.offset.x, tile.offset.y
-                    }.rotate(objectDirection);
-                const CoordsXY tileWorld{
-                    int32_t(std::lround(group.anchor.x))
-                        + tileOffset.x,
-                    int32_t(std::lround(group.anchor.y))
-                        + tileOffset.y,
-                };
-                const int32_t tileBaseZ =
-                    int32_t(std::lround(group.anchor.z))
-                    + tile.offset.z;
 
                 std::array<FirstPersonVec3, 4>
                     worldFace{};
@@ -2788,12 +2890,7 @@
 
                 struct LargeSceneryFaceView
                 {
-                    ImageId image{};
-                    const G1Element* g1 = nullptr;
-                    uint8_t direction = 0;
-                    uint8_t sourceRotation = 0;
-                    ScreenCoordsXY spritePos{};
-                    std::vector<uint8_t> pixels;
+                    const LargeSceneryDecodedView* source = nullptr;
                     float score = 0.0f;
                 };
                 std::vector<LargeSceneryFaceView>
@@ -2803,23 +2900,6 @@
                 {
                     if (!faceVisible(face.kind, direction))
                         continue;
-                    const ImageIndex imageIndex =
-                        entry.image + 4
-                        + (ImageIndex(face.sequence) << 2)
-                        + direction;
-                    const auto sourceImage =
-                        imageTemplate.WithIndex(imageIndex);
-                    const auto* g1 =
-                        GfxGetG1Element(sourceImage);
-                    if (g1 == nullptr
-                        || g1->width <= 0
-                        || g1->height <= 0)
-                        continue;
-                    const auto decoded =
-                        DecodeFirstPersonSpritePixels(*g1);
-                    if (!decoded.has_value())
-                        continue;
-
                     std::array<ScreenCoordsXY, 4>
                         projected{};
                     FirstPersonSilhouette silhouette{};
@@ -2846,24 +2926,14 @@
                     if (ownership < 0.20f)
                         continue;
 
-                    const uint8_t sourceRotation =
-                        FirstPersonViewportRotationForNativeView(
-                            objectDirection, direction);
-                    const auto spriteOrigin =
-                        GetTileElementPaintSpritePosition(
-                            tileWorld, sourceRotation);
-                    const auto spritePos =
-                        Translate3DTo2DWithZ(
-                            sourceRotation,
-                            { spriteOrigin, tileBaseZ });
+                    const auto* source =
+                        decodedView(
+                            face.sequence, direction);
+                    if (source == nullptr)
+                        continue;
 
                     candidates.push_back({
-                        sourceImage,
-                        g1,
-                        direction,
-                        sourceRotation,
-                        spritePos,
-                        *decoded,
+                        source,
                         ownership
                             * float(
                                 std::max<size_t>(
@@ -2876,7 +2946,8 @@
                        const LargeSceneryFaceView& b) {
                         if (a.score != b.score)
                             return a.score > b.score;
-                        return a.direction < b.direction;
+                        return a.source->direction
+                            < b.source->direction;
                     });
 
                 FirstPersonSurface surface{};
@@ -2896,7 +2967,7 @@
                 if (!candidates.empty())
                 {
                     surface.image =
-                        candidates.front().image;
+                        candidates.front().source->image;
                     const int32_t width =
                         std::clamp(
                             int32_t(std::ceil(std::max(
@@ -2946,14 +3017,16 @@
                         for (const auto& candidate :
                              candidates)
                         {
+                            const auto& sourceView =
+                                *candidate.source;
                             if (!SameFirstPersonMaterialTemplate(
                                     surface.image,
-                                    candidate.image))
+                                    sourceView.image))
                                 continue;
 
                             const auto localProjected =
                                 Translate3DTo2DWithZ(
-                                    candidate.direction,
+                                    sourceView.direction,
                                     {
                                         int32_t(std::lround(
                                             localPoint.x)),
@@ -2963,7 +3036,7 @@
                                             localPoint.z)),
                                     });
                             if (!ownedNear(
-                                    candidate.direction,
+                                    sourceView.direction,
                                     uint32_t(faceIndex),
                                     localProjected.x,
                                     localProjected.y))
@@ -2971,7 +3044,7 @@
 
                             const auto source =
                                 Translate3DTo2DWithZ(
-                                    candidate.sourceRotation,
+                                    sourceView.sourceRotation,
                                     {
                                         int32_t(std::lround(
                                             worldPoint.x)),
@@ -2982,21 +3055,21 @@
                                     });
                             const int32_t u =
                                 source.x
-                                - candidate.spritePos.x
-                                - candidate.g1->xOffset;
+                                - sourceView.spritePos.x
+                                - sourceView.g1->xOffset;
                             const int32_t v =
                                 source.y
-                                - candidate.spritePos.y
-                                - candidate.g1->yOffset;
+                                - sourceView.spritePos.y
+                                - sourceView.g1->yOffset;
                             if (u < 0 || v < 0
-                                || u >= candidate.g1->width
-                                || v >= candidate.g1->height)
+                                || u >= sourceView.g1->width
+                                || v >= sourceView.g1->height)
                                 continue;
                             const uint8_t pixel =
-                                candidate.pixels[
+                                sourceView.pixels[
                                     size_t(v)
                                         * size_t(
-                                            candidate.g1->width)
+                                            sourceView.g1->width)
                                     + size_t(u)];
                             if (pixel == 0)
                                 continue;
