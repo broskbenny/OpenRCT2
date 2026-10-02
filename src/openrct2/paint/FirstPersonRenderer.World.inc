@@ -1099,7 +1099,7 @@
                     // Avoid resolving object artwork/G1 metadata every rendered
                     // frame when neither native invalidation nor the staggered
                     // semantic fallback probe reported a change.
-                    const uint8_t surfaceStyle = tile->surfaceStyle;
+                    const uint8_t surfaceStyle = static_cast<uint8_t>(tile->getSurfaceObjectIndex());
                     const uint8_t grassVisualStage =
                         tile->getGrassLength() & 0x7u;
                     const ImageId waterOverlay = waterZ > baseZ
