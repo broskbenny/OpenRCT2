@@ -892,21 +892,50 @@
                     entry = {};
                     entry.x1=x1; entry.y1=y1;
                     entry.minZ=4096; entry.maxZ=-512;
+                    const uint32_t sourceGeneration =
+                        getGameState().currentTicks;
                     for(int32_t ty=y0;ty<y1;++ty)
                     for(int32_t tx=x0;tx<x1;++tx)
                     {
                         const CoordsXY p{tx*kCoordsXYStep,ty*kCoordsXYStep};
                         if (!MapIsLocationValid(p)) continue;
-                        const auto* tile = MapGetFirstElementAt(p);
-                        if(tile==nullptr) continue;
-                        do
+
+                        // The leaf bound and per-tile visibility cache require
+                        // the same authoritative tile walk. Publish both from
+                        // this one snapshot so cold first-person entry does not
+                        // immediately rescan every element in the visible leaf.
+                        const auto snapshot =
+                            ReadTileSemanticSnapshot(p);
+                        auto& tileCache =
+                            _staticPaintCache[TerrainKey(tx, ty)];
+                        if (!snapshot.populated)
                         {
-                            entry.populated = true;
-                            entry.minZ = std::min(entry.minZ,tile->getBaseZ());
-                            entry.maxZ = std::max(entry.maxZ,SemanticClearanceZ(*tile));
-                            if(tile->getType()==TileElementType::surface)
-                                entry.maxZ = std::max(entry.maxZ,tile->asSurface()->getWaterHeight());
-                        } while(!(tile++)->isLastForTile());
+                            tileCache.visibilityBoundValid = false;
+                            tileCache.visibilityDirty = false;
+                            tileCache.lastVisibilityGeneration =
+                                sourceGeneration;
+                            continue;
+                        }
+
+                        if (tileCache.valid
+                            && tileCache.signature
+                                != snapshot.signature)
+                        {
+                            tileCache.dirty = true;
+                        }
+                        tileCache.signature = snapshot.signature;
+                        tileCache.visibilityMinZ = snapshot.minZ;
+                        tileCache.visibilityMaxZ = snapshot.maxZ;
+                        tileCache.visibilityBoundValid = true;
+                        tileCache.visibilityDirty = false;
+                        tileCache.lastVisibilityGeneration =
+                            sourceGeneration;
+
+                        entry.populated = true;
+                        entry.minZ = std::min(
+                            entry.minZ, snapshot.minZ);
+                        entry.maxZ = std::max(
+                            entry.maxZ, snapshot.maxZ);
                     }
                     entry.dirty=false;
                 }
