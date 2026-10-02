@@ -36,10 +36,17 @@
                 bool probedAnimated = cached.animated;
                 if (authoritativeInvalidation || semanticProbeDue)
                 {
-                    // Expensive packed-element hashing and group discovery belong
-                    // on invalidation or staggered fallback probes, never the
-                    // ordinary frame path.
-                    probedSignature = NativeTileSignature(tile);
+                    // Visibility discovery already reads the authoritative tile
+                    // bytes when its bound is cold/dirty. Reuse that same-tick
+                    // signature instead of hashing every element twice during
+                    // first-person entry or native invalidation.
+                    const bool haveFreshVisibilitySignature =
+                        cached.visibilityBoundValid
+                        && !cached.visibilityDirty
+                        && cached.lastVisibilityGeneration
+                            == sourceGeneration;
+                    if (!haveFreshVisibilitySignature)
+                        probedSignature = NativeTileSignature(tile);
                     probedAnimated = MapAnimations::IsTileAnimatedForFirstPerson(
                         TileCoordsXY(tx, ty));
                     cached.lastSemanticGeneration = sourceGeneration;
