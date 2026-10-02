@@ -962,10 +962,132 @@
                     *entry, *small);
             if (hull == nullptr)
                 return false;
+
+            const float tileX = float(ps.MapPos.x);
+            const float tileY = float(ps.MapPos.y);
+            const float baseZ = float(small->getBaseZ());
+
+            // Face reprojection is an asset/state operation, not an instance
+            // operation. Identical scenery instances can share the expensive
+            // local-space bake and apply only their world translation and
+            // recolour material at submission time.
+            struct BakedSmallSceneryKey
+            {
+                const SmallSceneryEntry* entry{};
+                uint8_t direction{};
+                uint8_t quadrant{};
+                uint8_t occupied{};
+                uint8_t witherStage{};
+                bool operator==(const BakedSmallSceneryKey&) const = default;
+            };
+            struct BakedSmallSceneryKeyHash
+            {
+                size_t operator()(const BakedSmallSceneryKey& key) const
+                {
+                    size_t value =
+                        reinterpret_cast<uintptr_t>(
+                            key.entry) >> 4;
+                    value ^= size_t(key.direction) << 1;
+                    value ^= size_t(key.quadrant) << 4;
+                    value ^= size_t(key.occupied) << 7;
+                    value ^= size_t(key.witherStage) << 12;
+                    return value;
+                }
+            };
+            struct BakedSmallSceneryEntry
+            {
+                std::array<const uint8_t*, 4>
+                    sourceIdentities{};
+                bool resolved = false;
+                bool usable = false;
+                std::vector<FirstPersonSurface>
+                    localSurfaces;
+            };
+            static std::unordered_map<
+                BakedSmallSceneryKey,
+                BakedSmallSceneryEntry,
+                BakedSmallSceneryKeyHash>
+                bakedCache;
+            static uint64_t bakedCacheGeneration = 0;
+
+            const uint64_t reconstructionGeneration =
+                FirstPersonSmallSceneryReconstructionGeneration();
+            if (bakedCacheGeneration
+                != reconstructionGeneration)
+            {
+                bakedCache.clear();
+                bakedCacheGeneration =
+                    reconstructionGeneration;
+            }
+
+            const BakedSmallSceneryKey bakedKey{
+                entry,
+                uint8_t(small->getDirection() & 3u),
+                small->getSceneryQuadrant(),
+                uint8_t(
+                    small->getOccupiedQuadrants()
+                    & 0x0Fu),
+                FirstPersonSmallSceneryWitherStage(
+                    *entry, *small),
+            };
+            std::array<const uint8_t*, 4>
+                sourceIdentities{};
+            for (const auto& view :
+                 hull->textureViews)
+            {
+                if (view.imageDirection >= 4)
+                    continue;
+                const auto* source =
+                    GfxGetG1Element(view.image);
+                sourceIdentities[
+                    view.imageDirection] =
+                    source != nullptr
+                    ? source->offset : nullptr;
+            }
+
+            auto cachedBake =
+                bakedCache.find(bakedKey);
+            if (cachedBake != bakedCache.end()
+                && cachedBake->second.resolved
+                && cachedBake->second.sourceIdentities
+                    == sourceIdentities)
+            {
+                if (!cachedBake->second.usable)
+                    return false;
+                for (const auto& localSurface :
+                     cachedBake->second.localSurfaces)
+                {
+                    auto surface = localSurface;
+                    surface.image =
+                        image.WithIndex(
+                            localSurface.image.GetIndex());
+                    for (auto& vertex :
+                         surface.triangles)
+                    {
+                        vertex.world.x += tileX;
+                        vertex.world.y += tileY;
+                        vertex.world.z += baseZ;
+                    }
+                    scene.surfaces.emplace_back(
+                        std::move(surface));
+                }
+                return !cachedBake->second
+                            .localSurfaces.empty();
+            }
+
+            auto& baked = bakedCache[bakedKey];
+            baked = {};
+            baked.sourceIdentities =
+                sourceIdentities;
+
             const auto faces =
                 BuildFirstPersonVisualHullBoundaryFaces(*hull);
             if (faces.empty())
+            {
+                baked.resolved = true;
+                baked.usable = false;
                 return false;
+            }
 
             const auto faceVisible =
                 [](FirstPersonVec3 normal,
@@ -1083,9 +1205,6 @@
                     return false;
                 };
 
-            const float tileX = float(ps.MapPos.x);
-            const float tileY = float(ps.MapPos.y);
-            const float baseZ = float(small->getBaseZ());
             const size_t surfaceStart = scene.surfaces.size();
             size_t emittedFaces = 0;
             for (size_t faceIndex = 0;
@@ -1372,9 +1491,37 @@
                 // mesh and preserve the ordinary native sprite fallback rather
                 // than showing guessed solid-colour geometry.
                 scene.surfaces.resize(surfaceStart);
+                baked.localSurfaces.clear();
+                baked.resolved = true;
+                baked.usable = false;
                 return false;
             }
-            return emittedFaces != 0;
+
+            baked.localSurfaces.clear();
+            if (emittedFaces != 0)
+            {
+                baked.localSurfaces.reserve(
+                    scene.surfaces.size()
+                    - surfaceStart);
+                for (size_t i = surfaceStart;
+                     i < scene.surfaces.size(); ++i)
+                {
+                    auto local =
+                        scene.surfaces[i];
+                    for (auto& vertex :
+                         local.triangles)
+                    {
+                        vertex.world.x -= tileX;
+                        vertex.world.y -= tileY;
+                        vertex.world.z -= baseZ;
+                    }
+                    baked.localSurfaces.emplace_back(
+                        std::move(local));
+                }
+            }
+            baked.resolved = true;
+            baked.usable = emittedFaces != 0;
+            return baked.usable;
         }
 
         [[nodiscard]] bool IsHiddenPassengerTileComponent(
