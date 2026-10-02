@@ -364,27 +364,19 @@
         }
 
         TrackTrajectoryCacheEntry BuildTrackTrajectoryGeometry(
-            const Ride& ride, const TrackElement& track, TileElement* originElement,
-            const CoordsXYZ& sampleOrigin, const FirstPersonVec3& groupAnchor,
+            const FirstPersonTrackRailProfile& profile,
+            uint8_t topColour, uint8_t sideColour, float tunnelHeight, uint8_t tunnelColour,
+            const std::optional<FirstPersonTrackTrajectory>& next,
+            const FirstPersonVec3& groupAnchor,
             uint64_t groupKey, uint64_t signature,
             const FirstPersonTrackTrajectory& trajectory, uint64_t frame)
         {
             TrackTrajectoryCacheEntry result{};
             result.signature = signature;
             result.lastSeen = frame;
-            const auto resolvedProfile =
-                FirstPersonTrackRailProfileFor(ride, track);
-            if (!resolvedProfile.has_value())
-                return result;
-            const auto& profile = *resolvedProfile;
             result.railSilhouettes =
                 BuildFirstPersonAuthoritativeRailSilhouettes(
                     trajectory, groupAnchor, profile);
-            const uint8_t topColour =
-                FirstPersonRailColour(ride, track, true);
-            const uint8_t sideColour =
-                FirstPersonRailColour(ride, track, false);
-
             const auto railProxies =
                 BuildFirstPersonRailProxySegments(
                     trajectory, profile);
@@ -427,30 +419,17 @@
                 previousCarrierPoint = i;
             }
 
-            const auto& tunnelDescriptor =
-                GetTunnelDescriptor(
-                    track.isInverted()
-                    ? TunnelType::invertedFlat
-                    : TunnelType::standardFlat);
             const float tunnelFloor =
                 profile.verticalOffset
                 - profile.halfHeight - 4.0f;
             const float tunnelCeiling =
                 tunnelFloor
-                + float(tunnelDescriptor.height
-                    * kCoordsZPerTinyZ);
+                + tunnelHeight;
             const float tunnelHalfWidth =
                 std::max(
                     8.0f,
                     profile.halfGauge
                         + profile.halfWidth + 4.0f);
-            uint8_t tunnelColour =
-                static_cast<uint8_t>(
-                    Drawing::getColourMap(
-                        Drawing::Colour::darkBrown).midDark);
-            if (tunnelColour == 0)
-                tunnelColour = static_cast<uint8_t>(
-                    Drawing::PaletteIndex::trackRails1);
             for (const auto& tunnel :
                  BuildFirstPersonTrackTunnelRoute(
                      trajectory, tunnelHalfWidth,
@@ -478,9 +457,7 @@
                     std::move(surface));
             }
 
-            if (const auto next = NextFirstPersonTrackTrajectory(
-                    ride, sampleOrigin, originElement);
-                next.has_value())
+            if (next.has_value())
             {
                 const float gap = FirstPersonTrackTrajectoryEndpointGap(trajectory, *next);
                 if (gap <= 4.0f)
@@ -529,6 +506,13 @@
             IndexTrackTrajectoryRegions(result);
             return result;
         }
+
+        struct TrackGeometryRequest
+        {
+            uint64_t serial{};
+            CoordsXY tile{};
+        };
+        static std::unordered_map<uint64_t, TrackGeometryRequest> _trackGeometryRequests;
 
         void CollectTrackTrajectories(FirstPersonScene& scene)
         {
@@ -610,6 +594,7 @@
                         continue;
                 }
 
+                if (!_snapshotBudget.available()) continue;
                 auto* element = MapGetFirstElementAt(tile);
                 if (element == nullptr)
                     continue;
@@ -739,24 +724,40 @@
                             group->key, it->second);
                     }
 
-                    auto rebuilt =
-                        BuildTrackTrajectoryGeometry(
-                            *ride, *track, originElement,
-                            *sampleOrigin, group->anchor,
-                            group->key, signature,
-                            *trajectory, frame);
-                    MarkTrackTrajectoryRegionsDirty(
-                        rebuilt);
-                    _trackTrajectoryCache[
-                        group->key] =
-                        std::move(rebuilt);
-                    RegisterTrackTrajectoryRegionMembership(
-                        group->key,
-                        _trackTrajectoryCache[
-                            group->key]);
-                    activateTrajectoryRegions(
-                        _trackTrajectoryCache[
-                            group->key]);
+                    if (_trackGeometryRequests.contains(group->key)
+                        || !_snapshotBudget.take() || !_reconstructionWorker.hasCapacity()) continue;
+                    const auto profile = FirstPersonTrackRailProfileFor(*ride, *track);
+                    if (!profile) continue;
+                    const auto next = NextFirstPersonTrackTrajectory(*ride, *sampleOrigin, originElement);
+                    const auto topColour = FirstPersonRailColour(*ride, *track, true);
+                    const auto sideColour = FirstPersonRailColour(*ride, *track, false);
+                    const float tunnelHeight = float(GetTunnelDescriptor(track->isInverted()
+                        ? TunnelType::invertedFlat : TunnelType::standardFlat).height * kCoordsZPerTinyZ);
+                    auto tunnelColour = static_cast<uint8_t>(Drawing::getColourMap(Drawing::Colour::darkBrown).midDark);
+                    if (tunnelColour == 0) tunnelColour = static_cast<uint8_t>(Drawing::PaletteIndex::trackRails1);
+                    const auto key = group->key;
+                    const auto serial = ++_nextReconstructionRequest;
+                    const auto anchor = group->anchor;
+                    if (_reconstructionWorker.submit([profile = *profile, next, topColour, sideColour,
+                            tunnelHeight, tunnelColour, key, serial, anchor, signature, frame, trajectory = *trajectory] {
+                        auto result = BuildTrackTrajectoryGeometry(profile, topColour, sideColour,
+                            tunnelHeight, tunnelColour, next, anchor, key, signature, trajectory, frame);
+                        return [key, serial, result = std::move(result)]() mutable {
+                            const auto request = _trackGeometryRequests.find(key);
+                            if (request == _trackGeometryRequests.end() || request->second.serial != serial) return;
+                            if (const auto old = _trackTrajectoryCache.find(key); old != _trackTrajectoryCache.end())
+                                UnregisterTrackTrajectoryRegionMembership(key, old->second);
+                            MarkTrackTrajectoryRegionsDirty(result);
+                            _trackTrajectoryCache[key] = std::move(result);
+                            RegisterTrackTrajectoryRegionMembership(key, _trackTrajectoryCache[key]);
+                            _trackGeometryRequests.erase(request);
+                        };
+                    }, [key, serial] {
+                        const auto request = _trackGeometryRequests.find(key);
+                        if (request != _trackGeometryRequests.end() && request->second.serial == serial)
+                            _trackGeometryRequests.erase(request);
+                    })) _trackGeometryRequests[key] = {serial, tile};
+
                 } while (!(element++)->isLastForTile());
             }
 
@@ -886,8 +887,13 @@
             bool populated = true;
             if (x1-x0 <= 16 && y1-y0 <= 16)
             {
-                auto& entry = _regionBounds[TerrainKey(x0,y0)];
-                if (entry.dirty || entry.x1 != x1 || entry.y1 != y1)
+                const auto key = TerrainKey(x0, y0);
+                const bool known = _regionBounds.contains(key);
+                if (!known && !_discoveryBudget.available())
+                    return {{}, {}, false}; // discover this leaf on a later frame
+                auto& entry = _regionBounds[key];
+                if ((entry.dirty || entry.x1 != x1 || entry.y1 != y1)
+                    && _discoveryBudget.take(size_t((x1 - x0) * (y1 - y0))))
                 {
                     entry = {};
                     entry.x1=x1; entry.y1=y1;
@@ -908,6 +914,7 @@
                             ReadTileSemanticSnapshot(p);
                         auto& tileCache =
                             _staticPaintCache[TerrainKey(tx, ty)];
+                        tileCache.visibilityKnown = true;
                         if (!snapshot.populated)
                         {
                             tileCache.visibilityBoundValid = false;
@@ -939,9 +946,12 @@
                     }
                     entry.dirty=false;
                 }
-                populated = entry.populated;
-                low = float(entry.minZ);
-                high = float(entry.maxZ);
+                if (!entry.dirty)
+                {
+                    populated = entry.populated;
+                    low = float(entry.minZ);
+                    high = float(entry.maxZ);
+                }
             }
             const float dx =
                 float(x1-x0)*0.5f*kTile;
@@ -976,15 +986,17 @@
             const int32_t tx = world.x / kCoordsXYStep;
             const int32_t ty = world.y / kCoordsXYStep;
             const uint64_t key = TerrainKey(tx, ty);
+            if (!_staticPaintCache.contains(key) && !_discoveryBudget.available()) return std::nullopt;
             auto& cached = _staticPaintCache[key];
             constexpr uint64_t kVisibilityProbeInterval = 240;
-            const bool probeDue = !cached.visibilityBoundValid || cached.visibilityDirty
+            const bool probeDue = !cached.visibilityKnown || cached.visibilityDirty
                 || FirstPersonRefreshDue(
                     key ^ 0xd6e8feb86659fd93ull, sourceGeneration,
                     cached.lastVisibilityGeneration, kVisibilityProbeInterval);
-            if (probeDue)
+            if (probeDue && _discoveryBudget.take())
             {
                 const auto snapshot = ReadTileSemanticSnapshot(world);
+                cached.visibilityKnown = true;
                 if (!snapshot.populated)
                 {
                     cached.visibilityBoundValid = false;
@@ -1494,7 +1506,8 @@
 
         [[nodiscard]] FirstPersonSemanticArtworkView
             DecodeFirstPersonSemanticArtworkView(
-                const FirstPersonPaintSemanticComponent* component)
+                const FirstPersonPaintSemanticComponent* component,
+                const FirstPersonSpriteSnapshot& sprites)
         {
             FirstPersonSemanticArtworkView result{};
             if (component == nullptr
@@ -1502,7 +1515,7 @@
                 return result;
 
             const auto* g1 =
-                GfxGetG1Element(component->artwork.image);
+                sprites.get(component->artwork.image);
             if (g1 == nullptr || g1->width <= 0
                 || g1->height <= 0)
                 return result;
@@ -1530,7 +1543,7 @@
             if (component->artwork.mask.HasValue())
             {
                 result.maskG1 =
-                    GfxGetG1Element(component->artwork.mask);
+                    sprites.get(component->artwork.mask);
                 if (result.maskG1 != nullptr)
                 {
                     const auto decodedMask =
@@ -1791,12 +1804,28 @@
                             && view.component->artwork.mask.HasValue()
                         ? view.component->artwork.mask.GetIndex()
                         : 0u);
-                ExtendStableKey(
-                    key,
-                    reinterpret_cast<uintptr_t>(view.g1));
-                ExtendStableKey(
-                    key,
-                    reinterpret_cast<uintptr_t>(view.maskG1));
+                // Snapshot allocations have no stable identity. Hash owned
+                // artwork and its placement, so identical instances reuse the
+                // hull and recycled addresses cannot resurrect old geometry.
+                const auto hashSprite = [&](const G1Element* sprite, const std::vector<uint8_t>& pixels) {
+                    ExtendStableKey(key, sprite != nullptr);
+                    if (sprite == nullptr) return;
+                    ExtendStableKey(key, uint16_t(sprite->width));
+                    ExtendStableKey(key, uint16_t(sprite->height));
+                    ExtendStableKey(key, uint16_t(sprite->xOffset));
+                    ExtendStableKey(key, uint16_t(sprite->yOffset));
+                    for (const auto pixel : pixels) ExtendStableKey(key, pixel);
+                };
+                hashSprite(view.g1, view.pixels);
+                hashSprite(view.maskG1, view.maskPixels);
+                if (view.component != nullptr)
+                {
+                    const auto& origin = component.transform.origin;
+                    const auto projected = Translate3DTo2DWithZ(rotation,
+                        {int32_t(std::lround(origin.x)), int32_t(std::lround(origin.y)), int32_t(std::lround(origin.z))});
+                    ExtendStableKey(key, uint32_t(view.component->artwork.screenPos.x - projected.x));
+                    ExtendStableKey(key, uint32_t(view.component->artwork.screenPos.y - projected.y));
+                }
             }
             return key;
         }
@@ -1847,7 +1876,7 @@
             if (availableViews < minimumViews)
                 return std::nullopt;
 
-            static std::unordered_map<
+            static thread_local std::unordered_map<
                 uint64_t, FirstPersonSemanticVisualHullTemplate>
                 cache;
             if (cache.size() > 4096)
@@ -2199,7 +2228,8 @@
                     artworkViews,
                 const std::vector<
                     const FirstPersonPaintSemanticComponent*>*
-                    depthPeers = nullptr)
+                    depthPeers,
+                const FirstPersonSpriteSnapshot& sprites)
         {
             std::vector<FirstPersonSurface> result;
             auto faces =
@@ -2226,7 +2256,7 @@
             {
                 decodedViews[rotation] =
                     DecodeFirstPersonSemanticArtworkView(
-                        observations[rotation]);
+                        observations[rotation], sprites);
             }
 
             bool visualHullRefined = false;
@@ -2748,8 +2778,8 @@
             return fingerprint;
         }
 
-        void EnsureFirstPersonSemanticSurfaceCache(
-            StaticPaintCacheEntry& cached)
+        void BuildFirstPersonSemanticSurfaceCache(
+            StaticPaintCacheEntry& cached, const FirstPersonSpriteSnapshot& sprites)
         {
             const uint64_t fingerprint =
                 FirstPersonSemanticViewSetFingerprint(
@@ -2775,8 +2805,7 @@
                             movingMachinery
                     || canonical->role
                         == FirstPersonPaintSemanticRole::seat;
-                if (moving)
-                    continue;
+
 
                 const int32_t componentTileX =
                     canonical->mapPosition.x
@@ -2814,7 +2843,38 @@
                         componentRegion,
                         group.views,
                         depthPeers.empty()
-                            ? nullptr : &depthPeers);
+                            ? nullptr : &depthPeers, sprites);
+                if (moving)
+                {
+                    MovingSemanticMesh mesh;
+                    // Native IDs are session-global; normalize within the
+                    // tile so changing the admitted batch cannot change identity.
+                    mesh.componentId = canonical->id;
+                    for (const auto& rotation : cached.rotations)
+                    {
+                        const auto owner = std::find_if(rotation.semanticComponents.begin(), rotation.semanticComponents.end(),
+                            [&](const auto& candidate) { return &candidate == canonical; });
+                        if (owner != rotation.semanticComponents.end())
+                        {
+                            mesh.componentId -= rotation.semanticComponents.front().id;
+                            break;
+                        }
+                    }
+                    mesh.role = canonical->role;
+                    mesh.repetition = canonical->repetitionIndex;
+                    for (auto& surface : surfaces)
+                    {
+                        surface.gpuRegion = 0;
+                        for (auto& vertex : surface.triangles)
+                        {
+                            const auto local = FirstPersonSemanticLocalPoint(canonical->transform, vertex.world);
+                            vertex.world = {local.x, local.y, local.z};
+                        }
+                    }
+                    mesh.localSurfaces = std::move(surfaces);
+                    cached.semanticMovingMeshes.push_back(std::move(mesh));
+                    continue;
+                }
                 for (auto& surface : surfaces)
                 {
                     if (IsResidentStaticSurface(surface))
@@ -2835,10 +2895,94 @@
                 fingerprint;
         }
 
+        struct SemanticJob
+        {
+            StaticPaintCacheEntry snapshot;
+            FirstPersonSpriteSnapshot sprites;
+            uint64_t fingerprint{};
+            uint64_t request{};
+            uint64_t revision{};
+            bool submitted = false;
+        };
+        static std::unordered_map<uint64_t, std::shared_ptr<SemanticJob>> _semanticJobs;
+
+        void EnsureFirstPersonSemanticSurfaceCache(uint64_t key, StaticPaintCacheEntry& cached)
+        {
+            if (!cached.valid || cached.dirty) return;
+            const auto fingerprint = FirstPersonSemanticViewSetFingerprint(cached);
+            if (cached.semanticSurfaceFingerprint == fingerprint) return;
+            if (std::all_of(cached.rotations.begin(), cached.rotations.end(),
+                    [](const auto& rotation) { return rotation.semanticComponents.empty(); }))
+            {
+                cached.semanticSurfaceFingerprint = fingerprint;
+                return;
+            }
+            if (!_snapshotBudget.available() || !_reconstructionWorker.hasCapacity()) return;
+            if (!_semanticJobs.contains(key) && _semanticJobs.size() >= 16) return;
+            auto& slot = _semanticJobs[key];
+            if (slot && slot->revision != cached.sourceRevision) slot.reset();
+            if (!slot)
+            {
+                slot = std::make_shared<SemanticJob>();
+                slot->fingerprint = fingerprint;
+                slot->revision = cached.sourceRevision;
+                slot->request = ++_nextReconstructionRequest;
+                slot->snapshot.animated = cached.animated;
+                slot->snapshot.signature = cached.signature;
+                slot->snapshot.viewFlags = cached.viewFlags;
+                for (size_t i = 0; i < 4; ++i)
+                {
+                    const auto& source = cached.rotations[i];
+                    auto& target = slot->snapshot.rotations[i];
+                    target.semanticValid = source.semanticValid;
+                    target.semanticFingerprint = source.semanticFingerprint;
+                    target.lastAnimationGeneration = source.lastAnimationGeneration;
+                    target.semanticComponents = source.semanticComponents;
+                }
+                cached.semanticRequest = slot->request;
+            }
+            const auto job = slot;
+            if (job->submitted) return;
+            for (const auto& rotation : job->snapshot.rotations)
+            for (const auto& component : rotation.semanticComponents)
+            {
+                if (!job->sprites.capture(component.artwork.image, _snapshotBudget)
+                    || !job->sprites.capture(component.artwork.mask, _snapshotBudget)) return;
+            }
+            job->submitted = _reconstructionWorker.submit([job, key] {
+                // All components, artwork and peer geometry belong to this job.
+                auto result = job->snapshot;
+                BuildFirstPersonSemanticSurfaceCache(result, job->sprites);
+                return [job, key, result = std::move(result)]() mutable {
+                    const auto pending = _semanticJobs.find(key);
+                    if (pending == _semanticJobs.end() || pending->second != job) return;
+                    _semanticJobs.erase(pending);
+                    const auto found = _staticPaintCache.find(key);
+                    if (found == _staticPaintCache.end()) return;
+                    auto& target = found->second;
+                    if (target.sourceRevision != job->revision || target.semanticRequest != job->request) return;
+                    if (NativeTileSignature({int32_t(key >> 32) * kCoordsXYStep, int32_t(key) * kCoordsXYStep})
+                        != job->snapshot.signature || target.viewFlags != job->snapshot.viewFlags)
+                    {
+                        return;
+                    }
+                    target.semanticResidentSurfaces = std::move(result.semanticResidentSurfaces);
+                    target.semanticStreamedSurfaces = std::move(result.semanticStreamedSurfaces);
+                    target.semanticMovingMeshes = std::move(result.semanticMovingMeshes);
+                    target.semanticSurfaceFingerprint = job->fingerprint;
+                    MarkStaticRegionDirtyForTile(int32_t(key >> 32), int32_t(key));
+                };
+            }, [job, key] {
+                const auto found = _semanticJobs.find(key);
+                if (found != _semanticJobs.end() && found->second == job) _semanticJobs.erase(found);
+            });
+        }
+
         void RebuildStaticRegionPacket(uint64_t regionKey, uint64_t frame)
         {
             auto& packet = _staticRegionPackets[regionKey];
             packet.surfaces.clear();
+            packet.vertexCount = 0;
             packet.textureDependencies.clear();
             packet.reconstructionGroups.clear();
             packet.reconstructionSelectionStamp = 0;
@@ -2858,6 +3002,7 @@
                 if (!IsResidentStaticSurface(surface) || surface.gpuRegion != regionKey)
                     return;
                 packet.surfaces.push_back(surface);
+                packet.vertexCount += surface.coplanarOwner ? 12 : 6;
                 // Persistent baked materials sample their own immutable
                 // bitmap; the original ImageId remains only as palette/remap
                 // metadata. Object reloads clear the whole first-person scene,
@@ -2931,8 +3076,6 @@
                     && supportIt->second.valid
                     && !supportIt->second.dirty)
                 {
-                    EnsureFirstPersonSemanticSurfaceCache(
-                        supportIt->second);
                     for (const auto& surface :
                          supportIt->second
                              .semanticResidentSurfaces)
@@ -3038,15 +3181,10 @@
                                     .surfaces[index];
                             if (sourceSurface.artworkCarrier)
                             {
-                                std::vector<FirstPersonSurface>
-                                    projected;
-                                AppendFirstPersonTrackArtworkProjections(
-                                    sourceSurface,
-                                    trajectory->second,
-                                    projected);
-                                for (const auto& surface :
-                                     projected)
-                                    addSurface(surface);
+                                EnsureTrackMaterials(groupKey, trajectory->second);
+                                const auto projected = trajectory->second.projectedSurfaces.find(index);
+                                if (projected != trajectory->second.projectedSurfaces.end())
+                                    for (const auto& surface : projected->second) addSurface(surface);
                             }
                             else
                             {
@@ -3112,6 +3250,8 @@
                 };
                 packet.radius = 0.0f;
             }
+            packet.surfaceStorage = std::make_shared<const std::vector<FirstPersonSurface>>(std::move(packet.surfaces));
+            packet.publishedSourceRevision = packet.sourceRevision;
             ++packet.generation;
             packet.lastSeen = frame;
             packet.dirty = false;
@@ -3139,6 +3279,23 @@
                     _activeLargeSceneryRegions.end());
             }
 
+            _snapshotBudget = FirstPersonFrameBudget(32, std::chrono::microseconds(1000));
+            static size_t materialCursor = 0;
+            size_t examined = 0;
+            const size_t materialStart = scene.visibleTiles.empty() ? 0 : materialCursor % scene.visibleTiles.size();
+            while (examined < scene.visibleTiles.size() && _snapshotBudget.available())
+            {
+                const auto tile = scene.visibleTiles[(materialStart + examined++) % scene.visibleTiles.size()];
+                const auto cached = _staticPaintCache.find(TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+                if (cached == _staticPaintCache.end()) continue;
+                for (const auto& group : cached->second.reconstructionGroups)
+                {
+                    const auto track = _trackTrajectoryCache.find(group.key);
+                    if (track != _trackTrajectoryCache.end()) EnsureTrackMaterials(group.key, track->second);
+                }
+            }
+            materialCursor = materialStart + examined;
+            FirstPersonFrameBudget packetBudget(2, std::chrono::microseconds(1000));
             scene.staticRegions.reserve(visibleRegions.size());
             for (const auto key : visibleRegions)
             {
@@ -3161,16 +3318,17 @@
                             _reconstructionSelectionSerial;
                     }
                 }
-                if (packet.dirty)
+                if (packet.dirty && packetBudget.take())
                     RebuildStaticRegionPacket(key, frame);
                 packet.lastSeen = frame;
-                if (packet.surfaces.empty() || !frustum.visible(packet.center, packet.radius))
+                if (packet.publishedSourceRevision != packet.sourceRevision || !packet.surfaceStorage
+                    || packet.surfaceStorage->empty() || !frustum.visible(packet.center, packet.radius))
                     continue;
                 scene.staticRegions.push_back({
                     key, _sceneEpoch, packet.generation,
                     packet.center, packet.radius,
-                    &packet.surfaces,
-                    &packet.textureDependencies
+                    packet.surfaceStorage.get(),
+                    &packet.textureDependencies, packet.surfaceStorage, packet.sourceRevision, packet.vertexCount
                 });
             }
         }

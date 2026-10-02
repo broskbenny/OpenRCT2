@@ -408,6 +408,8 @@
     <ClInclude Include="paint\FirstPersonMath.h" />
     <ClInclude Include="paint\FirstPersonVehiclePose.h" />
     <ClInclude Include="paint\FirstPersonStreaming.h" />
+    <ClInclude Include="paint\FirstPersonAsync.h" />
+    <ClInclude Include="paint\FirstPersonSpriteSnapshot.h" />
     <ClInclude Include="paint\Paint.SessionFlags.h" />
     <ClInclude Include="paint\Painter.h" />
     <ClInclude Include="paint\Balloon.h" />

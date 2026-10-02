@@ -5,6 +5,7 @@
 #ifndef DISABLE_OPENGL
 #include "FirstPersonGLRenderer.h"
 #include "FirstPersonGpuBatching.h"
+#include <openrct2/paint/FirstPersonAsync.h>
 #include "SwapFramebuffer.h"
 #include "OpenGLFramebuffer.h"
 #include "TextureCache.h"
@@ -449,8 +450,16 @@ void main() {
         _staticRegionBytes-=it->second.bytes;
         _staticOpaqueRegions.erase(it);
     }
+    void FirstPersonGLRenderer::DiscardPendingRegion()
+    {
+        if (!_pendingRegion) return;
+        glCall(glDeleteBuffers, 1, &_pendingRegion->buffer.vbo);
+        glCall(glDeleteVertexArrays, 1, &_pendingRegion->buffer.vao);
+        _pendingRegion.reset();
+    }
     void FirstPersonGLRenderer::DiscardAllRegionBuffers()
     {
+        DiscardPendingRegion();
         while(!_staticOpaqueRegions.empty())
             DiscardRegionBuffer(_staticOpaqueRegions.begin()->first);
     }
@@ -736,66 +745,71 @@ void main() {
         // Native texture-cache atlas handles can change on sprite loads or
         // game-art reload. Preload unique image/mask IDs BEFORE constructing
         // any resident buffer; never retain stale atlas UV/layer metadata.
-        const GLuint atlasBeforePreload =
-            textures.GetAtlasesTexture();
-        const uint64_t textureRevisionSerial =
-            textures.GetImageTextureRevisionSerial();
-        const bool residentPreloadsReusable =
-            _atlasHandle == atlasBeforePreload;
-
-        std::unordered_set<uint64_t> seenTextures;
-        seenTextures.reserve(scene.surfaces.size()/2+1);
-        for(const auto& surface:scene.surfaces)
-        {
-            if(surface.image.HasValue() && !surface.hasImmutablePixelData() &&
-               seenTextures.insert(FirstPersonMaterialFingerprint(surface.image)).second)
-                textures.GetOrLoadImageTexture(surface.image);
-            if(surface.mask.HasValue() &&
-               seenTextures.insert(FirstPersonMaterialFingerprint(surface.mask)).second)
-                textures.GetOrLoadImageTexture(surface.mask);
-        }
-        for (const auto& region : scene.staticRegions)
-        {
-            if (residentPreloadsReusable)
-            {
-                const auto resident =
-                    _staticOpaqueRegions.find(region.key);
-                if (resident != _staticOpaqueRegions.end()
-                    && resident->second.sceneEpoch
-                        == region.sceneEpoch
-                    && resident->second.generation
-                        == region.generation
-                    && resident->second
-                        .dependencyRevisionSerial
-                        == textureRevisionSerial)
-                {
-                    continue;
-                }
-            }
-            if (region.textureDependencies == nullptr)
-                continue;
-            for (const auto image : *region.textureDependencies)
-            {
-                const ImageId id(image);
-                if (seenTextures.insert(FirstPersonMaterialFingerprint(id)).second)
-                    textures.GetOrLoadImageTexture(id);
-            }
-        }
-        const GLuint currentAtlas=textures.GetAtlasesTexture();
-        if(_atlasHandle!=currentAtlas)
+        const uint64_t textureRevisionSerial = textures.GetImageTextureRevisionSerial();
+        Paint::FirstPersonFrameBudget uploadBudget(512 * 1024, std::chrono::microseconds(2000));
+        const GLuint currentAtlas = textures.GetAtlasesTexture();
+        if (_atlasHandle != currentAtlas)
         {
             DiscardAllRegionBuffers();
             _coverageFallbackCache.clear();
-            _atlasHandle=currentAtlas;
+            _atlasHandle = currentAtlas;
         }
         std::unordered_map<uint64_t, BasicTextureInfo> immutableTextures;
         immutableTextures.reserve(scene.surfaces.size() / 16 + 1);
+        auto prepareMaterial = [&](const Paint::FirstPersonSurface& surface) {
+            const auto image = surface.image;
+            if (surface.hasImmutablePixelData() && (surface.immutableWidth <= 0 || surface.immutableHeight <= 0)) return true;
+            const auto prepareImage = [&](ImageId id) {
+                if (!id.HasValue() || textures.HasImageTexture(id)) return true;
+                const auto* source = GfxGetG1Element(id);
+                if (source == nullptr || source->width <= 0 || source->height <= 0) return true;
+                if (!uploadBudget.take(size_t(source->width) * size_t(source->height))) return false;
+                textures.GetOrLoadImageTexture(id);
+                return true;
+            };
+            if (surface.solidColour == 0)
+            {
+                if (surface.hasImmutablePixelData())
+                {
+                    const bool loaded = surface.persistentBitmap
+                        ? textures.HasFirstPersonPersistentBitmap(surface.immutableFingerprint)
+                        : immutableTextures.contains(surface.immutableFingerprint);
+                    if (!loaded)
+                    {
+                        if (!uploadBudget.take(size_t(surface.immutableWidth) * size_t(surface.immutableHeight))) return false;
+                        const auto& pixels = surface.immutablePixelData();
+                        if (surface.persistentBitmap)
+                            textures.GetOrLoadFirstPersonPersistentBitmap(surface.immutableFingerprint, pixels.data(),
+                                size_t(surface.immutableWidth), size_t(surface.immutableHeight));
+                        else
+                            immutableTextures.emplace(surface.immutableFingerprint,
+                                textures.LoadFirstPersonTransientBitmap(pixels.data(),
+                                    size_t(surface.immutableWidth), size_t(surface.immutableHeight)));
+                    }
+                }
+                else if (!prepareImage(image)) return false;
+                if (!prepareImage(surface.mask)) return false;
+            }
+            return true;
+        };
+        // Admit streamed materials before any draw calls; transparent scenery
+        // must not starve merely because opaque drawing used the time slice.
+        static size_t materialCursor = 0;
+        if (!scene.surfaces.empty())
+        {
+            const size_t start = materialCursor % scene.surfaces.size();
+            size_t examined = 0;
+            while (examined < scene.surfaces.size() && uploadBudget.available())
+                prepareMaterial(scene.surfaces[(start + examined++) % scene.surfaces.size()]);
+            materialCursor = start + examined;
+        }
         auto appendVertices = [&](
             std::vector<GPUVertex>& vertices,
             const Paint::FirstPersonSurface& surface,
             bool forceCoplanarOwner = false,
             bool suppressCoplanarOwner = false) {
             const auto image=surface.image;
+            if (!prepareMaterial(surface)) return false;
             const auto* g1 =
                 surface.solidColour == 0
                     && (!surface.hasImmutablePixelData()
@@ -813,7 +827,7 @@ void main() {
             else if (surface.hasImmutablePixelData())
             {
                 if (surface.immutableWidth <= 0 || surface.immutableHeight <= 0)
-                    return;
+                    return true;
                 const auto& pixelData =
                     surface.immutablePixelData();
                 if (surface.persistentBitmap)
@@ -842,7 +856,7 @@ void main() {
             }
             else
             {
-                if(g1==nullptr || g1->width<=0 || g1->height<=0) return;
+                if(g1==nullptr || g1->width<=0 || g1->height<=0) return true;
                 tex=textures.GetOrLoadImageTexture(image);
                 imageWidth = float(g1->width);
                 imageHeight = float(g1->height);
@@ -906,6 +920,7 @@ void main() {
                     {maskG1?float(maskG1->width):0.0f,maskG1?float(maskG1->height):0.0f},
                     maskG1?int32_t(maskTex.index):-1,
                     std::min<uint32_t>(surface.nativePaintOrdinal,0x00ffffffu)});
+            return true;
         };
         std::vector<GPUVertex> opaqueOrdinaryVertices;
         std::vector<GPUVertex> opaqueOwnerVertices;
@@ -921,15 +936,15 @@ void main() {
         }
         std::stable_sort(
             streamedOwners.begin(), streamedOwners.end(),
-            [](const auto* a, const auto* b) {
+            [](const auto* a, const auto* second) {
                 const uint32_t ao =
                     a->nativePaintOrdinal == 0
                     ? std::numeric_limits<uint32_t>::max()
                     : a->nativePaintOrdinal;
                 const uint32_t bo =
-                    b->nativePaintOrdinal == 0
+                    second->nativePaintOrdinal == 0
                     ? std::numeric_limits<uint32_t>::max()
-                    : b->nativePaintOrdinal;
+                    : second->nativePaintOrdinal;
                 return ao < bo;
             });
         for (const auto* surface : streamedOwners)
@@ -938,134 +953,142 @@ void main() {
                 true, false);
         std::vector<uint64_t> regionDraws;
         regionDraws.reserve(scene.staticRegions.size());
+        // CPU packing/drawing cached content does not consume the next upload
+        // phase. Both phases share one 512 KiB byte allowance.
+        uploadBudget.beginPhase(std::chrono::microseconds(2000));
+        // The cache target controls unseen residents. The visible working set
+        // plus one staged replacement must fit: the previous unbounded stream
+        // fallback stalled the frame, while a hard cap here would leave dense
+        // visible regions permanently absent.
+        size_t visibleBytes = 0, largestPacketBytes = 0;
         for (const auto& packet : scene.staticRegions)
         {
-            const uint64_t key = packet.key;
-            auto found=_staticOpaqueRegions.find(key);
-            if(found!=_staticOpaqueRegions.end()
-                && found->second.sceneEpoch==packet.sceneEpoch
-                && found->second.generation==packet.generation
-                && found->second.dependencyRevisionSerial
-                    == textureRevisionSerial)
+            const auto bytes = packet.vertexCount * sizeof(GPUVertex);
+            visibleBytes += bytes;
+            largestPacketBytes = std::max(largestPacketBytes, bytes);
+        }
+        const size_t regionBudget = std::max(kRegionGpuLimit, visibleBytes + largestPacketBytes);
+        // Protect every visible resident before considering LRU eviction.
+        for (const auto& packet : scene.staticRegions)
+            if (const auto it = _staticOpaqueRegions.find(packet.key); it != _staticOpaqueRegions.end())
+                it->second.lastSeen = _frame;
+        if (_pendingRegion)
+        {
+            const auto packet = std::find_if(scene.staticRegions.begin(), scene.staticRegions.end(),
+                [&](const auto& p) { return p.key == _pendingRegion->key; });
+            if (packet == scene.staticRegions.end() || packet->sourceRevision != _pendingRegion->buffer.sourceRevision
+                || _pendingRegion->buffer.dependencyRevisionSerial != textureRevisionSerial)
+                DiscardPendingRegion();
+        }
+        for (const auto& packet : scene.staticRegions)
+        {
+            auto found = _staticOpaqueRegions.find(packet.key);
+            const bool ready = found != _staticOpaqueRegions.end()
+                && found->second.sceneEpoch == packet.sceneEpoch
+                && found->second.generation == packet.generation
+                && found->second.dependencyRevisionSerial == textureRevisionSerial;
+            if (!ready && !_pendingRegion && packet.surfaceStorage && uploadBudget.available())
             {
-                found->second.lastSeen=_frame;
-                regionDraws.push_back(key);
-                continue;
-            }
-
-            uint64_t dependencyStamp = 14695981039346656037ull;
-            if (packet.textureDependencies != nullptr)
-            {
-                for (const auto image : *packet.textureDependencies)
+                const auto bytes = packet.vertexCount * sizeof(GPUVertex);
+                // Replacement must be possible even when there is no room for
+                // both versions. Drop the obsolete resident and let it pop in
+                // again after the bounded upload, instead of stalling forever.
+                if (bytes <= regionBudget && _staticRegionBytes + bytes > regionBudget
+                    && found != _staticOpaqueRegions.end())
                 {
-                    ExtendFirstPersonFingerprint(dependencyStamp, image);
-                    ExtendFirstPersonFingerprint(
-                        dependencyStamp, textures.GetImageTextureRevision(image));
+                    DiscardRegionBuffer(packet.key);
+                    found = _staticOpaqueRegions.end();
+                }
+                while (_staticRegionBytes + bytes > regionBudget)
+                {
+                    auto victim = _staticOpaqueRegions.end();
+                    for (auto it = _staticOpaqueRegions.begin(); it != _staticOpaqueRegions.end(); ++it)
+                        if (it->second.lastSeen != _frame && (victim == _staticOpaqueRegions.end()
+                            || it->second.lastSeen < victim->second.lastSeen)) victim = it;
+                    if (victim == _staticOpaqueRegions.end()) break;
+                    DiscardRegionBuffer(victim->first);
+                }
+                if (bytes > 0 && _staticRegionBytes + bytes <= regionBudget
+                    && packet.surfaces->size() <= size_t(std::numeric_limits<GLsizei>::max()) / 12)
+                {
+                    _pendingRegion = std::make_unique<PendingRegion>();
+                    auto& pending = *_pendingRegion;
+                    pending.key = packet.key;
+                    pending.surfaces = packet.surfaceStorage;
+                    auto& buffer = pending.buffer;
+                    buffer.sceneEpoch = packet.sceneEpoch;
+                    buffer.generation = packet.generation;
+                    buffer.sourceRevision = packet.sourceRevision;
+                    buffer.dependencyRevisionSerial = textureRevisionSerial;
+                    buffer.bytes = bytes;
+                    glCall(glGenVertexArrays, 1, &buffer.vao);
+                    glCall(glGenBuffers, 1, &buffer.vbo);
+                    ConfigureVertexInput(buffer.vao, buffer.vbo);
+                    glCall(glBindBuffer, GL_ARRAY_BUFFER, buffer.vbo);
+                    glCall(glBufferData, GL_ARRAY_BUFFER, GLsizeiptr(bytes), nullptr, GL_STATIC_DRAW);
                 }
             }
-            if(found!=_staticOpaqueRegions.end()
-                && found->second.sceneEpoch==packet.sceneEpoch
-                && found->second.generation==packet.generation
-                && found->second.dependencyStamp==dependencyStamp)
+            if (_pendingRegion && _pendingRegion->key == packet.key)
             {
-                found->second.dependencyRevisionSerial =
-                    textureRevisionSerial;
-                found->second.lastSeen=_frame;
-                regionDraws.push_back(key);
-                continue;
+                auto& pending = *_pendingRegion;
+                std::vector<GPUVertex> packed;
+                packed.reserve(384);
+                const auto flush = [&] {
+                    if (packed.empty()) return;
+                    glCall(glBindBuffer, GL_ARRAY_BUFFER, pending.buffer.vbo);
+                    glCall(glBufferSubData, GL_ARRAY_BUFFER,
+                        GLintptr(pending.uploadedVertices * sizeof(GPUVertex)),
+                        GLsizeiptr(packed.size() * sizeof(GPUVertex)), packed.data());
+                    pending.uploadedVertices += packed.size();
+                    packed.clear();
+                };
+                while (uploadBudget.available())
+                {
+                    if (!pending.ownersPhase && pending.nextSurface == pending.surfaces->size())
+                    {
+                        flush();
+                        pending.buffer.ordinaryCount = GLsizei(pending.uploadedVertices);
+                        pending.ownersPhase = true;
+                    }
+                    if (pending.ownersPhase && pending.owners.empty()) break;
+                    const size_t index = pending.ownersPhase
+                        ? pending.owners.begin()->second[pending.nextOwner] : pending.nextSurface;
+                    const auto& surface = (*pending.surfaces)[index];
+                    if (!uploadBudget.take(6 * sizeof(GPUVertex))) break;
+                    if (!appendVertices(packed, surface, pending.ownersPhase, !pending.ownersPhase)) break;
+                    if (!pending.ownersPhase)
+                    {
+                        if (surface.coplanarOwner)
+                            pending.owners[surface.nativePaintOrdinal == 0
+                                ? std::numeric_limits<uint32_t>::max() : surface.nativePaintOrdinal].push_back(index);
+                        ++pending.nextSurface;
+                    }
+                    else if (++pending.nextOwner == pending.owners.begin()->second.size())
+                    {
+                        pending.owners.erase(pending.owners.begin());
+                        pending.nextOwner = 0;
+                    }
+                    if (packed.size() >= 384) flush();
+                }
+                flush();
+                if (pending.ownersPhase && pending.owners.empty())
+                {
+                    pending.buffer.ownerCount = GLsizei(pending.uploadedVertices) - pending.buffer.ordinaryCount;
+                    DiscardRegionBuffer(packet.key);
+                    pending.buffer.lastSeen = _frame;
+                    _staticRegionBytes += pending.buffer.bytes;
+                    _staticOpaqueRegions.emplace(packet.key, pending.buffer);
+                    _pendingRegion.reset();
+                    found = _staticOpaqueRegions.find(packet.key);
+                }
             }
-
-            if (packet.surfaces == nullptr)
-                continue;
-            std::vector<GPUVertex> packed;
-            packed.reserve(packet.surfaces->size()*6);
-            for (const auto& surface : *packet.surfaces)
+            if (found != _staticOpaqueRegions.end())
             {
-                appendVertices(
-                    packed, surface,
-                    false, true);
+                // Keep ready geometry during an incremental replacement, but
+                // never show a region after authoritative game-state invalidation.
+                if (found->second.sourceRevision == packet.sourceRevision)
+                    regionDraws.push_back(packet.key);
             }
-            const GLsizei ordinaryCount =
-                GLsizei(packed.size());
-            std::vector<
-                const Paint::FirstPersonSurface*>
-                owners;
-            for (const auto& surface : *packet.surfaces)
-            {
-                if (surface.coplanarOwner)
-                    owners.push_back(&surface);
-            }
-            std::stable_sort(
-                owners.begin(), owners.end(),
-                [](const auto* a, const auto* b) {
-                    const uint32_t ao =
-                        a->nativePaintOrdinal == 0
-                        ? std::numeric_limits<uint32_t>::max()
-                        : a->nativePaintOrdinal;
-                    const uint32_t bo =
-                        b->nativePaintOrdinal == 0
-                        ? std::numeric_limits<uint32_t>::max()
-                        : b->nativePaintOrdinal;
-                    return ao < bo;
-                });
-            for (const auto* surface : owners)
-                appendVertices(
-                    packed, *surface,
-                    true, false);
-            const GLsizei ownerCount =
-                GLsizei(packed.size()) - ordinaryCount;
-            const size_t bytes=packed.size()*sizeof(GPUVertex);
-            if(bytes==0) continue;
-            const size_t oldBytes=found!=_staticOpaqueRegions.end()?found->second.bytes:0;
-            // Evict only regions not needed THIS frame. If a very dense park
-            // exceeds the cache budget, stream the extra region: preserve park
-            // coverage rather than thrashing or silently dropping geometry.
-            while(_staticRegionBytes-oldBytes+bytes>kRegionGpuLimit)
-            {
-                auto victim=_staticOpaqueRegions.end();
-                for(auto it=_staticOpaqueRegions.begin();it!=_staticOpaqueRegions.end();++it)
-                    if(it->first!=key && it->second.lastSeen!=_frame &&
-                       (victim==_staticOpaqueRegions.end() ||
-                        it->second.lastSeen<victim->second.lastSeen)) victim=it;
-                if(victim==_staticOpaqueRegions.end()) break;
-                DiscardRegionBuffer(victim->first);
-            }
-            if(_staticRegionBytes-oldBytes+bytes>kRegionGpuLimit ||
-               packed.size()>size_t(std::numeric_limits<GLsizei>::max()))
-            {
-                if(found!=_staticOpaqueRegions.end()) DiscardRegionBuffer(key);
-                opaqueOrdinaryVertices.insert(
-                    opaqueOrdinaryVertices.end(),
-                    packed.begin(),
-                    packed.begin() + ordinaryCount);
-                opaqueOwnerVertices.insert(
-                    opaqueOwnerVertices.end(),
-                    packed.begin() + ordinaryCount,
-                    packed.end());
-                continue;
-            }
-            if(found==_staticOpaqueRegions.end())
-            {
-                RegionBuffer buffer{};
-                glCall(glGenVertexArrays,1,&buffer.vao);
-                glCall(glGenBuffers,1,&buffer.vbo);
-                ConfigureVertexInput(buffer.vao,buffer.vbo);
-                found=_staticOpaqueRegions.emplace(key,buffer).first;
-            }
-            auto& region=found->second;
-            glCall(glBindVertexArray,region.vao);
-            glCall(glBindBuffer,GL_ARRAY_BUFFER,region.vbo);
-            glCall(glBufferData,GL_ARRAY_BUFFER,GLsizeiptr(bytes),packed.data(),GL_STATIC_DRAW);
-            _staticRegionBytes=_staticRegionBytes-region.bytes+bytes;
-            region.bytes=bytes;
-            region.ordinaryCount=ordinaryCount;
-            region.ownerCount=ownerCount;
-            region.sceneEpoch=packet.sceneEpoch;
-            region.generation=packet.generation;
-            region.dependencyStamp=dependencyStamp;
-            region.dependencyRevisionSerial=textureRevisionSerial;
-            region.lastSeen=_frame;
-            regionDraws.push_back(key);
         }
         // Do not evict fixed world geometry merely because the camera looked
         // away. The memory-budget path above performs LRU eviction only when a
@@ -1483,8 +1506,8 @@ void main() {
                     };
                 };
             auto setTileScissor = [&](const TransparentScreenTile& tile) {
-                const auto clip = tileClip(tile);
-                glCall(glScissor, clip.getLeft(), screenHeight - clip.getBottom(), clip.getWidth(), clip.getHeight());
+                const auto tileRect = tileClip(tile);
+                glCall(glScissor, tileRect.getLeft(), screenHeight - tileRect.getBottom(), tileRect.getWidth(), tileRect.getHeight());
             };
             auto composeLayer = [&](OpenGLFramebuffer& layer, const TransparentScreenTile& tile) {
                 _background->Bind();
@@ -1502,13 +1525,13 @@ void main() {
 
                 front.BindDraw();
                 _background->BindRead();
-                const auto clip = tileClip(tile);
-                const int32_t x0 = clip.getLeft();
-                const int32_t x1 = clip.getRight();
+                const auto tileRect = tileClip(tile);
+                const int32_t x0 = tileRect.getLeft();
+                const int32_t x1 = tileRect.getRight();
                 const int32_t y0 =
-                    screenHeight - clip.getBottom();
+                    screenHeight - tileRect.getBottom();
                 const int32_t y1 =
-                    screenHeight - clip.getTop();
+                    screenHeight - tileRect.getTop();
                 glCall(glBlitFramebuffer,x0,y0,x1,y1,x0,y0,x1,y1,GL_COLOR_BUFFER_BIT,GL_NEAREST);
             };
 

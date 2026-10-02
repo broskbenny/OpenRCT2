@@ -8,6 +8,10 @@
  *****************************************************************************/
 
 #include <gtest/gtest.h>
+#include <future>
+#include <thread>
+#include <openrct2/paint/FirstPersonAsync.h>
+#include <openrct2/paint/FirstPersonSpriteSnapshot.h>
 #include <algorithm>
 #include <openrct2/paint/FirstPersonRenderer.h>
 #include <openrct2/paint/FirstPersonAssetReconstruction.h>
@@ -22,6 +26,7 @@
 #include <openrct2/paint/FirstPersonWalkingSemantics.h>
 #include <openrct2/paint/Paint.h>
 #include <openrct2/entity/EntityBase.h>
+#include <openrct2/ride/Vehicle.h>
 #include <openrct2/world/tile_element/Slope.h>
 #include <openrct2/paint/FirstPersonVehiclePose.h>
 #include <openrct2/paint/tile_element/Paint.Path.h>
@@ -33,6 +38,8 @@
 #include <cmath>
 
 using namespace OpenRCT2::Paint;
+using OpenRCT2::Translate3DTo2DWithZ;
+using OpenRCT2::Vehicle;
 
 namespace
 {
@@ -655,30 +662,8 @@ TEST(FirstPersonAssetReconstructionTest, NativeFacingAndDepthOwnershipAgreeForAs
     }
 }
 
-TEST(FirstPersonSemanticGeometryTest, CoplanarSurfaceOwnershipIsExplicit)
-{
-    EXPECT_TRUE(
-        FirstPersonSemanticRoleOwnsCoplanarSurface(
-            FirstPersonPaintSemanticRole::pathDeck));
-    EXPECT_TRUE(
-        FirstPersonSemanticRoleOwnsCoplanarSurface(
-            FirstPersonPaintSemanticRole::stationFloor));
-    EXPECT_TRUE(
-        FirstPersonSemanticRoleOwnsCoplanarSurface(
-            FirstPersonPaintSemanticRole::structureFloor));
-    EXPECT_TRUE(
-        FirstPersonSemanticRoleOwnsCoplanarSurface(
-            FirstPersonPaintSemanticRole::structureRoof));
-    EXPECT_FALSE(
-        FirstPersonSemanticRoleOwnsCoplanarSurface(
-            FirstPersonPaintSemanticRole::wall));
-    EXPECT_FALSE(
-        FirstPersonSemanticRoleOwnsCoplanarSurface(
-            FirstPersonPaintSemanticRole::structureBody));
-    EXPECT_FALSE(
-        FirstPersonSemanticRoleOwnsCoplanarSurface(
-            FirstPersonPaintSemanticRole::support));
-}
+// Coplanar ordering is now material/physical-depth based, with no semantic
+// role whitelist. The old whitelist test referenced an API removed at HEAD.
 
 TEST(FirstPersonTrackTrajectoryTest, MotionTemplateIsIndependentOfRailCrossSection)
 {
@@ -746,7 +731,7 @@ TEST(FirstPersonTrackTrajectoryTest, StandardSamplesMatchVehicleMotionSource)
     const size_t index = size_t(EnumValue(OpenRCT2::TrackElemType::flat))
         * kNumOrthogonalDirections;
     const auto* list = gTrackVehicleInfo[
-        EnumValue(OpenRCT2::VehicleTrackSubposition::standard)][index];
+        EnumValue(VehicleTrackSubposition::standard)][index];
     ASSERT_NE(list, nullptr);
     ASSERT_EQ(trajectory->points.size(), list->size);
 
@@ -2096,3 +2081,157 @@ TEST(FirstPersonPeriodicPassengerMotionTest, HeldOutSecondHarmonicCannotHideInCo
     EXPECT_GT(calibration.validationRmse, 10.0f);
 }
 
+
+namespace
+{
+    // The worker is deliberately blocked while the render-side APIs run. A
+    // synchronous reconstruction/join regression makes this test time out.
+    struct FirstPersonWorkerGate
+    {
+        std::promise<void> release;
+        std::shared_future<void> ready = release.get_future().share();
+        ~FirstPersonWorkerGate() { release.set_value(); }
+    };
+    template<typename Predicate>
+    bool AwaitFirstPersonResult(FirstPersonWorkQueue& queue, Predicate&& done)
+    {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!done() && std::chrono::steady_clock::now() < end)
+        {
+            FirstPersonFrameBudget budget(2, std::chrono::milliseconds(1));
+            queue.publish(budget);
+            std::this_thread::yield();
+        }
+        return done();
+    }
+    bool SubmitFirstPersonTestWork(FirstPersonWorkQueue& queue, FirstPersonWorkQueue::Work work)
+    {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!queue.submit(work))
+        {
+            if (std::chrono::steady_clock::now() >= end) return false;
+            std::this_thread::yield();
+        }
+        return true;
+    }
+}
+
+TEST(FirstPersonAsyncTest, BlockedWorkerDoesNotBlockPublicationOrParkReset)
+{
+    FirstPersonWorkQueue queue;
+    std::promise<void> started;
+    auto start = started.get_future();
+    bool committed = false;
+    {
+        FirstPersonWorkerGate gate;
+        ASSERT_TRUE(SubmitFirstPersonTestWork(queue, [ready = gate.ready, &started, &committed] {
+            started.set_value();
+            ready.wait();
+            return [&committed] { committed = true; };
+        }));
+        ASSERT_EQ(start.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+        FirstPersonFrameBudget budget(2, std::chrono::milliseconds(1));
+        queue.publish(budget);
+        EXPECT_FALSE(committed);
+        const auto epoch = queue.epoch();
+        queue.cancel();
+        EXPECT_NE(queue.epoch(), epoch);
+        EXPECT_FALSE(committed);
+    }
+    bool nextParkCommitted = false;
+    ASSERT_TRUE(SubmitFirstPersonTestWork(queue, [&] { return [&] { nextParkCommitted = true; }; }));
+    EXPECT_TRUE(AwaitFirstPersonResult(queue, [&] { return nextParkCommitted; }));
+    EXPECT_FALSE(committed);
+}
+
+TEST(FirstPersonAsyncTest, SnapshotOutlivesSourceAndPublishesOnlyOnCallerThread)
+{
+    FirstPersonSpriteSnapshot snapshot;
+    FirstPersonFrameBudget capture(4, std::chrono::seconds(5));
+    std::vector<uint8_t> pixels{1, 2, 3, 4};
+    OpenRCT2::G1Element source{};
+    source.width = source.height = 2;
+    source.xOffset = -1;
+    source.offset = pixels.data();
+    ASSERT_TRUE(snapshot.capture(17, &source, capture));
+    pixels.assign(4, 99);
+    source.width = 1;
+    EXPECT_EQ(snapshot.get(17)->width, 2);
+    EXPECT_EQ(snapshot.get(17)->offset[3], 4);
+    EXPECT_EQ(snapshot.get(17)->xOffset, -1);
+    EXPECT_EQ(snapshot.get(18), nullptr); // no fallback to live G1 state
+
+    FirstPersonWorkQueue queue;
+    const auto renderThread = std::this_thread::get_id();
+    std::thread::id workerThread, publicationThread;
+    bool published = false;
+    ASSERT_TRUE(SubmitFirstPersonTestWork(queue, [snapshot, &workerThread, &publicationThread, &published] {
+        workerThread = std::this_thread::get_id();
+        const auto value = snapshot.get(17)->offset[3];
+        return [value, &publicationThread, &published] {
+            EXPECT_EQ(value, 4);
+            publicationThread = std::this_thread::get_id();
+            published = true;
+        };
+    }));
+    EXPECT_TRUE(AwaitFirstPersonResult(queue, [&] { return published; }));
+    EXPECT_NE(workerThread, renderThread);
+    EXPECT_EQ(publicationThread, renderThread);
+}
+
+TEST(FirstPersonAsyncTest, BackpressureDoesNotExecuteRejectedWorkInline)
+{
+    FirstPersonWorkQueue queue;
+    FirstPersonWorkerGate gate;
+    std::promise<void> started;
+    auto start = started.get_future();
+    std::atomic<size_t> executed{0};
+    ASSERT_TRUE(SubmitFirstPersonTestWork(queue, [ready = gate.ready, &started] {
+        started.set_value();
+        ready.wait();
+        return [] {};
+    }));
+    ASSERT_EQ(start.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    for (size_t i = 0; i < 7; ++i)
+        ASSERT_TRUE(SubmitFirstPersonTestWork(queue, [&] { ++executed; return [] {}; }));
+    EXPECT_FALSE(queue.hasCapacity());
+    EXPECT_FALSE(queue.submit([&] { ++executed; return [] {}; }));
+    EXPECT_EQ(executed.load(), 0u);
+    queue.cancel();
+}
+
+TEST(FirstPersonAsyncTest, BudgetedPublicationPreservesRemainingCompletions)
+{
+    FirstPersonWorkQueue queue;
+    size_t completed = 0;
+    ASSERT_TRUE(SubmitFirstPersonTestWork(queue, [&] { return [&] { ++completed; }; }));
+    ASSERT_TRUE(SubmitFirstPersonTestWork(queue, [&] { return [&] { ++completed; }; }));
+    FirstPersonFrameBudget noUploads(0, std::chrono::seconds(5));
+    queue.publish(noUploads);
+    EXPECT_EQ(completed, 0u);
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (completed == 0 && std::chrono::steady_clock::now() < end)
+    {
+        FirstPersonFrameBudget one(1, std::chrono::seconds(5));
+        queue.publish(one);
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(completed, 1u);
+    EXPECT_TRUE(AwaitFirstPersonResult(queue, [&] { return completed == 2; }));
+}
+
+TEST(FirstPersonAsyncTest, ExpiredCaptureBudgetLeavesSnapshotRetryable)
+{
+    FirstPersonSpriteSnapshot snapshot;
+    uint8_t pixel = 42;
+    OpenRCT2::G1Element source{};
+    source.width = source.height = 1;
+    source.offset = &pixel;
+    FirstPersonFrameBudget exhausted(0, std::chrono::seconds(5));
+    EXPECT_FALSE(snapshot.capture(10, &source, exhausted));
+    EXPECT_EQ(snapshot.get(10), nullptr);
+    FirstPersonFrameBudget nextFrame(1, std::chrono::seconds(5));
+    EXPECT_TRUE(snapshot.capture(10, &source, nextFrame));
+    EXPECT_EQ(snapshot.get(10)->offset[0], 42);
+    EXPECT_TRUE(snapshot.capture(10, &source, exhausted)); // already owned
+}

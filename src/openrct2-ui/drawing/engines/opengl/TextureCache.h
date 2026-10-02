@@ -211,6 +211,11 @@ namespace OpenRCT2::Ui
         ~TextureCache();
         void InvalidateImage(ImageIndex image);
         BasicTextureInfo GetOrLoadImageTexture(ImageId imageId);
+        bool HasImageTexture(ImageId image) const;
+        bool HasFirstPersonPersistentBitmap(uint64_t fingerprint) const
+        {
+            return _firstPersonPersistentBitmaps.contains(fingerprint);
+        }
         BasicTextureInfo GetOrLoadGlyphTexture(ImageId imageId, const Drawing::PaletteMap& paletteMap);
         BasicTextureInfo GetOrLoadBitmapTexture(ImageIndex image, const void* pixels, size_t width, size_t height);
         BasicTextureInfo LoadFirstPersonTransientBitmap(const void* pixels, size_t width, size_t height);

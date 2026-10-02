@@ -53,8 +53,9 @@ namespace OpenRCT2::Paint
     using FirstPersonVehicleBodyView =
         FirstPersonVisualHullView;
 
+    template<typename SpriteLookup>
     [[nodiscard]] inline std::vector<FirstPersonVehicleBodyView>
-        CollectFirstPersonVehicleBodyViews(const CarEntry& entry)
+        CollectFirstPersonVehicleBodyViews(const CarEntry& entry, SpriteLookup&& lookup)
     {
         std::vector<FirstPersonVehicleBodyView> result;
         if (!entry.groupEnabled(SpriteGroupType::slopeFlat)
@@ -78,7 +79,7 @@ namespace OpenRCT2::Paint
                 SpriteGroupType::slopeFlat, direction, 0);
             if (!seenImages.insert(image).second)
                 continue;
-            const auto* g1 = GfxGetG1Element(image);
+            const auto* g1 = lookup(image);
             constexpr size_t kMaxBodyPixels = 65536;
             if (g1 == nullptr || g1->offset == nullptr
                 || g1->width <= 0 || g1->height <= 0
@@ -121,11 +122,12 @@ namespace OpenRCT2::Paint
         return result;
     }
 
+    template<typename SpriteLookup>
     [[nodiscard]] inline FirstPersonVehicleBodyHull
-        BuildFirstPersonVehicleBodyHull(const CarEntry& entry)
+        BuildFirstPersonVehicleBodyHullFromSnapshot(const CarEntry& entry, SpriteLookup&& lookup)
     {
         const auto views =
-            CollectFirstPersonVehicleBodyViews(entry);
+            CollectFirstPersonVehicleBodyViews(entry, lookup);
         if (views.size() < 16)
             return {};
 
@@ -165,6 +167,11 @@ namespace OpenRCT2::Paint
             [](FirstPersonVec3) {
                 return true;
             });
+    }
+
+    [[nodiscard]] inline FirstPersonVehicleBodyHull BuildFirstPersonVehicleBodyHull(const CarEntry& entry)
+    {
+        return BuildFirstPersonVehicleBodyHullFromSnapshot(entry, [](ImageIndex image) { return GfxGetG1Element(image); });
     }
 
     [[nodiscard]] inline const FirstPersonVehicleBodyHull*

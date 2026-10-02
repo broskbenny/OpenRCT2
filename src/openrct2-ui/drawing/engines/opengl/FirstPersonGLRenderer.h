@@ -11,6 +11,7 @@
 #include <vector>
 #include <cstdint>
 #include <unordered_map>
+#include <map>
 namespace OpenRCT2::Ui
 {
     class TextureCache;
@@ -48,10 +49,24 @@ namespace OpenRCT2::Ui
             uint64_t sceneEpoch{}, generation{}, dependencyStamp{}, lastSeen{};
             uint64_t dependencyRevisionSerial{};
             size_t bytes{};
+            uint64_t sourceRevision{};
             GLsizei ordinaryCount{};
             GLsizei ownerCount{};
         };
         std::unordered_map<uint64_t,RegionBuffer> _staticOpaqueRegions;
+        struct PendingRegion
+        {
+            uint64_t key{};
+            RegionBuffer buffer;
+            std::shared_ptr<const std::vector<Paint::FirstPersonSurface>> surfaces;
+            size_t nextSurface{};
+            size_t uploadedVertices{};
+            bool ownersPhase = false;
+            std::map<uint32_t, std::vector<size_t>> owners;
+            size_t nextOwner{};
+        };
+        std::unique_ptr<PendingRegion> _pendingRegion;
+        void DiscardPendingRegion();
         struct CoverageFallbackCacheEntry
         {
             uint64_t imageRevision{};

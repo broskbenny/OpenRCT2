@@ -168,6 +168,9 @@ namespace OpenRCT2::Paint
         float radius{};
         const std::vector<FirstPersonSurface>* surfaces = nullptr;
         const std::vector<ImageIndex>* textureDependencies = nullptr;
+        std::shared_ptr<const std::vector<FirstPersonSurface>> surfaceStorage{};
+        uint64_t sourceRevision{};
+        size_t vertexCount{};
     };
 
     struct FirstPersonScene

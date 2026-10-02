@@ -30,6 +30,8 @@ namespace OpenRCT2::Paint
         std::vector<LargeSceneryAssetFace> faces;
     };
 
+    [[nodiscard]] LargeSceneryAssetModel BuildLargeSceneryAssetModel(const LargeSceneryEntry& entry);
+
     [[nodiscard]] bool LargeSceneryAssetEligible(
         const LargeSceneryEntry& entry);
     [[nodiscard]] const LargeSceneryAssetModel*

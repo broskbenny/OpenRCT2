@@ -11,6 +11,7 @@
             const auto frame = _terrainCache.frame;
             const uint32_t sourceGeneration = getGameState().currentTicks;
             constexpr uint64_t kSemanticProbeInterval = 240;
+            size_t nativeCapturesRemaining = 16;
             std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
             for (auto& misses : missesByRotation)
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
@@ -20,8 +21,12 @@
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
                 view.nearClip, view.farClip);
-            for (const auto tile : scene.visibleTiles)
+            static size_t captureCursor = 0;
+            const size_t captureStart = scene.visibleTiles.empty() ? 0 : captureCursor % scene.visibleTiles.size();
+            captureCursor += nativeCapturesRemaining;
+            for (size_t visit = 0; visit < scene.visibleTiles.size(); ++visit)
             {
+                const auto tile = scene.visibleTiles[(captureStart + visit) % scene.visibleTiles.size()];
                 const int32_t tx = tile.x / kCoordsXYStep;
                 const int32_t ty = tile.y / kCoordsXYStep;
                 const auto key = TerrainKey(tx, ty);
@@ -56,6 +61,15 @@
                     || (cached.valid && probedAnimated != cached.animated);
                 if (semanticChanged)
                 {
+                    if (!cached.valid || cached.signature != probedSignature || cached.viewFlags != opt.viewFlags)
+                    {
+                        ++cached.sourceRevision;
+                        _semanticJobs.erase(key);
+                        cached.semanticSurfaceFingerprint = 0;
+                        cached.semanticResidentSurfaces.clear();
+                        cached.semanticStreamedSurfaces.clear();
+                        cached.semanticMovingMeshes.clear();
+                    }
                     cached.signature = probedSignature;
                     cached.viewFlags = opt.viewFlags;
                     cached.animated = probedAnimated;
@@ -65,9 +79,6 @@
                     cached.cameraIndependentResidentSurfaces.clear();
                     cached.cameraIndependentStreamedSurfaces.clear();
                     cached.cameraIndependentFingerprint = 0;
-                    cached.semanticSurfaceFingerprint = 0;
-                    cached.semanticResidentSurfaces.clear();
-                    cached.semanticStreamedSurfaces.clear();
                     WithdrawFirstPersonSemanticComponents(tile);
                     cached.hasUngroupedResident = false;
                     cached.hasCameraDependentFallback = false;
@@ -254,8 +265,9 @@
                         || (cached.animated
                             && variant.lastAnimationGeneration
                                 != animationGeneration);
-                    if (stale)
+                    if (stale && nativeCapturesRemaining != 0)
                     {
+                        --nativeCapturesRemaining;
                         if (cameraIndependentRefreshKeys
                                 .insert(key).second)
                         {
@@ -274,6 +286,7 @@
                 }
             }
 
+            _snapshotBudget = FirstPersonFrameBudget(64, std::chrono::microseconds(1500));
             UpdateLargeSceneryReconstructions(scene, frame);
 
             struct PaintWorkItem
@@ -471,6 +484,7 @@
                     }
 
                     PaintSessionArrange(*session);
+                    _snapshotBudget = FirstPersonFrameBudget(64, std::chrono::microseconds(1500));
                     uint32_t nativePaintOrdinal = 1;
                     for (auto* root = session->PaintHead; root; root = root->NextQuadrantEntry)
                     {
@@ -785,6 +799,20 @@
                 }
             }
 
+            _snapshotBudget = FirstPersonFrameBudget(64, std::chrono::microseconds(1500));
+            // Round-robin snapshot admission prevents a long visible tile
+            // list (or perpetually animated foreground) starving later objects.
+            static size_t semanticCursor = 0;
+            size_t examined = 0;
+            const size_t semanticStart = scene.visibleTiles.empty() ? 0 : semanticCursor % scene.visibleTiles.size();
+            while (examined < scene.visibleTiles.size() && _snapshotBudget.available())
+            {
+                const auto tile = scene.visibleTiles[(semanticStart + examined++) % scene.visibleTiles.size()];
+                const auto key = TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+                const auto found = _staticPaintCache.find(key);
+                if (found != _staticPaintCache.end()) EnsureFirstPersonSemanticSurfaceCache(key, found->second);
+            }
+            semanticCursor = semanticStart + examined;
             // Only geometry that cannot live in a persistent opaque region is
             // reconstructed at surface granularity on an ordinary frame.
             for (const auto tile : scene.visibleTiles)
@@ -794,8 +822,6 @@
                 if (cacheIt == _staticPaintCache.end())
                     continue;
                 auto& cached = cacheIt->second;
-
-                EnsureFirstPersonSemanticSurfaceCache(cached);
 
                 for (const auto& semanticSurface :
                      cached.semanticStreamedSurfaces)
@@ -882,51 +908,36 @@
                     || cacheIt->second.dirty)
                     continue;
 
-                const auto semanticGroups =
-                    BuildFirstPersonSemanticViewGroups(
-                        cacheIt->second);
-                for (const auto& group :
-                     semanticGroups)
+                const auto& cached = cacheIt->second;
+                for (const auto& mesh : cached.semanticMovingMeshes)
                 {
-                    const auto* canonical =
-                        group.canonical;
-                    if (canonical == nullptr
-                        || (canonical->role
-                                != FirstPersonPaintSemanticRole::movingMachinery
-                            && canonical->role
-                                != FirstPersonPaintSemanticRole::seat))
-                        continue;
-
-                    std::vector<
-                        const FirstPersonPaintSemanticComponent*>
-                        depthPeers;
-                    if (canonical->artwork.group != 0)
+                    const FirstPersonPaintSemanticComponent* current = nullptr;
+                    uint32_t newest = 0;
+                    for (const auto& rotation : cached.rotations)
                     {
-                        for (const auto& peerGroup :
-                             semanticGroups)
+                        if (!rotation.semanticValid || rotation.lastAnimationGeneration < newest) continue;
+                        for (const auto& component : rotation.semanticComponents)
                         {
-                            const auto* peer =
-                                peerGroup.canonical;
-                            if (peer != nullptr
-                                && peer->artwork.group
-                                    == canonical->artwork.group)
+                            if (component.id - rotation.semanticComponents.front().id == mesh.componentId
+                                && component.role == mesh.role
+                                && component.repetitionIndex == mesh.repetition)
                             {
-                                depthPeers.push_back(peer);
+                                current = &component;
+                                newest = rotation.lastAnimationGeneration;
+                                break;
                             }
                         }
                     }
-                    auto surfaces =
-                        BuildFirstPersonSemanticComponentSurfaces(
-                            *canonical, 0,
-                            group.views,
-                            depthPeers.empty()
-                                ? nullptr : &depthPeers);
-                    for (auto& surface : surfaces)
+                    if (current == nullptr) continue;
+                    for (const auto& local : mesh.localSurfaces)
                     {
-                        if (SurfaceMayBeVisible(
-                                surface, worldFrustum))
-                            scene.surfaces.emplace_back(
-                                std::move(surface));
+                        auto surface = local;
+                        for (auto& vertex : surface.triangles)
+                            vertex.world = FirstPersonSemanticWorldPoint(current->transform,
+                                { vertex.world.x, vertex.world.y, vertex.world.z });
+                        surface.hasSemanticBounds = false;
+                        if (SurfaceMayBeVisible(surface, worldFrustum))
+                            scene.surfaces.emplace_back(std::move(surface));
                     }
                 }
             }

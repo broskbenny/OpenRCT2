@@ -190,8 +190,6 @@ namespace OpenRCT2::Paint
         const SmallSceneryElement& element,
         uint8_t viewportRotation)
     {
-        const uint8_t direction =
-            element.getDirectionWithOffset(viewportRotation) & 3u;
         CoordsXY offset{};
         if (entry.flags.has(SmallSceneryFlag::occupiesFullTile))
         {
@@ -369,10 +367,11 @@ namespace OpenRCT2::Paint
         return result;
     }
 
+    template<typename SpriteLookup>
     [[nodiscard]] inline FirstPersonVisualHull
-        BuildFirstPersonSmallSceneryVisualHull(
+        BuildFirstPersonSmallSceneryVisualHullFromSnapshot(
             const SmallSceneryEntry& entry,
-            const SmallSceneryElement& element)
+            const SmallSceneryElement& element, SpriteLookup&& lookup)
     {
         // Declared occupied quadrants and object height are the physical
         // contract for every scenery item that has one. Stateful/glass/effect
@@ -404,7 +403,7 @@ namespace OpenRCT2::Paint
             const ImageIndex image =
                 entry.image + direction
                 + uint32_t(witherStage) * 4u;
-            const auto* g1 = GfxGetG1Element(image);
+            const auto* g1 = lookup(image);
             if (g1 == nullptr || g1->offset == nullptr
                 || g1->width <= 0 || g1->height <= 0)
                 continue;
@@ -517,6 +516,13 @@ namespace OpenRCT2::Paint
 
         return BuildFirstPersonOccupancyHull(
             bounds, config, textureViews, occupancyPredicate);
+    }
+
+    [[nodiscard]] inline FirstPersonVisualHull BuildFirstPersonSmallSceneryVisualHull(
+        const SmallSceneryEntry& entry, const SmallSceneryElement& element)
+    {
+        return BuildFirstPersonSmallSceneryVisualHullFromSnapshot(entry, element,
+            [](ImageIndex image) { return GfxGetG1Element(image); });
     }
 
     [[nodiscard]] inline const FirstPersonVisualHull*

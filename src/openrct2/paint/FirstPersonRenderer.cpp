@@ -3,6 +3,7 @@
  * OpenRCT2 is licensed under the GNU General Public License version 3.
  *****************************************************************************/
 #include "FirstPersonRenderer.h"
+#include "FirstPersonSpriteSnapshot.h"
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonLargeSceneryReconstruction.h"
 #include "FirstPersonPhysicalProxy.h"
@@ -310,6 +311,9 @@ namespace OpenRCT2::Paint
         const FirstPersonRenderOptions& opt,
         const ScreenSize& dimensions)
     {
+        FirstPersonFrameBudget publicationBudget(2, std::chrono::microseconds(750));
+        _reconstructionWorker.publish(publicationBudget);
+        _discoveryBudget = FirstPersonFrameBudget(2048, std::chrono::microseconds(2000));
         // Reuse the prepared scene's backing allocations between presentation
         // frames. Every semantic value is rebuilt below; only vector capacity is
         // retained.
@@ -332,6 +336,7 @@ namespace OpenRCT2::Paint
         // Independent of the overhead paint collector: geometry is derived from live map state.
         DiscoverVisibleTiles(scene);
         CollectTerrain(scene);
+        _snapshotBudget = FirstPersonFrameBudget(16, std::chrono::microseconds(1000));
         CollectTrackTrajectories(scene);
     }
 
@@ -346,6 +351,13 @@ namespace OpenRCT2::Paint
     }
     void ResetFirstPersonPresentationCache()
     {
+        _reconstructionWorker.cancel();
+        _largeSceneryJobs.clear();
+        _smallSceneryJobs.clear();
+        _vehicleHullJobs.clear();
+        _semanticJobs.clear();
+        _trackMaterialJobs.clear();
+        _trackGeometryRequests.clear();
         _preparedFrame.active = false;
         _preparedFrame.valid = false;
         _preparedFrame.drawingEngine = nullptr;
@@ -395,6 +407,23 @@ namespace OpenRCT2::Paint
         const auto y0 = floorTile(std::min(low.y,high.y));
         const auto x1 = floorTile(std::max(low.x,high.x));
         const auto y1 = floorTile(std::max(low.y,high.y));
+        for (auto it = _largeSceneryJobs.begin(); it != _largeSceneryJobs.end();)
+        {
+            const auto& job = *it->second;
+            const bool changed = x0 <= job.maxX && x1 >= job.minX && y0 <= job.maxY && y1 >= job.minY
+                && std::any_of(job.tileSignatures.begin(), job.tileSignatures.end(),
+                    [](const auto& tile) { return NativeTileSignature(tile.first) != tile.second; });
+            if (changed) it = _largeSceneryJobs.erase(it);
+            else ++it;
+        }
+        for (auto it = _trackGeometryRequests.begin(); it != _trackGeometryRequests.end();)
+        {
+            const auto p = it->second.tile;
+            if (p.x / kCoordsXYStep >= x0 - 16 && p.x / kCoordsXYStep <= x1 + 16
+                && p.y / kCoordsXYStep >= y0 - 16 && p.y / kCoordsXYStep <= y1 + 16)
+                it = _trackGeometryRequests.erase(it);
+            else ++it;
+        }
         std::unordered_set<uint64_t> trackCandidates;
         std::unordered_set<uint64_t> largeSceneryCandidates;
         for (int32_t regionY = y0 / 32; regionY <= y1 / 32; ++regionY)
@@ -404,6 +433,7 @@ namespace OpenRCT2::Paint
                 FirstPersonGpuRegionKey(
                     regionX * 32, regionY * 32);
             _staticRegionPackets[regionKey].dirty = true;
+            ++_staticRegionPackets[regionKey].sourceRevision;
 
             if (const auto tracks =
                     _trackTrajectoryGroupsByBoundsRegion.find(
@@ -447,6 +477,15 @@ namespace OpenRCT2::Paint
             if (auto cached = _staticPaintCache.find(key);
                 cached != _staticPaintCache.end())
             {
+                if (NativeTileSignature({tx * kCoordsXYStep, ty * kCoordsXYStep}) != cached->second.signature)
+                {
+                    ++cached->second.sourceRevision;
+                    _semanticJobs.erase(key);
+                    cached->second.semanticMovingMeshes.clear();
+                    cached->second.semanticResidentSurfaces.clear();
+                    cached->second.semanticStreamedSurfaces.clear();
+                    cached->second.semanticSurfaceFingerprint = 0;
+                }
                 cached->second.dirty = true;
                 cached->second.visibilityDirty = true;
             }
@@ -466,6 +505,8 @@ namespace OpenRCT2::Paint
                 && y1 >= trajectory.minTileY)
             {
                 MarkTrackTrajectoryRegionsDirty(trajectory);
+                ++trajectory.materialVersion;
+                _trackMaterialJobs.erase(groupKey);
                 trajectory.dirty = true;
             }
         }

@@ -1,3 +1,9 @@
+        static FirstPersonWorkQueue _reconstructionWorker;
+        static FirstPersonFrameBudget _snapshotBudget{0, std::chrono::microseconds(0)};
+        static uint64_t _nextReconstructionRequest = 0;
+        static FirstPersonFrameBudget _discoveryBudget{0, std::chrono::microseconds(0)};
+        uint64_t NativeTileSignature(CoordsXY pos);
+
         static std::unordered_map<uint16_t, CoordsXY>
             _passengerAnchorSourceTiles;
 
@@ -513,6 +519,46 @@
             return result;
         }
 
+        struct VehicleHullJob
+        {
+            CarEntry entry{};
+            FirstPersonSpriteSnapshot sprites;
+            FirstPersonVehicleBodyHull hull;
+            bool submitted = false;
+            bool ready = false;
+        };
+        static std::unordered_map<uint32_t, std::shared_ptr<VehicleHullJob>> _vehicleHullJobs;
+
+        const FirstPersonVehicleBodyHull* RequestVehicleHull(const CarEntry& entry)
+        {
+            if (!entry.groupEnabled(SpriteGroupType::slopeFlat)) return nullptr;
+            auto found = _vehicleHullJobs.find(entry.baseImageId);
+            if (found == _vehicleHullJobs.end())
+            {
+                if (!_snapshotBudget.available() || !_reconstructionWorker.hasCapacity()) return nullptr;
+                auto job = std::make_shared<VehicleHullJob>();
+                job->entry = entry;
+                found = _vehicleHullJobs.emplace(entry.baseImageId, std::move(job)).first;
+            }
+            const auto job = found->second;
+            if (job->ready) return job->hull.valid ? &job->hull : nullptr;
+            if (!job->submitted)
+            {
+                for (uint8_t direction = 0; direction < 32; ++direction)
+                    if (!job->sprites.capture(entry.getSpriteOffset(SpriteGroupType::slopeFlat, direction, 0),
+                            _snapshotBudget)) return nullptr;
+                job->submitted = _reconstructionWorker.submit([job] {
+                    auto hull = BuildFirstPersonVehicleBodyHullFromSnapshot(job->entry,
+                        [&](ImageIndex id) { return job->sprites.get(id); });
+                    return [job, hull = std::move(hull)]() mutable {
+                        job->hull = std::move(hull);
+                        job->ready = true;
+                    };
+                }, [job] { job->ready = true; });
+            }
+            return nullptr;
+        }
+
         [[nodiscard]] const FirstPersonVehicleBodyHull*
             GetUsableVehicleHull(const Vehicle& vehicle)
         {
@@ -521,7 +567,7 @@
             const auto* entry = visual.carEntry;
             if (entry == nullptr)
                 return nullptr;
-            return GetFirstPersonVehicleBodyHull(*entry);
+            return RequestVehicleHull(*entry);
         }
 
         [[nodiscard]] const FirstPersonVehicleBodyHull*
@@ -943,155 +989,28 @@
             return true;
         }
 
-        bool AppendCalibratedSmallSceneryGeometry(
-            FirstPersonScene& scene, const PaintStruct& ps,
-            ImageId image, const ScreenCoordsXY& spritePos,
-            uint8_t rotation, ImageId mask = {})
+        bool BuildSmallSceneryGeometry(FirstPersonScene& scene,
+            const SmallSceneryElement& element, const SmallSceneryEntry& metadata,
+            ImageId image, const FirstPersonSpriteSnapshot& sprites)
         {
-            (void)spritePos;
-            const auto* small =
-                ps.Element != nullptr
-                ? ps.Element->asSmallScenery()
-                : nullptr;
-            if (small == nullptr || !image.HasValue()
-                || mask.HasValue())
-                return false;
-            const auto* entry = small->getEntry();
-            if (entry == nullptr)
-                return false;
-            const uint8_t direction =
-                small->getDirectionWithOffset(rotation) & 3u;
-            const ImageIndex expectedBodyImage =
-                entry->image + direction
-                + uint32_t(
-                    FirstPersonSmallSceneryWitherStage(
-                        *entry, *small))
-                    * 4u;
-            if (image.GetIndex() != expectedBodyImage)
-                return false;
-
-            const auto* hull =
-                GetFirstPersonSmallSceneryVisualHull(
-                    *entry, *small);
-            if (hull == nullptr)
-                return false;
-
-            const float tileX = float(ps.MapPos.x);
-            const float tileY = float(ps.MapPos.y);
-            const float baseZ = float(small->getBaseZ());
-
+            const auto* small = &element;
+            const auto* entry = &metadata;
+            const auto ownedHull = BuildFirstPersonSmallSceneryVisualHullFromSnapshot(
+                metadata, element, [&](ImageIndex id) { return sprites.get(id); });
+            const auto* hull = &ownedHull;
+            if (!hull->valid) return false;
+            const float tileX = 0, tileY = 0, baseZ = 0;
             // Face reprojection is an asset/state operation, not an instance
             // operation. Identical scenery instances can share the expensive
             // local-space bake and apply only their world translation and
             // recolour material at submission time.
-            struct BakedSmallSceneryKey
-            {
-                const SmallSceneryEntry* entry{};
-                uint8_t direction{};
-                uint8_t quadrant{};
-                uint8_t occupied{};
-                uint8_t witherStage{};
-                bool operator==(const BakedSmallSceneryKey&) const = default;
-            };
-            struct BakedSmallSceneryKeyHash
-            {
-                size_t operator()(const BakedSmallSceneryKey& key) const
-                {
-                    size_t value =
-                        reinterpret_cast<uintptr_t>(
-                            key.entry) >> 4;
-                    value ^= size_t(key.direction) << 1;
-                    value ^= size_t(key.quadrant) << 4;
-                    value ^= size_t(key.occupied) << 7;
-                    value ^= size_t(key.witherStage) << 12;
-                    return value;
-                }
-            };
             struct BakedSmallSceneryEntry
             {
-                std::array<const uint8_t*, 4>
-                    sourceIdentities{};
                 bool resolved = false;
                 bool usable = false;
-                std::vector<FirstPersonSurface>
-                    localSurfaces;
+                std::vector<FirstPersonSurface> localSurfaces;
             };
-            static std::unordered_map<
-                BakedSmallSceneryKey,
-                BakedSmallSceneryEntry,
-                BakedSmallSceneryKeyHash>
-                bakedCache;
-            static uint64_t bakedCacheGeneration = 0;
-
-            const uint64_t reconstructionGeneration =
-                FirstPersonSmallSceneryReconstructionGeneration();
-            if (bakedCacheGeneration
-                != reconstructionGeneration)
-            {
-                bakedCache.clear();
-                bakedCacheGeneration =
-                    reconstructionGeneration;
-            }
-
-            const BakedSmallSceneryKey bakedKey{
-                entry,
-                uint8_t(small->getDirection() & 3u),
-                small->getSceneryQuadrant(),
-                uint8_t(
-                    small->getOccupiedQuadrants()
-                    & 0x0Fu),
-                FirstPersonSmallSceneryWitherStage(
-                    *entry, *small),
-            };
-            std::array<const uint8_t*, 4>
-                sourceIdentities{};
-            for (const auto& view :
-                 hull->textureViews)
-            {
-                if (view.imageDirection >= 4)
-                    continue;
-                const auto* source =
-                    GfxGetG1Element(view.image);
-                sourceIdentities[
-                    view.imageDirection] =
-                    source != nullptr
-                    ? source->offset : nullptr;
-            }
-
-            auto cachedBake =
-                bakedCache.find(bakedKey);
-            if (cachedBake != bakedCache.end()
-                && cachedBake->second.resolved
-                && cachedBake->second.sourceIdentities
-                    == sourceIdentities)
-            {
-                if (!cachedBake->second.usable)
-                    return false;
-                for (const auto& localSurface :
-                     cachedBake->second.localSurfaces)
-                {
-                    auto surface = localSurface;
-                    surface.image =
-                        image.WithIndex(
-                            localSurface.image.GetIndex());
-                    for (auto& vertex :
-                         surface.triangles)
-                    {
-                        vertex.world.x += tileX;
-                        vertex.world.y += tileY;
-                        vertex.world.z += baseZ;
-                    }
-                    scene.surfaces.emplace_back(
-                        std::move(surface));
-                }
-                return !cachedBake->second
-                            .localSurfaces.empty();
-            }
-
-            auto& baked = bakedCache[bakedKey];
-            baked = {};
-            baked.sourceIdentities =
-                sourceIdentities;
+            BakedSmallSceneryEntry baked;
 
             const auto faces =
                 BuildFirstPersonVisualHullBoundaryFaces(*hull);
@@ -1181,7 +1100,7 @@
                 const auto sourceImage =
                     image.WithIndex(view.image);
                 const auto* g1 =
-                    GfxGetG1Element(sourceImage);
+                    sprites.get(sourceImage);
                 if (g1 == nullptr
                     || g1->width <= 0
                     || g1->height <= 0)
@@ -1567,6 +1486,101 @@
             return baked.usable;
         }
 
+        struct SmallSceneryJob
+        {
+            SmallSceneryEntry entry{};
+            SmallSceneryElement element{};
+            FirstPersonSpriteSnapshot sprites;
+            std::vector<FirstPersonSurface> surfaces;
+            std::unordered_set<uint64_t> waitingTiles;
+            bool submitted = false;
+            bool ready = false;
+        };
+        static std::unordered_map<uint64_t, std::shared_ptr<SmallSceneryJob>> _smallSceneryJobs;
+
+        bool AppendCalibratedSmallSceneryGeometry(
+            FirstPersonScene& scene, const PaintStruct& ps, ImageId image,
+            const ScreenCoordsXY&, uint8_t rotation, ImageId mask = {})
+        {
+            const auto* small = ps.Element ? ps.Element->asSmallScenery() : nullptr;
+            if (small == nullptr || !image.HasValue() || mask.HasValue()) return false;
+            const auto* entry = small->getEntry();
+            if (entry == nullptr) return false;
+            const auto stage = FirstPersonSmallSceneryWitherStage(*entry, *small);
+            if (image.GetIndex() != entry->image + (small->getDirectionWithOffset(rotation) & 3u)
+                    + uint32_t(stage) * 4u) return false;
+            uint64_t key = entry->image;
+            ExtendStableKey(key, small->getDirection());
+            ExtendStableKey(key, small->getSceneryQuadrant());
+            ExtendStableKey(key, small->getOccupiedQuadrants());
+            ExtendStableKey(key, stage);
+            auto it = _smallSceneryJobs.find(key);
+            if (it == _smallSceneryJobs.end())
+            {
+                if (!_snapshotBudget.available() || !_reconstructionWorker.hasCapacity())
+                {
+                    // Revisit this native view next frame; never fall through
+                    // to a synchronous silhouette reconstruction.
+                    InvalidateFirstPersonSceneTile(ps.MapPos);
+                    return true;
+                }
+                auto job = std::make_shared<SmallSceneryJob>();
+                job->entry = *entry;
+                job->entry.frame_offsets = nullptr;
+                job->entry.FrameOffsetCount = 0;
+                job->element = *small;
+                it = _smallSceneryJobs.emplace(key, std::move(job)).first;
+            }
+            const auto job = it->second;
+            if (job->ready)
+            {
+                if (job->surfaces.empty()) return false;
+                for (const auto& local : job->surfaces)
+                {
+                    auto surface = local;
+                    surface.image = image.WithIndex(local.image.GetIndex());
+                    for (auto& vertex : surface.triangles)
+                    {
+                        vertex.world.x += float(ps.MapPos.x);
+                        vertex.world.y += float(ps.MapPos.y);
+                        vertex.world.z += float(small->getBaseZ());
+                    }
+                    scene.surfaces.emplace_back(std::move(surface));
+                }
+                return true;
+            }
+            const auto tileKey = (uint64_t(uint32_t(ps.MapPos.x)) << 32) | uint32_t(ps.MapPos.y);
+            job->waitingTiles.insert(tileKey);
+            if (!job->submitted)
+            {
+                for (uint8_t view = 0; view < 4; ++view)
+                    if (!job->sprites.capture(entry->image + view + uint32_t(stage) * 4u, _snapshotBudget))
+                    {
+                        InvalidateFirstPersonSceneTile(ps.MapPos);
+                        return true;
+                    }
+                job->submitted = _reconstructionWorker.submit([job] {
+                    FirstPersonScene result;
+                    BuildSmallSceneryGeometry(result, job->element, job->entry,
+                        ImageId(job->entry.image), job->sprites);
+                    return [job, surfaces = std::move(result.surfaces)]() mutable {
+                        job->surfaces = std::move(surfaces);
+                        job->ready = true;
+                        for (const auto tile : job->waitingTiles)
+                            InvalidateFirstPersonSceneTile({int32_t(tile >> 32), int32_t(tile)});
+                        job->waitingTiles.clear();
+                    };
+                }, [job] {
+                    job->ready = true;
+                    for (const auto tile : job->waitingTiles)
+                        InvalidateFirstPersonSceneTile({int32_t(tile >> 32), int32_t(tile)});
+                    job->waitingTiles.clear();
+                });
+                if (!job->submitted) InvalidateFirstPersonSceneTile(ps.MapPos);
+            }
+            return true; // pending geometry deliberately absent
+        }
+
         [[nodiscard]] bool IsHiddenPassengerTileComponent(
             const PaintStruct& ps, EntityId hiddenEntity, uint8_t hiddenSeatIndex)
         {
@@ -1868,6 +1882,13 @@
             std::vector<FirstPersonPaintSemanticComponent>
                 semanticComponents;
         };
+        struct MovingSemanticMesh
+        {
+            uint32_t componentId{};
+            FirstPersonPaintSemanticRole role{};
+            uint16_t repetition{};
+            std::vector<FirstPersonSurface> localSurfaces;
+        };
         struct StaticPaintCacheEntry
         {
             uint64_t signature{};
@@ -1882,12 +1903,16 @@
             bool hasUngroupedResident = false;
             bool hasCameraDependentFallback = false;
             bool visibilityBoundValid = false;
+            bool visibilityKnown = false;
             bool visibilityDirty = true;
             int32_t visibilityMinZ = 0;
             int32_t visibilityMaxZ = 0;
             uint32_t lastVisibilityGeneration = 0;
             uint64_t cameraIndependentFingerprint = 0;
             uint64_t semanticSurfaceFingerprint = 0;
+            uint64_t semanticRequest = 0;
+            uint64_t sourceRevision = 0;
+            std::vector<MovingSemanticMesh> semanticMovingMeshes;
             std::vector<ReconstructionGroupInfo> reconstructionGroups;
             std::vector<FirstPersonSurface>
                 cameraIndependentResidentSurfaces;
@@ -2137,6 +2162,10 @@
         struct StaticRegionPacketCache
         {
             uint64_t generation{};
+            uint64_t sourceRevision{};
+            uint64_t publishedSourceRevision{};
+            size_t vertexCount{};
+            std::shared_ptr<const std::vector<FirstPersonSurface>> surfaceStorage;
             uint64_t lastSeen{};
             bool dirty = true;
             FirstPersonVec3 center{};
@@ -2166,6 +2195,10 @@
             };
 
             uint64_t signature{};
+            uint64_t materialVersion = 1;
+            uint64_t bakedMaterialVersion = 0;
+            uint64_t materialRequest = 0;
+            std::unordered_map<size_t, std::vector<FirstPersonSurface>> projectedSurfaces;
             uint64_t lastSeen{};
             bool dirty = false;
             bool boundaryContinuous = true;
@@ -2480,7 +2513,8 @@
         LargeSceneryGeometryCacheEntry BuildLargeSceneryInstanceGeometry(
             const LargeSceneryElement& large, const LargeSceneryEntry& entry,
             const LargeSceneryAssetModel& model, const ReconstructionGroupInfo& group,
-            uint64_t signature, uint64_t frame)
+            uint64_t signature, uint64_t frame,
+            const FirstPersonSpriteSnapshot& sprites, uint64_t assetGeneration)
         {
             LargeSceneryGeometryCacheEntry result{};
             result.signature = signature;
@@ -2529,7 +2563,7 @@
 
             struct BakedLargeSceneryKey
             {
-                const LargeSceneryEntry* entry{};
+                uint32_t image{};
                 uint8_t objectDirection{};
                 bool operator==(const BakedLargeSceneryKey&) const = default;
             };
@@ -2537,7 +2571,7 @@
             {
                 size_t operator()(const BakedLargeSceneryKey& key) const
                 {
-                    return (reinterpret_cast<uintptr_t>(key.entry) >> 4)
+                    return size_t(key.image)
                         ^ (size_t(key.objectDirection) << 1);
                 }
             };
@@ -2550,17 +2584,23 @@
                 FirstPersonVec3 localHigh{};
                 std::vector<FirstPersonSurface> localSurfaces;
             };
-            static std::unordered_map<
+            static thread_local std::unordered_map<
                 BakedLargeSceneryKey,
                 BakedLargeSceneryEntry,
                 BakedLargeSceneryKeyHash>
                 bakedCache;
 
+            static thread_local uint64_t cacheEpoch = 0;
+            if (cacheEpoch != assetGeneration)
+            {
+                bakedCache.clear();
+                cacheEpoch = assetGeneration;
+            }
             const BakedLargeSceneryKey bakedKey{
-                &entry, objectDirection
+                entry.image, objectDirection
             };
             const uint64_t bakedGeneration =
-                FirstPersonLargeSceneryReconstructionGeneration();
+                assetGeneration;
             if (const auto bakedIt = bakedCache.find(bakedKey);
                 bakedIt != bakedCache.end()
                 && bakedIt->second.generation
@@ -2700,7 +2740,7 @@
                     decoded.image =
                         imageTemplate.WithIndex(imageIndex);
                     decoded.g1 =
-                        GfxGetG1Element(decoded.image);
+                        sprites.get(decoded.image);
                     if (decoded.g1 == nullptr
                         || decoded.g1->width <= 0
                         || decoded.g1->height <= 0)
@@ -3777,6 +3817,94 @@
             return result;
         }
 
+        struct LargeSceneryJob
+        {
+            LargeSceneryEntry entry{};
+            LargeSceneryElement element{};
+            std::vector<LargeSceneryTile> tiles;
+            std::vector<std::pair<CoordsXY, uint64_t>> tileSignatures;
+            ReconstructionGroupInfo group{};
+            FirstPersonSpriteSnapshot sprites;
+            size_t nextImage = 0;
+            bool submitted = false;
+            int32_t minX{}, minY{}, maxX{}, maxY{};
+        };
+        static std::unordered_map<uint64_t, std::shared_ptr<LargeSceneryJob>> _largeSceneryJobs;
+
+        void QueueLargeSceneryGeometry(const LargeSceneryElement& large,
+            const LargeSceneryEntry& entry, const ReconstructionGroupInfo& group, uint64_t frame)
+        {
+            if (!_snapshotBudget.available() || !_reconstructionWorker.hasCapacity()) return;
+            if (!_largeSceneryJobs.contains(group.key) && _largeSceneryJobs.size() >= 8) return;
+            auto& slot = _largeSceneryJobs[group.key];
+            if (!slot)
+            {
+                slot = std::make_shared<LargeSceneryJob>();
+                slot->entry = entry;
+                slot->entry.tiles = {}; // never retain the object's span or text pointer
+                slot->entry.text = nullptr;
+                slot->tiles.assign(entry.tiles.begin(), entry.tiles.end());
+                slot->element = large;
+                slot->group = group;
+                slot->minX = slot->maxX = int32_t(group.anchor.x) / kCoordsXYStep;
+                slot->minY = slot->maxY = int32_t(group.anchor.y) / kCoordsXYStep;
+                for (const auto& tile : slot->tiles)
+                {
+                    const auto offset = CoordsXY{tile.offset.x, tile.offset.y}.rotate(large.getDirection());
+                    const auto x = int32_t(group.anchor.x + offset.x) / kCoordsXYStep;
+                    const auto y = int32_t(group.anchor.y + offset.y) / kCoordsXYStep;
+                    const CoordsXY location{x * kCoordsXYStep, y * kCoordsXYStep};
+                    slot->tileSignatures.emplace_back(location, NativeTileSignature(location));
+                    slot->minX = std::min(slot->minX, x); slot->maxX = std::max(slot->maxX, x);
+                    slot->minY = std::min(slot->minY, y); slot->maxY = std::max(slot->maxY, y);
+                }
+            }
+            const auto job = slot;
+            if (job->submitted) return;
+            while (job->nextImage < job->tiles.size() * 4)
+            {
+                if (!job->sprites.capture(entry.image + 4 + uint32_t(job->nextImage), _snapshotBudget)) return;
+                ++job->nextImage;
+            }
+            if (!LargeSceneryInstanceComplete(entry, group, large.getDirection() & 3u))
+            {
+                _largeSceneryJobs.erase(group.key);
+                return;
+            }
+            const auto epoch = _reconstructionWorker.epoch();
+            job->submitted = _reconstructionWorker.submit([job, frame, epoch]() {
+                auto metadata = job->entry;
+                metadata.tiles = job->tiles;
+                const auto model = BuildLargeSceneryAssetModel(metadata);
+                auto result = BuildLargeSceneryInstanceGeometry(job->element, metadata,
+                    model, job->group, job->group.key, frame, job->sprites, epoch);
+                return [job, result = std::move(result)]() mutable {
+                    const auto pending = _largeSceneryJobs.find(job->group.key);
+                    if (pending == _largeSceneryJobs.end() || pending->second != job) return;
+                    for (const auto& [tile, signature] : job->tileSignatures)
+                        if (NativeTileSignature(tile) != signature)
+                        {
+                            _largeSceneryJobs.erase(pending);
+                            return;
+                        }
+                    auto existing = _largeSceneryGeometryCache.find(job->group.key);
+                    if (existing != _largeSceneryGeometryCache.end())
+                    {
+                        MarkLargeSceneryGeometryRegionsDirty(existing->second);
+                        UnregisterLargeSceneryRegionMembership(job->group.key, existing->second);
+                    }
+                    MarkLargeSceneryGeometryRegionsDirty(result);
+                    RegisterLargeSceneryRegionMembership(job->group.key, result);
+                    _largeSceneryGeometryCache[job->group.key] = std::move(result);
+                    _largeSceneryJobs.erase(pending);
+                };
+            }, [job] {
+                const auto it = _largeSceneryJobs.find(job->group.key);
+                if (it != _largeSceneryJobs.end() && it->second == job)
+                    _largeSceneryJobs.erase(it);
+            });
+        }
+
         void UpdateLargeSceneryReconstructions(FirstPersonScene& scene, uint64_t frame)
         {
             _activeLargeSceneryRegions.clear();
@@ -3867,71 +3995,7 @@
                         continue;
                     }
 
-                    const auto* model =
-                        GetLargeSceneryAssetModel(
-                            *entry);
-                    if (model == nullptr
-                        || !model->usable)
-                        continue;
-
-                    uint64_t signature = group.key;
-                    ExtendStableKey(
-                        signature,
-                        static_cast<uint8_t>(large->getPrimaryColour()));
-                    ExtendStableKey(
-                        signature,
-                        static_cast<uint8_t>(large->getSecondaryColour()));
-                    ExtendStableKey(
-                        signature,
-                        static_cast<uint8_t>(large->getTertiaryColour()));
-                    ExtendStableKey(
-                        signature, model->faces.size());
-
-                    if (cached != _largeSceneryGeometryCache.end()
-                        && cached->second.signature == signature
-                        && !cached->second.dirty)
-                    {
-                        cached->second.lastSeen = frame;
-                        ActivateLargeSceneryRegions(cached->second);
-                        continue;
-                    }
-
-                    if (cached != _largeSceneryGeometryCache.end())
-                    {
-                        MarkLargeSceneryGeometryRegionsDirty(cached->second);
-                        UnregisterLargeSceneryRegionMembership(
-                            group.key, cached->second);
-                    }
-
-                    const uint8_t objectDirection =
-                        static_cast<uint8_t>(large->getDirection()) & 3u;
-                    if (!LargeSceneryInstanceComplete(
-                            *entry, group, objectDirection))
-                    {
-                        if (cached != _largeSceneryGeometryCache.end())
-                            _largeSceneryGeometryCache.erase(cached);
-                        continue;
-                    }
-
-                    auto rebuilt = BuildLargeSceneryInstanceGeometry(
-                        *large, *entry, *model, group, signature, frame);
-                    if (rebuilt.surfaces.empty())
-                    {
-                        // Keep the native sprite body visible, but remember the
-                        // failed decision and authoritative collision proxies.
-                        // Tile invalidation will dirty this entry if the object
-                        // state actually changes.
-                        RegisterLargeSceneryRegionMembership(
-                            group.key, rebuilt);
-                        _largeSceneryGeometryCache[group.key] =
-                            std::move(rebuilt);
-                        continue;
-                    }
-
-                    MarkLargeSceneryGeometryRegionsDirty(rebuilt);
-                    RegisterLargeSceneryRegionMembership(group.key, rebuilt);
-                    ActivateLargeSceneryRegions(rebuilt);
-                    _largeSceneryGeometryCache[group.key] = std::move(rebuilt);
+                    QueueLargeSceneryGeometry(*large, *entry, group, frame);
                 }
             }
 
@@ -4485,6 +4549,7 @@
                     surface.immutableWidth;
                 duplicate->immutableHeight =
                     surface.immutableHeight;
+                ++trajectory.materialVersion;
                 MarkTrackTrajectoryRegionsDirty(
                     trajectory);
                 return;
@@ -4517,13 +4582,15 @@
                 std::move(projection));
             // Geometry stays unchanged; only the resident rail material packet
             // needs to pick up the newly captured native artwork.
+            ++trajectory.materialVersion;
             MarkTrackTrajectoryRegionsDirty(trajectory);
         }
 
         void AppendFirstPersonTrackArtworkProjections(
             const FirstPersonSurface& carrier,
             const TrackTrajectoryCacheEntry& trajectory,
-            std::vector<FirstPersonSurface>& output)
+            std::vector<FirstPersonSurface>& output,
+            const FirstPersonSpriteSnapshot& sprites)
         {
             if (!carrier.artworkCarrier)
                 return;
@@ -4637,7 +4704,7 @@
                     const auto& projection =
                         projections[index];
                     const auto* g1 =
-                        GfxGetG1Element(
+                        sprites.get(
                             projection.image);
                     if (g1 == nullptr
                         || g1->width <= 0
@@ -4671,7 +4738,7 @@
                     if (projection.mask.HasValue())
                     {
                         item.maskG1 =
-                            GfxGetG1Element(
+                            sprites.get(
                                 projection.mask);
                         if (item.maskG1 != nullptr)
                         {
@@ -4948,3 +5015,59 @@
             }
         }
 
+
+        struct TrackMaterialJob
+        {
+            TrackTrajectoryCacheEntry snapshot;
+            FirstPersonSpriteSnapshot sprites;
+            bool submitted = false;
+        };
+        static std::unordered_map<uint64_t, std::shared_ptr<TrackMaterialJob>> _trackMaterialJobs;
+
+        void EnsureTrackMaterials(uint64_t key, TrackTrajectoryCacheEntry& trajectory)
+        {
+            if (trajectory.dirty || trajectory.bakedMaterialVersion == trajectory.materialVersion) return;
+            if (!_snapshotBudget.available() || !_reconstructionWorker.hasCapacity()) return;
+            if (!_trackMaterialJobs.contains(key) && _trackMaterialJobs.size() >= 16) return;
+            auto& slot = _trackMaterialJobs[key];
+            if (slot && (slot->snapshot.materialVersion != trajectory.materialVersion
+                || slot->snapshot.signature != trajectory.signature)) slot.reset();
+            if (!slot)
+            {
+                slot = std::make_shared<TrackMaterialJob>();
+                trajectory.materialRequest = ++_nextReconstructionRequest;
+                slot->snapshot = trajectory;
+                slot->snapshot.projectedSurfaces.clear();
+            }
+            const auto job = slot;
+            if (job->submitted) return;
+            for (const auto& views : job->snapshot.artworkProjections)
+            for (const auto& view : views)
+                if (!job->sprites.capture(view.image, _snapshotBudget)
+                    || !job->sprites.capture(view.mask, _snapshotBudget)) return;
+            job->submitted = _reconstructionWorker.submit([job, key] {
+                std::unordered_map<size_t, std::vector<FirstPersonSurface>> result;
+                for (size_t i = 0; i < job->snapshot.surfaces.size(); ++i)
+                {
+                    const auto& surface = job->snapshot.surfaces[i];
+                    if (surface.artworkCarrier)
+                        AppendFirstPersonTrackArtworkProjections(surface, job->snapshot, result[i], job->sprites);
+                }
+                return [job, key, result = std::move(result)]() mutable {
+                    const auto pending = _trackMaterialJobs.find(key);
+                    if (pending == _trackMaterialJobs.end() || pending->second != job) return;
+                    _trackMaterialJobs.erase(pending);
+                    const auto found = _trackTrajectoryCache.find(key);
+                    if (found == _trackTrajectoryCache.end()) return;
+                    auto& target = found->second;
+                    if (target.dirty || target.materialRequest != job->snapshot.materialRequest
+                        || target.materialVersion != job->snapshot.materialVersion) return;
+                    target.projectedSurfaces = std::move(result);
+                    target.bakedMaterialVersion = job->snapshot.materialVersion;
+                    MarkTrackTrajectoryRegionsDirty(target);
+                };
+            }, [job, key] {
+                const auto found = _trackMaterialJobs.find(key);
+                if (found != _trackMaterialJobs.end() && found->second == job) _trackMaterialJobs.erase(found);
+            });
+        }

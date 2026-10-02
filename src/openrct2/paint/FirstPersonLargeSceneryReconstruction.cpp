@@ -104,7 +104,7 @@ namespace OpenRCT2::Paint
         }
 
         [[nodiscard]] LargeSceneryAssetModel
-            BuildLargeSceneryAssetModel(
+            BuildLargeSceneryAssetModelImpl(
                 const LargeSceneryEntry& entry)
         {
             LargeSceneryAssetModel model{};
@@ -134,6 +134,11 @@ namespace OpenRCT2::Paint
         }
     }
 
+    LargeSceneryAssetModel BuildLargeSceneryAssetModel(const LargeSceneryEntry& entry)
+    {
+        return BuildLargeSceneryAssetModelImpl(entry);
+    }
+
     const LargeSceneryAssetModel*
         GetLargeSceneryAssetModel(
             const LargeSceneryEntry& entry)
@@ -147,7 +152,7 @@ namespace OpenRCT2::Paint
         if (!it->second.attempted)
         {
             it->second =
-                BuildLargeSceneryAssetModel(entry);
+                BuildLargeSceneryAssetModelImpl(entry);
         }
         return &it->second;
     }

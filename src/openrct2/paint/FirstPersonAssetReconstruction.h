@@ -108,14 +108,14 @@ namespace OpenRCT2::Paint
 
         const auto coverageAt =
             [&](int32_t qx, int32_t qy) {
-                std::vector<FirstPersonVerticalInterval> result;
+                std::vector<FirstPersonVerticalInterval> intervals;
                 for (const auto& other : cells)
                 {
                     if (other.qx == qx && other.qy == qy
                         && other.highZ > other.lowZ)
-                        result.push_back({ other.lowZ, other.highZ });
+                        intervals.push_back({ other.lowZ, other.highZ });
                 }
-                return result;
+                return intervals;
             };
 
         for (const auto& cell : cells)

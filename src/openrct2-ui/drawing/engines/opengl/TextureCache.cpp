@@ -72,6 +72,12 @@ void TextureCache::InvalidateImage(ImageIndex image)
     }
 }
 
+bool TextureCache::HasImageTexture(ImageId image) const
+{
+    return image.HasValue() && image.GetIndex() < _indexMap.size()
+        && _indexMap[image.GetIndex()] != kUnusedIndex;
+}
+
 // Note: for performance reasons, this returns a BasicTextureInfo over an AtlasTextureInfo (also to not expose the cache)
 BasicTextureInfo TextureCache::GetOrLoadImageTexture(const ImageId imageId)
 {
@@ -299,32 +305,39 @@ void TextureCache::EnlargeAtlasesTexture(GLuint newEntries)
 
     GLuint newIndices = _atlasesTextureIndices + newEntries;
 
-    std::vector<char> oldPixels;
-
     if (newIndices > _atlasesTextureCapacity)
     {
-        // Retrieve current array data, growing buffer.
-        oldPixels.resize(_atlasesTextureDimensions * _atlasesTextureDimensions * _atlasesTextureCapacity);
-        if (!oldPixels.empty())
-        {
-            glCall(glGetTexImage, GL_TEXTURE_2D_ARRAY, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, oldPixels.data());
-        }
-
-        // Initial capacity will be 12 which covers most cases of a fully visible park.
-        _atlasesTextureCapacity = (_atlasesTextureCapacity + 6) << 1uL;
-
+        // Preserve the atlas through GPU-side pixel transfer. A host readback
+        // here used to wait for every preceding draw whenever new scenery
+        // required another atlas layer.
+        GLint previousPack = 0, previousUnpack = 0;
+        glCall(glGetIntegerv, GL_PIXEL_PACK_BUFFER_BINDING, &previousPack);
+        glCall(glGetIntegerv, GL_PIXEL_UNPACK_BUFFER_BINDING, &previousUnpack);
+        GLuint transfer = 0;
         glCall(glBindTexture, GL_TEXTURE_2D_ARRAY, _atlasesTexture);
-        glCall(
-            glTexImage3D, GL_TEXTURE_2D_ARRAY, 0, GL_R8UI, _atlasesTextureDimensions, _atlasesTextureDimensions,
-            _atlasesTextureCapacity, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
-
-        // Restore old data
-        if (!oldPixels.empty())
+        if (_atlasesTextureCapacity != 0)
         {
-            glCall(
-                glTexSubImage3D, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, _atlasesTextureDimensions, _atlasesTextureDimensions,
-                _atlasesTextureIndices, GL_RED_INTEGER, GL_UNSIGNED_BYTE, oldPixels.data());
+            const auto bytes = GLsizeiptr(_atlasesTextureDimensions) * _atlasesTextureDimensions * _atlasesTextureCapacity;
+            glCall(glGenBuffers, 1, &transfer);
+            glCall(glBindBuffer, GL_PIXEL_PACK_BUFFER, transfer);
+            glCall(glBufferData, GL_PIXEL_PACK_BUFFER, bytes, nullptr, GL_STREAM_COPY);
+            glCall(glGetTexImage, GL_TEXTURE_2D_ARRAY, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
         }
+        glCall(glBindBuffer, GL_PIXEL_PACK_BUFFER, GLuint(previousPack));
+        glCall(glBindBuffer, GL_PIXEL_UNPACK_BUFFER, 0);
+        _atlasesTextureCapacity = (_atlasesTextureCapacity + 6) << 1uL;
+        glCall(glTexImage3D, GL_TEXTURE_2D_ARRAY, 0, GL_R8UI,
+            _atlasesTextureDimensions, _atlasesTextureDimensions, _atlasesTextureCapacity,
+            0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+        if (transfer != 0)
+        {
+            glCall(glBindBuffer, GL_PIXEL_UNPACK_BUFFER, transfer);
+            glCall(glTexSubImage3D, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0,
+                _atlasesTextureDimensions, _atlasesTextureDimensions, _atlasesTextureIndices,
+                GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+        }
+        glCall(glBindBuffer, GL_PIXEL_UNPACK_BUFFER, GLuint(previousUnpack));
+        if (transfer != 0) glCall(glDeleteBuffers, 1, &transfer);
     }
 
     _atlasesTextureIndices = newIndices;
