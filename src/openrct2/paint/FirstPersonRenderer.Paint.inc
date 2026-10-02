@@ -298,8 +298,11 @@
             // Separate dynamic hierarchy: rebuilt at simulation cadence, then
             // culled at presentation cadence using current tweened entity bounds.
             RebuildDynamicEntitySpatialCache(sourceGeneration);
-            for (const auto& region : _dynamicEntitySpatialCache.regions)
+            for (const auto slot :
+                 _dynamicEntitySpatialCache.activeSlots)
             {
+                const auto& region =
+                    _dynamicEntitySpatialCache.regions[slot];
                 if (!region.hasBounds || !worldFrustum.visible(region.center, region.radius))
                     continue;
                 for (const auto entityId : region.entities)

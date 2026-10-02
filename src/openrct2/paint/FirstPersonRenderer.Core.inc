@@ -1801,7 +1801,12 @@
         {
             bool valid = false;
             uint32_t generation = 0;
+            // Keep slots and their entity-vector capacities across simulation
+            // generations. Only regions active in the previous generation need
+            // clearing before the next authoritative rebuild.
             std::vector<DynamicEntityRegion> regions;
+            std::unordered_map<uint64_t, size_t> regionSlots;
+            std::vector<size_t> activeSlots;
         };
         static DynamicEntitySpatialCache _dynamicEntitySpatialCache;
 
@@ -1854,8 +1859,19 @@
 
             _dynamicEntitySpatialCache.valid = true;
             _dynamicEntitySpatialCache.generation = generation;
-            _dynamicEntitySpatialCache.regions.clear();
-            std::unordered_map<uint64_t, size_t> regionSlots;
+            for (const auto slot :
+                 _dynamicEntitySpatialCache.activeSlots)
+            {
+                auto& region =
+                    _dynamicEntitySpatialCache.regions[slot];
+                region.hasBounds = false;
+                region.low = {};
+                region.high = {};
+                region.center = {};
+                region.radius = 0.0f;
+                region.entities.clear();
+            }
+            _dynamicEntitySpatialCache.activeSlots.clear();
             constexpr int32_t kDynamicRegionTiles = 16;
             constexpr int32_t kDynamicRegionWorld = kDynamicRegionTiles * kCoordsXYStep;
             const auto floorDiv = [](int32_t value, int32_t divisor) {
@@ -1881,11 +1897,25 @@
                     const int32_t ry = floorDiv(location.y, kDynamicRegionWorld);
                     const uint64_t key =
                         (uint64_t(uint32_t(rx)) << 32) | uint32_t(ry);
-                    auto [slotIt, inserted] = regionSlots.emplace(
-                        key, _dynamicEntitySpatialCache.regions.size());
+                    auto [slotIt, inserted] =
+                        _dynamicEntitySpatialCache.regionSlots.emplace(
+                            key,
+                            _dynamicEntitySpatialCache
+                                .regions.size());
                     if (inserted)
-                        _dynamicEntitySpatialCache.regions.emplace_back();
-                    auto& region = _dynamicEntitySpatialCache.regions[slotIt->second];
+                    {
+                        _dynamicEntitySpatialCache
+                            .regions.emplace_back();
+                    }
+                    auto& region =
+                        _dynamicEntitySpatialCache
+                            .regions[slotIt->second];
+                    if (region.entities.empty())
+                    {
+                        _dynamicEntitySpatialCache
+                            .activeSlots.push_back(
+                                slotIt->second);
+                    }
                     region.entities.push_back(entityId);
 
                     const auto bounds = EntityVisualBounds(*entity);
@@ -1917,8 +1947,11 @@
                 }
             }
 
-            for (auto& region : _dynamicEntitySpatialCache.regions)
+            for (const auto slot :
+                 _dynamicEntitySpatialCache.activeSlots)
             {
+                auto& region =
+                    _dynamicEntitySpatialCache.regions[slot];
                 region.center = {
                     0.5f * (region.low.x + region.high.x),
                     0.5f * (region.low.y + region.high.y),
