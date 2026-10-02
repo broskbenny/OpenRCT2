@@ -384,8 +384,13 @@ namespace OpenRCT2::Paint
         const auto y1 = floorTile(std::max(low.y,high.y));
         for (int32_t regionY = y0 / 32; regionY <= y1 / 32; ++regionY)
         for (int32_t regionX = x0 / 32; regionX <= x1 / 32; ++regionX)
-            _staticRegionPackets[
-                FirstPersonGpuRegionKey(regionX * 32, regionY * 32)].dirty = true;
+        {
+            auto& packet = _staticRegionPackets[
+                FirstPersonGpuRegionKey(
+                    regionX * 32, regionY * 32)];
+            packet.dirty = true;
+            packet.sourceDirty = true;
+        }
         for (auto& [key, entry] : _regionBounds)
         {
             const int32_t originX = int32_t(key >> 32);

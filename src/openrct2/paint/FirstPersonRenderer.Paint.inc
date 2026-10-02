@@ -144,7 +144,6 @@
                 const bool needsTileSourceView =
                     !hasAnyValidRotation
                     || cached.animated
-                    || cached.hasUngroupedResident
                     || cached.hasCameraDependentFallback
                     || selectedTerrainEvidenceMissing;
                 uint8_t rotationMask =
@@ -895,6 +894,52 @@
                                 std::move(surface));
                     }
                 }
+            }
+
+            // Persist only the exceptional tiles that genuinely need
+            // presentation-time CPU work. Empty terrain and fixed opaque
+            // geometry disappear from the ordinary frame path after their
+            // region has been built once.
+            for (const auto tile : scene.visibleTiles)
+            {
+                const int32_t tx =
+                    tile.x / kCoordsXYStep;
+                const int32_t ty =
+                    tile.y / kCoordsXYStep;
+                const uint64_t key =
+                    TerrainKey(tx, ty);
+                const auto cacheIt =
+                    _staticPaintCache.find(key);
+                if (cacheIt
+                    == _staticPaintCache.end())
+                    continue;
+                auto& cached = cacheIt->second;
+
+                bool needsRefresh =
+                    cached.animated
+                    || cached.hasCameraDependentFallback
+                    || !cached.cameraIndependentStreamedSurfaces.empty()
+                    || !cached.semanticStreamedSurfaces.empty();
+                if (!needsRefresh)
+                {
+                    for (const auto& variant :
+                         cached.rotations)
+                    {
+                        if (!variant.streamedSurfaces.empty())
+                        {
+                            needsRefresh = true;
+                            break;
+                        }
+                    }
+                }
+
+                auto& packet =
+                    _staticRegionPackets[
+                        FirstPersonGpuRegionKey(tx, ty)];
+                if (needsRefresh)
+                    packet.refreshTileKeys.insert(key);
+                else
+                    packet.refreshTileKeys.erase(key);
             }
 
             // Cache entries can have been painted in different presentation

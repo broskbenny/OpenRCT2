@@ -172,6 +172,10 @@ namespace OpenRCT2::Paint
         // Persistent fixed opaque geometry is submitted by region descriptor;
         // individual static surfaces are exposed only when that region rebuilds.
         std::vector<FirstPersonStaticRegion> staticRegions;
+        // Camera visibility is region-based. visibleTiles contains only tiles
+        // whose cached world source actually needs rebuilding/presentation
+        // refresh; it is deliberately not the whole visible park.
+        std::vector<uint64_t> visibleStaticRegions;
         std::vector<CoordsXY> visibleTiles;
         // Diagnostics count native tile-paint work, not merely submitted quads.
         uint32_t staticTilePaints = 0;
