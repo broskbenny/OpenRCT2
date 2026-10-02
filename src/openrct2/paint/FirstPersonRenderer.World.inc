@@ -2229,12 +2229,14 @@
                         observations[rotation]);
             }
 
+            bool visualHullRefined = false;
             if (const auto carved =
                     BuildFirstPersonSemanticVisualHullFaces(
                         component, decodedViews);
                 carved.has_value() && !carved->empty())
             {
                 faces = *carved;
+                visualHullRefined = true;
             }
 
             std::vector<std::array<FirstPersonVec3, 4>>
@@ -2381,6 +2383,13 @@
                             return a.score > b.score;
                         return a.rotation < b.rotation;
                     });
+
+                // Boundary faces introduced only to close a carved visual
+                // hull are not automatically material-bearing surfaces. If no
+                // native view observes such a face, keep it visually empty;
+                // collision remains on the authoritative component geometry.
+                if (visualHullRefined && candidates.empty())
+                    continue;
 
                 FirstPersonSurface surface{};
                 surface.gpuRegion = gpuRegion;
