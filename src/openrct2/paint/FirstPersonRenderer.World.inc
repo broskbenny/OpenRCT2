@@ -549,6 +549,17 @@
             std::unordered_set<uint64_t> seenGroups;
             seenGroups.reserve(
                 scene.visibleTiles.size() / 2 + 1);
+            scene.activeTrackRegions.reserve(
+                scene.visibleTiles.size() / 8 + 1);
+            const auto activateTrajectoryRegions =
+                [&](const TrackTrajectoryCacheEntry& trajectory) {
+                    for (const auto& [regionKey, indices] :
+                         trajectory.regionSurfaceIndices)
+                    {
+                        (void)indices;
+                        scene.activeTrackRegions.push_back(regionKey);
+                    }
+                };
 
             for (const auto tile : scene.visibleTiles)
             {
@@ -644,6 +655,7 @@
                             MarkTrackTrajectoryRegionsDirty(
                                 it->second);
                         }
+                        activateTrajectoryRegions(it->second);
                         continue;
                     }
 
@@ -693,6 +705,9 @@
                         std::move(rebuilt);
                     RegisterTrackTrajectoryRegionMembership(
                         group->key,
+                        _trackTrajectoryCache[
+                            group->key]);
+                    activateTrajectoryRegions(
                         _trackTrajectoryCache[
                             group->key]);
                 } while (!(element++)->isLastForTile());
@@ -2327,22 +2342,12 @@
                 visibleRegions.insert(FirstPersonGpuRegionKey(
                     tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
             // A single physical track piece can cross a 32x32 GPU-region edge.
-            // If any sequence made the piece visible this frame, submit every
-            // region occupied by its authoritative sampled trajectory.
-            for (const auto& [groupKey, trajectory] :
-                 _trackTrajectoryCache)
-            {
-                (void)groupKey;
-                if (trajectory.dirty
-                    || trajectory.lastSeen != frame)
-                    continue;
-                for (const auto& [regionKey, indices] :
-                     trajectory.regionSurfaceIndices)
-                {
-                    (void)indices;
-                    visibleRegions.insert(regionKey);
-                }
-            }
+            // CollectTrackTrajectories already recorded every region belonging
+            // to groups encountered by visible tiles. Reuse that exact set
+            // instead of scanning the park-wide persistent trajectory cache.
+            visibleRegions.insert(
+                scene.activeTrackRegions.begin(),
+                scene.activeTrackRegions.end());
             if (_largeSceneryGeometryEnabled)
             {
                 visibleRegions.insert(

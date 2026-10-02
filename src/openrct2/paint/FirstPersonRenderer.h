@@ -176,6 +176,10 @@ namespace OpenRCT2::Paint
         // individual static surfaces are exposed only when that region rebuilds.
         std::vector<FirstPersonStaticRegion> staticRegions;
         std::vector<CoordsXY> visibleTiles;
+        // Region keys belonging to track groups actually encountered during
+        // this frame's visible-tile traversal. Carrying them forward avoids a
+        // park-wide scan of the persistent trajectory cache during submission.
+        std::vector<uint64_t> activeTrackRegions;
     };
 
     struct FirstPersonWallPlane
