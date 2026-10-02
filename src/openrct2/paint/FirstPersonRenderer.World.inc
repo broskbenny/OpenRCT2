@@ -975,13 +975,6 @@
                 if (!frustum.visible({float(x+16),float(y+16),0.5f*(low+high)},
                                     48.0f+0.5f*(high-low))) continue;
                     const uint8_t sourceRotation = ChooseTerrainSourceRotation(slope);
-                    const auto image = GetFirstPersonTerrainImage(*tile, origin, sourceRotation);
-                    const auto* g1 = image.HasValue() ? GfxGetG1Element(image) : nullptr;
-                    if (g1 == nullptr) continue;
-                    const ImageId waterMask = waterZ > baseZ
-                        ? GetFirstPersonWaterMaskImage(*tile, sourceRotation) : ImageId{};
-                    const ImageId waterOverlay = waterZ > baseZ
-                        ? GetFirstPersonWaterOverlayImage(*tile, opt.viewFlags, sourceRotation) : ImageId{};
                     const uint64_t terrainKey = TerrainKey(tx, ty);
                     auto& cache = _terrainCache.entries[terrainKey];
                     const bool wasDirty = cache.dirty;
@@ -996,12 +989,74 @@
                             MarkStaticRegionDirtyForTile(tx, ty);
                         }
                     }
+
+                    // Terrain artwork is deterministic from these surface fields.
+                    // Avoid resolving object artwork/G1 metadata every rendered
+                    // frame when neither native invalidation nor the staggered
+                    // semantic fallback probe reported a change.
+                    const uint8_t surfaceStyle = tile->surfaceStyle;
+                    const uint8_t grassVisualStage =
+                        tile->getGrassLength() & 0x7u;
+                    const ImageId waterOverlay = waterZ > baseZ
+                        ? GetFirstPersonWaterOverlayImage(
+                            *tile, opt.viewFlags, sourceRotation)
+                        : ImageId{};
+                    const auto semanticCache =
+                        _staticPaintCache.find(terrainKey);
+                    const bool semanticDirty =
+                        semanticCache != _staticPaintCache.end()
+                        && semanticCache->second.dirty;
+                    const bool sourceStateMatches =
+                        !wasDirty && !semanticDirty
+                        && cache.baseZ == baseZ
+                        && cache.waterZ == waterZ
+                        && cache.slope == slope
+                        && cache.sourceRotation == sourceRotation
+                        && cache.surfaceStyle == surfaceStyle
+                        && cache.grassVisualStage == grassVisualStage
+                        && cache.waterOverlayImage == waterOverlay;
+                    if (sourceStateMatches)
+                    {
+                        cache.lastSeen = frame;
+                        if (!cache.verticalOpening
+                            && !IsResidentStaticSurface(cache.ground))
+                            scene.surfaces.emplace_back(cache.ground);
+                        if (cache.water.has_value()
+                            && !IsResidentStaticSurface(*cache.water))
+                            scene.surfaces.emplace_back(*cache.water);
+                        if (cache.waterOverlay.has_value()
+                            && !IsResidentStaticSurface(*cache.waterOverlay))
+                            scene.surfaces.emplace_back(*cache.waterOverlay);
+                        continue;
+                    }
+
+                    const auto image =
+                        GetFirstPersonTerrainImage(
+                            *tile, origin, sourceRotation);
+                    const auto* g1 =
+                        image.HasValue()
+                        ? GfxGetG1Element(image)
+                        : nullptr;
+                    if (g1 == nullptr)
+                        continue;
+                    const ImageId waterMask = waterZ > baseZ
+                        ? GetFirstPersonWaterMaskImage(
+                            *tile, sourceRotation)
+                        : ImageId{};
                     const bool terrainChanged =
-                        cache.source != image || cache.waterMaskImage != waterMask ||
-                        cache.waterOverlayImage != waterOverlay || cache.baseZ != baseZ || cache.slope != slope ||
-                        cache.sourceRotation != sourceRotation || cache.waterZ != waterZ || cache.spriteX != g1->xOffset ||
-                        cache.spriteY != g1->yOffset || cache.spriteWidth != g1->width ||
-                        cache.spriteHeight != g1->height;
+                        cache.source != image
+                        || cache.waterMaskImage != waterMask
+                        || cache.waterOverlayImage != waterOverlay
+                        || cache.baseZ != baseZ
+                        || cache.slope != slope
+                        || cache.sourceRotation != sourceRotation
+                        || cache.waterZ != waterZ
+                        || cache.surfaceStyle != surfaceStyle
+                        || cache.grassVisualStage != grassVisualStage
+                        || cache.spriteX != g1->xOffset
+                        || cache.spriteY != g1->yOffset
+                        || cache.spriteWidth != g1->width
+                        || cache.spriteHeight != g1->height;
                     if (FirstPersonTerrainRevalidationNeedsRegionRebuild(
                             wasDirty, terrainChanged))
                     {
@@ -1013,6 +1068,8 @@
                         cache.baseZ = baseZ;
                         cache.slope = slope;
                         cache.sourceRotation = sourceRotation;
+                        cache.surfaceStyle = surfaceStyle;
+                        cache.grassVisualStage = grassVisualStage;
                         cache.waterZ = waterZ;
                         cache.spriteX = g1->xOffset;
                         cache.spriteY = g1->yOffset;

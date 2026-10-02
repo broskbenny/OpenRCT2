@@ -1612,6 +1612,8 @@
             int32_t baseZ{}, waterZ{};
             uint8_t slope{};
             uint8_t sourceRotation{};
+            uint8_t surfaceStyle{};
+            uint8_t grassVisualStage{};
             bool verticalOpening = false;
             int32_t spriteX{}, spriteY{}, spriteWidth{}, spriteHeight{};
             FirstPersonSurface ground{};
