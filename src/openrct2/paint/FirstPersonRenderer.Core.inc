@@ -3097,15 +3097,83 @@
                     projectPoint,
                     occupancyPredicate,
                     pointSupported);
-            if (!hull.valid)
+
+            std::vector<FirstPersonVisualHullFace> faces;
+            if (hull.valid)
             {
-                cacheFailure();
-                return result;
+                faces =
+                    BuildFirstPersonVisualHullBoundaryFaces(
+                        hull);
             }
 
-            const auto faces =
-                BuildFirstPersonVisualHullBoundaryFaces(
-                    hull);
+            if (faces.empty())
+            {
+                // Carving is refinement, not permission to throw away known
+                // structure. Preserve the old authoritative occupancy shell
+                // as a non-billboard fallback when an asset does not provide
+                // enough silhouette evidence for a stable carved hull.
+                faces.reserve(model.faces.size());
+                for (const auto& sourceFace :
+                     model.faces)
+                {
+                    if (sourceFace.sequence
+                        >= entry.tiles.size())
+                        continue;
+                    const auto& tile =
+                        entry.tiles[
+                            sourceFace.sequence];
+                    FirstPersonVisualHullFace face{};
+                    for (size_t i = 0;
+                         i < face.corners.size(); ++i)
+                    {
+                        const auto& corner =
+                            sourceFace.corners[i];
+                        const auto localXY =
+                            FirstPersonLargeSceneryPlacedPoint(
+                                {
+                                    tile.offset.x,
+                                    tile.offset.y,
+                                },
+                                {
+                                    corner.x,
+                                    corner.y,
+                                },
+                                objectDirection);
+                        face.corners[i] = {
+                            group.anchor.x
+                                + float(localXY.x),
+                            group.anchor.y
+                                + float(localXY.y),
+                            group.anchor.z
+                                + float(corner.z),
+                        };
+                    }
+                    const auto a = Sub(
+                        face.corners[1],
+                        face.corners[0]);
+                    const auto b = Sub(
+                        face.corners[2],
+                        face.corners[0]);
+                    FirstPersonVec3 normal{
+                        a.y * b.z - a.z * b.y,
+                        a.z * b.x - a.x * b.z,
+                        a.x * b.y - a.y * b.x,
+                    };
+                    const float normalLength =
+                        std::sqrt(
+                            normal.x * normal.x
+                            + normal.y * normal.y
+                            + normal.z * normal.z);
+                    if (!(normalLength > 1e-5f))
+                        continue;
+                    face.normal = {
+                        normal.x / normalLength,
+                        normal.y / normalLength,
+                        normal.z / normalLength,
+                    };
+                    faces.push_back(face);
+                }
+            }
             if (faces.empty())
             {
                 cacheFailure();
