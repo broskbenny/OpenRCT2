@@ -352,11 +352,13 @@ namespace OpenRCT2::Paint
         _dynamicEntitySpatialCache = {};
         _trackTrajectoryCache.clear();
         _trackTrajectoryGroupsByRegion.clear();
+        _trackTrajectoryGroupsByBoundsRegion.clear();
         ClearLargeSceneryAssetModelCache();
         ClearFirstPersonSmallSceneryReconstructionCache();
         _largeSceneryGeometryCache.clear();
         ClearFirstPersonLargeSceneryPhysicalProxies();
         _largeSceneryGroupsByRegion.clear();
+        _largeSceneryGroupsByBoundsRegion.clear();
         _activeLargeSceneryRegions.clear();
         _largeSceneryGeometryEnabled = false;
         ClearFirstPersonSemanticComponents();
@@ -373,10 +375,37 @@ namespace OpenRCT2::Paint
         const auto y0 = floorTile(std::min(low.y,high.y));
         const auto x1 = floorTile(std::max(low.x,high.x));
         const auto y1 = floorTile(std::max(low.y,high.y));
+        std::unordered_set<uint64_t> trackCandidates;
+        std::unordered_set<uint64_t> largeSceneryCandidates;
         for (int32_t regionY = y0 / 32; regionY <= y1 / 32; ++regionY)
         for (int32_t regionX = x0 / 32; regionX <= x1 / 32; ++regionX)
-            _staticRegionPackets[
-                FirstPersonGpuRegionKey(regionX * 32, regionY * 32)].dirty = true;
+        {
+            const uint64_t regionKey =
+                FirstPersonGpuRegionKey(
+                    regionX * 32, regionY * 32);
+            _staticRegionPackets[regionKey].dirty = true;
+
+            if (const auto tracks =
+                    _trackTrajectoryGroupsByBoundsRegion.find(
+                        regionKey);
+                tracks
+                    != _trackTrajectoryGroupsByBoundsRegion.end())
+            {
+                trackCandidates.insert(
+                    tracks->second.begin(),
+                    tracks->second.end());
+            }
+            if (const auto scenery =
+                    _largeSceneryGroupsByBoundsRegion.find(
+                        regionKey);
+                scenery
+                    != _largeSceneryGroupsByBoundsRegion.end())
+            {
+                largeSceneryCandidates.insert(
+                    scenery->second.begin(),
+                    scenery->second.end());
+            }
+        }
         for (auto& [key, entry] : _regionBounds)
         {
             const int32_t originX = int32_t(key >> 32);
@@ -407,25 +436,37 @@ namespace OpenRCT2::Paint
                 cached->second.visibilityDirty = true;
             }
         }
-        for (auto& [groupKey, trajectory] : _trackTrajectoryCache)
+        for (const auto groupKey : trackCandidates)
         {
-            (void)groupKey;
+            const auto found =
+                _trackTrajectoryCache.find(groupKey);
+            if (found == _trackTrajectoryCache.end())
+                continue;
+            auto& trajectory = found->second;
             if (!trajectory.hasBounds)
                 continue;
-            if (x0 <= trajectory.maxTileX && x1 >= trajectory.minTileX
-                && y0 <= trajectory.maxTileY && y1 >= trajectory.minTileY)
+            if (x0 <= trajectory.maxTileX
+                && x1 >= trajectory.minTileX
+                && y0 <= trajectory.maxTileY
+                && y1 >= trajectory.minTileY)
             {
                 MarkTrackTrajectoryRegionsDirty(trajectory);
                 trajectory.dirty = true;
             }
         }
-        for (auto& [groupKey, geometry] : _largeSceneryGeometryCache)
+        for (const auto groupKey : largeSceneryCandidates)
         {
-            (void)groupKey;
+            const auto found =
+                _largeSceneryGeometryCache.find(groupKey);
+            if (found == _largeSceneryGeometryCache.end())
+                continue;
+            auto& geometry = found->second;
             if (!geometry.hasBounds)
                 continue;
-            if (x0 <= geometry.maxTileX && x1 >= geometry.minTileX
-                && y0 <= geometry.maxTileY && y1 >= geometry.minTileY)
+            if (x0 <= geometry.maxTileX
+                && x1 >= geometry.minTileX
+                && y0 <= geometry.maxTileY
+                && y1 >= geometry.minTileY)
             {
                 MarkLargeSceneryGeometryRegionsDirty(geometry);
                 geometry.dirty = true;

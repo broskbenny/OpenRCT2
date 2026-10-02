@@ -2013,6 +2013,11 @@
             _trackTrajectoryCache;
         static std::unordered_map<uint64_t, std::unordered_set<uint64_t>>
             _trackTrajectoryGroupsByRegion;
+        // Spatial candidate index for invalidation. Unlike the surface-region
+        // map above, this covers every 32x32 region touched by the trajectory's
+        // exact cached tile bounds.
+        static std::unordered_map<uint64_t, std::unordered_set<uint64_t>>
+            _trackTrajectoryGroupsByBoundsRegion;
 
         uint64_t TerrainKey(int32_t tx, int32_t ty);
 
@@ -2031,8 +2036,32 @@
         static std::unordered_map<uint64_t, LargeSceneryGeometryCacheEntry> _largeSceneryGeometryCache;
         static std::unordered_map<uint64_t, std::unordered_set<uint64_t>>
             _largeSceneryGroupsByRegion;
+        static std::unordered_map<uint64_t, std::unordered_set<uint64_t>>
+            _largeSceneryGroupsByBoundsRegion;
         static std::unordered_set<uint64_t> _activeLargeSceneryRegions;
         static bool _largeSceneryGeometryEnabled = false;
+
+        template<typename Visit>
+        void VisitFirstPersonGpuRegionsInTileBounds(
+            int32_t minTileX, int32_t minTileY,
+            int32_t maxTileX, int32_t maxTileY,
+            Visit&& visit)
+        {
+            if (maxTileX < minTileX || maxTileY < minTileY)
+                return;
+            const int32_t minRegionX = minTileX / 32;
+            const int32_t minRegionY = minTileY / 32;
+            const int32_t maxRegionX = maxTileX / 32;
+            const int32_t maxRegionY = maxTileY / 32;
+            for (int32_t regionY = minRegionY;
+                 regionY <= maxRegionY; ++regionY)
+            for (int32_t regionX = minRegionX;
+                 regionX <= maxRegionX; ++regionX)
+            {
+                visit(FirstPersonGpuRegionKey(
+                    regionX * 32, regionY * 32));
+            }
+        }
 
         [[nodiscard]] bool LargeSceneryGeometryAllowedForView(uint32_t viewFlags)
         {
@@ -2067,6 +2096,26 @@
             uint64_t groupKey, const LargeSceneryGeometryCacheEntry& cached)
         {
             WithdrawFirstPersonLargeSceneryPhysicalProxies(groupKey);
+            if (cached.hasBounds)
+            {
+                VisitFirstPersonGpuRegionsInTileBounds(
+                    cached.minTileX, cached.minTileY,
+                    cached.maxTileX, cached.maxTileY,
+                    [&](uint64_t regionKey) {
+                        const auto found =
+                            _largeSceneryGroupsByBoundsRegion.find(
+                                regionKey);
+                        if (found
+                            == _largeSceneryGroupsByBoundsRegion.end())
+                            return;
+                        found->second.erase(groupKey);
+                        if (found->second.empty())
+                        {
+                            _largeSceneryGroupsByBoundsRegion.erase(
+                                found);
+                        }
+                    });
+            }
             std::unordered_set<uint64_t> regions;
             for (const auto& surface : cached.surfaces)
             {
@@ -2089,6 +2138,16 @@
         {
             PublishFirstPersonLargeSceneryPhysicalProxies(
                 groupKey, cached.collisionProxies);
+            if (cached.hasBounds)
+            {
+                VisitFirstPersonGpuRegionsInTileBounds(
+                    cached.minTileX, cached.minTileY,
+                    cached.maxTileX, cached.maxTileY,
+                    [&](uint64_t regionKey) {
+                        _largeSceneryGroupsByBoundsRegion[
+                            regionKey].insert(groupKey);
+                    });
+            }
             for (const auto& surface : cached.surfaces)
             {
                 if (surface.gpuRegion != 0)
@@ -3246,6 +3305,26 @@
             uint64_t groupKey,
             const TrackTrajectoryCacheEntry& cached)
         {
+            if (cached.hasBounds)
+            {
+                VisitFirstPersonGpuRegionsInTileBounds(
+                    cached.minTileX, cached.minTileY,
+                    cached.maxTileX, cached.maxTileY,
+                    [&](uint64_t regionKey) {
+                        const auto found =
+                            _trackTrajectoryGroupsByBoundsRegion.find(
+                                regionKey);
+                        if (found
+                            == _trackTrajectoryGroupsByBoundsRegion.end())
+                            return;
+                        found->second.erase(groupKey);
+                        if (found->second.empty())
+                        {
+                            _trackTrajectoryGroupsByBoundsRegion.erase(
+                                found);
+                        }
+                    });
+            }
             for (const auto& [regionKey, indices] :
                  cached.regionSurfaceIndices)
             {
@@ -3269,6 +3348,16 @@
             uint64_t groupKey,
             const TrackTrajectoryCacheEntry& cached)
         {
+            if (cached.hasBounds)
+            {
+                VisitFirstPersonGpuRegionsInTileBounds(
+                    cached.minTileX, cached.minTileY,
+                    cached.maxTileX, cached.maxTileY,
+                    [&](uint64_t regionKey) {
+                        _trackTrajectoryGroupsByBoundsRegion[
+                            regionKey].insert(groupKey);
+                    });
+            }
             for (const auto& [regionKey, indices] :
                  cached.regionSurfaceIndices)
             {
