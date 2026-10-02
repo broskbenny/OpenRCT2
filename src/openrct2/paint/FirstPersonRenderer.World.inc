@@ -563,6 +563,53 @@
 
             for (const auto tile : scene.visibleTiles)
             {
+                // Stable tiles already carry the authoritative reconstruction
+                // groups discovered when their semantic cache was built. Reuse
+                // those groups instead of walking every tile element again on
+                // every rendered frame. Cold/dirty/missing trajectories fall
+                // through to the live authoritative scan below.
+                const auto tileKey = TerrainKey(
+                    tile.x / kCoordsXYStep,
+                    tile.y / kCoordsXYStep);
+                const auto paintCache =
+                    _staticPaintCache.find(tileKey);
+                bool needsLiveTrackScan =
+                    paintCache == _staticPaintCache.end()
+                    || !paintCache->second.valid
+                    || paintCache->second.dirty;
+                if (!needsLiveTrackScan)
+                {
+                    for (const auto& group :
+                         paintCache->second.reconstructionGroups)
+                    {
+                        if (group.type
+                            != TileElementType::track
+                            || !seenGroups.insert(
+                                group.key).second)
+                            continue;
+
+                        const auto trajectory =
+                            _trackTrajectoryCache.find(
+                                group.key);
+                        if (trajectory
+                                == _trackTrajectoryCache.end()
+                            || trajectory->second.dirty)
+                        {
+                            // Let the live scan resolve unsupported, newly
+                            // changed, or not-yet-built track authoritatively.
+                            seenGroups.erase(group.key);
+                            needsLiveTrackScan = true;
+                            break;
+                        }
+
+                        trajectory->second.lastSeen = frame;
+                        activateTrajectoryRegions(
+                            trajectory->second);
+                    }
+                    if (!needsLiveTrackScan)
+                        continue;
+                }
+
                 auto* element = MapGetFirstElementAt(tile);
                 if (element == nullptr)
                     continue;
