@@ -30,9 +30,10 @@ namespace OpenRCT2::Ui
             const ScreenRect& dirtyClip);
     private:
         GLuint _program{}, _composeProgram{}, _vao{}, _vbo{};
-        // Boolean occlusion queries are used only as nonblocking early-out
-        // probes for pathological transparency stacks. Unavailable results are
-        // ignored, so they can never introduce a CPU/GPU synchronisation.
+        // Boolean occlusion queries retire empty exact transparency layers.
+        // Normal polling is nonblocking. If all probes are in flight on a
+        // pathological stack, bounded backpressure waits for one completed
+        // probe instead of queuing unbounded extra peel passes.
         std::array<GLuint,8> _peelCoverageQueries{};
         std::array<bool,8> _peelCoveragePending{};
         std::array<uint64_t,8> _peelCoverageTokens{};

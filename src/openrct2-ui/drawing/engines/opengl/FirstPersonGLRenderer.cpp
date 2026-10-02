@@ -619,6 +619,57 @@ void main() {
                 }
                 return exhausted;
             };
+        const auto findFreePeelCoverageQuery =
+            [&]() {
+                for (size_t i = 0;
+                     i < _peelCoverageQueries.size(); ++i)
+                {
+                    if (!_peelCoveragePending[i])
+                        return i;
+                }
+                return _peelCoverageQueries.size();
+            };
+        const auto waitForPeelCoverageQuery =
+            [&](uint64_t token) {
+                size_t slot = _peelCoverageQueries.size();
+                // Prefer a probe from this tile: a zero result then proves
+                // that every later exact peel layer is empty.
+                for (size_t i = 0;
+                     i < _peelCoverageQueries.size(); ++i)
+                {
+                    if (_peelCoveragePending[i]
+                        && _peelCoverageTokens[i] == token)
+                    {
+                        slot = i;
+                        break;
+                    }
+                }
+                if (slot == _peelCoverageQueries.size())
+                {
+                    for (size_t i = 0;
+                         i < _peelCoverageQueries.size(); ++i)
+                    {
+                        if (_peelCoveragePending[i])
+                        {
+                            slot = i;
+                            break;
+                        }
+                    }
+                }
+                if (slot == _peelCoverageQueries.size())
+                    return false;
+
+                GLuint anySamples = 1;
+                glCall(
+                    glGetQueryObjectuiv,
+                    _peelCoverageQueries[slot],
+                    GL_QUERY_RESULT, &anySamples);
+                const bool exhausted =
+                    _peelCoverageTokens[slot] == token
+                    && anySamples == 0;
+                _peelCoveragePending[slot] = false;
+                return exhausted;
+            };
         // Retire completed probes from earlier tiles/frames without waiting.
         (void)pollPeelCoverageQueries(0);
 
@@ -1281,73 +1332,12 @@ void main() {
             // Rectangle coverage deliberately overestimates real sprite
             // coverage. Its maximum is therefore a safe upper bound on the
             // number of logical transparent layers any pixel can contain.
+            // Coverage changes only at candidate edges, so do not rebuild a
+            // 128x128 per-pixel prefix grid for every tile and frame.
             const auto conservativeLayerLimit =
                 [](const TransparentScreenTile& tile) {
-                    const int32_t tileWidth =
-                        tile.x1 - tile.x0;
-                    const int32_t tileHeight =
-                        tile.y1 - tile.y0;
-                    if (tileWidth <= 0 || tileHeight <= 0
-                        || tile.candidates.empty())
-                        return size_t{ 0 };
-
-                    const int32_t stride = tileWidth + 1;
-                    std::vector<int32_t> overlap(
-                        size_t(tileWidth + 1)
-                            * size_t(tileHeight + 1),
-                        0);
-                    const auto at =
-                        [&](int32_t x, int32_t y)
-                            -> int32_t& {
-                            return overlap[
-                                size_t(y) * size_t(stride)
-                                + size_t(x)];
-                        };
-                    for (const auto& candidate :
-                         tile.candidates)
-                    {
-                        const int32_t x0 =
-                            candidate.x0 - tile.x0;
-                        const int32_t y0 =
-                            candidate.y0 - tile.y0;
-                        const int32_t x1 =
-                            candidate.x1 - tile.x0;
-                        const int32_t y1 =
-                            candidate.y1 - tile.y0;
-                        if (x1 <= x0 || y1 <= y0)
-                            continue;
-                        ++at(x0, y0);
-                        --at(x1, y0);
-                        --at(x0, y1);
-                        ++at(x1, y1);
-                    }
-
-                    for (int32_t y = 0;
-                         y <= tileHeight; ++y)
-                    for (int32_t x = 1;
-                         x <= tileWidth; ++x)
-                    {
-                        at(x, y) += at(x - 1, y);
-                    }
-                    for (int32_t x = 0;
-                         x <= tileWidth; ++x)
-                    for (int32_t y = 1;
-                         y <= tileHeight; ++y)
-                    {
-                        at(x, y) += at(x, y - 1);
-                    }
-
-                    int32_t maximum = 0;
-                    for (int32_t y = 0;
-                         y < tileHeight; ++y)
-                    for (int32_t x = 0;
-                         x < tileWidth; ++x)
-                    {
-                        maximum =
-                            std::max(maximum, at(x, y));
-                    }
-                    return size_t(
-                        std::max(maximum, 0));
+                    return FirstPersonMaximumRectangleOverlap(
+                        tile.candidates);
                 };
 
             auto& front = output.GetFinalFramebuffer();
@@ -1460,10 +1450,31 @@ void main() {
 
                 for(size_t pass=0; pass<logicalPasses; ++pass)
                 {
-                    if (probeExhaustion
-                        && pollPeelCoverageQueries(
-                            coverageToken))
-                        break;
+                    size_t coverageSlot =
+                        _peelCoverageQueries.size();
+                    if (probeExhaustion)
+                    {
+                        if (pollPeelCoverageQueries(
+                                coverageToken))
+                            break;
+
+                        coverageSlot =
+                            findFreePeelCoverageQuery();
+                        if (coverageSlot
+                            == _peelCoverageQueries.size())
+                        {
+                            // Do not blindly queue the rest of a pathological
+                            // exact stack after all probes are in flight. A
+                            // small bounded pipeline keeps GPU work ahead of
+                            // the CPU, then waits for one real coverage result.
+                            // This changes scheduling only, never layer output.
+                            if (waitForPeelCoverageQuery(
+                                    coverageToken))
+                                break;
+                            coverageSlot =
+                                findFreePeelCoverageQuery();
+                        }
+                    }
 
                     auto& physicalLayer = *_peelDepthLayers[size_t(pass&1)];
                     auto& logicalLayer = *_peelLayers[size_t(pass&1)];
@@ -1496,20 +1507,6 @@ void main() {
                     // texture anyway to avoid framebuffer/texture feedback.
                     OpenGLAPI::SetTexture(5,GL_TEXTURE_2D,_opaqueSnapshot->GetDepthTexture());
 
-                    size_t coverageSlot =
-                        _peelCoverageQueries.size();
-                    if (probeExhaustion)
-                    {
-                        for (size_t i = 0;
-                             i < _peelCoverageQueries.size(); ++i)
-                        {
-                            if (!_peelCoveragePending[i])
-                            {
-                                coverageSlot = i;
-                                break;
-                            }
-                        }
-                    }
                     if (coverageSlot
                         < _peelCoverageQueries.size())
                     {
@@ -1534,9 +1531,9 @@ void main() {
                     }
 
                     // A completed zero-sample result is definitive: every
-                    // subsequent logical layer is empty too. Never wait for
-                    // the result; if the driver is still working, continue the
-                    // exact peel path and poll again after composition.
+                    // subsequent logical layer is empty too. Normal progress
+                    // remains nonblocking; saturation backpressure above is the
+                    // only place that waits for a coverage result.
                     if (probeExhaustion
                         && pollPeelCoverageQueries(
                             coverageToken))
