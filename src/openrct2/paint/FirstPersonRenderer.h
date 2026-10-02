@@ -118,6 +118,19 @@ namespace OpenRCT2::Paint
         // enter the per-frame transparency list without copying their bitmap.
         std::shared_ptr<const std::vector<uint8_t>>
             persistentPixels;
+        [[nodiscard]] bool hasImmutablePixelData() const
+        {
+            return persistentPixels != nullptr
+                ? !persistentPixels->empty()
+                : !immutablePixels.empty();
+        }
+        [[nodiscard]] const std::vector<uint8_t>&
+            immutablePixelData() const
+        {
+            return persistentPixels != nullptr
+                ? *persistentPixels
+                : immutablePixels;
+        }
         int16_t immutableWidth = 0;
         int16_t immutableHeight = 0;
         uint64_t immutableFingerprint = 0;

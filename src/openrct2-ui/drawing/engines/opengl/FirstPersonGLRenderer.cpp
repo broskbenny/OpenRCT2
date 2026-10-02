@@ -747,7 +747,7 @@ void main() {
         seenTextures.reserve(scene.surfaces.size()/2+1);
         for(const auto& surface:scene.surfaces)
         {
-            if(surface.image.HasValue() && surface.immutablePixels.empty() &&
+            if(surface.image.HasValue() && !surface.hasImmutablePixelData() &&
                seenTextures.insert(FirstPersonMaterialFingerprint(surface.image)).second)
                 textures.GetOrLoadImageTexture(surface.image);
             if(surface.mask.HasValue() &&
@@ -801,15 +801,17 @@ void main() {
                 // The shader ignores atlas/UV fields for direct palette geometry.
                 imageWidth = imageHeight = 1.0f;
             }
-            else if (!surface.immutablePixels.empty())
+            else if (surface.hasImmutablePixelData())
             {
                 if (surface.immutableWidth <= 0 || surface.immutableHeight <= 0)
                     return;
+                const auto& pixelData =
+                    surface.immutablePixelData();
                 if (surface.persistentBitmap)
                 {
                     tex = textures.GetOrLoadFirstPersonPersistentBitmap(
                         surface.immutableFingerprint,
-                        surface.immutablePixels.data(),
+                        pixelData.data(),
                         size_t(surface.immutableWidth),
                         size_t(surface.immutableHeight));
                 }
@@ -819,7 +821,7 @@ void main() {
                     if (it == immutableTextures.end())
                     {
                         const auto loaded = textures.LoadFirstPersonTransientBitmap(
-                            surface.immutablePixels.data(),
+                            pixelData.data(),
                             size_t(surface.immutableWidth), size_t(surface.immutableHeight));
                         it = immutableTextures.emplace(
                             surface.immutableFingerprint, loaded).first;

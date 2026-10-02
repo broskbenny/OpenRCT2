@@ -600,7 +600,7 @@
                                 // refreshed. Persistent reconstructed materials
                                 // are world-fixed and belong in resident static
                                 // regions just like ordinary opaque textures.
-                                if (!scene.surfaces[i].immutablePixels.empty()
+                                if (scene.surfaces[i].hasImmutablePixelData()
                                     && !scene.surfaces[i].persistentBitmap)
                                 {
                                     scene.surfaces[i].gpuRegion = 0;

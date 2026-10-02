@@ -1454,24 +1454,24 @@
                     if (visiblePixelCount == 0)
                         continue;
 
-                    surface.immutablePixels =
-                        std::move(pixels);
+                    uint64_t fingerprint =
+                        14695981039346656037ull;
+                    ExtendStableKey(fingerprint, width);
+                    ExtendStableKey(fingerprint, height);
+                    for (const auto pixel : pixels)
+                    {
+                        fingerprint ^= pixel;
+                        fingerprint *= 1099511628211ull;
+                    }
+                    surface.persistentPixels =
+                        std::make_shared<
+                            std::vector<uint8_t>>(
+                                std::move(pixels));
                     surface.immutableWidth =
                         int16_t(width);
                     surface.immutableHeight =
                         int16_t(height);
                     surface.persistentBitmap = true;
-
-                    uint64_t fingerprint =
-                        14695981039346656037ull;
-                    ExtendStableKey(fingerprint, width);
-                    ExtendStableKey(fingerprint, height);
-                    for (const auto pixel :
-                         surface.immutablePixels)
-                    {
-                        fingerprint ^= pixel;
-                        fingerprint *= 1099511628211ull;
-                    }
                     surface.immutableFingerprint =
                         fingerprint;
 
@@ -3090,26 +3090,26 @@
                     if (visiblePixelCount == 0)
                         return {};
 
-                    surface.immutablePixels =
-                        std::move(pixels);
-                    surface.immutableWidth =
-                        int16_t(width);
-                    surface.immutableHeight =
-                        int16_t(height);
-                    surface.persistentBitmap = true;
-
                     uint64_t fingerprint =
                         14695981039346656037ull;
                     ExtendStableKey(
                         fingerprint, width);
                     ExtendStableKey(
                         fingerprint, height);
-                    for (const auto pixel :
-                         surface.immutablePixels)
+                    for (const auto pixel : pixels)
                     {
                         fingerprint ^= pixel;
                         fingerprint *= 1099511628211ull;
                     }
+                    surface.persistentPixels =
+                        std::make_shared<
+                            std::vector<uint8_t>>(
+                                std::move(pixels));
+                    surface.immutableWidth =
+                        int16_t(width);
+                    surface.immutableHeight =
+                        int16_t(height);
+                    surface.persistentBitmap = true;
                     surface.immutableFingerprint =
                         fingerprint;
 
@@ -3384,7 +3384,7 @@
             if (surface.persistentBitmap)
                 return !surface.image.IsBlended();
             return surface.image.HasValue() && !surface.image.IsBlended()
-                && surface.immutablePixels.empty();
+                && !surface.hasImmutablePixelData();
         }
 
         [[nodiscard]] uint64_t ResidentStaticSurfaceFingerprint(
@@ -4329,26 +4329,26 @@
                 surface.mask = {};
                 surface.solidColour = 0;
                 surface.physicalCoverage = false;
-                surface.persistentBitmap = true;
-                surface.immutablePixels =
-                    std::move(pixels);
-                surface.immutableWidth =
-                    int16_t(width);
-                surface.immutableHeight =
-                    int16_t(height);
-
                 uint64_t fingerprint =
                     14695981039346656037ull;
                 ExtendStableKey(
                     fingerprint, width);
                 ExtendStableKey(
                     fingerprint, height);
-                for (const auto pixel :
-                     surface.immutablePixels)
+                for (const auto pixel : pixels)
                 {
                     fingerprint ^= pixel;
                     fingerprint *= 1099511628211ull;
                 }
+                surface.persistentBitmap = true;
+                surface.persistentPixels =
+                    std::make_shared<
+                        std::vector<uint8_t>>(
+                            std::move(pixels));
+                surface.immutableWidth =
+                    int16_t(width);
+                surface.immutableHeight =
+                    int16_t(height);
                 surface.immutableFingerprint =
                     fingerprint;
 
