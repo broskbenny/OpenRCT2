@@ -29,7 +29,7 @@ namespace OpenRCT2::Ui
             SwapFramebuffer& output, int32_t screenWidth, int32_t screenHeight,
             const ScreenRect& dirtyClip);
     private:
-        GLuint _program{}, _composeProgram{}, _vao{}, _vbo{};
+        GLuint _program{}, _composeProgram{}, _vao{}, _vbo{}, _ebo{};
         // Boolean occlusion queries retire empty exact transparency layers.
         // Normal polling is nonblocking. If all probes are in flight on a
         // pathological stack, bounded backpressure waits for one completed

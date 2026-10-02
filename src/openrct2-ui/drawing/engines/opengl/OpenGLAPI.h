@@ -32,6 +32,7 @@
     #define glDepthFunc __static__glDepthFunc
     #define glDisable __static__glDisable
     #define glDrawArrays __static__glDrawArrays
+    #define glDrawElements __static__glDrawElements
     #define glEnable __static__glEnable
     #define glEnd __static__glEnd
     #define glGenTextures __static__glGenTextures
@@ -78,6 +79,7 @@
     #undef glDepthFunc
     #undef glDisable
     #undef glDrawArrays
+    #undef glDrawElements
     #undef glEnable
     #undef glEnd
     #undef glGenTextures
@@ -111,6 +113,7 @@ using PFNGLDELETETEXTURESPROC = void(APIENTRYP)(GLsizei n, const GLuint* texture
 using PFNGLDEPTHFUNCPROC = void(APIENTRYP)(GLenum func);
 using PFNGLDISABLEPROC = void(APIENTRYP)(GLenum cap);
 using PFNGLDRAWARRAYSPROC = void(APIENTRYP)(GLenum mode, GLint first, GLsizei count);
+using PFNGLDRAWELEMENTSPROC = void(APIENTRYP)(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices);
 using PFNGLENABLEPROC = void(APIENTRYP)(GLenum cap);
 using PFNGLENDPROC = void(APIENTRYP)(void);
 using PFNGLGETERRORPROC = GLenum(APIENTRYP)(void);
