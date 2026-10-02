@@ -3425,7 +3425,10 @@
                             0,
                         };
                     }
-                    return {};
+                    return {
+                        LargeSceneryCompositeSampleKind::unknown,
+                        0,
+                    };
                 };
 
             bool haveBounds = false;
