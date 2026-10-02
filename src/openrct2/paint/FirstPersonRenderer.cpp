@@ -390,22 +390,21 @@ namespace OpenRCT2::Paint
             WithdrawFirstPersonSemanticComponents(
                 { tx * kCoordsXYStep,
                   ty * kCoordsXYStep });
-        }
-        for (auto& [key, terrain] : _terrainCache.entries)
-        {
-            const int32_t tx = int32_t(key >> 32);
-            const int32_t ty = int32_t(key & 0xffffffffu);
-            if (tx >= x0 && tx <= x1 && ty >= y0 && ty <= y1)
-                terrain.dirty = true;
-        }
-        for (auto& [key,cached] : _staticPaintCache)
-        {
-            const int32_t tx=int32_t(key>>32);
-            const int32_t ty=int32_t(key&0xffffffffu);
-            if (tx>=x0 && tx<=x1 && ty>=y0 && ty<=y1)
+
+            // Both caches are already addressed by the exact tile key. A local
+            // native invalidation should therefore cost O(invalidated tiles),
+            // not O(every terrain/static tile first person has ever cached).
+            const uint64_t key = TerrainKey(tx, ty);
+            if (auto terrain = _terrainCache.entries.find(key);
+                terrain != _terrainCache.entries.end())
             {
-                cached.dirty = true;
-                cached.visibilityDirty = true;
+                terrain->second.dirty = true;
+            }
+            if (auto cached = _staticPaintCache.find(key);
+                cached != _staticPaintCache.end())
+            {
+                cached->second.dirty = true;
+                cached->second.visibilityDirty = true;
             }
         }
         for (auto& [groupKey, trajectory] : _trackTrajectoryCache)
