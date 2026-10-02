@@ -930,193 +930,6 @@
             return true;
         }
 
-        bool AppendAuthoritativeTileOccupancyGeometry(
-            FirstPersonScene& scene, const PaintStruct& ps,
-            ImageId image, uint8_t rotation)
-        {
-            if (ps.Source != PaintStructSource::tile
-                || ps.Element == nullptr
-                || !image.HasValue())
-                return false;
-
-            const auto type = ps.Element->getType();
-            if (type == TileElementType::surface
-                || type == TileElementType::path
-                || type == TileElementType::track
-                || type == TileElementType::wall
-                || type == TileElementType::banner)
-                return false;
-
-            const uint8_t occupied =
-                ps.Element->getOccupiedQuadrants() & 0x0Fu;
-            const int32_t baseZ = ps.Element->getBaseZ();
-            const int32_t clearanceZ =
-                SemanticClearanceZ(*ps.Element);
-            if (occupied == 0 || clearanceZ <= baseZ)
-                return false;
-
-            const auto layout =
-                GetSpriteCompositeLayout(image, {});
-            if (!layout.has_value())
-                return false;
-
-            static constexpr uint8_t kQuarterAt[2][2] = {
-                { 2, 1 },
-                { 3, 0 },
-            };
-            const auto occupiedAt =
-                [&](int32_t gx, int32_t gy) {
-                    if (gx < 0 || gy < 0
-                        || gx >= 2 || gy >= 2)
-                        return false;
-                    return (occupied
-                        & (uint8_t{ 1 }
-                            << kQuarterAt[gy][gx]))
-                        != 0;
-                };
-
-            float minX = float(kCoordsXYStep);
-            float minY = float(kCoordsXYStep);
-            float maxX = 0.0f;
-            float maxY = 0.0f;
-            for (int32_t gy = 0; gy < 2; ++gy)
-            for (int32_t gx = 0; gx < 2; ++gx)
-            {
-                if (!occupiedAt(gx, gy))
-                    continue;
-                minX = std::min(
-                    minX, float(gx * kCoordsXYHalfTile));
-                minY = std::min(
-                    minY, float(gy * kCoordsXYHalfTile));
-                maxX = std::max(
-                    maxX, float((gx + 1)
-                        * kCoordsXYHalfTile));
-                maxY = std::max(
-                    maxY, float((gy + 1)
-                        * kCoordsXYHalfTile));
-            }
-            const FirstPersonVec3 semanticLow{
-                float(ps.MapPos.x) + minX,
-                float(ps.MapPos.y) + minY,
-                float(baseZ),
-            };
-            const FirstPersonVec3 semanticHigh{
-                float(ps.MapPos.x) + maxX,
-                float(ps.MapPos.y) + maxY,
-                float(clearanceZ),
-            };
-            const FirstPersonVec3 semanticCenter{
-                0.5f * (semanticLow.x + semanticHigh.x),
-                0.5f * (semanticLow.y + semanticHigh.y),
-                0.5f * (semanticLow.z + semanticHigh.z),
-            };
-            const float hx =
-                0.5f * (semanticHigh.x - semanticLow.x);
-            const float hy =
-                0.5f * (semanticHigh.y - semanticLow.y);
-            const float hz =
-                0.5f * (semanticHigh.z - semanticLow.z);
-            const float semanticRadius =
-                std::sqrt(hx * hx + hy * hy + hz * hz)
-                + 2.0f;
-
-            size_t emitted = 0;
-            const auto emitFace =
-                [&](const std::array<FirstPersonVec3, 4>& world) {
-                    FirstPersonSurface surface{};
-                    surface.image = image;
-                    surface.physicalCoverage = true;
-                    surface.hasSemanticBounds = true;
-                    surface.semanticCenter = semanticCenter;
-                    surface.semanticRadius = semanticRadius;
-                    std::array<FirstPersonVertex, 4> vertices{};
-                    for (size_t i = 0; i < world.size(); ++i)
-                    {
-                        const auto point = CoordsXYZ{
-                            int32_t(std::lround(world[i].x)),
-                            int32_t(std::lround(world[i].y)),
-                            int32_t(std::lround(world[i].z)),
-                        };
-                        const auto projected =
-                            Translate3DTo2DWithZ(
-                                rotation, point);
-                        vertices[i] = {
-                            world[i],
-                            float(projected.x
-                                - ps.ScreenPos.x
-                                - layout->xOffset),
-                            float(projected.y
-                                - ps.ScreenPos.y
-                                - layout->yOffset),
-                        };
-                    }
-                    EmitQuad(surface, vertices);
-                    scene.surfaces.emplace_back(
-                        std::move(surface));
-                    ++emitted;
-                };
-
-            const float worldBase = float(baseZ);
-            const float worldTop = float(clearanceZ);
-            for (int32_t gy = 0; gy < 2; ++gy)
-            for (int32_t gx = 0; gx < 2; ++gx)
-            {
-                if (!occupiedAt(gx, gy))
-                    continue;
-                const float x0 =
-                    float(ps.MapPos.x
-                        + gx * kCoordsXYHalfTile);
-                const float x1 =
-                    float(ps.MapPos.x
-                        + (gx + 1) * kCoordsXYHalfTile);
-                const float y0 =
-                    float(ps.MapPos.y
-                        + gy * kCoordsXYHalfTile);
-                const float y1 =
-                    float(ps.MapPos.y
-                        + (gy + 1) * kCoordsXYHalfTile);
-
-                // Top plus exposed vertical boundary faces. Internal quarter
-                // boundaries are deliberately absent, so the occupancy volume
-                // cannot self-fight.
-                emitFace({ {
-                    { x0, y0, worldTop },
-                    { x1, y0, worldTop },
-                    { x1, y1, worldTop },
-                    { x0, y1, worldTop },
-                } });
-                if (!occupiedAt(gx - 1, gy))
-                    emitFace({ {
-                        { x0, y1, worldBase },
-                        { x0, y0, worldBase },
-                        { x0, y0, worldTop },
-                        { x0, y1, worldTop },
-                    } });
-                if (!occupiedAt(gx + 1, gy))
-                    emitFace({ {
-                        { x1, y0, worldBase },
-                        { x1, y1, worldBase },
-                        { x1, y1, worldTop },
-                        { x1, y0, worldTop },
-                    } });
-                if (!occupiedAt(gx, gy - 1))
-                    emitFace({ {
-                        { x0, y0, worldBase },
-                        { x1, y0, worldBase },
-                        { x1, y0, worldTop },
-                        { x0, y0, worldTop },
-                    } });
-                if (!occupiedAt(gx, gy + 1))
-                    emitFace({ {
-                        { x1, y1, worldBase },
-                        { x0, y1, worldBase },
-                        { x0, y1, worldTop },
-                        { x1, y1, worldTop },
-                    } });
-            }
-            return emitted != 0;
-        }
-
         bool AppendCalibratedSmallSceneryGeometry(
             FirstPersonScene& scene, const PaintStruct& ps,
             ImageId image, const ScreenCoordsXY& spritePos,
@@ -1782,21 +1595,14 @@
                     AppendCalibratedSmallSceneryGeometry(
                         scene, ps, colourify(ps.image_id),
                         ps.ScreenPos, rotation);
-                const bool occupancyPhysical =
-                    !smallPhysical
-                    && AppendAuthoritativeTileOccupancyGeometry(
-                        scene, ps, colourify(ps.image_id),
-                        rotation);
-                if (!smallPhysical
-                    && !occupancyPhysical)
+                if (!smallPhysical)
                 {
                     AppendLayer(
                         scene, anchor, basis, isoAnchor,
                         colourify(ps.image_id), ps.ScreenPos);
                 }
                 if (scene.surfaces.size() > surfaceStart
-                    && !smallPhysical
-                    && !occupancyPhysical)
+                    && !smallPhysical)
                 {
                     ApplyImmutablePaintSnapshot(
                         scene.surfaces.back(),
@@ -2152,11 +1958,6 @@
             uint64_t generation{};
             uint64_t lastSeen{};
             bool dirty = true;
-            // sourceDirty means the authoritative tile sources in this region
-            // must be revisited. Ordinary packet/VBO dirtiness does not.
-            bool sourceDirty = true;
-            uint32_t sourceViewFlags{};
-            std::unordered_set<uint64_t> refreshTileKeys;
             FirstPersonVec3 center{};
             float radius{};
             std::vector<FirstPersonSurface> surfaces;
@@ -3040,34 +2841,6 @@
             }
             if (!enabled)
                 return;
-
-            // Camera movement activates persistent geometry through region
-            // membership. Rebuilding/discovery below is only for tiles whose
-            // authoritative source is actually cold or dirty.
-            for (const auto regionKey :
-                 scene.visibleStaticRegions)
-            {
-                const auto membership =
-                    _largeSceneryGroupsByRegion.find(
-                        regionKey);
-                if (membership
-                    == _largeSceneryGroupsByRegion.end())
-                    continue;
-                for (const auto groupKey :
-                     membership->second)
-                {
-                    const auto cached =
-                        _largeSceneryGeometryCache.find(
-                            groupKey);
-                    if (cached
-                            == _largeSceneryGeometryCache.end()
-                        || cached->second.dirty)
-                        continue;
-                    cached->second.lastSeen = frame;
-                    ActivateLargeSceneryRegions(
-                        cached->second);
-                }
-            }
 
             // Discovery reuses the reconstruction groups already collected by
             // the static-tile semantic cache. Cold fitting is deterministic:

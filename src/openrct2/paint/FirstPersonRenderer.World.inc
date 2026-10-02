@@ -765,7 +765,7 @@
             float low = -512.0f;
             float high = 4096.0f;
             bool populated = true;
-            if (x1-x0 <= 32 && y1-y0 <= 32)
+            if (x1-x0 <= 16 && y1-y0 <= 16)
             {
                 auto& entry = _regionBounds[TerrainKey(x0,y0)];
                 if (entry.dirty || entry.x1 != x1 || entry.y1 != y1)
@@ -800,7 +800,7 @@
             const float dz = (high-low)*0.5f;
             // Occupancy/paint bounds can underestimate art overhang. Reserve
             // one conservative halo for tall sprite components and entities.
-            const float halo = (x1-x0 <= 32 && y1-y0 <= 32) ? 512.0f : 0.0f;
+            const float halo = (x1-x0 <= 16 && y1-y0 <= 16) ? 512.0f : 0.0f;
             return {{float(x0+x1)*0.5f*kTile,float(y0+y1)*0.5f*kTile,(high+low)*0.5f},
                      std::sqrt(dx*dx+dy*dy+dz*dz)+halo,populated};
         }
@@ -866,83 +866,25 @@
                 view.camera, view.fieldOfViewDegrees, view.aspect,
                 view.nearClip, view.farClip);
             const auto map = getGameState().mapSize;
-
-            scene.visibleStaticRegions.clear();
-            scene.visibleTiles.clear();
-
-            constexpr int32_t kRegionTiles = 32;
-            for (int32_t y0 = 0; y0 < map.y;
-                 y0 += kRegionTiles)
-            for (int32_t x0 = 0; x0 < map.x;
-                 x0 += kRegionTiles)
-            {
-                const int32_t x1 =
-                    std::min(x0 + kRegionTiles, map.x);
-                const int32_t y1 =
-                    std::min(y0 + kRegionTiles, map.y);
-                const auto bounds =
-                    CachedRegionBounds(x0, y0, x1, y1);
-                if (!bounds.populated
-                    || !frustum.visible(
-                        bounds.center, bounds.radius))
-                    continue;
-
-                const uint64_t regionKey =
-                    FirstPersonGpuRegionKey(x0, y0);
-                scene.visibleStaticRegions.push_back(
-                    regionKey);
-                auto& packet =
-                    _staticRegionPackets[regionKey];
-
-                if (packet.generation != 0
-                    && packet.sourceViewFlags
-                        != scene.options.viewFlags)
+            auto visit = [&](int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
+                for (int32_t ty = y0; ty < y1; ++ty)
+                for (int32_t tx = x0; tx < x1; ++tx)
                 {
-                    packet.sourceDirty = true;
-                    packet.dirty = true;
-                }
-
-                const bool rebuildSources =
-                    packet.generation == 0
-                    || packet.sourceDirty;
-                if (rebuildSources)
-                {
-                    for (int32_t ty = y0; ty < y1; ++ty)
-                    for (int32_t tx = x0; tx < x1; ++tx)
+                    const CoordsXY world{ tx * kCoordsXYStep, ty * kCoordsXYStep };
+                    if (!MapIsLocationValid(world)) continue;
+                    const auto semantic = CachedTileVisibilityBounds(
+                        world, getGameState().currentTicks);
+                    if (semantic.has_value()
+                        && frustum.visible(semantic->center, semantic->radius))
                     {
-                        const CoordsXY world{
-                            tx * kCoordsXYStep,
-                            ty * kCoordsXYStep
-                        };
-                        if (MapIsLocationValid(world))
-                            scene.visibleTiles.emplace_back(
-                                world);
+                        scene.visibleTiles.emplace_back(world);
                     }
-                    continue;
                 }
-
-                // Only animated, transparent or genuinely camera-facing
-                // cached tiles return to the per-frame CPU path.
-                for (const auto tileKey :
-                     packet.refreshTileKeys)
-                {
-                    const int32_t tx =
-                        int32_t(tileKey >> 32);
-                    const int32_t ty =
-                        int32_t(
-                            tileKey & 0xffffffffu);
-                    if (tx < x0 || tx >= x1
-                        || ty < y0 || ty >= y1)
-                        continue;
-                    const CoordsXY world{
-                        tx * kCoordsXYStep,
-                        ty * kCoordsXYStep
-                    };
-                    if (MapIsLocationValid(world))
-                        scene.visibleTiles.emplace_back(
-                            world);
-                }
-            }
+            };
+            auto bounds = [](int32_t x0,int32_t y0,int32_t x1,int32_t y1) {
+                return CachedRegionBounds(x0,y0,x1,y1);
+            };
+            VisitFirstPersonRegions(frustum,0,0,map.x,map.y,visit,bounds);
         }
 
         void CollectTerrain(FirstPersonScene& scene)
@@ -2381,42 +2323,28 @@
         void SubmitVisibleStaticRegions(
             FirstPersonScene& scene, const FirstPersonFrustum& frustum, uint64_t frame)
         {
-            std::unordered_set<uint64_t> visibleRegions(
-                scene.visibleStaticRegions.begin(),
-                scene.visibleStaticRegions.end());
-
-            std::unordered_set<uint64_t> activeTrackGroups;
-            for (const auto regionKey :
-                 scene.visibleStaticRegions)
+            std::unordered_set<uint64_t> visibleRegions;
+            visibleRegions.reserve(scene.visibleTiles.size() / 64 + 1);
+            for (const auto tile : scene.visibleTiles)
+                visibleRegions.insert(FirstPersonGpuRegionKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+            // A single physical track piece can cross a 32x32 GPU-region edge.
+            // If any sequence made the piece visible this frame, submit every
+            // region occupied by its authoritative sampled trajectory.
+            for (const auto& [groupKey, trajectory] :
+                 _trackTrajectoryCache)
             {
-                const auto membership =
-                    _trackTrajectoryGroupsByRegion.find(
-                        regionKey);
-                if (membership
-                    == _trackTrajectoryGroupsByRegion.end())
+                (void)groupKey;
+                if (trajectory.dirty
+                    || trajectory.lastSeen != frame)
                     continue;
-                activeTrackGroups.insert(
-                    membership->second.begin(),
-                    membership->second.end());
-            }
-            for (const auto groupKey :
-                 activeTrackGroups)
-            {
-                const auto trajectory =
-                    _trackTrajectoryCache.find(groupKey);
-                if (trajectory
-                        == _trackTrajectoryCache.end()
-                    || trajectory->second.dirty)
-                    continue;
-                trajectory->second.lastSeen = frame;
                 for (const auto& [regionKey, indices] :
-                     trajectory->second.regionSurfaceIndices)
+                     trajectory.regionSurfaceIndices)
                 {
                     (void)indices;
                     visibleRegions.insert(regionKey);
                 }
             }
-
             if (_largeSceneryGeometryEnabled)
             {
                 visibleRegions.insert(
@@ -2424,12 +2352,10 @@
                     _activeLargeSceneryRegions.end());
             }
 
-            scene.staticRegions.reserve(
-                visibleRegions.size());
+            scene.staticRegions.reserve(visibleRegions.size());
             for (const auto key : visibleRegions)
             {
-                auto& packet =
-                    _staticRegionPackets[key];
+                auto& packet = _staticRegionPackets[key];
                 if (!packet.dirty
                     && packet.reconstructionSelectionStamp
                         != CurrentReconstructionSelectionStamp(
@@ -2438,15 +2364,9 @@
                     packet.dirty = true;
                 }
                 if (packet.dirty)
-                    RebuildStaticRegionPacket(
-                        key, frame);
-                packet.sourceDirty = false;
-                packet.sourceViewFlags =
-                    scene.options.viewFlags;
+                    RebuildStaticRegionPacket(key, frame);
                 packet.lastSeen = frame;
-                if (packet.surfaces.empty()
-                    || !frustum.visible(
-                        packet.center, packet.radius))
+                if (packet.surfaces.empty() || !frustum.visible(packet.center, packet.radius))
                     continue;
                 scene.staticRegions.push_back({
                     key, _sceneEpoch, packet.generation,
