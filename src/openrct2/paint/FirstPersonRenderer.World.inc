@@ -1818,13 +1818,34 @@
                     component.transform))
                 return std::nullopt;
 
-            for (const auto& view : views)
-            {
-                if (view.component == nullptr
-                    || view.g1 == nullptr
-                    || view.pixels.empty())
-                    return std::nullopt;
-            }
+            const auto localLow =
+                component.geometry.points[0];
+            const auto localHigh =
+                component.geometry.points[1];
+            const float extentX =
+                std::abs(localHigh.x - localLow.x);
+            const float extentY =
+                std::abs(localHigh.y - localLow.y);
+            const float extentZ =
+                std::abs(localHigh.z - localLow.z);
+            const float minimumExtent =
+                std::min({ extentX, extentY, extentZ });
+            // A near-planar authoritative envelope already constrains the
+            // missing depth dimension, so one native silhouette can refine it
+            // without inventing bulk. Truly volumetric envelopes retain the
+            // stricter four-view requirement.
+            const size_t minimumViews =
+                minimumExtent <= 1.5f ? 1u : 4u;
+            const size_t availableViews =
+                std::count_if(
+                    views.begin(), views.end(),
+                    [](const auto& view) {
+                        return view.component != nullptr
+                            && view.g1 != nullptr
+                            && !view.pixels.empty();
+                    });
+            if (availableViews < minimumViews)
+                return std::nullopt;
 
             static std::unordered_map<
                 uint64_t, FirstPersonSemanticVisualHullTemplate>
@@ -1929,6 +1950,10 @@
                  rotation < 4; ++rotation)
             {
                 const auto& source = views[rotation];
+                if (source.component == nullptr
+                    || source.g1 == nullptr
+                    || source.pixels.empty())
+                    continue;
                 FirstPersonVisualHullView hullView{};
                 hullView.imageDirection = rotation;
                 hullView.image =
@@ -1978,19 +2003,13 @@
                     hullView.observed.add(
                         screenX, screenY);
                 }
-                if (hullView.observed.empty())
-                {
-                    cache.emplace(key, std::move(cached));
-                    return std::vector<
-                        std::array<FirstPersonVec3, 4>>{};
-                }
-                hullViews.push_back(std::move(hullView));
+                if (!hullView.observed.empty())
+                    hullViews.push_back(std::move(hullView));
             }
 
-            const auto localLow =
-                component.geometry.points[0];
-            const auto localHigh =
-                component.geometry.points[1];
+            if (hullViews.size() < minimumViews)
+                return std::nullopt;
+
             const auto occupancy =
                 [&](FirstPersonVec3 world) {
                     const auto local =
@@ -2108,7 +2127,7 @@
                 };
 
             FirstPersonVisualHullConfig config{};
-            config.minimumViews = 4;
+            config.minimumViews = minimumViews;
             config.minimumOccupiedCells = 1;
             config.maximumOccupiedCells = 65536;
             config.maximumGridCells = 65536;
