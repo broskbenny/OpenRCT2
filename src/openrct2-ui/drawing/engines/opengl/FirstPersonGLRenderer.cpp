@@ -792,7 +792,12 @@ void main() {
         immutableTextures.reserve(scene.surfaces.size() / 16 + 1);
         auto appendVertices = [&](std::vector<GPUVertex>& vertices, const Paint::FirstPersonSurface& surface) {
             const auto image=surface.image;
-            const auto* g1=surface.solidColour == 0 ? GfxGetG1Element(image) : nullptr;
+            const auto* g1 =
+                surface.solidColour == 0
+                    && (!surface.hasImmutablePixelData()
+                        || surface.physicalCoverage)
+                ? GfxGetG1Element(image)
+                : nullptr;
             BasicTextureInfo tex{};
             float imageWidth = 0.0f;
             float imageHeight = 0.0f;

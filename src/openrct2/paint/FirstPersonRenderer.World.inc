@@ -2246,8 +2246,17 @@
                 if (!IsResidentStaticSurface(surface) || surface.gpuRegion != regionKey)
                     return;
                 packet.surfaces.push_back(surface);
-                if (surface.image.HasValue())
-                    dependencies.insert(surface.image.GetIndex());
+                // Persistent baked materials sample their own immutable
+                // bitmap; the original ImageId remains only as palette/remap
+                // metadata. Object reloads clear the whole first-person scene,
+                // so keeping that unused source atlas entry as a dependency
+                // would only trigger needless preloads/revision checks.
+                if (surface.image.HasValue()
+                    && !surface.hasImmutablePixelData())
+                {
+                    dependencies.insert(
+                        surface.image.GetIndex());
+                }
                 if (surface.mask.HasValue())
                     dependencies.insert(surface.mask.GetIndex());
 
