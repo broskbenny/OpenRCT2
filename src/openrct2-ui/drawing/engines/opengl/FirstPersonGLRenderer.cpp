@@ -1180,9 +1180,7 @@ void main() {
             std::vector<GPUVertex> packedTransparentVertices;
             packedTransparentVertices.reserve(
                 streamedTransparent.size() * 6);
-            std::unordered_map<
-                const Paint::FirstPersonSurface*,
-                std::pair<size_t, size_t>>
+            std::vector<std::pair<size_t, size_t>>
                 transparentVertexRanges;
             transparentVertexRanges.reserve(
                 streamedTransparent.size());
@@ -1192,16 +1190,10 @@ void main() {
                     packedTransparentVertices.size();
                 appendVertices(
                     packedTransparentVertices, *surface);
-                const size_t count =
+                transparentVertexRanges.emplace_back(
+                    first,
                     packedTransparentVertices.size()
-                    - first;
-                if (count != 0)
-                {
-                    transparentVertexRanges.emplace(
-                        surface,
-                        std::pair<size_t, size_t>{
-                            first, count });
-                }
+                        - first);
             }
 
             struct TransparentTileCandidate
@@ -1283,12 +1275,16 @@ void main() {
             // before screen binning. A crossing surface therefore occupies
             // only tiles reached by its clipped polygon, never the full
             // viewport merely because one original vertex was behind the eye.
-            for (const auto* surface : streamedTransparent)
+            for (size_t surfaceIndex = 0;
+                 surfaceIndex < streamedTransparent.size();
+                 ++surfaceIndex)
             {
+                const auto* surface =
+                    streamedTransparent[surfaceIndex];
                 const auto packedRange =
-                    transparentVertexRanges.find(surface);
-                if (packedRange
-                    == transparentVertexRanges.end())
+                    transparentVertexRanges[
+                        surfaceIndex];
+                if (packedRange.second == 0)
                     continue;
 
                 float minX =
@@ -1409,8 +1405,8 @@ void main() {
                             size_t(ty) * size_t(tileColumns)
                             + size_t(tx)];
                     tile.candidates.push_back({
-                        packedRange->second.first,
-                        packedRange->second.second,
+                        packedRange.first,
+                        packedRange.second,
                         std::max(x0, tile.x0),
                         std::max(y0, tile.y0),
                         std::min(x1, tile.x1),
@@ -1510,6 +1506,7 @@ void main() {
             glCall(
                 glBindBuffer,
                 GL_ELEMENT_ARRAY_BUFFER,_ebo);
+            std::vector<GLuint> tileIndices;
             for (const auto& tile : transparencyTiles)
             {
                 const auto dirtyTileClip = tileClip(tile);
@@ -1528,7 +1525,7 @@ void main() {
                     tileVertexCount +=
                         candidate.vertexCount;
                 }
-                std::vector<GLuint> tileIndices;
+                tileIndices.clear();
                 tileIndices.reserve(tileVertexCount);
                 for (const auto& candidate :
                      tile.candidates)
