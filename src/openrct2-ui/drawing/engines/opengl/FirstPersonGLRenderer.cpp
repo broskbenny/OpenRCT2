@@ -887,9 +887,23 @@ void main() {
                 opaqueOwnerVertices, *surface);
         std::vector<uint64_t> regionDraws;
         regionDraws.reserve(scene.staticRegions.size());
+        const uint64_t textureRevisionSerial =
+            textures.GetImageTextureRevisionSerial();
         for (const auto& packet : scene.staticRegions)
         {
             const uint64_t key = packet.key;
+            auto found=_staticOpaqueRegions.find(key);
+            if(found!=_staticOpaqueRegions.end()
+                && found->second.sceneEpoch==packet.sceneEpoch
+                && found->second.generation==packet.generation
+                && found->second.dependencyRevisionSerial
+                    == textureRevisionSerial)
+            {
+                found->second.lastSeen=_frame;
+                regionDraws.push_back(key);
+                continue;
+            }
+
             uint64_t dependencyStamp = 14695981039346656037ull;
             if (packet.textureDependencies != nullptr)
             {
@@ -900,13 +914,13 @@ void main() {
                         dependencyStamp, textures.GetImageTextureRevision(image));
                 }
             }
-
-            auto found=_staticOpaqueRegions.find(key);
             if(found!=_staticOpaqueRegions.end()
                 && found->second.sceneEpoch==packet.sceneEpoch
                 && found->second.generation==packet.generation
                 && found->second.dependencyStamp==dependencyStamp)
             {
+                found->second.dependencyRevisionSerial =
+                    textureRevisionSerial;
                 found->second.lastSeen=_frame;
                 regionDraws.push_back(key);
                 continue;
@@ -997,6 +1011,7 @@ void main() {
             region.sceneEpoch=packet.sceneEpoch;
             region.generation=packet.generation;
             region.dependencyStamp=dependencyStamp;
+            region.dependencyRevisionSerial=textureRevisionSerial;
             region.lastSeen=_frame;
             regionDraws.push_back(key);
         }

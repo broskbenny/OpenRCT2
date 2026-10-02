@@ -46,6 +46,7 @@ namespace OpenRCT2::Ui
         {
             GLuint vao{}, vbo{};
             uint64_t sceneEpoch{}, generation{}, dependencyStamp{}, lastSeen{};
+            uint64_t dependencyRevisionSerial{};
             size_t bytes{};
             GLsizei ordinaryCount{};
             GLsizei ownerCount{};

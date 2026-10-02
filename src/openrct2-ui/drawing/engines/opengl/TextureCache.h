@@ -188,6 +188,7 @@ namespace OpenRCT2::Ui
     private:
         bool _initialized = false;
         std::unordered_map<ImageIndex,uint64_t> _imageAtlasRevisions;
+        uint64_t _imageAtlasRevisionSerial = 1;
 
         GLuint _atlasesTexture = 0;
         GLint _atlasesTextureDimensions = 0;
@@ -224,6 +225,13 @@ namespace OpenRCT2::Ui
         {
             const auto it=_imageAtlasRevisions.find(image);
             return it==_imageAtlasRevisions.end()?0:it->second;
+        }
+        // Changes only when a loaded G1 image is invalidated. First-person
+        // region buffers can therefore skip per-image revision lookups while
+        // this serial is unchanged, then verify exact dependencies on change.
+        [[nodiscard]] uint64_t GetImageTextureRevisionSerial() const
+        {
+            return _imageAtlasRevisionSerial;
         }
         GLuint GetPaletteTexture();
         GLuint GetBlendPaletteTexture();

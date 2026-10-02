@@ -43,6 +43,9 @@ void TextureCache::InvalidateImage(ImageIndex image)
     if (index == kUnusedIndex)
         return;
     ++_imageAtlasRevisions[image];
+    ++_imageAtlasRevisionSerial;
+    if (_imageAtlasRevisionSerial == 0)
+        _imageAtlasRevisionSerial = 1;
 
     AtlasTextureInfo& elem = _textureCache.at(index);
 
