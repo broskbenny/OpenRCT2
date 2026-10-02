@@ -2494,6 +2494,38 @@
             result.collisionProxies =
                 BuildFirstPersonLargeSceneryCollisionProxies(
                     entry, model, group, objectDirection);
+            if (!result.collisionProxies.empty())
+            {
+                FirstPersonVec3 proxyLow =
+                    result.collisionProxies.front().low;
+                FirstPersonVec3 proxyHigh =
+                    result.collisionProxies.front().high;
+                for (const auto& proxy :
+                     result.collisionProxies)
+                {
+                    proxyLow.x =
+                        std::min(proxyLow.x, proxy.low.x);
+                    proxyLow.y =
+                        std::min(proxyLow.y, proxy.low.y);
+                    proxyLow.z =
+                        std::min(proxyLow.z, proxy.low.z);
+                    proxyHigh.x =
+                        std::max(proxyHigh.x, proxy.high.x);
+                    proxyHigh.y =
+                        std::max(proxyHigh.y, proxy.high.y);
+                    proxyHigh.z =
+                        std::max(proxyHigh.z, proxy.high.z);
+                }
+                result.hasBounds = true;
+                result.minTileX = int32_t(std::floor(
+                    proxyLow.x / float(kCoordsXYStep)));
+                result.minTileY = int32_t(std::floor(
+                    proxyLow.y / float(kCoordsXYStep)));
+                result.maxTileX = int32_t(std::floor(
+                    proxyHigh.x / float(kCoordsXYStep)));
+                result.maxTileY = int32_t(std::floor(
+                    proxyHigh.y / float(kCoordsXYStep)));
+            }
 
             struct BakedLargeSceneryKey
             {
