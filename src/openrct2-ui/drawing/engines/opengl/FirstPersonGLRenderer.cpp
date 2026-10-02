@@ -790,7 +790,11 @@ void main() {
         }
         std::unordered_map<uint64_t, BasicTextureInfo> immutableTextures;
         immutableTextures.reserve(scene.surfaces.size() / 16 + 1);
-        auto appendVertices = [&](std::vector<GPUVertex>& vertices, const Paint::FirstPersonSurface& surface) {
+        auto appendVertices = [&](
+            std::vector<GPUVertex>& vertices,
+            const Paint::FirstPersonSurface& surface,
+            bool forceCoplanarOwner = false,
+            bool suppressCoplanarOwner = false) {
             const auto image=surface.image;
             const auto* g1 =
                 surface.solidColour == 0
@@ -890,7 +894,10 @@ void main() {
                     (surface.solidColour == 0 && image.IsBlended()
                         ? (image.GetRemap()==static_cast<uint8_t>(Drawing::FilterPaletteID::paletteWater)?3:1)
                         : 0)
-                        | (surface.coplanarOwner ? 4 : 0)
+                        | ((forceCoplanarOwner
+                                || (!suppressCoplanarOwner
+                                    && surface.coplanarOwner))
+                            ? 4 : 0)
                         | (surface.physicalCoverage ? 8 : 0)
                         | (surface.solidColour != 0 ? 16 : 0)
                         | (surface.textureFallbackOnly ? 32 : 0)
@@ -906,11 +913,11 @@ void main() {
             streamedOwners;
         for (const auto* surface : streamedOpaque)
         {
+            appendVertices(
+                opaqueOrdinaryVertices, *surface,
+                false, true);
             if (surface->coplanarOwner)
                 streamedOwners.push_back(surface);
-            else
-                appendVertices(
-                    opaqueOrdinaryVertices, *surface);
         }
         std::stable_sort(
             streamedOwners.begin(), streamedOwners.end(),
@@ -927,7 +934,8 @@ void main() {
             });
         for (const auto* surface : streamedOwners)
             appendVertices(
-                opaqueOwnerVertices, *surface);
+                opaqueOwnerVertices, *surface,
+                true, false);
         std::vector<uint64_t> regionDraws;
         regionDraws.reserve(scene.staticRegions.size());
         for (const auto& packet : scene.staticRegions)
@@ -973,8 +981,9 @@ void main() {
             packed.reserve(packet.surfaces->size()*6);
             for (const auto& surface : *packet.surfaces)
             {
-                if (!surface.coplanarOwner)
-                    appendVertices(packed, surface);
+                appendVertices(
+                    packed, surface,
+                    false, true);
             }
             const GLsizei ordinaryCount =
                 GLsizei(packed.size());
@@ -1000,7 +1009,9 @@ void main() {
                     return ao < bo;
                 });
             for (const auto* surface : owners)
-                appendVertices(packed, *surface);
+                appendVertices(
+                    packed, *surface,
+                    true, false);
             const GLsizei ownerCount =
                 GLsizei(packed.size()) - ordinaryCount;
             const size_t bytes=packed.size()*sizeof(GPUVertex);
