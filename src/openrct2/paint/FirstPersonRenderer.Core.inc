@@ -2992,7 +2992,7 @@
                         occupancyCells.end(),
                         [&](const auto& cell) {
                             return pointInCell(
-                                point, cell);
+                                point, cell, 0.001f);
                         });
                 };
             const auto projectPoint =
@@ -3037,7 +3037,8 @@
                     for (const auto& cell :
                          occupancyCells)
                     {
-                        if (!pointInCell(point, cell))
+                        if (!pointInCell(
+                                point, cell, 0.001f))
                             continue;
                         const auto* source =
                             decodedView(
@@ -3721,10 +3722,10 @@
                 return;
 
             // Discovery reuses the reconstruction groups already collected by
-            // the static-tile semantic cache. Cold fitting is deterministic:
-            // at most one previously unseen asset is attempted per frame, and
-            // every success OR fallback decision is cached. No asset restarts
-            // identical work forever after missing a wall-clock deadline.
+            // the static-tile semantic cache. Asset/direction carving decisions
+            // and per-instance results are cached, including failures, so an
+            // unsupported asset does not repeat identical cold reconstruction
+            // work on every frame.
             std::unordered_set<uint64_t> seenGroups;
             seenGroups.reserve(scene.visibleTiles.size() / 2 + 1);
 
@@ -3841,8 +3842,14 @@
                         *large, *entry, *model, group, signature, frame);
                     if (rebuilt.surfaces.empty())
                     {
-                        if (cached != _largeSceneryGeometryCache.end())
-                            _largeSceneryGeometryCache.erase(cached);
+                        // Keep the native sprite body visible, but remember the
+                        // failed decision and authoritative collision proxies.
+                        // Tile invalidation will dirty this entry if the object
+                        // state actually changes.
+                        RegisterLargeSceneryRegionMembership(
+                            group.key, rebuilt);
+                        _largeSceneryGeometryCache[group.key] =
+                            std::move(rebuilt);
                         continue;
                     }
 
@@ -3866,7 +3873,8 @@
                 return false;
             const auto found = _largeSceneryGeometryCache.find(surface.reconstructionGroup);
             if (found == _largeSceneryGeometryCache.end() || found->second.dirty
-                || found->second.lastSeen != frame)
+                || found->second.lastSeen != frame
+                || found->second.surfaces.empty())
                 return false;
             const auto image = surface.image.GetIndex();
             return image >= found->second.bodyImageFirst
