@@ -123,6 +123,68 @@ namespace OpenRCT2::Paint
             g1, x, y);
     }
 
+    inline void AppendFirstPersonG1OpaqueSilhouette(
+        const G1Element& g1,
+        FirstPersonSilhouette& silhouette)
+    {
+        if (g1.offset == nullptr
+            || g1.width <= 0 || g1.height <= 0
+            || g1.flags.has(G1Flag::isPalette))
+            return;
+
+        if (g1.flags.has(G1Flag::hasRLECompression))
+        {
+            for (int32_t y = 0; y < g1.height; ++y)
+            {
+                const uint16_t lineOffset =
+                    uint16_t(g1.offset[y * 2])
+                    | (uint16_t(g1.offset[y * 2 + 1])
+                        << 8);
+                const uint8_t* run =
+                    g1.offset + lineOffset;
+                bool endOfLine = false;
+                size_t guard = 0;
+                while (!endOfLine && guard++ < 256)
+                {
+                    uint8_t length = *run++;
+                    const int32_t start = *run++;
+                    endOfLine =
+                        (length & 0x80u) != 0;
+                    length &= 0x7fu;
+                    for (uint8_t i = 0;
+                         i < length; ++i)
+                    {
+                        if (run[i] != 0)
+                        {
+                            silhouette.add(
+                                g1.xOffset + start + i,
+                                g1.yOffset + y);
+                        }
+                    }
+                    run += length;
+                }
+            }
+            return;
+        }
+
+        const bool transparent =
+            g1.flags.has(G1Flag::hasTransparency);
+        for (int32_t y = 0; y < g1.height; ++y)
+        for (int32_t x = 0; x < g1.width; ++x)
+        {
+            const uint8_t pixel =
+                g1.offset[
+                    size_t(y) * size_t(g1.width)
+                    + size_t(x)];
+            if (!transparent || pixel != 0)
+            {
+                silhouette.add(
+                    g1.xOffset + x,
+                    g1.yOffset + y);
+            }
+        }
+    }
+
     [[nodiscard]] inline CoordsXY FirstPersonSmallSceneryPaintOffset(
         const SmallSceneryEntry& entry,
         const SmallSceneryElement& element,
@@ -362,17 +424,8 @@ namespace OpenRCT2::Paint
             view.imageDirection = rotation;
             view.image = image;
             view.g1 = g1;
-            for (int32_t y = 0; y < g1->height; ++y)
-            for (int32_t x = 0; x < g1->width; ++x)
-            {
-                if (FirstPersonVisualHullPixelOpaque(
-                        *g1, x, y))
-                {
-                    view.observed.add(
-                        g1->xOffset + x,
-                        g1->yOffset + y);
-                }
-            }
+            AppendFirstPersonG1OpaqueSilhouette(
+                *g1, view.observed);
             if (!view.observed.empty())
                 views.push_back(std::move(view));
         }
@@ -409,9 +462,9 @@ namespace OpenRCT2::Paint
             };
         if (allowSilhouetteRefinement)
         {
-            auto carved = BuildFirstPersonVisualHull(
-                views, bounds, config,
-                [&](uint8_t rotation, FirstPersonVec3 point) {
+            const auto projectPoint =
+                [&](uint8_t rotation,
+                    FirstPersonVec3 point) {
                     const auto offset =
                         FirstPersonSmallSceneryPaintOffset(
                             entry, element, rotation);
@@ -430,8 +483,34 @@ namespace OpenRCT2::Paint
                         float(projected.x - spriteOrigin.x),
                         float(projected.y - spriteOrigin.y),
                     };
-                },
-                occupancyPredicate);
+                };
+            const auto pointSupported =
+                [&](const FirstPersonVisualHullView& view,
+                    FirstPersonVec3 point) {
+                    const auto projected =
+                        projectPoint(
+                            view.imageDirection, point);
+                    const int32_t px =
+                        int32_t(std::lround(
+                            projected[0]));
+                    const int32_t py =
+                        int32_t(std::lround(
+                            projected[1]));
+                    for (int32_t dy = -1;
+                         dy <= 1; ++dy)
+                    for (int32_t dx = -1;
+                         dx <= 1; ++dx)
+                    {
+                        if (view.observed.contains(
+                                px + dx, py + dy))
+                            return true;
+                    }
+                    return false;
+                };
+            auto carved = BuildFirstPersonVisualHull(
+                views, bounds, config,
+                projectPoint, occupancyPredicate,
+                pointSupported);
             if (carved.valid)
                 return carved;
         }
