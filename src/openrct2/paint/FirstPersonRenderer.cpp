@@ -406,13 +406,8 @@ namespace OpenRCT2::Paint
                     scenery->second.end());
             }
         }
-        for (auto& [key, entry] : _regionBounds)
-        {
-            const int32_t originX = int32_t(key >> 32);
-            const int32_t originY = int32_t(key & 0xffffffffu);
-            if (x0 < entry.x1 && x1 >= originX && y0 < entry.y1 && y1 >= originY)
-                entry.dirty = true;
-        }
+        InvalidateFirstPersonRegionBounds(
+            x0, y0, x1, y1);
         for (int32_t ty = y0; ty <= y1; ++ty)
         for (int32_t tx = x0; tx <= x1; ++tx)
         {

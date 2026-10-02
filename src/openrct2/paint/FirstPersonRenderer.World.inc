@@ -819,6 +819,63 @@
         };
         static std::unordered_map<uint64_t, RegionCacheEntry> _regionBounds;
 
+        void InvalidateFirstPersonRegionBounds(
+            int32_t dirtyX0, int32_t dirtyY0,
+            int32_t dirtyX1, int32_t dirtyY1)
+        {
+            const auto map = getGameState().mapSize;
+            const auto invalidateNode =
+                [&](auto&& self,
+                    int32_t x0, int32_t y0,
+                    int32_t x1, int32_t y1) -> void {
+                    if (x0 >= x1 || y0 >= y1
+                        || dirtyX1 < x0 || dirtyX0 >= x1
+                        || dirtyY1 < y0 || dirtyY0 >= y1)
+                        return;
+
+                    if (x1 - x0 <= 16
+                        && y1 - y0 <= 16)
+                    {
+                        const auto found =
+                            _regionBounds.find(
+                                TerrainKey(x0, y0));
+                        if (found != _regionBounds.end()
+                            && found->second.x1 == x1
+                            && found->second.y1 == y1)
+                        {
+                            found->second.dirty = true;
+                        }
+                        return;
+                    }
+
+                    // Mirror VisitFirstPersonRegions exactly. The leaf
+                    // partition depends only on map dimensions, so a local
+                    // edit can descend directly to the cached leaves it
+                    // intersects instead of scanning every cached leaf.
+                    if (y1 - y0 >= x1 - x0)
+                    {
+                        const int32_t mid =
+                            y0 + (y1 - y0) / 2;
+                        self(
+                            self, x0, y0, x1, mid);
+                        self(
+                            self, x0, mid, x1, y1);
+                    }
+                    else
+                    {
+                        const int32_t mid =
+                            x0 + (x1 - x0) / 2;
+                        self(
+                            self, x0, y0, mid, y1);
+                        self(
+                            self, mid, y0, x1, y1);
+                    }
+                };
+            invalidateNode(
+                invalidateNode,
+                0, 0, map.x, map.y);
+        }
+
         FirstPersonRegionSphere CachedRegionBounds(int32_t x0, int32_t y0, int32_t x1, int32_t y1)
         {
             constexpr float kTile = float(kCoordsXYStep);
