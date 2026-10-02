@@ -15,7 +15,7 @@
             constexpr uint8_t dark =
                 static_cast<uint8_t>(Drawing::PaletteIndex::pi10);
             constexpr uint8_t marker =
-                static_cast<uint8_t>(Drawing::PaletteIndex::hotPink8);
+                static_cast<uint8_t>(Drawing::PaletteIndex::pi44);
             return (((x >> 2) ^ (y >> 2)) & 1) != 0
                 ? marker : dark;
         }
