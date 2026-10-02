@@ -734,6 +734,13 @@ void main() {
         // Native texture-cache atlas handles can change on sprite loads or
         // game-art reload. Preload unique image/mask IDs BEFORE constructing
         // any resident buffer; never retain stale atlas UV/layer metadata.
+        const GLuint atlasBeforePreload =
+            textures.GetAtlasesTexture();
+        const uint64_t textureRevisionSerial =
+            textures.GetImageTextureRevisionSerial();
+        const bool residentPreloadsReusable =
+            _atlasHandle == atlasBeforePreload;
+
         std::unordered_set<uint64_t> seenTextures;
         seenTextures.reserve(scene.surfaces.size()/2+1);
         for(const auto& surface:scene.surfaces)
@@ -747,6 +754,22 @@ void main() {
         }
         for (const auto& region : scene.staticRegions)
         {
+            if (residentPreloadsReusable)
+            {
+                const auto resident =
+                    _staticOpaqueRegions.find(region.key);
+                if (resident != _staticOpaqueRegions.end()
+                    && resident->second.sceneEpoch
+                        == region.sceneEpoch
+                    && resident->second.generation
+                        == region.generation
+                    && resident->second
+                        .dependencyRevisionSerial
+                        == textureRevisionSerial)
+                {
+                    continue;
+                }
+            }
             if (region.textureDependencies == nullptr)
                 continue;
             for (const auto image : *region.textureDependencies)
@@ -887,8 +910,6 @@ void main() {
                 opaqueOwnerVertices, *surface);
         std::vector<uint64_t> regionDraws;
         regionDraws.reserve(scene.staticRegions.size());
-        const uint64_t textureRevisionSerial =
-            textures.GetImageTextureRevisionSerial();
         for (const auto& packet : scene.staticRegions)
         {
             const uint64_t key = packet.key;
