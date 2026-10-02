@@ -90,10 +90,10 @@ namespace OpenRCT2::Paint
         // Cached upright sprites must always face the CURRENT camera: keep their
         // original native image-space offsets and world anchor, not old vertices.
         bool viewFacing = false;
-        // Equal-height surface ownership is semantic, not geometric.
-        // Owning surfaces are drawn after non-owners with the same physical
-        // depth so path/deck/floor artwork replaces covered terrain without
-        // moving either surface.
+        // Equal-depth ownership is logical paint evidence, not a geometry
+        // offset. World-fixed native artwork can be replayed in authoritative
+        // paint order against the frozen physical-depth result, so coincident
+        // surfaces resolve deterministically without role-specific biases.
         bool coplanarOwner = false;
         // Visual coverage may deliberately follow known-solid world geometry
         // instead of sprite alpha (terrain, rails, structural faces). This is a
