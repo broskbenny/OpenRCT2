@@ -381,6 +381,25 @@ namespace OpenRCT2::Paint
             && sourceCoverage >= 0.90f;
     }
 
+    enum class FirstPersonArtworkSampleCoverage : uint8_t
+    {
+        unknown,
+        transparent,
+        raster,
+    };
+
+    [[nodiscard]] constexpr FirstPersonArtworkSampleCoverage
+        FirstPersonArtworkSampleCoverageForPoint(
+            bool sourceReady, int32_t u, int32_t v,
+            int32_t width, int32_t height)
+    {
+        if (!sourceReady || width <= 0 || height <= 0)
+            return FirstPersonArtworkSampleCoverage::unknown;
+        if (u < 0 || v < 0 || u >= width || v >= height)
+            return FirstPersonArtworkSampleCoverage::transparent;
+        return FirstPersonArtworkSampleCoverage::raster;
+    }
+
     [[nodiscard]] constexpr float FirstPersonIsoDepth(
         uint8_t rotation, const CoordsXYZ& point)
     {

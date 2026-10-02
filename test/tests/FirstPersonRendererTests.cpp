@@ -324,6 +324,104 @@ TEST(FirstPersonVisualHullTest, AuthoritativeOccupancySurvivesMissingSilhouetteE
     EXPECT_FALSE(hull.containsPoint({ 4.0f, 20.0f, 4.0f }));
 }
 
+TEST(FirstPersonAssetReconstructionTest, KnownSpriteBoundsClassifyOutsideAsTransparent)
+{
+    EXPECT_EQ(
+        FirstPersonArtworkSampleCoverageForPoint(
+            false, 0, 0, 8, 8),
+        FirstPersonArtworkSampleCoverage::unknown);
+    EXPECT_EQ(
+        FirstPersonArtworkSampleCoverageForPoint(
+            true, -1, 4, 8, 8),
+        FirstPersonArtworkSampleCoverage::transparent);
+    EXPECT_EQ(
+        FirstPersonArtworkSampleCoverageForPoint(
+            true, 8, 4, 8, 8),
+        FirstPersonArtworkSampleCoverage::transparent);
+    EXPECT_EQ(
+        FirstPersonArtworkSampleCoverageForPoint(
+            true, 7, 7, 8, 8),
+        FirstPersonArtworkSampleCoverage::raster);
+}
+
+TEST(FirstPersonSmallSceneryCollisionTest, TreeArtworkQuartersRotateOuterCornersInward)
+{
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 2.0f;
+    hull.sizeForward = 16;
+    hull.sizeRight = 16;
+    hull.sizeUp = 4;
+    hull.occupied.assign(
+        size_t(hull.sizeForward)
+            * size_t(hull.sizeRight)
+            * size_t(hull.sizeUp),
+        1);
+
+    const std::array<FirstPersonVec3, 4> outerCorners{ {
+        { 32.0f, 32.0f, 4.0f },
+        { 32.0f, 0.0f, 4.0f },
+        { 0.0f, 0.0f, 4.0f },
+        { 0.0f, 32.0f, 4.0f },
+    } };
+    for (uint8_t quarter = 0; quarter < 4; ++quarter)
+    {
+        const auto rotated =
+            FirstPersonSmallSceneryTreeArtworkPoint(
+                hull, quarter, outerCorners[quarter]);
+        EXPECT_FLOAT_EQ(rotated.x, 16.0f);
+        EXPECT_FLOAT_EQ(rotated.y, 16.0f);
+        EXPECT_FLOAT_EQ(rotated.z, 4.0f);
+    }
+}
+
+TEST(FirstPersonSmallSceneryCollisionTest, TreeVisualSplitKeepsCollisionExtentAndAddsInteriorSeams)
+{
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 2.0f;
+    hull.sizeForward = 16;
+    hull.sizeRight = 16;
+    hull.sizeUp = 4;
+    hull.occupied.assign(
+        size_t(hull.sizeForward)
+            * size_t(hull.sizeRight)
+            * size_t(hull.sizeUp),
+        1);
+
+    const auto ordinary =
+        BuildFirstPersonSmallSceneryVisualFaces(
+            hull, false);
+    ASSERT_EQ(ordinary.size(), 6u);
+    EXPECT_TRUE(std::all_of(
+        ordinary.begin(), ordinary.end(),
+        [](const auto& face) {
+            return face.artworkQuarter
+                == kFirstPersonSmallSceneryUnsplitArtworkQuarter;
+        }));
+
+    const auto tree =
+        BuildFirstPersonSmallSceneryVisualFaces(
+            hull, true);
+    EXPECT_GT(tree.size(), ordinary.size());
+    EXPECT_EQ(
+        std::count_if(
+            tree.begin(), tree.end(),
+            [](const auto& face) {
+                return face.syntheticInterior;
+            }),
+        4);
+
+    for (const auto& visualFace : tree)
+    for (const auto& corner : visualFace.face.corners)
+    {
+        EXPECT_GE(corner.x, 0.0f);
+        EXPECT_LE(corner.x, 32.0f);
+        EXPECT_GE(corner.y, 0.0f);
+        EXPECT_LE(corner.y, 32.0f);
+    }
+}
+
 TEST(FirstPersonSmallSceneryCollisionTest, QuarterMappingMatchesNativeConstructionQuadrants)
 {
     EXPECT_EQ(FirstPersonSmallSceneryQuarterForPoint(24, 24), 0);

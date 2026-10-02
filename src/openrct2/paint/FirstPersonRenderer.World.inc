@@ -1637,9 +1637,20 @@
             const int32_t v =
                 iso.y - view.component->artwork.screenPos.y
                 - view.g1->yOffset;
-            if (u < 0 || v < 0
-                || u >= view.g1->width
-                || v >= view.g1->height)
+            const auto coverage =
+                FirstPersonArtworkSampleCoverageForPoint(
+                    true, u, v,
+                    view.g1->width, view.g1->height);
+            if (coverage
+                == FirstPersonArtworkSampleCoverage::transparent)
+            {
+                return {
+                    FirstPersonSemanticArtworkSampleKind::transparent,
+                    0
+                };
+            }
+            if (coverage
+                != FirstPersonArtworkSampleCoverage::raster)
                 return {};
 
             if (view.maskG1 != nullptr
@@ -1651,9 +1662,21 @@
                 const int32_t mv =
                     iso.y - view.component->artwork.screenPos.y
                     - view.maskG1->yOffset;
-                if (mu < 0 || mv < 0
-                    || mu >= view.maskG1->width
-                    || mv >= view.maskG1->height)
+                const auto maskCoverage =
+                    FirstPersonArtworkSampleCoverageForPoint(
+                        true, mu, mv,
+                        view.maskG1->width,
+                        view.maskG1->height);
+                if (maskCoverage
+                    == FirstPersonArtworkSampleCoverage::transparent)
+                {
+                    return {
+                        FirstPersonSemanticArtworkSampleKind::transparent,
+                        0
+                    };
+                }
+                if (maskCoverage
+                    != FirstPersonArtworkSampleCoverage::raster)
                     return {};
                 const uint8_t mask =
                     view.maskPixels[
@@ -2494,7 +2517,9 @@
                             face, s, t);
 
                     bool texelKnown = false;
-                    bool texelUnknown = candidates.empty();
+                    // No ready observation means no visible material yet.
+                    // It is not evidence for the diagnostic unknown checker.
+                    bool texelUnknown = false;
                     uint8_t selectedPixel = 0;
                     for (const auto& candidate :
                          candidates)

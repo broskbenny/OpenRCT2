@@ -1012,8 +1012,11 @@
             };
             BakedSmallSceneryEntry baked;
 
+            const bool splitTreeArtwork =
+                entry->flags.has(SmallSceneryFlag::isTree);
             const auto faces =
-                BuildFirstPersonVisualHullBoundaryFaces(*hull);
+                BuildFirstPersonSmallSceneryVisualFaces(
+                    *hull, splitTreeArtwork);
             if (faces.empty())
             {
                 baked.resolved = true;
@@ -1047,7 +1050,8 @@
                 for (size_t faceIndex = 0;
                      faceIndex < faces.size(); ++faceIndex)
                 {
-                    const auto& face = faces[faceIndex];
+                    const auto& visualFace = faces[faceIndex];
+                    const auto& face = visualFace.face;
                     if (!faceVisible(
                             face.normal, sourceRotation))
                         continue;
@@ -1172,7 +1176,8 @@
             for (size_t faceIndex = 0;
                  faceIndex < faces.size(); ++faceIndex)
             {
-                const auto& face = faces[faceIndex];
+                const auto& visualFace = faces[faceIndex];
+                const auto& face = visualFace.face;
                 std::vector<SmallSceneryFaceView> candidates;
                 for (const auto& source : decodedViews)
                 {
@@ -1182,9 +1187,17 @@
                         continue;
 
                     std::array<ScreenCoordsXY, 4> projected{};
+                    std::array<ScreenCoordsXY, 4> artworkProjected{};
                     for (size_t i = 0;
                          i < face.corners.size(); ++i)
                     {
+                        const auto artworkPoint =
+                            splitTreeArtwork
+                            ? FirstPersonSmallSceneryTreeArtworkPoint(
+                                *hull,
+                                visualFace.artworkQuarter,
+                                face.corners[i])
+                            : face.corners[i];
                         projected[i] =
                             Translate3DTo2DWithZ(
                                 source.rotation,
@@ -1196,10 +1209,24 @@
                                     int32_t(std::lround(
                                         face.corners[i].z)),
                                 });
+                        artworkProjected[i] =
+                            Translate3DTo2DWithZ(
+                                source.rotation,
+                                {
+                                    int32_t(std::lround(
+                                        artworkPoint.x)),
+                                    int32_t(std::lround(
+                                        artworkPoint.y)),
+                                    int32_t(std::lround(
+                                        artworkPoint.z)),
+                                });
                     }
                     FirstPersonSilhouette silhouette{};
                     AddFirstPersonSilhouetteQuad(
                         silhouette, projected);
+                    FirstPersonSilhouette artworkSilhouette{};
+                    AddFirstPersonSilhouetteQuad(
+                        artworkSilhouette, artworkProjected);
                     const float ownership =
                         FirstPersonDepthOwnerCoverage(
                             depthOwners[source.rotation],
@@ -1218,7 +1245,7 @@
                             { paintOffset, 0 });
                     const float sourceCoverage =
                         FirstPersonSilhouettePredicateCoverage(
-                            silhouette,
+                            artworkSilhouette,
                             [&](int32_t x, int32_t y) {
                                 const int32_t u =
                                     x - sourceOrigin.x
@@ -1322,7 +1349,7 @@
                                     sourceView.image))
                                 continue;
 
-                            const auto projected =
+                            const auto physicalProjected =
                                 Translate3DTo2DWithZ(
                                     sourceView.rotation,
                                     {
@@ -1336,9 +1363,28 @@
                             if (!ownedNear(
                                     sourceView.rotation,
                                     uint32_t(faceIndex),
-                                    projected.x,
-                                    projected.y))
+                                    physicalProjected.x,
+                                    physicalProjected.y))
                                 continue;
+
+                            const auto artworkPoint =
+                                splitTreeArtwork
+                                ? FirstPersonSmallSceneryTreeArtworkPoint(
+                                    *hull,
+                                    visualFace.artworkQuarter,
+                                    point)
+                                : point;
+                            const auto projected =
+                                Translate3DTo2DWithZ(
+                                    sourceView.rotation,
+                                    {
+                                        int32_t(std::lround(
+                                            artworkPoint.x)),
+                                        int32_t(std::lround(
+                                            artworkPoint.y)),
+                                        int32_t(std::lround(
+                                            artworkPoint.z)),
+                                    });
 
                             const auto paintOffset =
                                 FirstPersonSmallSceneryPaintOffset(
@@ -1445,7 +1491,8 @@
                 // An unobserved bottom face may exist physically for collision,
                 // but inventing a flat material for it is not visual evidence.
                 if (face.kind
-                    == FirstPersonVisualHullFaceKind::bottom)
+                    == FirstPersonVisualHullFaceKind::bottom
+                    || visualFace.syntheticInterior)
                     continue;
 
                 // A normally visible face with no native-view material means
