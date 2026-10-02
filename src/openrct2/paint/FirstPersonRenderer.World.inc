@@ -2354,6 +2354,8 @@
             packet.reconstructionSelectionStamp =
                 CurrentReconstructionSelectionStamp(
                     packet.reconstructionGroups);
+            packet.reconstructionSelectionSerial =
+                _reconstructionSelectionSerial;
             if (haveBounds)
             {
                 packet.center = {
@@ -2407,11 +2409,22 @@
             {
                 auto& packet = _staticRegionPackets[key];
                 if (!packet.dirty
-                    && packet.reconstructionSelectionStamp
-                        != CurrentReconstructionSelectionStamp(
-                            packet.reconstructionGroups))
+                    && packet.reconstructionSelectionSerial
+                        != _reconstructionSelectionSerial)
                 {
-                    packet.dirty = true;
+                    const auto currentSelectionStamp =
+                        CurrentReconstructionSelectionStamp(
+                            packet.reconstructionGroups);
+                    if (packet.reconstructionSelectionStamp
+                        != currentSelectionStamp)
+                    {
+                        packet.dirty = true;
+                    }
+                    else
+                    {
+                        packet.reconstructionSelectionSerial =
+                            _reconstructionSelectionSerial;
+                    }
                 }
                 if (packet.dirty)
                     RebuildStaticRegionPacket(key, frame);

@@ -1753,6 +1753,10 @@
             uint8_t selectedRotation = 0;
         };
         static std::unordered_map<uint64_t, ReconstructionRotationState> _reconstructionRotations;
+        // Advances only when at least one reconstruction group changes its
+        // selected native source view. Static regions can skip hashing every
+        // dependency while this remains unchanged.
+        static uint64_t _reconstructionSelectionSerial = 1;
 
         [[nodiscard]] uint64_t
             CurrentReconstructionSelectionStamp(
@@ -1937,6 +1941,7 @@
             std::vector<ImageIndex> textureDependencies;
             std::vector<uint64_t> reconstructionGroups;
             uint64_t reconstructionSelectionStamp{};
+            uint64_t reconstructionSelectionSerial{};
         };
         static std::unordered_map<uint64_t, StaticRegionPacketCache> _staticRegionPackets;
 

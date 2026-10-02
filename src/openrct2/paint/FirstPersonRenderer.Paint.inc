@@ -167,6 +167,13 @@
                         : std::nullopt;
                     const auto selected = PaintRotationForPoint(
                         opt.camera, group.anchor, previous);
+                    if (!state.hasSelectedRotation
+                        || state.selectedRotation != selected)
+                    {
+                        ++_reconstructionSelectionSerial;
+                        if (_reconstructionSelectionSerial == 0)
+                            _reconstructionSelectionSerial = 1;
+                    }
                     state.selectedRotation = selected;
                     state.hasSelectedRotation = true;
                     state.lastSeen = frame;
