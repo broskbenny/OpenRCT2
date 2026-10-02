@@ -20,7 +20,9 @@ namespace OpenRCT2::Paint
     {
         FirstPersonVec3 eye{};
         FirstPersonBasis basis{};
-        float tanHalfHorizontal{}, tanHalfVertical{}, nearDistance{}, farDistance{};
+        float tanHalfHorizontal{}, tanHalfVertical{};
+        float horizontalRadiusScale{}, verticalRadiusScale{};
+        float nearDistance{}, farDistance{};
 
         FirstPersonFrustum(
             const FirstPersonCamera& camera, float horizontalFov, float aspect, float nearClip, float farClip)
@@ -28,6 +30,8 @@ namespace OpenRCT2::Paint
             , basis(GetFirstPersonBasis(camera))
             , tanHalfHorizontal(std::tan(std::clamp(horizontalFov, 30.0f, 120.0f) * 0.00872664625997f))
             , tanHalfVertical(tanHalfHorizontal / std::max(aspect, 0.01f))
+            , horizontalRadiusScale(std::sqrt(1.0f + tanHalfHorizontal * tanHalfHorizontal))
+            , verticalRadiusScale(std::sqrt(1.0f + tanHalfVertical * tanHalfVertical))
             , nearDistance(nearClip)
             , farDistance(farClip)
         {
@@ -41,13 +45,13 @@ namespace OpenRCT2::Paint
             const float z = FpDot(d, basis.forward);
             if (z + radius < nearDistance || z - radius > farDistance)
                 return false;
-            if (x > z * tanHalfHorizontal + radius * std::sqrt(1.0f + tanHalfHorizontal * tanHalfHorizontal))
+            if (x > z * tanHalfHorizontal + radius * horizontalRadiusScale)
                 return false;
-            if (-x > z * tanHalfHorizontal + radius * std::sqrt(1.0f + tanHalfHorizontal * tanHalfHorizontal))
+            if (-x > z * tanHalfHorizontal + radius * horizontalRadiusScale)
                 return false;
-            if (y > z * tanHalfVertical + radius * std::sqrt(1.0f + tanHalfVertical * tanHalfVertical))
+            if (y > z * tanHalfVertical + radius * verticalRadiusScale)
                 return false;
-            if (-y > z * tanHalfVertical + radius * std::sqrt(1.0f + tanHalfVertical * tanHalfVertical))
+            if (-y > z * tanHalfVertical + radius * verticalRadiusScale)
                 return false;
             return true;
         }
