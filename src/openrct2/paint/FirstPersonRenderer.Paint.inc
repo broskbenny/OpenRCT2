@@ -256,11 +256,6 @@
                         variant.semanticComponents.clear();
                         variant.semanticValid = false;
                         missesByRotation[rotation].insert(key);
-                        ++scene.staticTilePaints;
-                    }
-                    else
-                    {
-                        ++scene.staticTileCacheHits;
                     }
                 }
             }
@@ -295,7 +290,6 @@
                     continue;
                 for (const auto entityId : region.entities)
                 {
-                    ++scene.dynamicTileQueries;
                     auto* entity = getGameState().entities.tryGetEntity<EntityBase>(entityId);
                     if (entity == nullptr)
                         continue;
@@ -315,7 +309,6 @@
                     const auto visualBounds = EntityVisualBounds(*entity);
                     if (!worldFrustum.visible(visualBounds.center, visualBounds.radius))
                         continue;
-                    ++scene.dynamicTilesPainted;
 
                     auto& state = _entityRotations[entityId.ToUnderlying()];
                     const auto previous = state.hasSelectedRotation

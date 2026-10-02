@@ -47,7 +47,6 @@ namespace OpenRCT2::Drawing
             = 0;
         // OpenGL's perspective pass is optional for the existing software drawing context.
         virtual bool DrawFirstPersonScene(RenderTarget&, const Paint::FirstPersonScene&) { return false; }
-        virtual float GetFirstPersonGpuTimeMs() const { return 0.0f; }
     };
 
 } // namespace OpenRCT2::Drawing

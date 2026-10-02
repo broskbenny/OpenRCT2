@@ -129,7 +129,6 @@ public:
     void DrawLine(RenderTarget& rt, PaletteIndex colour, const ScreenLine& line) override;
     void DrawSprite(RenderTarget& rt, ImageId imageId, int32_t x, int32_t y) override;
     bool DrawFirstPersonScene(RenderTarget& rt, const Paint::FirstPersonScene& scene) override;
-    float GetFirstPersonGpuTimeMs() const override;
     void DrawSpriteRawMasked(RenderTarget& rt, int32_t x, int32_t y, ImageId maskImage, ImageId colourImage) override;
     void DrawSpriteSolid(RenderTarget& rt, ImageId image, int32_t x, int32_t y, PaletteIndex colour) override;
     void DrawGlyph(RenderTarget& rt, ImageId image, int32_t x, int32_t y, const PaletteMap& palette) override;
@@ -700,11 +699,6 @@ bool OpenGLDrawingContext::DrawFirstPersonScene(RenderTarget& rt, const Paint::F
         scene, *_textureCache, *_swapFramebuffer,
         framebuffer.GetWidth(), framebuffer.GetHeight(), clip);
     return true;
-}
-
-float OpenGLDrawingContext::GetFirstPersonGpuTimeMs() const
-{
-    return _firstPerson ? _firstPerson->LastGpuTimeMs() : 0.0f;
 }
 
 void OpenGLDrawingContext::Clear(RenderTarget& rt, PaletteIndex paletteIndex)

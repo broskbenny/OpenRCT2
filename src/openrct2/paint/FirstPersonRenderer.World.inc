@@ -637,7 +637,6 @@
                         && it->second.signature
                             == signature)
                     {
-                        ++scene.trackGeometryCacheHits;
                         it->second.lastSeen = frame;
                         if (it->second.dirty)
                         {
@@ -681,7 +680,6 @@
                             group->key, it->second);
                     }
 
-                    ++scene.trackGeometryBuilds;
                     auto rebuilt =
                         BuildTrackTrajectoryGeometry(
                             *ride, *track, originElement,

@@ -18,7 +18,6 @@
 #include "Paint.Entity.h"
 
 #include "../Context.h"
-#include "../Diagnostic.h"
 #include "../GameState.h"
 #include "../drawing/Drawing.Sprite.h"
 #include "../drawing/Colour.h"
@@ -63,7 +62,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -320,17 +318,9 @@ namespace OpenRCT2::Paint
             opt.fieldOfViewDegrees, opt.nearClip, opt.farClip);
         scene.options.farClip = scene.resolvedView.farClip;
         // Independent of the overhead paint collector: geometry is derived from live map state.
-        const auto visibilityStart=std::chrono::steady_clock::now();
         DiscoverVisibleTiles(scene);
-        const auto terrainStart=std::chrono::steady_clock::now();
-        scene.visibilityCpuMs=std::chrono::duration<float,std::milli>(terrainStart-visibilityStart).count();
         CollectTerrain(scene);
-        const auto trackStart=std::chrono::steady_clock::now();
-        scene.terrainCpuMs=std::chrono::duration<float,std::milli>(
-            trackStart-terrainStart).count();
         CollectTrackTrajectories(scene);
-        scene.trackCpuMs=std::chrono::duration<float,std::milli>(
-            std::chrono::steady_clock::now()-trackStart).count();
         // This remains an explicitly identified compatibility bridge for complex sprite selection.
         return scene;
     }
@@ -514,25 +504,13 @@ namespace OpenRCT2::Paint
                     ++_preparedFrame.serial;
             }
 
-            const auto start =
-                std::chrono::steady_clock::now();
             localScene =
                 CollectFirstPersonScene(opt, dimensions);
             localScene.screenOrigin = screenOrigin;
             localScene.presentationFrameSerial =
                 _preparedFrame.active
                     ? _preparedFrame.serial : 0;
-            const auto paintStart =
-                std::chrono::steady_clock::now();
             CollectPaintSprites(localScene, rt);
-            const auto submitStart =
-                std::chrono::steady_clock::now();
-            localScene.paintCpuMs =
-                std::chrono::duration<float, std::milli>(
-                    submitStart - paintStart).count();
-            localScene.prepareCpuMs =
-                std::chrono::duration<float, std::milli>(
-                    submitStart - start).count();
 
             if (_preparedFrame.active)
             {
@@ -555,73 +533,8 @@ namespace OpenRCT2::Paint
         auto* context =
             rt.DrawingEngine->GetDrawingContext();
         if (context != nullptr)
-        {
             context->DrawFirstPersonScene(rt, *scene);
 
-            // Sparse passive diagnostics: distinguish CPU scene construction
-            // from actual GPU submission/compositing before changing either.
-            static uint64_t lastDiagnosticSerial = 0;
-            const uint64_t serial =
-                scene->presentationFrameSerial;
-            if (serial != 0
-                && serial != lastDiagnosticSerial
-                && serial % 120 == 0)
-            {
-                lastDiagnosticSerial = serial;
-                size_t viewFacing = 0;
-                size_t blended = 0;
-                size_t cameraIndependent = 0;
-                for (const auto& surface :
-                     scene->surfaces)
-                {
-                    if (surface.viewFacing)
-                        ++viewFacing;
-                    if (surface.image.HasValue()
-                        && surface.image.IsBlended())
-                        ++blended;
-                    if (surface.cameraIndependent)
-                        ++cameraIndependent;
-                }
-
-                size_t staticSurfaces = 0;
-                for (const auto& region :
-                     scene->staticRegions)
-                {
-                    if (region.surfaces != nullptr)
-                        staticSurfaces +=
-                            region.surfaces->size();
-                }
-
-                LOG_INFO(
-                    "[RCTFP PERF] serial=%llu tiles=%zu regions=%zu "
-                    "staticSurfaces=%zu streamed=%zu viewFacing=%zu "
-                    "blended=%zu cameraIndependent=%zu staticPaints=%u "
-                    "cacheHits=%u trackBuilds=%u trackHits=%u "
-                    "dynamicQueries=%u dynamicPainted=%u "
-                    "cpuMs{vis=%.2f terrain=%.2f track=%.2f paint=%.2f total=%.2f} "
-                    "gpuMs=%.2f",
-                    static_cast<unsigned long long>(serial),
-                    scene->visibleTiles.size(),
-                    scene->staticRegions.size(),
-                    staticSurfaces,
-                    scene->surfaces.size(),
-                    viewFacing,
-                    blended,
-                    cameraIndependent,
-                    scene->staticTilePaints,
-                    scene->staticTileCacheHits,
-                    scene->trackGeometryBuilds,
-                    scene->trackGeometryCacheHits,
-                    scene->dynamicTileQueries,
-                    scene->dynamicTilesPainted,
-                    scene->visibilityCpuMs,
-                    scene->terrainCpuMs,
-                    scene->trackCpuMs,
-                    scene->paintCpuMs,
-                    scene->prepareCpuMs,
-                    context->GetFirstPersonGpuTimeMs());
-            }
-        }
     }
 } // namespace OpenRCT2::Paint
 

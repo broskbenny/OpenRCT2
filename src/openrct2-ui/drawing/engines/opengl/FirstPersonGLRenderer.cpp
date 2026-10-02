@@ -434,7 +434,6 @@ void main() {
         glCall(glDeleteShader, cv);
         glCall(glDeleteShader, cf);
         if (status != GL_TRUE) throw std::runtime_error("First-person compositor linking failed");
-        glCall(glGenQueries, GLsizei(_timerQueries.size()), _timerQueries.data());
         glCall(glGenQueries, GLsizei(_peelCoverageQueries.size()), _peelCoverageQueries.data());
         glCall(glGenVertexArrays, 1, &_vao);
         glCall(glGenBuffers, 1, &_vbo);
@@ -461,7 +460,6 @@ void main() {
         glCall(glDeleteVertexArrays, 1, &_vao);
         glCall(glDeleteProgram, _program);
         glCall(glDeleteProgram, _composeProgram);
-        glCall(glDeleteQueries,GLsizei(_timerQueries.size()),_timerQueries.data());
         glCall(glDeleteQueries,GLsizei(_peelCoverageQueries.size()),_peelCoverageQueries.data());
     }
     void FirstPersonGLRenderer::Draw(
@@ -594,30 +592,6 @@ void main() {
         const int32_t clipBottom = clip.getBottom();
         const int32_t clipWidth = clip.getWidth();
         const int32_t clipHeight = clip.getHeight();
-        // GPU timing remains diagnostic only. Queries are polled, never waited
-        // on, so diagnostics cannot force a CPU/GPU synchronisation every frame.
-        for (size_t i=0;i<_timerQueries.size();++i)
-        {
-            if (!_timerPending[i]) continue;
-            GLuint ready=0;
-            glCall(glGetQueryObjectuiv,_timerQueries[i],GL_QUERY_RESULT_AVAILABLE,&ready);
-            if (ready)
-            {
-                GLuint64 nanos=0;
-                glCall(glGetQueryObjectui64v,_timerQueries[i],GL_QUERY_RESULT,&nanos);
-                _lastGpuTimeMs=float(double(nanos)*1e-6);
-                _timerPending[i]=false;
-            }
-        }
-        auto timerSlot=_timerQueries.size();
-        for(size_t n=0;n<_timerQueries.size();++n)
-        {
-            const size_t i=(_nextTimer+n)%_timerQueries.size();
-            if(!_timerPending[i]) {timerSlot=i;_nextTimer=uint32_t((i+1)%_timerQueries.size());break;}
-        }
-        if(timerSlot<_timerQueries.size())
-            glCall(glBeginQuery,GL_TIME_ELAPSED,_timerQueries[timerSlot]);
-
         const auto pollPeelCoverageQueries =
             [&](uint64_t token) {
                 bool exhausted = false;
@@ -1618,11 +1592,6 @@ void main() {
         glCall(glViewport, 0, 0, screenWidth, screenHeight);
         glCall(glBindVertexArray, 0);
         OpenGLState::Reset();
-        if(timerSlot<_timerQueries.size())
-        {
-            glCall(glEndQuery,GL_TIME_ELAPSED);
-            _timerPending[timerSlot]=true;
-        }
     }
 } // namespace OpenRCT2::Ui
 #endif
