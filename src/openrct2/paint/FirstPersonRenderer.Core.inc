@@ -3148,29 +3148,45 @@
                                 + float(corner.z),
                         };
                     }
-                    const auto a = Sub(
-                        face.corners[1],
-                        face.corners[0]);
-                    const auto b = Sub(
-                        face.corners[2],
-                        face.corners[0]);
-                    FirstPersonVec3 normal{
-                        a.y * b.z - a.z * b.y,
-                        a.z * b.x - a.x * b.z,
-                        a.x * b.y - a.y * b.x,
-                    };
-                    const float normalLength =
-                        std::sqrt(
-                            normal.x * normal.x
-                            + normal.y * normal.y
-                            + normal.z * normal.z);
-                    if (!(normalLength > 1e-5f))
-                        continue;
-                    face.normal = {
-                        normal.x / normalLength,
-                        normal.y / normalLength,
-                        normal.z / normalLength,
-                    };
+                    if (sourceFace.kind
+                        == LargeSceneryAssetFaceKind::top)
+                    {
+                        face.normal = { 0.0f, 0.0f, 1.0f };
+                    }
+                    else if (sourceFace.kind
+                        == LargeSceneryAssetFaceKind::bottom)
+                    {
+                        face.normal = { 0.0f, 0.0f, -1.0f };
+                    }
+                    else
+                    {
+                        CoordsXY localNormal{};
+                        switch (sourceFace.kind)
+                        {
+                            case LargeSceneryAssetFaceKind::minX:
+                                localNormal = { -1, 0 };
+                                break;
+                            case LargeSceneryAssetFaceKind::maxX:
+                                localNormal = { 1, 0 };
+                                break;
+                            case LargeSceneryAssetFaceKind::minY:
+                                localNormal = { 0, -1 };
+                                break;
+                            case LargeSceneryAssetFaceKind::maxY:
+                                localNormal = { 0, 1 };
+                                break;
+                            default:
+                                break;
+                        }
+                        const auto worldNormal =
+                            localNormal.rotate(
+                                objectDirection);
+                        face.normal = {
+                            float(worldNormal.x),
+                            float(worldNormal.y),
+                            0.0f,
+                        };
+                    }
                     faces.push_back(face);
                 }
             }
