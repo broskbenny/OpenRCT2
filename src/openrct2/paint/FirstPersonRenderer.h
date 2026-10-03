@@ -172,6 +172,11 @@ namespace OpenRCT2::Paint
         // geometry plus all available native observations and therefore does
         // not depend on the passenger-selected native source rotation.
         bool cameraIndependent = false;
+        // A closed reconstructed hull can expose an authoritative boundary
+        // face. Its outward normal defines the physically visible half-space;
+        // this is independent of sprite flags and native paint ordering.
+        bool exteriorOnly = false;
+        FirstPersonVec3 outwardNormal{};
         // Zero means tile-local/unconnected artwork. Nonzero identifies a
         // multi-tile reconstruction group whose native source rotation is
         // selected from one canonical object/track origin.

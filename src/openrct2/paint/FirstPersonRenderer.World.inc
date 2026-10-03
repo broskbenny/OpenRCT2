@@ -3858,11 +3858,11 @@
                                 "FP_PLANE region=(%d,%d) normal=(%.3f,%.3f,%.3f) "
                                 "distance=%.2f overlap=(%.1f,%.1f) "
                                 "A[type=%s image=%u reconGroup=%llu semanticGroup=%llu gpuRegion=%llu "
-                                "owner=%d order=%llu role=%u "
+                                "owner=%d order=%llu exterior=%d normal=(%.1f,%.1f,%.1f) role=%u "
                                 "source=(tile=%d,%d comp=%u rot=%u artGroup=%u) "
                                 "material=(tile=%d,%d comp=%u rot=%u artGroup=%u order=%llu)] "
                                 "B[type=%s image=%u reconGroup=%llu semanticGroup=%llu gpuRegion=%llu "
-                                "owner=%d order=%llu role=%u "
+                                "owner=%d order=%llu exterior=%d normal=(%.1f,%.1f,%.1f) role=%u "
                                 "source=(tile=%d,%d comp=%u rot=%u artGroup=%u) "
                                 "material=(tile=%d,%d comp=%u rot=%u artGroup=%u order=%llu)] "
                                 "differentGroup=%d differentRegion=%d",
@@ -3888,6 +3888,10 @@
                                 static_cast<
                                     unsigned long long>(
                                         other.nativePaintOrdinal),
+                                other.exteriorOnly ? 1 : 0,
+                                double(other.outwardNormal.x),
+                                double(other.outwardNormal.y),
+                                double(other.outwardNormal.z),
                                 unsigned(other.diagnosticSemanticRole),
                                 other.diagnosticSourceTile.x
                                     / kCoordsXYStep,
@@ -3924,6 +3928,10 @@
                                 static_cast<
                                     unsigned long long>(
                                         surface.nativePaintOrdinal),
+                                surface.exteriorOnly ? 1 : 0,
+                                double(surface.outwardNormal.x),
+                                double(surface.outwardNormal.y),
+                                double(surface.outwardNormal.z),
                                 unsigned(surface.diagnosticSemanticRole),
                                 surface.diagnosticSourceTile.x
                                     / kCoordsXYStep,

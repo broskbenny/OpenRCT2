@@ -1271,6 +1271,8 @@
                 // is still alpha-tested artwork. Do not turn transparent sprite
                 // pixels into visible matter merely because a hull face exists.
                 surface.cameraIndependent = true;
+                surface.exteriorOnly = true;
+                surface.outwardNormal = face.normal;
 
                 if (!candidates.empty())
                 {
@@ -4093,6 +4095,14 @@
                 ExtendStableKey(
                     fingerprint, surface.cameraIndependent ? 1 : 0);
                 ExtendStableKey(
+                    fingerprint, surface.exteriorOnly ? 1 : 0);
+                if (surface.exteriorOnly)
+                {
+                    extendFloat(surface.outwardNormal.x);
+                    extendFloat(surface.outwardNormal.y);
+                    extendFloat(surface.outwardNormal.z);
+                }
+                ExtendStableKey(
                     fingerprint, surface.immutableFingerprint);
                 ExtendStableKey(
                     fingerprint, surface.textureFallbackOnly ? 1 : 0);
@@ -4250,6 +4260,22 @@
             ExtendStableKey(key, surface.immutableFingerprint);
             ExtendStableKey(key, surface.solidColour);
             ExtendStableKey(key, surface.nativePaintOrdinal);
+            ExtendStableKey(key, surface.exteriorOnly ? 1 : 0);
+            if (surface.exteriorOnly)
+            {
+                ExtendStableKey(
+                    key,
+                    uint64_t(int64_t(std::llround(
+                        double(surface.outwardNormal.x) * 1024.0))));
+                ExtendStableKey(
+                    key,
+                    uint64_t(int64_t(std::llround(
+                        double(surface.outwardNormal.y) * 1024.0))));
+                ExtendStableKey(
+                    key,
+                    uint64_t(int64_t(std::llround(
+                        double(surface.outwardNormal.z) * 1024.0))));
+            }
             ExtendStableKey(key, surface.image.GetRemap());
             ExtendStableKey(
                 key,

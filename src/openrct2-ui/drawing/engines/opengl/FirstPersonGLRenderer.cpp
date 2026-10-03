@@ -39,6 +39,7 @@ layout(location=7) in vec4 aMaskAtlas;
 layout(location=8) in vec2 aMaskSize;
 layout(location=9) in int aMaskLayer;
 layout(location=10) in uint aPaintOrdinal;
+layout(location=11) in vec3 aOutwardNormal;
 uniform vec3 uEye;
 uniform vec3 uForward;
 uniform vec3 uRight;
@@ -56,6 +57,7 @@ flat out vec4 fMaskAtlas;
 flat out vec2 fMaskSize;
 flat out int fMaskLayer;
 flat out uint fPaintOrdinal;
+flat out vec3 fOutwardNormal;
 void main() {
     vec3 delta = aWorld - uEye;
     float x = dot(delta, uRight);
@@ -76,6 +78,7 @@ void main() {
     fMaskSize = aMaskSize;
     fMaskLayer = aMaskLayer;
     fPaintOrdinal = aPaintOrdinal;
+    fOutwardNormal = aOutwardNormal;
 }
 )GLSL";
         constexpr char kFragmentShader[] = R"GLSL(#version 330 core
@@ -101,6 +104,7 @@ flat in vec4 fMaskAtlas;
 flat in vec2 fMaskSize;
 flat in int fMaskLayer;
 flat in uint fPaintOrdinal;
+flat in vec3 fOutwardNormal;
 layout(location=0) out uint oIndex;
 
 float CoplanarDepthTolerance(float physicalDepth) {
@@ -120,6 +124,13 @@ float CoplanarDepthTolerance(float physicalDepth) {
 }
 
 void main() {
+    // Closed reconstructed hull faces are physical boundary surfaces.
+    // Use their authoritative world-space outward normal instead of
+    // OpenGL winding so shared internal boundaries cannot both render.
+    if ((fFlags & 64) != 0
+        && dot(fOutwardNormal, uEye - fWorld) <= 0.0)
+        discard;
+
     uint col = 0u;
     if ((fFlags & 16) != 0) {
         // Geometry reconstructed from simulation semantics can carry a direct
@@ -305,6 +316,7 @@ void main() {
             float maskSize[2];
             int32_t maskLayer;
             uint32_t paintOrdinal;
+            float outwardNormal[3];
         };
         void ConfigureVertexInput(GLuint vao, GLuint vbo)
         {
@@ -332,6 +344,8 @@ void main() {
         glCall(glVertexAttribIPointer, 9, 1, GL_INT, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, maskLayer)));
         glCall(glEnableVertexAttribArray, 10);
         glCall(glVertexAttribIPointer, 10, 1, GL_UNSIGNED_INT, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, paintOrdinal)));
+        glCall(glEnableVertexAttribArray, 11);
+        glCall(glVertexAttribPointer, 11, 3, GL_FLOAT, GL_FALSE, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, outwardNormal)));
         }
         GLuint Compile(GLenum type, const char* source)
         {
@@ -915,13 +929,17 @@ void main() {
                         | (surface.physicalCoverage ? 8 : 0)
                         | (surface.solidColour != 0 ? 16 : 0)
                         | (surface.textureFallbackOnly ? 32 : 0)
+                        | (surface.exteriorOnly ? 64 : 0)
                         | (coverageFallback << 8),
                     {maskTex.coords.x,maskTex.coords.y,maskTex.coords.z,maskTex.coords.w},
                     {maskG1?float(maskG1->width):0.0f,maskG1?float(maskG1->height):0.0f},
                     maskG1?int32_t(maskTex.index):-1,
                     uint32_t(std::min<uint64_t>(
                         surface.nativePaintOrdinal,
-                        0x00ffffffull))});
+                        0x00ffffffull)),
+                    {surface.outwardNormal.x,
+                     surface.outwardNormal.y,
+                     surface.outwardNormal.z}});
             return true;
         };
         std::vector<GPUVertex> opaqueOrdinaryVertices;
