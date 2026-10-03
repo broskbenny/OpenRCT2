@@ -146,6 +146,8 @@ void InputManager::processAnalogueInput()
 
     const int32_t deadzone = Config::Get().general.gamepadDeadzone;
     const float sensitivity = Config::Get().general.gamepadSensitivity;
+    float accumulatedMoveX = 0.0f;
+    float accumulatedMoveY = 0.0f;
 
     for (auto* gameController : _gameControllers)
     {
@@ -168,38 +170,39 @@ void InputManager::processAnalogueInput()
 
                 // Use a quadratic curve for better fine control at low sensitivities
                 float sensitivityCurve = sensitivity * sensitivity;
-                float moveX = rawX * sensitivityCurve * 8.0f; // Reasonable base scale
-                float moveY = rawY * sensitivityCurve * 8.0f;
-
-                // Do not integrate imperceptible controller noise forever.
-                // Fractional accumulation previously turned a tiny steady-axis
-                // drift into a whole viewport pixel every few dozen frames,
-                // producing the characteristic periodic camera nudge even
-                // though the stick appeared centred.
-                constexpr float kMinimumIntentionalPixelsPerFrame = 0.05f;
-                const auto accumulateAxis = [](
-                    float movement, float& accumulator) {
-                    if (std::abs(movement)
-                        < kMinimumIntentionalPixelsPerFrame)
-                    {
-                        accumulator = 0.0f;
-                        return 0;
-                    }
-
-                    accumulator += movement;
-                    float integerPart = 0.0f;
-                    accumulator =
-                        std::modf(accumulator, &integerPart);
-                    return static_cast<int>(integerPart);
-                };
-
-                _analogueScroll.x +=
-                    accumulateAxis(moveX, _analogueScrollAccumX);
-                _analogueScroll.y +=
-                    accumulateAxis(moveY, _analogueScrollAccumY);
+                accumulatedMoveX += rawX * sensitivityCurve * 8.0f;
+                accumulatedMoveY += rawY * sensitivityCurve * 8.0f;
             }
         }
     }
+
+    // Do not integrate imperceptible controller noise forever. Fractional
+    // accumulation previously turned a tiny steady-axis drift into a whole
+    // viewport pixel every few dozen frames, producing the characteristic
+    // periodic camera nudge even though the stick appeared centred.
+    constexpr float kMinimumIntentionalPixelsPerFrame = 0.05f;
+    const auto accumulateAxis = [](
+        float movement, float& accumulator) {
+        if (std::abs(movement)
+            < kMinimumIntentionalPixelsPerFrame)
+        {
+            accumulator = 0.0f;
+            return 0;
+        }
+
+        accumulator += movement;
+        float integerPart = 0.0f;
+        accumulator =
+            std::modf(accumulator, &integerPart);
+        return static_cast<int>(integerPart);
+    };
+
+    _analogueScroll.x =
+        accumulateAxis(
+            accumulatedMoveX, _analogueScrollAccumX);
+    _analogueScroll.y =
+        accumulateAxis(
+            accumulatedMoveY, _analogueScrollAccumY);
 }
 
 void InputManager::updateAnalogueScroll()
