@@ -3275,6 +3275,24 @@
                 }
             }
 
+            const auto mutuallyExclusiveExteriorFaces =
+                [](const FirstPersonSurface& a,
+                   const FirstPersonSurface& b) {
+                    // Closed reconstructed hull boundary faces are visible
+                    // only from their outward half-space. Two coplanar
+                    // exterior faces with opposite physical normals can
+                    // never contribute from the same camera position, so
+                    // reporting them as a visual conflict is diagnostic
+                    // noise rather than evidence of fighting geometry.
+                    constexpr float kOpposedNormal = -0.999f;
+                    return a.exteriorOnly
+                        && b.exteriorOnly
+                        && FpDot(
+                               a.outwardNormal,
+                               b.outwardNormal)
+                            <= kOpposedNormal;
+                };
+
             // Diagnostic only: this runs when a dirty static region is rebuilt,
             // never in the normal presentation loop. Report materially-sized
             // horizontal same-Z overlaps, including ordinary terrain/path
@@ -3311,24 +3329,6 @@
                         hash ^= value;
                         hash *= 1099511628211ull;
                     };
-                const auto mutuallyExclusiveExteriorFaces =
-                    [](const FirstPersonSurface& a,
-                       const FirstPersonSurface& b) {
-                        // Closed reconstructed hull boundary faces are visible
-                        // only from their outward half-space. Two coplanar
-                        // exterior faces with opposite physical normals can
-                        // never contribute from the same camera position, so
-                        // reporting them as a visual conflict is diagnostic
-                        // noise rather than evidence of fighting geometry.
-                        constexpr float kOpposedNormal = -0.999f;
-                        return a.exteriorOnly
-                            && b.exteriorOnly
-                            && FpDot(
-                                   a.outwardNormal,
-                                   b.outwardNormal)
-                                <= kOpposedNormal;
-                    };
-
                 std::unordered_map<
                     uint64_t, std::vector<CoplanarProbe>>
                     buckets;
