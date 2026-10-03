@@ -187,8 +187,7 @@ static uint32_t PublishFirstPersonWallSemanticPlane(
             wallElement.getSlope(),
             int32_t(wallEntry.height) * kCoordsZStep),
         image, artworkOffset, artworkGroup,
-        decal, collidable,
-        wallEntry.flags.has(WallSceneryFlag::isDoubleSided));
+        decal, collidable);
 }
 
 static void PaintWallWall(

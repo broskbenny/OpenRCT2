@@ -192,10 +192,6 @@ struct FirstPersonPaintSemanticComponent
     FirstPersonPaintSemanticArtwork artwork{};
     uint16_t repetitionIndex = 0;
     bool collidable = true;
-    // Rendering sidedness is semantic geometry, not a camera heuristic.
-    // Walls set this from WallSceneryFlag::isDoubleSided; other semantic
-    // primitives retain the historical two-sided behaviour by default.
-    bool doubleSided = true;
 };
 
 struct PassengerPaintAnchor
@@ -477,7 +473,7 @@ uint32_t PaintSessionAddFirstPersonSemanticOrientedQuad(
     const std::array<FirstPersonPaintSemanticVec3, 4>& localCorners,
     ImageId image = {}, const CoordsXYZ& artworkOffset = {},
     uint32_t artworkGroup = 0, bool decal = false,
-    bool collidable = true, bool doubleSided = true);
+    bool collidable = true);
 
 uint32_t PaintSessionAddFirstPersonSemanticOrientedBox(
     PaintSession& session, FirstPersonPaintSemanticRole role,

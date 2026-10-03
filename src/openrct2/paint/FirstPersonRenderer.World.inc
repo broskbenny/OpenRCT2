@@ -1462,8 +1462,6 @@
                 fingerprint, component.repetitionIndex);
             ExtendStableKey(
                 fingerprint, component.collidable ? 1 : 0);
-            ExtendStableKey(
-                fingerprint, component.doubleSided ? 1 : 0);
             const auto faces =
                 BuildFirstPersonSemanticPhysicalFaces(component);
             ExtendStableKey(fingerprint, faces.size());
@@ -2248,6 +2246,7 @@
             BuildFirstPersonSemanticComponentSurfaces(
                 const FirstPersonPaintSemanticComponent& component,
                 uint64_t gpuRegion,
+                uint64_t diagnosticSemanticGroup,
                 const std::array<
                     const FirstPersonPaintSemanticComponent*, 4>&
                     artworkViews,
@@ -2448,7 +2447,6 @@
 
                 FirstPersonSurface surface{};
                 surface.gpuRegion = gpuRegion;
-                surface.singleSided = !component.doubleSided;
                 // Geometry/collision and visible material are independent.
                 // Palette index zero is explicit native transparency, not a
                 // hole to fill merely because this component has a 3D shape.
@@ -2464,27 +2462,62 @@
                     component.artwork.nativePaintOrdinal;
 
                 ImageId fallbackImage{};
-                for (const auto& view : decodedViews)
+                const FirstPersonPaintSemanticComponent*
+                    materialComponent = nullptr;
+                uint8_t materialRotation = 0xFF;
+                for (uint8_t rotation = 0;
+                     rotation < decodedViews.size(); ++rotation)
                 {
+                    const auto& view = decodedViews[rotation];
                     if (view.component != nullptr
                         && view.component->artwork.image.HasValue())
                     {
                         fallbackImage =
                             view.component->artwork.image;
+                        materialComponent = view.component;
+                        materialRotation = rotation;
                         break;
                     }
                 }
                 if (!candidates.empty())
                 {
+                    materialRotation =
+                        candidates.front().rotation;
+                    materialComponent =
+                        decodedViews[materialRotation].component;
                     fallbackImage =
-                        decodedViews[
-                            candidates.front().rotation]
-                            .component->artwork.image;
+                        materialComponent->artwork.image;
                 }
                 if (!fallbackImage.HasValue())
                     continue;
 
                 surface.image = fallbackImage;
+                surface.diagnosticSemanticGroup =
+                    diagnosticSemanticGroup;
+                surface.diagnosticSourceTile =
+                    component.mapPosition;
+                surface.diagnosticSourceComponent =
+                    component.id;
+                surface.diagnosticSourceArtworkGroup =
+                    component.artwork.group;
+                surface.diagnosticSourceRotation =
+                    component.artwork.sourceRotation;
+                surface.diagnosticSemanticRole =
+                    static_cast<uint8_t>(component.role);
+                if (materialComponent != nullptr)
+                {
+                    surface.diagnosticMaterialTile =
+                        materialComponent->mapPosition;
+                    surface.diagnosticMaterialComponent =
+                        materialComponent->id;
+                    surface.diagnosticMaterialArtworkGroup =
+                        materialComponent->artwork.group;
+                    surface.diagnosticMaterialPaintOrdinal =
+                        materialComponent->artwork
+                            .nativePaintOrdinal;
+                    surface.diagnosticMaterialRotation =
+                        materialRotation;
+                }
                 const int32_t width =
                     std::clamp(
                         int32_t(std::ceil(std::max(
@@ -2869,6 +2902,7 @@
                     BuildFirstPersonSemanticComponentSurfaces(
                         *canonical,
                         componentRegion,
+                        group.key,
                         group.views,
                         depthPeers.empty()
                             ? nullptr : &depthPeers, sprites);
@@ -3783,6 +3817,34 @@
                             hashValue(
                                 conflictKey,
                                 surface.nativePaintOrdinal);
+                            hashValue(
+                                conflictKey,
+                                other.diagnosticSemanticGroup);
+                            hashValue(
+                                conflictKey,
+                                surface.diagnosticSemanticGroup);
+                            hashValue(
+                                conflictKey,
+                                uint64_t(uint32_t(
+                                    other.diagnosticSourceTile.x)));
+                            hashValue(
+                                conflictKey,
+                                uint64_t(uint32_t(
+                                    other.diagnosticSourceTile.y)));
+                            hashValue(
+                                conflictKey,
+                                uint64_t(uint32_t(
+                                    surface.diagnosticSourceTile.x)));
+                            hashValue(
+                                conflictKey,
+                                uint64_t(uint32_t(
+                                    surface.diagnosticSourceTile.y)));
+                            hashValue(
+                                conflictKey,
+                                other.diagnosticSourceComponent);
+                            hashValue(
+                                conflictKey,
+                                surface.diagnosticSourceComponent);
 
                             if (planeLogsThisRegion
                                     >= kMaxPlaneLogsPerRegion
@@ -3795,8 +3857,14 @@
                             LOG_WARNING(
                                 "FP_PLANE region=(%d,%d) normal=(%.3f,%.3f,%.3f) "
                                 "distance=%.2f overlap=(%.1f,%.1f) "
-                                "A[type=%s image=%u group=%llu gpuRegion=%llu owner=%d order=%llu] "
-                                "B[type=%s image=%u group=%llu gpuRegion=%llu owner=%d order=%llu] "
+                                "A[type=%s image=%u reconGroup=%llu semanticGroup=%llu gpuRegion=%llu "
+                                "owner=%d order=%llu role=%u "
+                                "source=(tile=%d,%d comp=%u rot=%u artGroup=%u) "
+                                "material=(tile=%d,%d comp=%u rot=%u artGroup=%u order=%llu)] "
+                                "B[type=%s image=%u reconGroup=%llu semanticGroup=%llu gpuRegion=%llu "
+                                "owner=%d order=%llu role=%u "
+                                "source=(tile=%d,%d comp=%u rot=%u artGroup=%u) "
+                                "material=(tile=%d,%d comp=%u rot=%u artGroup=%u order=%llu)] "
                                 "differentGroup=%d differentRegion=%d",
                                 regionX, regionY,
                                 double(probe->normal.x),
@@ -3812,11 +3880,35 @@
                                         other.reconstructionGroup),
                                 static_cast<
                                     unsigned long long>(
+                                        other.diagnosticSemanticGroup),
+                                static_cast<
+                                    unsigned long long>(
                                         other.gpuRegion),
                                 other.coplanarOwner ? 1 : 0,
                                 static_cast<
                                     unsigned long long>(
                                         other.nativePaintOrdinal),
+                                unsigned(other.diagnosticSemanticRole),
+                                other.diagnosticSourceTile.x
+                                    / kCoordsXYStep,
+                                other.diagnosticSourceTile.y
+                                    / kCoordsXYStep,
+                                other.diagnosticSourceComponent,
+                                unsigned(
+                                    other.diagnosticSourceRotation),
+                                other.diagnosticSourceArtworkGroup,
+                                other.diagnosticMaterialTile.x
+                                    / kCoordsXYStep,
+                                other.diagnosticMaterialTile.y
+                                    / kCoordsXYStep,
+                                other.diagnosticMaterialComponent,
+                                unsigned(
+                                    other.diagnosticMaterialRotation),
+                                other.diagnosticMaterialArtworkGroup,
+                                static_cast<
+                                    unsigned long long>(
+                                        other
+                                            .diagnosticMaterialPaintOrdinal),
                                 surfaceType(surface),
                                 imageB,
                                 static_cast<
@@ -3824,11 +3916,35 @@
                                         surface.reconstructionGroup),
                                 static_cast<
                                     unsigned long long>(
+                                        surface.diagnosticSemanticGroup),
+                                static_cast<
+                                    unsigned long long>(
                                         surface.gpuRegion),
                                 surface.coplanarOwner ? 1 : 0,
                                 static_cast<
                                     unsigned long long>(
                                         surface.nativePaintOrdinal),
+                                unsigned(surface.diagnosticSemanticRole),
+                                surface.diagnosticSourceTile.x
+                                    / kCoordsXYStep,
+                                surface.diagnosticSourceTile.y
+                                    / kCoordsXYStep,
+                                surface.diagnosticSourceComponent,
+                                unsigned(
+                                    surface.diagnosticSourceRotation),
+                                surface.diagnosticSourceArtworkGroup,
+                                surface.diagnosticMaterialTile.x
+                                    / kCoordsXYStep,
+                                surface.diagnosticMaterialTile.y
+                                    / kCoordsXYStep,
+                                surface.diagnosticMaterialComponent,
+                                unsigned(
+                                    surface.diagnosticMaterialRotation),
+                                surface.diagnosticMaterialArtworkGroup,
+                                static_cast<
+                                    unsigned long long>(
+                                        surface
+                                            .diagnosticMaterialPaintOrdinal),
                                 other.reconstructionGroup
                                         != surface.reconstructionGroup
                                     ? 1 : 0,

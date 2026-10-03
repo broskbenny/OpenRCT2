@@ -109,15 +109,25 @@ namespace OpenRCT2::Paint
         // Cached upright sprites must always face the CURRENT camera: keep their
         // original native image-space offsets and world anchor, not old vertices.
         bool viewFacing = false;
-        // Single-sided semantic planes keep their authored physical winding.
-        // The GPU rejects only the opposite side; global culling stays disabled
-        // for terrain, sprites, and genuinely double-sided geometry.
-        bool singleSided = false;
         // Equal-depth ownership is logical paint evidence, not a geometry
         // offset. World-fixed native artwork can be replayed in authoritative
         // paint order against the frozen physical-depth result, so coincident
         // surfaces resolve deterministically without role-specific biases.
         bool coplanarOwner = false;
+        // Diagnostic provenance for semantic material reconstruction. These
+        // fields do not affect rendering or cache identity; they only explain
+        // where a final plane/material came from when FP_PLANE is enabled.
+        uint64_t diagnosticSemanticGroup = 0;
+        CoordsXY diagnosticSourceTile{};
+        CoordsXY diagnosticMaterialTile{};
+        uint32_t diagnosticSourceComponent = 0;
+        uint32_t diagnosticMaterialComponent = 0;
+        uint32_t diagnosticSourceArtworkGroup = 0;
+        uint32_t diagnosticMaterialArtworkGroup = 0;
+        uint64_t diagnosticMaterialPaintOrdinal = 0;
+        uint8_t diagnosticSourceRotation = 0xFF;
+        uint8_t diagnosticMaterialRotation = 0xFF;
+        uint8_t diagnosticSemanticRole = 0;
         // Visual coverage may deliberately follow known-solid world geometry
         // instead of sprite alpha (terrain, rails, structural faces). This is a
         // rendering/material rule only, never a collision flag: foliage and
