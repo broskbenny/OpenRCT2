@@ -468,8 +468,8 @@ namespace OpenRCT2::Paint
                     cached.verticalOpening ? 1 : 0,
                     static_cast<unsigned long long>(
                         cached.ground.gpuRegion),
-                    cached.water.has_value() ? 1 : 0,
-                    cached.waterOverlay.has_value() ? 1 : 0);
+                    cached.water.size(),
+                    cached.waterOverlay.size());
             }
 
             const auto paint = _staticPaintCache.find(key);
