@@ -17,10 +17,6 @@
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
             std::unordered_set<uint64_t>
                 cameraIndependentRefreshKeys;
-            std::unordered_map<uint64_t, uint8_t>
-                requestedTileRotations;
-            requestedTileRotations.reserve(
-                scene.visibleTiles.size());
             const auto& view = scene.resolvedView;
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
@@ -84,7 +80,7 @@
                     cached.cameraIndependentStreamedSurfaces.clear();
                     cached.cameraIndependentFingerprint = 0;
                     WithdrawFirstPersonSemanticComponents(tile);
-                    cached.hasCameraDependentWorldFallback = false;
+                    cached.hasUngroupedResident = false;
                     cached.hasCameraDependentFallback = false;
 
                     auto* element = MapGetFirstElementAt(tile);
@@ -124,14 +120,13 @@
                 const auto previousRotation = cached.hasSelectedRotation
                     ? std::optional<uint8_t>{ cached.selectedRotation }
                     : std::nullopt;
-                const auto tileRotation =
-                    PaintRotationForTile(
-                        opt.camera, tile, previousRotation);
-                requestedTileRotations[key] = tileRotation;
-                // selectedRotation is the last fully captured native view that
-                // is safe to present. Do not switch it merely because the eye
-                // crossed a source-view boundary; the requested view is
-                // acquired below and promoted only after capture completes.
+                const auto tileRotation = PaintRotationForTile(opt.camera, tile, previousRotation);
+                if ((!cached.hasSelectedRotation
+                        || cached.selectedRotation != tileRotation)
+                    && cached.hasUngroupedResident)
+                    MarkStaticRegionDirtyForTile(tx, ty);
+                cached.selectedRotation = tileRotation;
+                cached.hasSelectedRotation = true;
                 cached.lastSeen = frame;
 
                 bool hasTerrainEdgeSemantic = false;
@@ -167,7 +162,7 @@
                 const bool needsTileSourceView =
                     !hasAnyValidRotation
                     || cached.animated
-                    || cached.hasCameraDependentWorldFallback
+                    || cached.hasUngroupedResident
                     || cached.hasCameraDependentFallback
                     || selectedTerrainEvidenceMissing;
                 uint8_t rotationMask =
@@ -273,12 +268,12 @@
                     if (stale && nativeCapturesRemaining != 0)
                     {
                         --nativeCapturesRemaining;
-                        // Acquiring another native source view is
-                        // artwork evidence, not physical invalidation.
-                        // Preserve ready camera-independent reconstruction and
-                        // merge the new observation into it. Authoritative tile
-                        // invalidation already clears these lists above.
-                        cameraIndependentRefreshKeys.insert(key);
+                        if (cameraIndependentRefreshKeys
+                                .insert(key).second)
+                        {
+                            cached.cameraIndependentResidentSurfaces.clear();
+                            cached.cameraIndependentStreamedSurfaces.clear();
+                        }
                         variant.valid = true;
                         variant.lastPainted = frame;
                         variant.lastAnimationGeneration = animationGeneration;
@@ -767,27 +762,15 @@
 
                                     if (IsResidentStaticSurface(surface))
                                     {
-                                        // This surface is opaque/world-fixed
-                                        // but still depends on one native
-                                        // source rotation. Keeping it inside a
-                                        // resident region would make turning
-                                        // the camera rebuild that region.
-                                        // Stream it instead; reconstructed
-                                        // camera-independent geometry took the
-                                        // branch above.
-                                        variant.streamedSurfaces.push_back(
-                                            surface);
+                                        variant.residentSurfaces.push_back(surface);
                                         if (surface.reconstructionGroup == 0)
-                                        {
-                                            cacheIt->second
-                                                .hasCameraDependentWorldFallback =
-                                                true;
-                                        }
+                                            cacheIt->second.hasUngroupedResident = true;
                                     }
                                     else
                                     {
                                         variant.streamedSurfaces.push_back(surface);
-                                        if (surface.reconstructionGroup
+                                        if (surface.viewFacing
+                                            && surface.reconstructionGroup
                                                 == 0)
                                         {
                                             cacheIt->second
@@ -814,25 +797,6 @@
                     Drawing::ScrollingText::EndFirstPersonSnapshotCapture();
                     PaintSessionFree(session);
                 }
-            }
-
-            // Promote a newly requested native view only after this frame's
-            // capture work has completed. Until then selectedRotation keeps
-            // pointing at the previously ready view, so turning never blanks
-            // already-visible fallback artwork while a new view is prepared.
-            for (const auto& [key, requested] :
-                 requestedTileRotations)
-            {
-                const auto cacheIt =
-                    _staticPaintCache.find(key);
-                if (cacheIt == _staticPaintCache.end())
-                    continue;
-                auto& cached = cacheIt->second;
-                if (requested >= cached.rotations.size()
-                    || !cached.rotations[requested].valid)
-                    continue;
-                cached.selectedRotation = requested;
-                cached.hasSelectedRotation = true;
             }
 
             // Semantic geometry is usable as soon as the selected native view
