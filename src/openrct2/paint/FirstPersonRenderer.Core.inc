@@ -1823,8 +1823,11 @@
             bool verticalOpening = false;
             int32_t spriteX{}, spriteY{}, spriteWidth{}, spriteHeight{};
             FirstPersonSurface ground{};
-            std::optional<FirstPersonSurface> water;
-            std::optional<FirstPersonSurface> waterOverlay;
+            // A shallow shoreline can clip each of the terrain quad's two
+            // authoritative triangles independently, so water is not always
+            // representable by one full-tile quad.
+            std::vector<FirstPersonSurface> water;
+            std::vector<FirstPersonSurface> waterOverlay;
             ImageId waterMaskImage{}, waterOverlayImage{};
             uint64_t lastSeen{};
             bool dirty = true;
