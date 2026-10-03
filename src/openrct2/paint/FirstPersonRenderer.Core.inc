@@ -1923,7 +1923,11 @@
             bool animated = false;
             bool hasSelectedRotation = false;
             uint8_t selectedRotation = 0;
-            bool hasUngroupedResident = false;
+            // Native fallback artwork whose selected source view can change
+            // with the camera must never live in a resident GPU region. Keep
+            // it streamed so a head turn cannot invalidate physical world
+            // packets.
+            bool hasCameraDependentWorldFallback = false;
             bool hasCameraDependentFallback = false;
             bool visibilityBoundValid = false;
             bool visibilityKnown = false;

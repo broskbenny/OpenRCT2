@@ -981,13 +981,28 @@ void main() {
         // fallback stalled the frame, while a hard cap here would leave dense
         // visible regions permanently absent.
         size_t visibleBytes = 0, largestPacketBytes = 0;
+        size_t readyVisibleBytes = 0;
         for (const auto& packet : scene.staticRegions)
         {
-            const auto bytes = packet.vertexCount * sizeof(GPUVertex);
+            const auto bytes =
+                packet.vertexCount * sizeof(GPUVertex);
             visibleBytes += bytes;
-            largestPacketBytes = std::max(largestPacketBytes, bytes);
+            largestPacketBytes =
+                std::max(largestPacketBytes, bytes);
+            if (const auto it =
+                    _staticOpaqueRegions.find(packet.key);
+                it != _staticOpaqueRegions.end())
+            {
+                readyVisibleBytes += it->second.bytes;
+            }
         }
-        const size_t regionBudget = std::max(kRegionGpuLimit, visibleBytes + largestPacketBytes);
+        // Atomic replacement needs room for the complete currently-visible
+        // resident set plus one staged replacement. Old and new generations
+        // may differ in size, so budget from the larger visible footprint.
+        const size_t regionBudget = std::max(
+            kRegionGpuLimit,
+            std::max(visibleBytes, readyVisibleBytes)
+                + largestPacketBytes);
         // Protect every visible resident before considering LRU eviction.
         for (const auto& packet : scene.staticRegions)
             if (const auto it = _staticOpaqueRegions.find(packet.key); it != _staticOpaqueRegions.end())
@@ -1010,15 +1025,11 @@ void main() {
             if (!ready && !_pendingRegion && packet.surfaceStorage && uploadBudget.available())
             {
                 const auto bytes = packet.vertexCount * sizeof(GPUVertex);
-                // Replacement must be possible even when there is no room for
-                // both versions. Drop the obsolete resident and let it pop in
-                // again after the bounded upload, instead of stalling forever.
-                if (bytes <= regionBudget && _staticRegionBytes + bytes > regionBudget
-                    && found != _staticOpaqueRegions.end())
-                {
-                    DiscardRegionBuffer(packet.key);
-                    found = _staticOpaqueRegions.end();
-                }
+                // Never destroy the ready generation of a visible region to
+                // make space for its replacement. Evict only non-visible LRU
+                // regions; if the protected visible set still leaves
+                // insufficient room, postpone this upload and keep drawing
+                // the old generation.
                 while (_staticRegionBytes + bytes > regionBudget)
                 {
                     auto victim = _staticOpaqueRegions.end();
@@ -1104,8 +1115,10 @@ void main() {
             }
             if (found != _staticOpaqueRegions.end())
             {
-                // Keep ready geometry during an incremental replacement, but
-                // never show a region after authoritative game-state invalidation.
+                // Keep the ready generation visible throughout an incremental
+                // replacement. Only authoritative source invalidation may hide
+                // stale geometry; camera/material generation changes retain
+                // the already-ready world until the replacement is complete.
                 if (found->second.sourceRevision == packet.sourceRevision)
                     regionDraws.push_back(packet.key);
             }
