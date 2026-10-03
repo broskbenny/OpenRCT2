@@ -1144,12 +1144,12 @@
                         if (!cache.verticalOpening
                             && !IsResidentStaticSurface(cache.ground))
                             scene.surfaces.emplace_back(cache.ground);
-                        if (cache.water.has_value()
-                            && !IsResidentStaticSurface(*cache.water))
-                            scene.surfaces.emplace_back(*cache.water);
-                        if (cache.waterOverlay.has_value()
-                            && !IsResidentStaticSurface(*cache.waterOverlay))
-                            scene.surfaces.emplace_back(*cache.waterOverlay);
+                        for (const auto& waterSurface : cache.water)
+                            if (!IsResidentStaticSurface(waterSurface))
+                                scene.surfaces.emplace_back(waterSurface);
+                        for (const auto& overlaySurface : cache.waterOverlay)
+                            if (!IsResidentStaticSurface(overlaySurface))
+                                scene.surfaces.emplace_back(overlaySurface);
                         continue;
                     }
 
@@ -1225,57 +1225,235 @@
                         cache.ground.physicalCoverage = true;
                         cache.ground.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
                         EmitQuad(cache.ground, v, UsesOppositeTerrainDiagonal(slope));
-                        cache.water.reset();
-                        cache.waterOverlay.reset();
+                        cache.water.clear();
+                        cache.waterOverlay.clear();
                         if (waterMask.HasValue())
                         {
-                            const auto* wg1 = GfxGetG1Element(waterMask);
-                            if (wg1 != nullptr)
+                            struct WetPolygon
                             {
-                                FirstPersonSurface waterSurface{};
-                                waterSurface.image = waterMask;
-                                // The map defines a continuous physical water
-                                // sheet across the full tile. Transparency in
-                                // the native isometric mask is compositing
-                                // artwork, not absence of water in 3D.
-                                waterSurface.physicalCoverage = true;
-                                waterSurface.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
-                                std::array<FirstPersonVertex, 4> w{};
-                                const auto waterIso = Translate3DTo2DWithZ(
-                                    sourceRotation, { sourceSpritePosition, waterZ });
+                                std::array<FirstPersonVec3, 4> points{};
+                                size_t count = 0;
+                            };
+
+                            constexpr float kWetEpsilon = 0.001f;
+                            const float waterHeight = float(waterZ);
+                            const auto sameXY =
+                                [](FirstPersonVec3 a, FirstPersonVec3 b) {
+                                    return std::abs(a.x - b.x) <= kWetEpsilon
+                                        && std::abs(a.y - b.y) <= kWetEpsilon;
+                                };
+                            const auto clipTerrainTriangleToWater =
+                                [&](std::array<size_t, 3> indices) {
+                                    WetPolygon result{};
+                                    bool hasStrictlySubmergedVertex = false;
+                                    for (const auto index : indices)
+                                    {
+                                        if (world[index].z
+                                            < waterHeight - kWetEpsilon)
+                                        {
+                                            hasStrictlySubmergedVertex = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!hasStrictlySubmergedVertex)
+                                        return result;
+
+                                    std::array<FirstPersonVec3, 8> clipped{};
+                                    size_t clippedCount = 0;
+                                    const auto appendUnique =
+                                        [&](FirstPersonVec3 point) {
+                                            point.z = waterHeight;
+                                            if (clippedCount != 0
+                                                && sameXY(
+                                                    clipped[clippedCount - 1],
+                                                    point))
+                                                return;
+                                            clipped[clippedCount++] = point;
+                                        };
+                                    for (size_t edge = 0; edge < 3; ++edge)
+                                    {
+                                        const auto a = world[indices[edge]];
+                                        const auto b =
+                                            world[indices[(edge + 1) % 3]];
+                                        const bool aInside =
+                                            a.z <= waterHeight + kWetEpsilon;
+                                        const bool bInside =
+                                            b.z <= waterHeight + kWetEpsilon;
+
+                                        if (aInside)
+                                            appendUnique(a);
+                                        if (aInside == bInside)
+                                            continue;
+
+                                        const float dz = b.z - a.z;
+                                        if (std::abs(dz) <= kWetEpsilon)
+                                            continue;
+                                        const float t =
+                                            std::clamp(
+                                                (waterHeight - a.z) / dz,
+                                                0.0f, 1.0f);
+                                        appendUnique({
+                                            a.x + (b.x - a.x) * t,
+                                            a.y + (b.y - a.y) * t,
+                                            waterHeight,
+                                        });
+                                    }
+                                    if (clippedCount > 1
+                                        && sameXY(
+                                            clipped.front(),
+                                            clipped[clippedCount - 1]))
+                                        --clippedCount;
+                                    if (clippedCount < 3
+                                        || clippedCount > 4)
+                                        return result;
+
+                                    float twiceArea = 0.0f;
+                                    for (size_t i = 0; i < clippedCount; ++i)
+                                    {
+                                        const auto& a = clipped[i];
+                                        const auto& b =
+                                            clipped[(i + 1) % clippedCount];
+                                        twiceArea += a.x * b.y - b.x * a.y;
+                                    }
+                                    if (std::abs(twiceArea) <= kWetEpsilon)
+                                        return result;
+
+                                    result.count = clippedCount;
+                                    for (size_t i = 0; i < clippedCount; ++i)
+                                        result.points[i] = clipped[i];
+                                    return result;
+                                };
+
+                            std::array<WetPolygon, 2> wetPolygons{};
+                            const bool completelySubmerged =
+                                std::all_of(
+                                    world.begin(), world.end(),
+                                    [&](const auto& point) {
+                                        return point.z
+                                            < waterHeight - kWetEpsilon;
+                                    });
+                            if (completelySubmerged)
+                            {
+                                wetPolygons[0].count = 4;
                                 for (size_t i = 0; i < world.size(); ++i)
                                 {
-                                    const auto p = CoordsXYZ{ int32_t(world[i].x), int32_t(world[i].y), waterZ };
-                                    const auto src = Translate3DTo2DWithZ(sourceRotation, p);
-                                    w[i] = { { world[i].x, world[i].y, float(waterZ) },
-                                             float(src.x-waterIso.x-wg1->xOffset),
-                                             float(src.y-waterIso.y-wg1->yOffset) };
+                                    wetPolygons[0].points[i] = {
+                                        world[i].x,
+                                        world[i].y,
+                                        waterHeight,
+                                    };
                                 }
-                                EmitQuad(waterSurface,w);
-                                cache.water = std::move(waterSurface);
                             }
-                            const auto* og1 = waterOverlay.HasValue() ? GfxGetG1Element(waterOverlay) : nullptr;
-                            if (og1 != nullptr)
+                            else
                             {
-                                // The original game paints a separate water overlay.
-                                // Leave it on top of the blended mask, but let its
-                                // encoded holes expose the tint and world underneath.
-                                FirstPersonSurface overlay{};
-                                overlay.image = waterOverlay;
-                                overlay.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
-                                std::array<FirstPersonVertex, 4> w{};
-                                const auto waterIso = Translate3DTo2DWithZ(
-                                    sourceRotation, { sourceSpritePosition, waterZ });
-                                for (size_t i = 0; i < world.size(); ++i)
+                                const bool oppositeDiagonal =
+                                    UsesOppositeTerrainDiagonal(slope);
+                                const std::array<std::array<size_t, 3>, 2>
+                                    triangles = oppositeDiagonal
+                                    ? std::array<std::array<size_t, 3>, 2>{ {
+                                          { 0, 1, 3 },
+                                          { 1, 2, 3 },
+                                      } }
+                                    : std::array<std::array<size_t, 3>, 2>{ {
+                                          { 0, 1, 2 },
+                                          { 0, 2, 3 },
+                                      } };
+                                for (size_t i = 0; i < triangles.size(); ++i)
                                 {
-                                    const auto p = CoordsXYZ{ int32_t(world[i].x), int32_t(world[i].y), waterZ };
-                                    const auto src = Translate3DTo2DWithZ(sourceRotation, p);
-                                    w[i] = { { world[i].x, world[i].y, float(waterZ)+0.25f },
-                                             float(src.x-waterIso.x-og1->xOffset),
-                                             float(src.y-waterIso.y-og1->yOffset) };
+                                    wetPolygons[i] =
+                                        clipTerrainTriangleToWater(
+                                            triangles[i]);
                                 }
-                                EmitQuad(overlay,w);
-                                cache.waterOverlay = std::move(overlay);
+                            }
+
+                            const auto appendWaterMaterial =
+                                [&](std::vector<FirstPersonSurface>& target,
+                                    const WetPolygon& polygon,
+                                    ImageId material, const G1Element& materialG1,
+                                    bool physicalCoverage, float zOffset) {
+                                    if (polygon.count < 3)
+                                        return;
+
+                                    const auto waterIso =
+                                        Translate3DTo2DWithZ(
+                                            sourceRotation,
+                                            { sourceSpritePosition, waterZ });
+                                    const auto makeVertex =
+                                        [&](FirstPersonVec3 point) {
+                                            const CoordsXYZ sample{
+                                                int32_t(std::lround(point.x)),
+                                                int32_t(std::lround(point.y)),
+                                                waterZ,
+                                            };
+                                            const auto src =
+                                                Translate3DTo2DWithZ(
+                                                    sourceRotation, sample);
+                                            point.z =
+                                                waterHeight + zOffset;
+                                            return FirstPersonVertex{
+                                                point,
+                                                float(src.x - waterIso.x
+                                                    - materialG1.xOffset),
+                                                float(src.y - waterIso.y
+                                                    - materialG1.yOffset),
+                                            };
+                                        };
+
+                                    std::array<FirstPersonVertex, 4> vertices{};
+                                    for (size_t i = 0; i < polygon.count; ++i)
+                                        vertices[i] =
+                                            makeVertex(polygon.points[i]);
+
+                                    FirstPersonSurface surface{};
+                                    surface.image = material;
+                                    surface.physicalCoverage =
+                                        physicalCoverage;
+                                    surface.gpuRegion =
+                                        FirstPersonGpuRegionKey(tx, ty);
+                                    if (polygon.count == 3)
+                                    {
+                                        surface.triangles = {
+                                            vertices[0], vertices[1], vertices[2],
+                                            vertices[0], vertices[2], vertices[2],
+                                        };
+                                    }
+                                    else
+                                    {
+                                        surface.triangles = {
+                                            vertices[0], vertices[1], vertices[2],
+                                            vertices[0], vertices[2], vertices[3],
+                                        };
+                                    }
+                                    target.emplace_back(std::move(surface));
+                                };
+
+                            if (const auto* wg1 = GfxGetG1Element(waterMask);
+                                wg1 != nullptr)
+                            {
+                                for (const auto& polygon : wetPolygons)
+                                {
+                                    appendWaterMaterial(
+                                        cache.water, polygon, waterMask, *wg1,
+                                        true, 0.0f);
+                                }
+                            }
+
+                            if (const auto* og1 =
+                                    waterOverlay.HasValue()
+                                    ? GfxGetG1Element(waterOverlay)
+                                    : nullptr;
+                                og1 != nullptr)
+                            {
+                                // The native overlay is decorative artwork on
+                                // the same authoritative wet footprint. Its
+                                // transparency can reveal the physical water
+                                // foundation, never dry land or empty space.
+                                for (const auto& polygon : wetPolygons)
+                                {
+                                    appendWaterMaterial(
+                                        cache.waterOverlay, polygon,
+                                        waterOverlay, *og1, false, 0.25f);
+                                }
                             }
                         }
                     }
@@ -1283,10 +1461,12 @@
                     cache.dirty = false;
                     if (!cache.verticalOpening && !IsResidentStaticSurface(cache.ground))
                         scene.surfaces.emplace_back(cache.ground);
-                    if (cache.water.has_value() && !IsResidentStaticSurface(*cache.water))
-                        scene.surfaces.emplace_back(*cache.water);
-                    if (cache.waterOverlay.has_value() && !IsResidentStaticSurface(*cache.waterOverlay))
-                        scene.surfaces.emplace_back(*cache.waterOverlay);
+                    for (const auto& waterSurface : cache.water)
+                        if (!IsResidentStaticSurface(waterSurface))
+                            scene.surfaces.emplace_back(waterSurface);
+                    for (const auto& overlaySurface : cache.waterOverlay)
+                        if (!IsResidentStaticSurface(overlaySurface))
+                            scene.surfaces.emplace_back(overlaySurface);
             }
             // Terrain is bounded by the park and changes only through native
             // invalidation. Retaining it makes a turn a visibility operation,
@@ -3142,8 +3322,10 @@
                     const auto& terrain = terrainIt->second;
                     if (!terrain.verticalOpening)
                         addSurface(terrain.ground);
-                    if (terrain.water.has_value()) addSurface(*terrain.water);
-                    if (terrain.waterOverlay.has_value()) addSurface(*terrain.waterOverlay);
+                    for (const auto& waterSurface : terrain.water)
+                        addSurface(waterSurface);
+                    for (const auto& overlaySurface : terrain.waterOverlay)
+                        addSurface(overlaySurface);
                 }
 
                 if (auto supportIt =
