@@ -1212,7 +1212,9 @@ static void PathPaintPoleSupport(
     const bool hasPassedSurface = (session.Flags & PaintSessionFlags::PassedSurface) != 0;
     if (!hasSupports || !hasPassedSurface)
     {
-        PaintPathDeckImageAsParent(session, surfaceImage, { 0, 0, height }, boundbox);
+        PaintPathDeckImageAsParent(
+            session, surfaceImage, { 0, 0, height },
+            boundbox, pathArtworkGroup);
     }
     else
     {
@@ -1231,7 +1233,9 @@ static void PathPaintPoleSupport(
 
         if (pathElement.isQueue() || (pathPaintInfo.railings.flags & RAILING_ENTRY_FLAG_DRAW_PATH_OVER_SUPPORTS))
         {
-            PaintPathDeckImageAsChild(session, surfaceImage, { 0, 0, height }, boundbox);
+            PaintPathDeckImageAsChild(
+                session, surfaceImage, { 0, 0, height },
+                boundbox, pathArtworkGroup);
         }
     }
 
