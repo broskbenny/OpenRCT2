@@ -39,11 +39,13 @@ namespace OpenRCT2::Paint
         horizontalArtwork = 1u << 0,
         horizontalPhysical = 1u << 1,
         horizontalMixed = 1u << 2,
+        planes = 1u << 3,
     };
 
     inline constexpr uint32_t kFirstPersonDiagnosticDefaultMask =
         uint32_t(FirstPersonDiagnosticCategory::horizontalArtwork)
-        | uint32_t(FirstPersonDiagnosticCategory::horizontalPhysical);
+        | uint32_t(FirstPersonDiagnosticCategory::horizontalPhysical)
+        | uint32_t(FirstPersonDiagnosticCategory::planes);
     inline constexpr uint32_t kFirstPersonDiagnosticAllMask =
         kFirstPersonDiagnosticDefaultMask
         | uint32_t(FirstPersonDiagnosticCategory::horizontalMixed);

@@ -1766,21 +1766,25 @@ static void ConsoleCommandFirstPersonDiagnostics(
     constexpr uint32_t mixed =
         uint32_t(Paint::FirstPersonDiagnosticCategory::
             horizontalMixed);
+    constexpr uint32_t planes =
+        uint32_t(Paint::FirstPersonDiagnosticCategory::
+            planes);
 
     const auto writeStatus = [&]() {
         const uint32_t mask =
             Paint::GetFirstPersonDiagnosticMask();
         console.WriteFormatLine(
-            "fpdiag: artwork=%s physical=%s mixed=%s",
+            "fpdiag: artwork=%s physical=%s mixed=%s planes=%s",
             (mask & artwork) != 0 ? "on" : "off",
             (mask & physical) != 0 ? "on" : "off",
-            (mask & mixed) != 0 ? "on" : "off");
+            (mask & mixed) != 0 ? "on" : "off",
+            (mask & planes) != 0 ? "on" : "off");
     };
     const auto writeUsage = [&]() {
         console.WriteLine(
             "fpdiag [status|default|all|none]");
         console.WriteLine(
-            "fpdiag <artwork|physical|mixed> <on|off>");
+            "fpdiag <artwork|physical|mixed|planes> <on|off>");
     };
 
     if (argv.empty() || argv[0] == "status"
@@ -1818,6 +1822,8 @@ static void ConsoleCommandFirstPersonDiagnostics(
         category = physical;
     else if (argv[0] == "mixed")
         category = mixed;
+    else if (argv[0] == "planes")
+        category = planes;
     else
     {
         writeUsage();
@@ -1923,7 +1929,7 @@ static constexpr ConsoleCommand console_command_table[] = {
     { "exit", ConsoleCommandClose, "Closes the console.", "exit" },
     { "fpdiag", ConsoleCommandFirstPersonDiagnostics,
       "Filters first-person renderer diagnostics.",
-      "fpdiag [status|default|all|none|<artwork|physical|mixed> <on|off>]" },
+      "fpdiag [status|default|all|none|<artwork|physical|mixed|planes> <on|off>]" },
     { "get", ConsoleCommandGet, "Gets the value of the specified variable.", "get <variable>" },
     { "help", ConsoleCommandHelp, "Lists commands or info about a command.", "help [command]" },
     { "hide", ConsoleCommandHide, "Hides the console.", "hide" },

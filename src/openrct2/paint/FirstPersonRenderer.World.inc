@@ -3489,6 +3489,372 @@
                 }
             }
 
+
+            if ((gFirstPersonDiagnosticMask
+                    & uint32_t(
+                        FirstPersonDiagnosticCategory::planes))
+                != 0)
+            {
+                struct PlaneProbe
+                {
+                    size_t surfaceIndex = 0;
+                    FirstPersonVec3 normal{};
+                    float planeDistance = 0.0f;
+                    float minU = 0.0f;
+                    float minV = 0.0f;
+                    float maxU = 0.0f;
+                    float maxV = 0.0f;
+                    uint8_t projectionAxis = 0;
+                };
+
+                const auto surfaceType =
+                    [](const FirstPersonSurface& surface)
+                        -> const char* {
+                        if (surface.solidColour != 0)
+                            return "solid";
+                        if (surface.artworkCarrier)
+                            return "carrier";
+                        if (surface.textureFallbackOnly)
+                            return "fallback";
+                        if (surface.physicalCoverage)
+                            return "physical";
+                        return "artwork";
+                    };
+                const auto hashValue =
+                    [](uint64_t& hash, uint64_t value) {
+                        hash ^= value;
+                        hash *= 1099511628211ull;
+                    };
+                const auto canonicalPlane =
+                    [](const FirstPersonSurface& surface)
+                        -> std::optional<PlaneProbe> {
+                        const auto& p0 =
+                            surface.triangles[0].world;
+                        const auto& p1 =
+                            surface.triangles[1].world;
+                        const auto& p2 =
+                            surface.triangles[2].world;
+                        const FirstPersonVec3 a{
+                            p1.x - p0.x,
+                            p1.y - p0.y,
+                            p1.z - p0.z,
+                        };
+                        const FirstPersonVec3 b{
+                            p2.x - p0.x,
+                            p2.y - p0.y,
+                            p2.z - p0.z,
+                        };
+                        auto normal = FpCross(a, b);
+                        const float length = std::sqrt(
+                            FpDot(normal, normal));
+                        if (!(length > 1e-5f))
+                            return std::nullopt;
+                        normal = {
+                            normal.x / length,
+                            normal.y / length,
+                            normal.z / length,
+                        };
+
+                        // Horizontal surfaces already have dedicated channels.
+                        if (std::abs(normal.z) >= 0.98f)
+                            return std::nullopt;
+
+                        const float ax = std::abs(normal.x);
+                        const float ay = std::abs(normal.y);
+                        const float az = std::abs(normal.z);
+                        const uint8_t dominant =
+                            ax >= ay && ax >= az ? 0
+                            : (ay >= az ? 1 : 2);
+                        const float dominantValue =
+                            dominant == 0 ? normal.x
+                            : (dominant == 1
+                                ? normal.y : normal.z);
+                        if (dominantValue < 0.0f)
+                        {
+                            normal = {
+                                -normal.x,
+                                -normal.y,
+                                -normal.z,
+                            };
+                        }
+
+                        PlaneProbe result{};
+                        result.normal = normal;
+                        result.planeDistance =
+                            FpDot(normal, p0);
+                        result.projectionAxis = dominant;
+                        result.minU =
+                            std::numeric_limits<float>::infinity();
+                        result.minV =
+                            std::numeric_limits<float>::infinity();
+                        result.maxU =
+                            -std::numeric_limits<float>::infinity();
+                        result.maxV =
+                            -std::numeric_limits<float>::infinity();
+
+                        for (const auto& vertex :
+                             surface.triangles)
+                        {
+                            const auto& p = vertex.world;
+                            float u = 0.0f;
+                            float v = 0.0f;
+                            if (dominant == 0)
+                            {
+                                u = p.y;
+                                v = p.z;
+                            }
+                            else if (dominant == 1)
+                            {
+                                u = p.x;
+                                v = p.z;
+                            }
+                            else
+                            {
+                                u = p.x;
+                                v = p.y;
+                            }
+                            result.minU =
+                                std::min(result.minU, u);
+                            result.minV =
+                                std::min(result.minV, v);
+                            result.maxU =
+                                std::max(result.maxU, u);
+                            result.maxV =
+                                std::max(result.maxV, v);
+                        }
+                        return result;
+                    };
+
+                std::unordered_map<
+                    uint64_t, std::vector<PlaneProbe>>
+                    planeBuckets;
+                planeBuckets.reserve(
+                    packet.surfaces.size() / 8 + 1);
+                static std::unordered_set<uint64_t>
+                    loggedPlaneConflicts;
+                static uint64_t loggedPlaneGeneration = 0;
+                if (loggedPlaneGeneration
+                    != gFirstPersonDiagnosticGeneration)
+                {
+                    loggedPlaneConflicts.clear();
+                    loggedPlaneGeneration =
+                        gFirstPersonDiagnosticGeneration;
+                }
+                else if (loggedPlaneConflicts.size() > 4096)
+                {
+                    loggedPlaneConflicts.clear();
+                }
+
+                size_t planeLogsThisRegion = 0;
+                constexpr size_t kMaxPlaneLogsPerRegion = 12;
+                constexpr float kNormalMatch = 0.999f;
+                constexpr float kPlaneDistanceEpsilon = 0.25f;
+                constexpr float kPlaneOverlapEpsilon = 0.5f;
+
+                for (size_t index = 0;
+                     index < packet.surfaces.size(); ++index)
+                {
+                    auto probe =
+                        canonicalPlane(packet.surfaces[index]);
+                    if (!probe.has_value())
+                        continue;
+                    probe->surfaceIndex = index;
+
+                    const int32_t normalX =
+                        int32_t(std::lround(
+                            probe->normal.x * 100.0f));
+                    const int32_t normalY =
+                        int32_t(std::lround(
+                            probe->normal.y * 100.0f));
+                    const int32_t normalZ =
+                        int32_t(std::lround(
+                            probe->normal.z * 100.0f));
+                    const int32_t distanceBucket =
+                        int32_t(std::floor(
+                            probe->planeDistance * 4.0f));
+
+                    for (int32_t bucketOffset = -1;
+                         bucketOffset <= 1; ++bucketOffset)
+                    {
+                        uint64_t bucketKey =
+                            14695981039346656037ull;
+                        hashValue(
+                            bucketKey,
+                            uint64_t(uint32_t(normalX)));
+                        hashValue(
+                            bucketKey,
+                            uint64_t(uint32_t(normalY)));
+                        hashValue(
+                            bucketKey,
+                            uint64_t(uint32_t(normalZ)));
+                        hashValue(
+                            bucketKey,
+                            uint64_t(uint32_t(
+                                distanceBucket
+                                + bucketOffset)));
+
+                        const auto bucket =
+                            planeBuckets.find(bucketKey);
+                        if (bucket == planeBuckets.end())
+                            continue;
+
+                        for (const auto& peer :
+                             bucket->second)
+                        {
+                            if (peer.projectionAxis
+                                != probe->projectionAxis)
+                                continue;
+                            if (FpDot(
+                                    peer.normal,
+                                    probe->normal)
+                                < kNormalMatch)
+                                continue;
+                            if (std::abs(
+                                    peer.planeDistance
+                                    - probe->planeDistance)
+                                > kPlaneDistanceEpsilon)
+                                continue;
+
+                            const float overlapU =
+                                std::min(
+                                    peer.maxU, probe->maxU)
+                                - std::max(
+                                    peer.minU, probe->minU);
+                            const float overlapV =
+                                std::min(
+                                    peer.maxV, probe->maxV)
+                                - std::max(
+                                    peer.minV, probe->minV);
+                            if (overlapU <= kPlaneOverlapEpsilon
+                                || overlapV
+                                    <= kPlaneOverlapEpsilon)
+                                continue;
+
+                            const float overlapArea =
+                                overlapU * overlapV;
+                            const float overlapLength =
+                                std::max(
+                                    overlapU, overlapV);
+                            if (overlapArea < 16.0f
+                                && overlapLength < 8.0f)
+                                continue;
+
+                            const auto& surface =
+                                packet.surfaces[index];
+                            const auto& other =
+                                packet.surfaces[
+                                    peer.surfaceIndex];
+                            const uint32_t imageA =
+                                other.image.HasValue()
+                                ? other.image.GetIndex() : 0;
+                            const uint32_t imageB =
+                                surface.image.HasValue()
+                                ? surface.image.GetIndex() : 0;
+
+                            uint64_t conflictKey =
+                                14695981039346656037ull;
+                            hashValue(
+                                conflictKey,
+                                uint64_t(uint32_t(normalX)));
+                            hashValue(
+                                conflictKey,
+                                uint64_t(uint32_t(normalY)));
+                            hashValue(
+                                conflictKey,
+                                uint64_t(uint32_t(normalZ)));
+                            hashValue(
+                                conflictKey,
+                                uint64_t(uint32_t(
+                                    distanceBucket)));
+                            hashValue(conflictKey, imageA);
+                            hashValue(conflictKey, imageB);
+                            hashValue(
+                                conflictKey,
+                                other.reconstructionGroup);
+                            hashValue(
+                                conflictKey,
+                                surface.reconstructionGroup);
+                            hashValue(
+                                conflictKey,
+                                other.nativePaintOrdinal);
+                            hashValue(
+                                conflictKey,
+                                surface.nativePaintOrdinal);
+
+                            if (planeLogsThisRegion
+                                    >= kMaxPlaneLogsPerRegion
+                                || !loggedPlaneConflicts.insert(
+                                        conflictKey)
+                                        .second)
+                                continue;
+
+                            ++planeLogsThisRegion;
+                            LOG_WARNING(
+                                "FP_PLANE region=(%d,%d) normal=(%.3f,%.3f,%.3f) "
+                                "distance=%.2f overlap=(%.1f,%.1f) "
+                                "A[type=%s image=%u group=%llu gpuRegion=%llu owner=%d order=%llu] "
+                                "B[type=%s image=%u group=%llu gpuRegion=%llu owner=%d order=%llu] "
+                                "differentGroup=%d differentRegion=%d",
+                                regionX, regionY,
+                                double(probe->normal.x),
+                                double(probe->normal.y),
+                                double(probe->normal.z),
+                                double(probe->planeDistance),
+                                double(overlapU),
+                                double(overlapV),
+                                surfaceType(other),
+                                imageA,
+                                static_cast<
+                                    unsigned long long>(
+                                        other.reconstructionGroup),
+                                static_cast<
+                                    unsigned long long>(
+                                        other.gpuRegion),
+                                other.coplanarOwner ? 1 : 0,
+                                static_cast<
+                                    unsigned long long>(
+                                        other.nativePaintOrdinal),
+                                surfaceType(surface),
+                                imageB,
+                                static_cast<
+                                    unsigned long long>(
+                                        surface.reconstructionGroup),
+                                static_cast<
+                                    unsigned long long>(
+                                        surface.gpuRegion),
+                                surface.coplanarOwner ? 1 : 0,
+                                static_cast<
+                                    unsigned long long>(
+                                        surface.nativePaintOrdinal),
+                                other.reconstructionGroup
+                                        != surface.reconstructionGroup
+                                    ? 1 : 0,
+                                other.gpuRegion
+                                        != surface.gpuRegion
+                                    ? 1 : 0);
+                        }
+                    }
+
+                    uint64_t ownBucketKey =
+                        14695981039346656037ull;
+                    hashValue(
+                        ownBucketKey,
+                        uint64_t(uint32_t(normalX)));
+                    hashValue(
+                        ownBucketKey,
+                        uint64_t(uint32_t(normalY)));
+                    hashValue(
+                        ownBucketKey,
+                        uint64_t(uint32_t(normalZ)));
+                    hashValue(
+                        ownBucketKey,
+                        uint64_t(uint32_t(
+                            distanceBucket)));
+                    planeBuckets[ownBucketKey].push_back(
+                        *probe);
+                }
+            }
+
             packet.textureDependencies.assign(
                 dependencies.begin(), dependencies.end());
             std::sort(
