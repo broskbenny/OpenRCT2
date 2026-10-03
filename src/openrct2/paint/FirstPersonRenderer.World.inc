@@ -3315,6 +3315,18 @@
                         && a.diagnosticSourceTile.y
                             == b.diagnosticSourceTile.y;
                 };
+            const auto visuallyEquivalentPhysicalSolids =
+                [](const FirstPersonSurface& a,
+                   const FirstPersonSurface& b) {
+                    // Exact coplanar overlap between two physical solid-colour
+                    // faces with the same palette value cannot produce a
+                    // visible material conflict. This commonly occurs where
+                    // adjacent rail proxy prisms overlap slightly at joins.
+                    return a.physicalCoverage
+                        && b.physicalCoverage
+                        && a.solidColour != 0
+                        && a.solidColour == b.solidColour;
+                };
             const auto mutuallyExclusiveExteriorFaces =
                 [](const FirstPersonSurface& a,
                    const FirstPersonSurface& b) {
@@ -3486,6 +3498,8 @@
                         if (mutuallyExclusiveExteriorFaces(
                                 other, surface)
                             || intentionalSemanticArtworkLayers(
+                                other, surface)
+                            || visuallyEquivalentPhysicalSolids(
                                 other, surface))
                             continue;
 
@@ -3846,6 +3860,8 @@
                             if (mutuallyExclusiveExteriorFaces(
                                     other, surface)
                                 || intentionalSemanticArtworkLayers(
+                                    other, surface)
+                                || visuallyEquivalentPhysicalSolids(
                                     other, surface))
                                 continue;
 
