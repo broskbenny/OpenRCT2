@@ -146,7 +146,7 @@ namespace OpenRCT2::Paint
         // Stable native painter order for logical tie breaking. Physical depth
         // remains authoritative; this ordinal is consulted only when surfaces
         // occupy the same physical layer (opaque owners or transparency).
-        uint32_t nativePaintOrdinal = 0;
+        uint64_t nativePaintOrdinal = 0;
         uint64_t gpuRegion = 0; // Nonzero only for static WORLD-FIXED source art.
         FirstPersonVec3 billboardAnchor{};
         float billboardLeft{}, billboardTop{}, billboardWidth{}, billboardHeight{};
