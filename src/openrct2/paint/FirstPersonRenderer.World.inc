@@ -1241,7 +1241,7 @@
                             constexpr float kWetEpsilon = 0.001f;
                             const float waterHeight = float(waterZ);
                             const auto sameXY =
-                                [](FirstPersonVec3 a, FirstPersonVec3 b) {
+                                [&](FirstPersonVec3 a, FirstPersonVec3 b) {
                                     return std::abs(a.x - b.x) <= kWetEpsilon
                                         && std::abs(a.y - b.y) <= kWetEpsilon;
                                 };
