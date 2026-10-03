@@ -273,12 +273,12 @@
                     if (stale && nativeCapturesRemaining != 0)
                     {
                         --nativeCapturesRemaining;
-                        if (cameraIndependentRefreshKeys
-                                .insert(key).second)
-                        {
-                            cached.cameraIndependentResidentSurfaces.clear();
-                            cached.cameraIndependentStreamedSurfaces.clear();
-                        }
+                        // Acquiring another native source view is
+                        // artwork evidence, not physical invalidation.
+                        // Preserve ready camera-independent reconstruction and
+                        // merge the new observation into it. Authoritative tile
+                        // invalidation already clears these lists above.
+                        cameraIndependentRefreshKeys.insert(key);
                         variant.valid = true;
                         variant.lastPainted = frame;
                         variant.lastAnimationGeneration = animationGeneration;
