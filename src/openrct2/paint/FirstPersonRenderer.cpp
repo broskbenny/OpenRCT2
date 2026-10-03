@@ -20,6 +20,7 @@
 
 #include "../Context.h"
 #include "../Diagnostic.h"
+#include "../core/Console.hpp"
 #include "../GameState.h"
 #include "../drawing/Drawing.Sprite.h"
 #include "../drawing/Colour.h"
@@ -50,6 +51,7 @@
 #include "../world/Wall.h"
 #include "../ride/Track.h"
 #include "../world/tile_element/SurfaceElement.h"
+#include "../world/tile_element/EntranceElement.h"
 #include "../world/tile_element/PathElement.h"
 #include "../world/tile_element/TrackElement.h"
 #include "../world/tile_element/SmallSceneryElement.h"
@@ -79,6 +81,7 @@ namespace OpenRCT2::Paint
         uint32_t gFirstPersonDiagnosticMask =
             kFirstPersonDiagnosticDefaultMask;
         uint64_t gFirstPersonDiagnosticGeneration = 1;
+        bool gFirstPersonInspectorPickRequested = false;
 
         #include "FirstPersonRenderer.Core.inc"
         #include "FirstPersonRenderer.World.inc"
@@ -100,6 +103,777 @@ namespace OpenRCT2::Paint
     {
         return gFirstPersonDiagnosticMask;
     }
+
+    void RequestFirstPersonInspectorPick()
+    {
+        gFirstPersonInspectorPickRequested = true;
+    }
+
+    namespace
+    {
+        struct FirstPersonInspectorHit
+        {
+            const FirstPersonSurface* surface = nullptr;
+            const FirstPersonStaticRegion* region = nullptr;
+            size_t surfaceIndex = 0;
+            float distance = 0.0f;
+            float u = 0.0f;
+            float v = 0.0f;
+            FirstPersonVec3 point{};
+        };
+
+        [[nodiscard]] bool IntersectFirstPersonInspectorTriangle(
+            const FirstPersonVec3& origin, const FirstPersonVec3& direction,
+            const FirstPersonVertex& a, const FirstPersonVertex& b,
+            const FirstPersonVertex& c, float& distance, float& u, float& v)
+        {
+            constexpr float kEpsilon = 0.00001f;
+            const FirstPersonVec3 edge1{
+                b.world.x - a.world.x,
+                b.world.y - a.world.y,
+                b.world.z - a.world.z,
+            };
+            const FirstPersonVec3 edge2{
+                c.world.x - a.world.x,
+                c.world.y - a.world.y,
+                c.world.z - a.world.z,
+            };
+            const auto p = FpCross(direction, edge2);
+            const float determinant = FpDot(edge1, p);
+            if (std::abs(determinant) <= kEpsilon)
+                return false;
+
+            const float inverse = 1.0f / determinant;
+            const FirstPersonVec3 fromA{
+                origin.x - a.world.x,
+                origin.y - a.world.y,
+                origin.z - a.world.z,
+            };
+            const float baryB = FpDot(fromA, p) * inverse;
+            if (baryB < -kEpsilon || baryB > 1.0f + kEpsilon)
+                return false;
+
+            const auto q = FpCross(fromA, edge1);
+            const float baryC = FpDot(direction, q) * inverse;
+            if (baryC < -kEpsilon || baryB + baryC > 1.0f + kEpsilon)
+                return false;
+
+            const float t = FpDot(edge2, q) * inverse;
+            if (t <= kEpsilon)
+                return false;
+
+            const float baryA = 1.0f - baryB - baryC;
+            distance = t;
+            u = baryA * a.u + baryB * b.u + baryC * c.u;
+            v = baryA * a.v + baryB * b.v + baryC * c.v;
+            return true;
+        }
+
+        [[nodiscard]] bool IntersectFirstPersonInspectorSurface(
+            const FirstPersonSurface& surface, const FirstPersonVec3& origin,
+            const FirstPersonVec3& direction, FirstPersonInspectorHit& hit)
+        {
+            bool found = false;
+            float bestDistance = std::numeric_limits<float>::max();
+            float bestU = 0.0f;
+            float bestV = 0.0f;
+            for (const size_t first : { size_t(0), size_t(3) })
+            {
+                float distance = 0.0f;
+                float u = 0.0f;
+                float v = 0.0f;
+                if (!IntersectFirstPersonInspectorTriangle(
+                        origin, direction,
+                        surface.triangles[first],
+                        surface.triangles[first + 1],
+                        surface.triangles[first + 2],
+                        distance, u, v))
+                    continue;
+                if (distance < bestDistance)
+                {
+                    found = true;
+                    bestDistance = distance;
+                    bestU = u;
+                    bestV = v;
+                }
+            }
+            if (!found)
+                return false;
+
+            const FirstPersonVec3 point{
+                origin.x + direction.x * bestDistance,
+                origin.y + direction.y * bestDistance,
+                origin.z + direction.z * bestDistance,
+            };
+            if (surface.exteriorOnly)
+            {
+                const FirstPersonVec3 towardEye{
+                    origin.x - point.x,
+                    origin.y - point.y,
+                    origin.z - point.z,
+                };
+                if (FpDot(surface.outwardNormal, towardEye) <= 0.0f)
+                    return false;
+            }
+
+            hit.surface = &surface;
+            hit.distance = bestDistance;
+            hit.u = bestU;
+            hit.v = bestV;
+            hit.point = point;
+            return true;
+        }
+
+        [[nodiscard]] bool SampleFirstPersonInspectorPixels(
+            const std::vector<uint8_t>& pixels, int32_t width, int32_t height,
+            float u, float v, uint8_t& pixel)
+        {
+            const int32_t x = int32_t(std::floor(u));
+            const int32_t y = int32_t(std::floor(v));
+            if (x < 0 || y < 0 || x >= width || y >= height
+                || width <= 0 || height <= 0)
+                return false;
+            const size_t index =
+                size_t(y) * size_t(width) + size_t(x);
+            if (index >= pixels.size())
+                return false;
+            pixel = pixels[index];
+            return true;
+        }
+
+        [[nodiscard]] bool FirstPersonInspectorSurfaceVisibleAtHit(
+            const FirstPersonInspectorHit& hit)
+        {
+            const auto& surface = *hit.surface;
+            if (surface.solidColour != 0)
+                return true;
+            if (!surface.image.HasValue())
+                return false;
+
+            bool colourInside = false;
+            uint8_t colourPixel = 0;
+            if (surface.hasImmutablePixelData())
+            {
+                colourInside = SampleFirstPersonInspectorPixels(
+                    surface.immutablePixelData(),
+                    surface.immutableWidth, surface.immutableHeight,
+                    hit.u, hit.v, colourPixel);
+            }
+            else if (const auto* g1 = GfxGetG1Element(surface.image);
+                     g1 != nullptr)
+            {
+                const auto pixels =
+                    DecodeFirstPersonSpritePixels(*g1);
+                if (!pixels.has_value())
+                    return false;
+                colourInside = SampleFirstPersonInspectorPixels(
+                    *pixels, g1->width, g1->height,
+                    hit.u, hit.v, colourPixel);
+            }
+            else
+            {
+                return false;
+            }
+
+            if (!colourInside && !surface.physicalCoverage)
+                return false;
+            if (colourInside && colourPixel == 0
+                && !surface.physicalCoverage)
+                return false;
+
+            if (surface.mask.HasValue())
+            {
+                const auto* mask = GfxGetG1Element(surface.mask);
+                if (mask == nullptr)
+                    return false;
+                const auto maskPixels =
+                    DecodeFirstPersonSpritePixels(*mask);
+                if (!maskPixels.has_value())
+                    return false;
+                uint8_t maskPixel = 0;
+                if (!SampleFirstPersonInspectorPixels(
+                        *maskPixels, mask->width, mask->height,
+                        hit.u, hit.v, maskPixel)
+                    || maskPixel == 0)
+                    return false;
+            }
+            return true;
+        }
+
+        [[nodiscard]] const char* FirstPersonInspectorTileElementName(
+            TileElementType type)
+        {
+            switch (type)
+            {
+                case TileElementType::surface:
+                    return "surface";
+                case TileElementType::path:
+                    return "path";
+                case TileElementType::track:
+                    return "track";
+                case TileElementType::smallScenery:
+                    return "smallScenery";
+                case TileElementType::entrance:
+                    return "entrance";
+                case TileElementType::wall:
+                    return "wall";
+                case TileElementType::largeScenery:
+                    return "largeScenery";
+                case TileElementType::banner:
+                    return "banner";
+                default:
+                    return "unknown";
+            }
+        }
+
+        void DumpFirstPersonInspectorSurface(
+            const FirstPersonInspectorHit& hit, const char* label,
+            bool detailed)
+        {
+            const auto& surface = *hit.surface;
+            Console::WriteLine(
+                "%s distance=%.3f point=(%.3f,%.3f,%.3f) uv=(%.3f,%.3f)",
+                label, double(hit.distance),
+                double(hit.point.x), double(hit.point.y),
+                double(hit.point.z), double(hit.u), double(hit.v));
+            Console::WriteLine(
+                "  source=%s surfaceIndex=%zu region=%llu image=%d mask=%d",
+                hit.region != nullptr ? "staticRegion" : "streamed",
+                hit.surfaceIndex,
+                hit.region != nullptr
+                    ? static_cast<unsigned long long>(hit.region->key)
+                    : 0ull,
+                surface.image.HasValue()
+                    ? int32_t(surface.image.GetIndex()) : -1,
+                surface.mask.HasValue()
+                    ? int32_t(surface.mask.GetIndex()) : -1);
+            Console::WriteLine(
+                "  gpuRegion=%llu cameraIndependent=%d viewFacing=%d physicalCoverage=%d "
+                "coplanarOwner=%d nativePaintOrdinal=%llu exteriorOnly=%d",
+                static_cast<unsigned long long>(surface.gpuRegion),
+                surface.cameraIndependent ? 1 : 0,
+                surface.viewFacing ? 1 : 0,
+                surface.physicalCoverage ? 1 : 0,
+                surface.coplanarOwner ? 1 : 0,
+                static_cast<unsigned long long>(
+                    surface.nativePaintOrdinal),
+                surface.exteriorOnly ? 1 : 0);
+            Console::WriteLine(
+                "  solidColour=%u persistentBitmap=%d immutableFingerprint=%llu "
+                "reconstructionGroup=%llu reconstructionKind=%u",
+                unsigned(surface.solidColour),
+                surface.persistentBitmap ? 1 : 0,
+                static_cast<unsigned long long>(
+                    surface.immutableFingerprint),
+                static_cast<unsigned long long>(
+                    surface.reconstructionGroup),
+                unsigned(surface.diagnosticReconstructionKind));
+            Console::WriteLine(
+                "  semanticRole=%u semanticGroup=%llu sourceTile=(%d,%d) "
+                "materialTile=(%d,%d) sourceComponent=%u materialComponent=%u",
+                unsigned(surface.diagnosticSemanticRole),
+                static_cast<unsigned long long>(
+                    surface.diagnosticSemanticGroup),
+                surface.diagnosticSourceTile.x,
+                surface.diagnosticSourceTile.y,
+                surface.diagnosticMaterialTile.x,
+                surface.diagnosticMaterialTile.y,
+                surface.diagnosticSourceComponent,
+                surface.diagnosticMaterialComponent);
+            Console::WriteLine(
+                "  outwardNormal=(%.3f,%.3f,%.3f) semanticBounds=%d "
+                "semanticCenter=(%.3f,%.3f,%.3f) semanticRadius=%.3f",
+                double(surface.outwardNormal.x),
+                double(surface.outwardNormal.y),
+                double(surface.outwardNormal.z),
+                surface.hasSemanticBounds ? 1 : 0,
+                double(surface.semanticCenter.x),
+                double(surface.semanticCenter.y),
+                double(surface.semanticCenter.z),
+                double(surface.semanticRadius));
+
+            if (hit.region != nullptr)
+            {
+                Console::WriteLine(
+                    "  region sceneEpoch=%llu generation=%llu sourceRevision=%llu "
+                    "vertexCount=%zu storageSurfaces=%zu",
+                    static_cast<unsigned long long>(
+                        hit.region->sceneEpoch),
+                    static_cast<unsigned long long>(
+                        hit.region->generation),
+                    static_cast<unsigned long long>(
+                        hit.region->sourceRevision),
+                    hit.region->vertexCount,
+                    hit.region->surfaceStorage != nullptr
+                        ? hit.region->surfaceStorage->size() : 0);
+                const auto packet =
+                    _staticRegionPackets.find(hit.region->key);
+                if (packet != _staticRegionPackets.end())
+                {
+                    Console::WriteLine(
+                        "  packet dirty=%d generation=%llu sourceRevision=%llu "
+                        "publishedSourceRevision=%llu vertexCount=%zu publishedSurfaces=%zu",
+                        packet->second.dirty ? 1 : 0,
+                        static_cast<unsigned long long>(
+                            packet->second.generation),
+                        static_cast<unsigned long long>(
+                            packet->second.sourceRevision),
+                        static_cast<unsigned long long>(
+                            packet->second.publishedSourceRevision),
+                        packet->second.vertexCount,
+                        packet->second.surfaceStorage != nullptr
+                            ? packet->second.surfaceStorage->size() : 0);
+                }
+            }
+
+            if (!detailed)
+                return;
+            for (size_t i = 0; i < surface.triangles.size(); ++i)
+            {
+                const auto& vertex = surface.triangles[i];
+                Console::WriteLine(
+                    "  vertex[%zu] world=(%.3f,%.3f,%.3f) uv=(%.3f,%.3f)",
+                    i, double(vertex.world.x), double(vertex.world.y),
+                    double(vertex.world.z), double(vertex.u),
+                    double(vertex.v));
+            }
+        }
+
+        void DumpFirstPersonInspectorTileCache(
+            int32_t tileX, int32_t tileY)
+        {
+            const auto key = TerrainKey(tileX, tileY);
+            Console::WriteLine(
+                "--- FP_PICK CACHE tile=(%d,%d) key=%llu ---",
+                tileX, tileY,
+                static_cast<unsigned long long>(key));
+
+            const auto terrain = _terrainCache.entries.find(key);
+            if (terrain == _terrainCache.entries.end())
+            {
+                Console::WriteLine("  terrainCache=absent");
+            }
+            else
+            {
+                const auto& cached = terrain->second;
+                Console::WriteLine(
+                    "  terrainCache dirty=%d baseZ=%d waterZ=%d slope=%u "
+                    "sourceRotation=%u surfaceStyle=%u verticalOpening=%d "
+                    "groundRegion=%llu water=%d overlay=%d",
+                    cached.dirty ? 1 : 0,
+                    cached.baseZ, cached.waterZ,
+                    unsigned(cached.slope),
+                    unsigned(cached.sourceRotation),
+                    unsigned(cached.surfaceStyle),
+                    cached.verticalOpening ? 1 : 0,
+                    static_cast<unsigned long long>(
+                        cached.ground.gpuRegion),
+                    cached.water.has_value() ? 1 : 0,
+                    cached.waterOverlay.has_value() ? 1 : 0);
+            }
+
+            const auto paint = _staticPaintCache.find(key);
+            if (paint == _staticPaintCache.end())
+            {
+                Console::WriteLine("  staticPaintCache=absent");
+            }
+            else
+            {
+                const auto& cached = paint->second;
+                Console::WriteLine(
+                    "  staticPaint valid=%d dirty=%d animated=%d sourceRevision=%llu "
+                    "hasSelectedRotation=%d selectedRotation=%u visibilityDirty=%d "
+                    "reconstructionGroups=%zu",
+                    cached.valid ? 1 : 0,
+                    cached.dirty ? 1 : 0,
+                    cached.animated ? 1 : 0,
+                    static_cast<unsigned long long>(
+                        cached.sourceRevision),
+                    cached.hasSelectedRotation ? 1 : 0,
+                    unsigned(cached.selectedRotation),
+                    cached.visibilityDirty ? 1 : 0,
+                    cached.reconstructionGroups.size());
+                Console::WriteLine(
+                    "  staticPaint cameraIndependentResident=%zu "
+                    "cameraIndependentStreamed=%zu semanticResident=%zu "
+                    "semanticStreamed=%zu movingSemantic=%zu",
+                    cached.cameraIndependentResidentSurfaces.size(),
+                    cached.cameraIndependentStreamedSurfaces.size(),
+                    cached.semanticResidentSurfaces.size(),
+                    cached.semanticStreamedSurfaces.size(),
+                    cached.semanticMovingMeshes.size());
+                for (size_t rotation = 0;
+                     rotation < cached.rotations.size(); ++rotation)
+                {
+                    const auto& variant =
+                        cached.rotations[rotation];
+                    Console::WriteLine(
+                        "  rotation[%zu] valid=%d semanticValid=%d "
+                        "resident=%zu streamed=%zu residentFingerprint=%llu "
+                        "semanticFingerprint=%llu",
+                        rotation,
+                        variant.valid ? 1 : 0,
+                        variant.semanticValid ? 1 : 0,
+                        variant.residentSurfaces.size(),
+                        variant.streamedSurfaces.size(),
+                        static_cast<unsigned long long>(
+                            variant.residentFingerprint),
+                        static_cast<unsigned long long>(
+                            variant.semanticFingerprint));
+                }
+            }
+
+            const auto regionKey =
+                FirstPersonGpuRegionKey(tileX, tileY);
+            const auto packet =
+                _staticRegionPackets.find(regionKey);
+            if (packet == _staticRegionPackets.end())
+            {
+                Console::WriteLine(
+                    "  regionPacket region=%llu absent",
+                    static_cast<unsigned long long>(regionKey));
+            }
+            else
+            {
+                Console::WriteLine(
+                    "  regionPacket region=%llu dirty=%d generation=%llu "
+                    "sourceRevision=%llu publishedSourceRevision=%llu "
+                    "vertexCount=%zu publishedSurfaces=%zu",
+                    static_cast<unsigned long long>(regionKey),
+                    packet->second.dirty ? 1 : 0,
+                    static_cast<unsigned long long>(
+                        packet->second.generation),
+                    static_cast<unsigned long long>(
+                        packet->second.sourceRevision),
+                    static_cast<unsigned long long>(
+                        packet->second.publishedSourceRevision),
+                    packet->second.vertexCount,
+                    packet->second.surfaceStorage != nullptr
+                        ? packet->second.surfaceStorage->size() : 0);
+            }
+        }
+
+        void DumpFirstPersonInspectorMapTile(
+            int32_t tileX, int32_t tileY, const char* reason)
+        {
+            const CoordsXY tile{
+                tileX * kCoordsXYStep,
+                tileY * kCoordsXYStep,
+            };
+            if (!MapIsLocationValid(tile))
+                return;
+
+            Console::WriteLine(
+                "--- FP_PICK MAP tile=(%d,%d) world=(%d,%d) reason=%s ---",
+                tileX, tileY, tile.x, tile.y, reason);
+            auto* element = MapGetFirstElementAt(tile);
+            if (element == nullptr)
+            {
+                Console::WriteLine("  no tile elements");
+                return;
+            }
+
+            size_t index = 0;
+            while (true)
+            {
+                const auto type = element->getType();
+                Console::WriteLine(
+                    "  element[%zu] type=%s(%u) baseZ=%d clearanceZ=%d "
+                    "direction=%u quadrants=0x%02x ghost=%d invisible=%d",
+                    index,
+                    FirstPersonInspectorTileElementName(type),
+                    unsigned(type),
+                    element->getBaseZ(),
+                    element->getClearanceZ(),
+                    unsigned(element->getDirection()),
+                    unsigned(element->getOccupiedQuadrants()),
+                    element->isGhost() ? 1 : 0,
+                    element->isInvisible() ? 1 : 0);
+
+                switch (type)
+                {
+                    case TileElementType::surface:
+                    {
+                        const auto* surface =
+                            element->asSurface();
+                        Console::WriteLine(
+                            "    terrain slope=0x%02x waterHeight=%d surfaceObject=%u "
+                            "edgeObject=%u grass=%u fences=0x%02x",
+                            unsigned(surface->getSlope()),
+                            surface->getWaterHeight(),
+                            unsigned(surface->getSurfaceObjectIndex()),
+                            unsigned(surface->getEdgeObjectIndex()),
+                            unsigned(surface->getGrassLength()),
+                            unsigned(surface->getParkFences()));
+                        break;
+                    }
+                    case TileElementType::path:
+                    {
+                        const auto* path = element->asPath();
+                        Console::WriteLine(
+                            "    path surface=%u railings=%u edges=0x%02x corners=0x%02x "
+                            "sloped=%d slopeDirection=%u queue=%d wide=%d addition=%u",
+                            unsigned(path->getSurfaceEntryIndex()),
+                            unsigned(path->getRailingsEntryIndex()),
+                            unsigned(path->getEdges()),
+                            unsigned(path->getCorners()),
+                            path->isSloped() ? 1 : 0,
+                            unsigned(path->getSlopeDirection()),
+                            path->isQueue() ? 1 : 0,
+                            path->isWide() ? 1 : 0,
+                            unsigned(path->getAddition()));
+                        break;
+                    }
+                    case TileElementType::track:
+                    {
+                        const auto* track = element->asTrack();
+                        Console::WriteLine(
+                            "    track type=%u sequence=%u ride=%u rideType=%u "
+                            "station=%u chain=%d inverted=%d cableLift=%d",
+                            unsigned(track->getTrackType()),
+                            unsigned(track->getSequenceIndex()),
+                            unsigned(track->getRideIndex().ToUnderlying()),
+                            unsigned(track->getRideType()),
+                            unsigned(track->getStationIndex().ToUnderlying()),
+                            track->hasChain() ? 1 : 0,
+                            track->isInverted() ? 1 : 0,
+                            track->hasCableLift() ? 1 : 0);
+                        break;
+                    }
+                    case TileElementType::smallScenery:
+                    {
+                        const auto* scenery =
+                            element->asSmallScenery();
+                        Console::WriteLine(
+                            "    smallScenery entry=%u quadrant=%u age=%u needsSupports=%d",
+                            unsigned(scenery->getEntryIndex()),
+                            unsigned(scenery->getSceneryQuadrant()),
+                            unsigned(scenery->getAge()),
+                            scenery->needsSupports() ? 1 : 0);
+                        break;
+                    }
+                    case TileElementType::entrance:
+                    {
+                        const auto* entrance =
+                            element->asEntrance();
+                        Console::WriteLine(
+                            "    entrance type=%u sequence=%u directions=0x%x "
+                            "entry=%u surface=%u ride=%u station=%u",
+                            unsigned(entrance->getEntranceType()),
+                            unsigned(entrance->getSequenceIndex()),
+                            unsigned(entrance->getDirections()),
+                            unsigned(entrance->getEntryIndex()),
+                            unsigned(entrance->getSurfaceEntryIndex()),
+                            unsigned(entrance->getRideIndex().ToUnderlying()),
+                            unsigned(entrance->getStationIndex().ToUnderlying()));
+                        break;
+                    }
+                    case TileElementType::wall:
+                    {
+                        const auto* wall = element->asWall();
+                        Console::WriteLine(
+                            "    wall entry=%u slope=%u animationFrame=%u animating=%d acrossTrack=%d",
+                            unsigned(wall->getEntryIndex()),
+                            unsigned(wall->getSlope()),
+                            unsigned(wall->getAnimationFrame()),
+                            wall->isAnimating() ? 1 : 0,
+                            wall->isAcrossTrack() ? 1 : 0);
+                        break;
+                    }
+                    case TileElementType::largeScenery:
+                    {
+                        const auto* scenery =
+                            element->asLargeScenery();
+                        Console::WriteLine(
+                            "    largeScenery entry=%u sequence=%u",
+                            unsigned(scenery->getEntryIndex()),
+                            unsigned(scenery->getSequenceIndex()));
+                        break;
+                    }
+                    default:
+                        break;
+                }
+
+                const bool last = element->isLastForTile();
+                ++index;
+                if (last)
+                    break;
+                ++element;
+            }
+
+            DumpFirstPersonInspectorTileCache(tileX, tileY);
+        }
+
+        void DumpFirstPersonInspectorRelevantTiles(
+            const FirstPersonVec3& point)
+        {
+            const int32_t tileX =
+                int32_t(std::floor(
+                    point.x / float(kCoordsXYStep)));
+            const int32_t tileY =
+                int32_t(std::floor(
+                    point.y / float(kCoordsXYStep)));
+            DumpFirstPersonInspectorMapTile(
+                tileX, tileY, "hit");
+
+            constexpr float kBoundaryTolerance = 0.5f;
+            const float localX =
+                point.x - float(tileX * kCoordsXYStep);
+            const float localY =
+                point.y - float(tileY * kCoordsXYStep);
+            if (localX <= kBoundaryTolerance)
+                DumpFirstPersonInspectorMapTile(
+                    tileX - 1, tileY, "hit -X boundary");
+            if (localX >=
+                float(kCoordsXYStep) - kBoundaryTolerance)
+                DumpFirstPersonInspectorMapTile(
+                    tileX + 1, tileY, "hit +X boundary");
+            if (localY <= kBoundaryTolerance)
+                DumpFirstPersonInspectorMapTile(
+                    tileX, tileY - 1, "hit -Y boundary");
+            if (localY >=
+                float(kCoordsXYStep) - kBoundaryTolerance)
+                DumpFirstPersonInspectorMapTile(
+                    tileX, tileY + 1, "hit +Y boundary");
+        }
+
+        void DumpFirstPersonInspectorPick(
+            const FirstPersonScene& scene)
+        {
+            const auto& camera = scene.resolvedView.camera;
+            const auto direction =
+                GetFirstPersonBasis(camera).forward;
+
+            std::vector<FirstPersonInspectorHit> intersections;
+            intersections.reserve(
+                scene.surfaces.size()
+                + scene.staticRegions.size() * 32);
+
+            for (size_t i = 0; i < scene.surfaces.size(); ++i)
+            {
+                FirstPersonInspectorHit hit{};
+                if (!IntersectFirstPersonInspectorSurface(
+                        scene.surfaces[i], camera.position,
+                        direction, hit))
+                    continue;
+                if (hit.distance > scene.resolvedView.farClip)
+                    continue;
+                hit.surfaceIndex = i;
+                intersections.emplace_back(hit);
+            }
+
+            for (const auto& region : scene.staticRegions)
+            {
+                if (region.surfaceStorage == nullptr)
+                    continue;
+                const auto& surfaces =
+                    *region.surfaceStorage;
+                for (size_t i = 0; i < surfaces.size(); ++i)
+                {
+                    FirstPersonInspectorHit hit{};
+                    if (!IntersectFirstPersonInspectorSurface(
+                            surfaces[i], camera.position,
+                            direction, hit))
+                        continue;
+                    if (hit.distance > scene.resolvedView.farClip)
+                        continue;
+                    hit.region = &region;
+                    hit.surfaceIndex = i;
+                    intersections.emplace_back(hit);
+                }
+            }
+
+            std::sort(
+                intersections.begin(), intersections.end(),
+                [](const auto& a, const auto& b) {
+                    if (a.distance != b.distance)
+                        return a.distance < b.distance;
+                    if (a.surface->coplanarOwner
+                        != b.surface->coplanarOwner)
+                        return a.surface->coplanarOwner;
+                    return a.surface->nativePaintOrdinal
+                        > b.surface->nativePaintOrdinal;
+                });
+
+            Console::WriteLine("========== FP_PICK ==========");
+            Console::WriteLine(
+                "camera=(%.3f,%.3f,%.3f) ray=(%.6f,%.6f,%.6f) "
+                "sceneSurfaces=%zu staticRegions=%zu",
+                double(camera.position.x),
+                double(camera.position.y),
+                double(camera.position.z),
+                double(direction.x), double(direction.y),
+                double(direction.z),
+                scene.surfaces.size(),
+                scene.staticRegions.size());
+
+            std::vector<FirstPersonInspectorHit> visible;
+            constexpr float kCoplanarBand = 0.25f;
+            float firstVisibleDistance =
+                std::numeric_limits<float>::max();
+            for (const auto& hit : intersections)
+            {
+                if (firstVisibleDistance
+                        != std::numeric_limits<float>::max()
+                    && hit.distance
+                        > firstVisibleDistance
+                            + kCoplanarBand)
+                    break;
+                if (!FirstPersonInspectorSurfaceVisibleAtHit(hit))
+                    continue;
+                if (firstVisibleDistance
+                    == std::numeric_limits<float>::max())
+                    firstVisibleDistance = hit.distance;
+                visible.push_back(hit);
+            }
+
+            if (visible.empty())
+            {
+                Console::WriteLine(
+                    "no visible first-person surface intersects the centre ray");
+                Console::WriteLine("=============================");
+                return;
+            }
+
+            size_t primaryIndex = 0;
+            for (size_t i = 1; i < visible.size(); ++i)
+            {
+                if (std::abs(
+                        visible[i].distance
+                        - firstVisibleDistance)
+                    > kCoplanarBand)
+                    continue;
+                const auto& candidate =
+                    *visible[i].surface;
+                const auto& primary =
+                    *visible[primaryIndex].surface;
+                if (candidate.coplanarOwner
+                    && (!primary.coplanarOwner
+                        || candidate.nativePaintOrdinal
+                            > primary.nativePaintOrdinal))
+                {
+                    primaryIndex = i;
+                }
+            }
+
+            DumpFirstPersonInspectorSurface(
+                visible[primaryIndex], "PRIMARY", true);
+            Console::WriteLine(
+                "--- FP_PICK NEAR-LAYER count=%zu band=%.3f ---",
+                visible.size(), double(kCoplanarBand));
+            for (size_t i = 0; i < visible.size(); ++i)
+            {
+                if (i == primaryIndex)
+                    continue;
+                DumpFirstPersonInspectorSurface(
+                    visible[i], "COMPETITOR", false);
+            }
+
+            DumpFirstPersonInspectorRelevantTiles(
+                visible[primaryIndex].point);
+            Console::WriteLine("=============================");
+        }
+    } // namespace
 
     std::optional<PassengerPaintAnchor>
         CaptureFirstPersonPassengerPaintAnchor(
@@ -372,6 +1146,7 @@ namespace OpenRCT2::Paint
     }
     void ResetFirstPersonPresentationCache()
     {
+        gFirstPersonInspectorPickRequested = false;
         _reconstructionWorker.cancel();
         _largeSceneryJobs.clear();
         _smallSceneryJobs.clear();
@@ -653,6 +1428,12 @@ namespace OpenRCT2::Paint
                     rt.DrawingEngine;
                 _preparedFrame.valid = true;
             }
+        }
+
+        if (gFirstPersonInspectorPickRequested)
+        {
+            gFirstPersonInspectorPickRequested = false;
+            DumpFirstPersonInspectorPick(*scene);
         }
 
         auto* context =
