@@ -171,23 +171,32 @@ void InputManager::processAnalogueInput()
                 float moveX = rawX * sensitivityCurve * 8.0f; // Reasonable base scale
                 float moveY = rawY * sensitivityCurve * 8.0f;
 
-                // Accumulate the movement with fractional precision
-                _analogueScrollAccumX += moveX;
-                _analogueScrollAccumY += moveY;
+                // Do not integrate imperceptible controller noise forever.
+                // Fractional accumulation previously turned a tiny steady-axis
+                // drift into a whole viewport pixel every few dozen frames,
+                // producing the characteristic periodic camera nudge even
+                // though the stick appeared centred.
+                constexpr float kMinimumIntentionalPixelsPerFrame = 0.05f;
+                const auto accumulateAxis = [](
+                    float movement, float& accumulator) {
+                    if (std::abs(movement)
+                        < kMinimumIntentionalPixelsPerFrame)
+                    {
+                        accumulator = 0.0f;
+                        return 0;
+                    }
 
-                // Extract integer movement for this frame
-                float intPartX, intPartY;
-                float fracX = std::modf(_analogueScrollAccumX, &intPartX);
-                float fracY = std::modf(_analogueScrollAccumY, &intPartY);
+                    accumulator += movement;
+                    float integerPart = 0.0f;
+                    accumulator =
+                        std::modf(accumulator, &integerPart);
+                    return static_cast<int>(integerPart);
+                };
 
-                int pixelsX = static_cast<int>(intPartX);
-                int pixelsY = static_cast<int>(intPartY);
-
-                _analogueScrollAccumX = fracX;
-                _analogueScrollAccumY = fracY;
-
-                _analogueScroll.x += pixelsX;
-                _analogueScroll.y += pixelsY;
+                _analogueScroll.x +=
+                    accumulateAxis(moveX, _analogueScrollAccumX);
+                _analogueScroll.y +=
+                    accumulateAxis(moveY, _analogueScrollAccumY);
             }
         }
     }
