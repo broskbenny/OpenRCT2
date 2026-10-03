@@ -177,7 +177,7 @@ struct FirstPersonPaintSemanticArtwork
     uint8_t sourceRotation = 0;
     // Logical order assigned from the arranged native PaintStruct stream.
     // This is used only to resolve surfaces at the same physical depth.
-    uint32_t nativePaintOrdinal = 0;
+    uint64_t nativePaintOrdinal = 0;
     bool decal = false;
 };
 
