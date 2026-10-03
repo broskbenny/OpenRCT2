@@ -459,7 +459,7 @@ namespace OpenRCT2::Paint
                 Console::WriteLine(
                     "  terrainCache dirty=%d baseZ=%d waterZ=%d slope=%u "
                     "sourceRotation=%u surfaceStyle=%u verticalOpening=%d "
-                    "groundRegion=%llu water=%d overlay=%d",
+                    "groundRegion=%llu water=%zu overlay=%zu",
                     cached.dirty ? 1 : 0,
                     cached.baseZ, cached.waterZ,
                     unsigned(cached.slope),
