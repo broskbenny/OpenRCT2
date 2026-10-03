@@ -1145,9 +1145,12 @@ void main() {
             }
             if (found != _staticOpaqueRegions.end())
             {
-                // Keep ready geometry during an incremental replacement, but
-                // never show a region after authoritative game-state invalidation.
-                if (found->second.sourceRevision == packet.sourceRevision)
+                // The scene still references this region, so its existing GPU
+                // buffer is the last-known-good presentation generation. Keep
+                // drawing it while a newer generation/revision uploads. A
+                // scene-epoch change is a real park teardown and must never
+                // retain geometry from the previous world.
+                if (found->second.sceneEpoch == packet.sceneEpoch)
                     regionDraws.push_back(packet.key);
             }
         }
