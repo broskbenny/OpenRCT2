@@ -3242,6 +3242,7 @@
             // never in the normal presentation loop. Report materially-sized
             // horizontal same-Z overlaps, including ordinary terrain/path
             // surfaces, so visible fighting can be traced to concrete geometry.
+            if (gFirstPersonDiagnosticMask != 0)
             {
                 struct CoplanarProbe
                 {
@@ -3280,8 +3281,18 @@
                 buckets.reserve(packet.surfaces.size() / 8 + 1);
                 static std::unordered_set<uint64_t>
                     loggedConflicts;
-                if (loggedConflicts.size() > 4096)
+                static uint64_t loggedGeneration = 0;
+                if (loggedGeneration
+                    != gFirstPersonDiagnosticGeneration)
+                {
                     loggedConflicts.clear();
+                    loggedGeneration =
+                        gFirstPersonDiagnosticGeneration;
+                }
+                else if (loggedConflicts.size() > 4096)
+                {
+                    loggedConflicts.clear();
+                }
 
                 size_t logsThisRegion = 0;
                 constexpr size_t kMaxLogsPerRegion = 8;
@@ -3378,6 +3389,35 @@
                         const auto& other =
                             packet.surfaces[
                                 peer.surfaceIndex];
+
+                        uint32_t diagnosticCategory = 0;
+                        const char* diagnosticName = "artwork";
+                        if (other.physicalCoverage
+                            && surface.physicalCoverage)
+                        {
+                            diagnosticCategory = uint32_t(
+                                FirstPersonDiagnosticCategory::
+                                    horizontalPhysical);
+                            diagnosticName = "physical";
+                        }
+                        else if (other.physicalCoverage
+                            != surface.physicalCoverage)
+                        {
+                            diagnosticCategory = uint32_t(
+                                FirstPersonDiagnosticCategory::
+                                    horizontalMixed);
+                            diagnosticName = "mixed";
+                        }
+                        else
+                        {
+                            diagnosticCategory = uint32_t(
+                                FirstPersonDiagnosticCategory::
+                                    horizontalArtwork);
+                        }
+                        if ((gFirstPersonDiagnosticMask
+                                & diagnosticCategory) == 0)
+                            continue;
+
                         const uint32_t imageA =
                             other.image.HasValue()
                             ? other.image.GetIndex() : 0;
@@ -3404,6 +3444,9 @@
                         hashValue(
                             conflictKey,
                             surface.nativePaintOrdinal);
+                        hashValue(
+                            conflictKey,
+                            diagnosticCategory);
 
                         if (logsThisRegion
                                 < kMaxLogsPerRegion
@@ -3413,10 +3456,11 @@
                         {
                             ++logsThisRegion;
                             LOG_WARNING(
-                                "FP_HORIZONTAL region=(%d,%d) tile=(%d,%d) z=%.2f "
+                                "FP_HORIZONTAL[%s] region=(%d,%d) tile=(%d,%d) z=%.2f "
                                 "overlap=(%.1f,%.1f) "
                                 "A[type=%s image=%u owner=%d physical=%d order=%llu] "
                                 "B[type=%s image=%u owner=%d physical=%d order=%llu]",
+                                diagnosticName,
                                 regionX, regionY,
                                 tileX, tileY, double(z),
                                 double(overlapX),

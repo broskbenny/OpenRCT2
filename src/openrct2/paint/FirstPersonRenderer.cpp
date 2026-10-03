@@ -76,10 +76,30 @@ namespace OpenRCT2::Paint
 {
     namespace
     {
+        uint32_t gFirstPersonDiagnosticMask =
+            kFirstPersonDiagnosticDefaultMask;
+        uint64_t gFirstPersonDiagnosticGeneration = 1;
+
         #include "FirstPersonRenderer.Core.inc"
         #include "FirstPersonRenderer.World.inc"
         #include "FirstPersonRenderer.Paint.inc"
     } // namespace
+
+    void SetFirstPersonDiagnosticMask(uint32_t mask)
+    {
+        mask &= kFirstPersonDiagnosticAllMask;
+        if (gFirstPersonDiagnosticMask == mask)
+            return;
+        gFirstPersonDiagnosticMask = mask;
+        ++gFirstPersonDiagnosticGeneration;
+        if (gFirstPersonDiagnosticGeneration == 0)
+            gFirstPersonDiagnosticGeneration = 1;
+    }
+
+    uint32_t GetFirstPersonDiagnosticMask()
+    {
+        return gFirstPersonDiagnosticMask;
+    }
 
     std::optional<PassengerPaintAnchor>
         CaptureFirstPersonPassengerPaintAnchor(

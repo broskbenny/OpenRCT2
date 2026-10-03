@@ -34,6 +34,23 @@ namespace OpenRCT2::Paint
         suppressSubtree,
     };
 
+    enum class FirstPersonDiagnosticCategory : uint32_t
+    {
+        horizontalArtwork = 1u << 0,
+        horizontalPhysical = 1u << 1,
+        horizontalMixed = 1u << 2,
+    };
+
+    inline constexpr uint32_t kFirstPersonDiagnosticDefaultMask =
+        uint32_t(FirstPersonDiagnosticCategory::horizontalArtwork)
+        | uint32_t(FirstPersonDiagnosticCategory::horizontalPhysical);
+    inline constexpr uint32_t kFirstPersonDiagnosticAllMask =
+        kFirstPersonDiagnosticDefaultMask
+        | uint32_t(FirstPersonDiagnosticCategory::horizontalMixed);
+
+    void SetFirstPersonDiagnosticMask(uint32_t mask);
+    [[nodiscard]] uint32_t GetFirstPersonDiagnosticMask();
+
     [[nodiscard]] constexpr FirstPersonHiddenComponentDisposition
         FirstPersonHiddenComponentPolicy(
             bool matchesHiddenEntity, bool entityPainted,

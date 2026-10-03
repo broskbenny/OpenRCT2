@@ -48,6 +48,7 @@
 #include "../object/ObjectManager.h"
 #include "../object/ObjectRepository.h"
 #include "../object/PeepAnimationsObject.h"
+#include "../paint/FirstPersonRenderer.h"
 #include "../profiling/Profiling.h"
 #include "../ride/Ride.h"
 #include "../ride/RideConstruction.h"
@@ -1753,6 +1754,104 @@ static void ConsoleSpawnBalloon(InteractiveConsole& console, const arguments_t& 
     Balloon::create({ x, y, z }, colour, false);
 }
 
+static void ConsoleCommandFirstPersonDiagnostics(
+    InteractiveConsole& console, const arguments_t& argv)
+{
+    constexpr uint32_t artwork =
+        uint32_t(Paint::FirstPersonDiagnosticCategory::
+            horizontalArtwork);
+    constexpr uint32_t physical =
+        uint32_t(Paint::FirstPersonDiagnosticCategory::
+            horizontalPhysical);
+    constexpr uint32_t mixed =
+        uint32_t(Paint::FirstPersonDiagnosticCategory::
+            horizontalMixed);
+
+    const auto writeStatus = [&]() {
+        const uint32_t mask =
+            Paint::GetFirstPersonDiagnosticMask();
+        console.WriteFormatLine(
+            "fpdiag: artwork=%s physical=%s mixed=%s",
+            (mask & artwork) != 0 ? "on" : "off",
+            (mask & physical) != 0 ? "on" : "off",
+            (mask & mixed) != 0 ? "on" : "off");
+    };
+    const auto writeUsage = [&]() {
+        console.WriteLine(
+            "fpdiag [status|default|all|none]");
+        console.WriteLine(
+            "fpdiag <artwork|physical|mixed> <on|off>");
+    };
+
+    if (argv.empty() || argv[0] == "status"
+        || argv[0] == "list")
+    {
+        writeStatus();
+        return;
+    }
+
+    if (argv[0] == "default")
+    {
+        Paint::SetFirstPersonDiagnosticMask(
+            Paint::kFirstPersonDiagnosticDefaultMask);
+        writeStatus();
+        return;
+    }
+    if (argv[0] == "all")
+    {
+        Paint::SetFirstPersonDiagnosticMask(
+            Paint::kFirstPersonDiagnosticAllMask);
+        writeStatus();
+        return;
+    }
+    if (argv[0] == "none")
+    {
+        Paint::SetFirstPersonDiagnosticMask(0);
+        writeStatus();
+        return;
+    }
+
+    uint32_t category = 0;
+    if (argv[0] == "artwork")
+        category = artwork;
+    else if (argv[0] == "physical")
+        category = physical;
+    else if (argv[0] == "mixed")
+        category = mixed;
+    else
+    {
+        writeUsage();
+        return;
+    }
+
+    if (argv.size() < 2)
+    {
+        writeUsage();
+        return;
+    }
+
+    bool enable = false;
+    if (argv[1] == "on" || argv[1] == "1"
+        || argv[1] == "true")
+    {
+        enable = true;
+    }
+    else if (argv[1] != "off" && argv[1] != "0"
+        && argv[1] != "false")
+    {
+        writeUsage();
+        return;
+    }
+
+    uint32_t mask = Paint::GetFirstPersonDiagnosticMask();
+    if (enable)
+        mask |= category;
+    else
+        mask &= ~category;
+    Paint::SetFirstPersonDiagnosticMask(mask);
+    writeStatus();
+}
+
 using console_command_func = void (*)(InteractiveConsole& console, const arguments_t& argv);
 struct ConsoleCommand
 {
@@ -1822,6 +1921,9 @@ static constexpr ConsoleCommand console_command_table[] = {
     { "dereference", ConsoleCommandDereference, "Dereferences a nullptr, for testing purposes only", "dereference" },
     { "echo", ConsoleCommandEcho, "Echoes the text to the console.", "echo <text>" },
     { "exit", ConsoleCommandClose, "Closes the console.", "exit" },
+    { "fpdiag", ConsoleCommandFirstPersonDiagnostics,
+      "Filters first-person renderer diagnostics.",
+      "fpdiag [status|default|all|none|<artwork|physical|mixed> <on|off>]" },
     { "get", ConsoleCommandGet, "Gets the value of the specified variable.", "get <variable>" },
     { "help", ConsoleCommandHelp, "Lists commands or info about a command.", "help [command]" },
     { "hide", ConsoleCommandHide, "Hides the console.", "hide" },
