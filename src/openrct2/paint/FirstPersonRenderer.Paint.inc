@@ -58,9 +58,21 @@
                         TileCoordsXY(tx, ty));
                     cached.lastSemanticGeneration = sourceGeneration;
                 }
-                const bool semanticChanged = authoritativeInvalidation
-                    || (semanticProbeDue && probedSignature != cached.signature)
-                    || (cached.valid && probedAnimated != cached.animated);
+                // "dirty" means the native game asked us to revalidate; it
+                // does not by itself mean the authoritative tile changed.
+                // Generic redraw/shadow/entity invalidations are common. Keep
+                // the ready reconstruction when the complete TileElement byte
+                // signature, view flags and animation classification still
+                // match.
+                const bool sourceChanged =
+                    !cached.valid
+                    || probedSignature != cached.signature
+                    || cached.viewFlags != opt.viewFlags;
+                const bool animationClassChanged =
+                    cached.valid
+                    && probedAnimated != cached.animated;
+                const bool semanticChanged =
+                    sourceChanged || animationClassChanged;
                 if (semanticChanged)
                 {
                     if (!cached.valid || cached.signature != probedSignature || cached.viewFlags != opt.viewFlags)
@@ -117,6 +129,12 @@
                         variant.semanticComponents.clear();
                     }
                     MarkStaticRegionDirtyForTile(tx, ty);
+                }
+                else if (authoritativeInvalidation)
+                {
+                    // Revalidation proved the cached tile is still the same
+                    // authoritative source. Retain every ready surface/rotation.
+                    cached.dirty = false;
                 }
 
                 const auto previousRotation = cached.hasSelectedRotation
