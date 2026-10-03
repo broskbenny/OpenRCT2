@@ -1277,6 +1277,30 @@ void main() {
                     GLsizei(
                         opaqueOwnerVertices.size()));
             }
+
+            // Owner replay deliberately used the pre-owner snapshot so equal
+            // depth could be resolved without owners competing with
+            // themselves. Transparency, however, must be occluded by the
+            // completed opaque scene. Refresh only the depth snapshot now that
+            // all owners have written their final physical depth.
+            _opaqueSnapshot->BindDraw();
+            front.BindRead();
+            glCall(
+                glBlitFramebuffer,
+                clipLeft, screenHeight - clipBottom,
+                clipRight, screenHeight - clipTop,
+                clipLeft, screenHeight - clipBottom,
+                clipRight, screenHeight - clipTop,
+                GL_DEPTH_BUFFER_BIT,GL_NEAREST);
+            front.Bind();
+            glCall(
+                glViewport,left,
+                screenHeight-top-height,
+                width,height);
+            glCall(
+                glScissor,clipLeft,
+                screenHeight-clipBottom,
+                clipWidth,clipHeight);
         }
 
         if (!streamedTransparent.empty())
