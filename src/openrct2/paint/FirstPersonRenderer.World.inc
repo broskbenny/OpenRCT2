@@ -3070,7 +3070,10 @@
                 if (!IsResidentStaticSurface(surface) || surface.gpuRegion != regionKey)
                     return;
                 packet.surfaces.push_back(surface);
-                packet.vertexCount += surface.coplanarOwner ? 12 : 6;
+                // Every opaque surface is uploaded exactly once. Coplanar
+                // owners are excluded from the ordinary physical-depth pass
+                // and live only in the ordered owner range.
+                packet.vertexCount += 6;
                 // Persistent baked materials sample their own immutable
                 // bitmap; the original ImageId remains only as palette/remap
                 // metadata. Object reloads clear the whole first-person scene,
@@ -4194,14 +4197,22 @@
                 if (packet.dirty && packetBudget.take())
                     RebuildStaticRegionPacket(key, frame);
                 packet.lastSeen = frame;
-                if (packet.publishedSourceRevision != packet.sourceRevision || !packet.surfaceStorage
-                    || packet.surfaceStorage->empty() || !frustum.visible(packet.center, packet.radius))
+                // A dirty/source-newer packet is the prospective next
+                // generation. Its currently published storage remains the
+                // last-known-good world until RebuildStaticRegionPacket()
+                // atomically replaces it. Never create an intermediate
+                // frame in which an authoritative invalidation makes the
+                // entire 32x32 region disappear.
+                if (!packet.surfaceStorage
+                    || packet.surfaceStorage->empty()
+                    || !frustum.visible(packet.center, packet.radius))
                     continue;
                 scene.staticRegions.push_back({
                     key, _sceneEpoch, packet.generation,
                     packet.center, packet.radius,
                     packet.surfaceStorage.get(),
-                    &packet.textureDependencies, packet.surfaceStorage, packet.sourceRevision, packet.vertexCount
+                    &packet.textureDependencies, packet.surfaceStorage,
+                    packet.publishedSourceRevision, packet.vertexCount
                 });
             }
         }
