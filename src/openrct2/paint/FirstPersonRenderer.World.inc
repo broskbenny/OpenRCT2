@@ -3239,9 +3239,9 @@
             }
 
             // Diagnostic only: this runs when a dirty static region is rebuilt,
-            // never in the normal presentation loop. Report horizontally
-            // overlapping ordered surfaces that occupy the same physical Z
-            // layer so visual fighting can be traced back to concrete artwork.
+            // never in the normal presentation loop. Report materially-sized
+            // horizontal same-Z overlaps, including ordinary terrain/path
+            // surfaces, so visible fighting can be traced to concrete geometry.
             {
                 struct CoplanarProbe
                 {
@@ -3293,8 +3293,6 @@
                 {
                     const auto& surface =
                         packet.surfaces[index];
-                    if (!surface.coplanarOwner)
-                        continue;
 
                     const float z =
                         surface.triangles[0].world.z;
@@ -3365,6 +3363,17 @@
                         if (overlapX <= kMinimumOverlap
                             || overlapY <= kMinimumOverlap)
                             continue;
+                        const float overlapArea =
+                            overlapX * overlapY;
+                        const float overlapLength =
+                            std::max(overlapX, overlapY);
+                        // Ignore tiny corner/seam contacts such as the 1x1
+                        // pairs reported by the first probe. Keep broad
+                        // overlaps and long thin strips, both of which can
+                        // visibly flicker.
+                        if (overlapArea < 8.0f
+                            && overlapLength < 8.0f)
+                            continue;
 
                         const auto& other =
                             packet.surfaces[
@@ -3404,19 +3413,25 @@
                         {
                             ++logsThisRegion;
                             LOG_WARNING(
-                                "FP_COPLANAR tile=(%d,%d) z=%.2f overlap=(%.1f,%.1f) "
-                                "A[type=%s image=%u order=%llu] "
-                                "B[type=%s image=%u order=%llu]",
+                                "FP_HORIZONTAL region=(%d,%d) tile=(%d,%d) z=%.2f "
+                                "overlap=(%.1f,%.1f) "
+                                "A[type=%s image=%u owner=%d physical=%d order=%llu] "
+                                "B[type=%s image=%u owner=%d physical=%d order=%llu]",
+                                regionX, regionY,
                                 tileX, tileY, double(z),
                                 double(overlapX),
                                 double(overlapY),
                                 surfaceType(other),
                                 imageA,
+                                other.coplanarOwner ? 1 : 0,
+                                other.physicalCoverage ? 1 : 0,
                                 static_cast<
                                     unsigned long long>(
                                         other.nativePaintOrdinal),
                                 surfaceType(surface),
                                 imageB,
+                                surface.coplanarOwner ? 1 : 0,
+                                surface.physicalCoverage ? 1 : 0,
                                 static_cast<
                                     unsigned long long>(
                                         surface.nativePaintOrdinal));
