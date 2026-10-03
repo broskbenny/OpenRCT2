@@ -17,6 +17,8 @@
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
             std::unordered_set<uint64_t>
                 cameraIndependentRefreshKeys;
+            std::unordered_map<uint64_t, uint8_t>
+                requestedTileRotations;
             const auto& view = scene.resolvedView;
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
@@ -120,13 +122,14 @@
                 const auto previousRotation = cached.hasSelectedRotation
                     ? std::optional<uint8_t>{ cached.selectedRotation }
                     : std::nullopt;
-                const auto tileRotation = PaintRotationForTile(opt.camera, tile, previousRotation);
-                if ((!cached.hasSelectedRotation
-                        || cached.selectedRotation != tileRotation)
-                    && cached.hasUngroupedResident)
-                    MarkStaticRegionDirtyForTile(tx, ty);
-                cached.selectedRotation = tileRotation;
-                cached.hasSelectedRotation = true;
+                const auto tileRotation =
+                    PaintRotationForTile(
+                        opt.camera, tile, previousRotation);
+                // Request the camera-preferred native observation, but do not
+                // make it the presentation source until that variant has
+                // actually been captured. The previous valid source remains
+                // the last-known-good representation during acquisition.
+                requestedTileRotations[key] = tileRotation;
                 cached.lastSeen = frame;
 
                 bool hasTerrainEdgeSemantic = false;
@@ -268,12 +271,12 @@
                     if (stale && nativeCapturesRemaining != 0)
                     {
                         --nativeCapturesRemaining;
-                        if (cameraIndependentRefreshKeys
-                                .insert(key).second)
-                        {
-                            cached.cameraIndependentResidentSurfaces.clear();
-                            cached.cameraIndependentStreamedSurfaces.clear();
-                        }
+                        // Another native view is additional artwork evidence
+                        // for the same physical object. Preserve already-ready
+                        // camera-independent reconstruction and merge/deduplicate
+                        // the new observation below; authoritative source
+                        // invalidation already clears these caches explicitly.
+                        cameraIndependentRefreshKeys.insert(key);
                         variant.valid = true;
                         variant.lastPainted = frame;
                         variant.lastAnimationGeneration = animationGeneration;
@@ -796,6 +799,36 @@
                     }
                     Drawing::ScrollingText::EndFirstPersonSnapshotCapture();
                     PaintSessionFree(session);
+                }
+            }
+
+            // Promote a requested source view only after its capture is
+            // complete. Until then, keep the previous selected rotation so a
+            // camera turn cannot publish an empty resident representation.
+            for (const auto& [key, requested] :
+                 requestedTileRotations)
+            {
+                const auto cacheIt =
+                    _staticPaintCache.find(key);
+                if (cacheIt == _staticPaintCache.end()
+                    || requested
+                        >= cacheIt->second.rotations.size()
+                    || !cacheIt->second
+                            .rotations[requested].valid)
+                    continue;
+
+                auto& cached = cacheIt->second;
+                if (!cached.hasSelectedRotation
+                    || cached.selectedRotation != requested)
+                {
+                    if (cached.hasUngroupedResident)
+                    {
+                        MarkStaticRegionDirtyForTile(
+                            int32_t(key >> 32),
+                            int32_t(key & 0xffffffffu));
+                    }
+                    cached.selectedRotation = requested;
+                    cached.hasSelectedRotation = true;
                 }
             }
 
