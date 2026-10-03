@@ -93,43 +93,6 @@ static PaintStruct* PaintPathFixtureAsParent(
     return result;
 }
 
-static PaintStruct* PaintPathLampAsParent(
-    PaintSession& session, ImageId image,
-    const CoordsXYZ& offset, const BoundBoxXYZ& sortingBox)
-{
-    // The native lamp bounding box is a paint-sorting volume, not the visible
-    // extent of the sprite. Treating it as the texture receiver clipped the
-    // lantern head at the sorting-box ceiling. Publish the actual fixture as a
-    // narrow pole plus a separate head while leaving the native sorting box
-    // untouched for the isometric renderer.
-    const uint32_t group =
-        PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
-    const int32_t sortingTop =
-        sortingBox.offset.z + sortingBox.length.z;
-    const int32_t poleTop =
-        std::max(offset.z + 1, sortingTop);
-    PaintSessionAddFirstPersonSemanticBeam(
-        session, FirstPersonPaintSemanticRole::pathFixture,
-        { offset.x, offset.y, offset.z },
-        { offset.x, offset.y, poleTop },
-        1, image, offset, group, true);
-    PaintSessionAddFirstPersonSemanticBox(
-        session, FirstPersonPaintSemanticRole::pathFixture,
-        { offset.x - 3, offset.y - 3,
-          std::max(offset.z, poleTop - 4) },
-        { offset.x + 4, offset.y + 4,
-          poleTop + kCoordsZStep },
-        image, offset, group, 0, 0, false);
-
-    FirstPersonPaintSemanticScope scope(
-        session, FirstPersonPaintSemanticRole::pathFixture,
-        group);
-    auto* result = PaintAddImageAsParent(
-        session, image, offset, sortingBox);
-    session.FirstPersonSemanticArtworkGroup = 0;
-    return result;
-}
-
 /* rct2: 0x006A5AE5 */
 static void PathAdditionLightsPaint(
     PaintSession& session, const PathAdditionEntry& pathAdditionEntry, const PathElement& pathElement, int32_t height,
@@ -142,25 +105,25 @@ static void PathAdditionLightsPaint(
     if (edges & EDGE_NE)
     {
         auto imageIndex = GetFootpathLampImage(pathAdditionEntry, EDGE_NE, isBroken);
-        PaintPathLampAsParent(
+        PaintPathFixtureAsParent(
             session, imageTemplate.WithIndex(imageIndex), { 2, 16, height }, { { 3, 8, height + 2 }, { 0, 16, 23 } });
     }
     if (edges & EDGE_SE)
     {
         auto imageIndex = GetFootpathLampImage(pathAdditionEntry, EDGE_SE, isBroken);
-        PaintPathLampAsParent(
+        PaintPathFixtureAsParent(
             session, imageTemplate.WithIndex(imageIndex), { 16, 30, height }, { { 2, 29, height + 2 }, { 22, 0, 23 } });
     }
     if (edges & EDGE_SW)
     {
         auto imageIndex = GetFootpathLampImage(pathAdditionEntry, EDGE_SW, isBroken);
-        PaintPathLampAsParent(
+        PaintPathFixtureAsParent(
             session, imageTemplate.WithIndex(imageIndex), { 30, 16, height }, { { 29, 2, height + 2 }, { 0, 22, 23 } });
     }
     if (edges & EDGE_NW)
     {
         auto imageIndex = GetFootpathLampImage(pathAdditionEntry, EDGE_NW, isBroken);
-        PaintPathLampAsParent(
+        PaintPathFixtureAsParent(
             session, imageTemplate.WithIndex(imageIndex), { 16, 2, height }, { { 8, 3, height + 2 }, { 16, 0, 23 } });
     }
 }

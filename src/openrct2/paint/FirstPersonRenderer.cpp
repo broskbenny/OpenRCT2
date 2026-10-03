@@ -19,6 +19,7 @@
 #include "Paint.Entity.h"
 
 #include "../Context.h"
+#include "../Diagnostic.h"
 #include "../GameState.h"
 #include "../drawing/Drawing.Sprite.h"
 #include "../drawing/Colour.h"

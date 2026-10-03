@@ -3238,6 +3238,198 @@
                 }
             }
 
+            // Diagnostic only: this runs when a dirty static region is rebuilt,
+            // never in the normal presentation loop. Report horizontally
+            // overlapping ordered surfaces that occupy the same physical Z
+            // layer so visual fighting can be traced back to concrete artwork.
+            {
+                struct CoplanarProbe
+                {
+                    size_t surfaceIndex = 0;
+                    float minX = 0.0f;
+                    float minY = 0.0f;
+                    float maxX = 0.0f;
+                    float maxY = 0.0f;
+                    float z = 0.0f;
+                    int32_t tileX = 0;
+                    int32_t tileY = 0;
+                    int32_t zKey = 0;
+                };
+
+                const auto surfaceType =
+                    [](const FirstPersonSurface& surface) -> const char* {
+                        if (surface.solidColour != 0)
+                            return "solid";
+                        if (surface.artworkCarrier)
+                            return "carrier";
+                        if (surface.textureFallbackOnly)
+                            return "fallback";
+                        if (surface.physicalCoverage)
+                            return "physical";
+                        return "artwork";
+                    };
+                const auto hashValue =
+                    [](uint64_t& hash, uint64_t value) {
+                        hash ^= value;
+                        hash *= 1099511628211ull;
+                    };
+
+                std::unordered_map<
+                    uint64_t, std::vector<CoplanarProbe>>
+                    buckets;
+                buckets.reserve(packet.surfaces.size() / 8 + 1);
+                static std::unordered_set<uint64_t>
+                    loggedConflicts;
+                if (loggedConflicts.size() > 4096)
+                    loggedConflicts.clear();
+
+                size_t logsThisRegion = 0;
+                constexpr size_t kMaxLogsPerRegion = 8;
+                constexpr float kPlaneEpsilon = 0.01f;
+                constexpr float kMinimumOverlap = 0.5f;
+
+                for (size_t index = 0;
+                     index < packet.surfaces.size(); ++index)
+                {
+                    const auto& surface =
+                        packet.surfaces[index];
+                    if (!surface.coplanarOwner)
+                        continue;
+
+                    const float z =
+                        surface.triangles[0].world.z;
+                    bool horizontal = true;
+                    float minX =
+                        surface.triangles[0].world.x;
+                    float minY =
+                        surface.triangles[0].world.y;
+                    float maxX = minX;
+                    float maxY = minY;
+                    for (const auto& vertex :
+                         surface.triangles)
+                    {
+                        const auto& p = vertex.world;
+                        if (std::abs(p.z - z)
+                            > kPlaneEpsilon)
+                        {
+                            horizontal = false;
+                            break;
+                        }
+                        minX = std::min(minX, p.x);
+                        minY = std::min(minY, p.y);
+                        maxX = std::max(maxX, p.x);
+                        maxY = std::max(maxY, p.y);
+                    }
+                    if (!horizontal
+                        || maxX - minX <= kMinimumOverlap
+                        || maxY - minY <= kMinimumOverlap)
+                        continue;
+
+                    const int32_t tileX =
+                        int32_t(std::floor(
+                            ((minX + maxX) * 0.5f)
+                            / float(kCoordsXYStep)));
+                    const int32_t tileY =
+                        int32_t(std::floor(
+                            ((minY + maxY) * 0.5f)
+                            / float(kCoordsXYStep)));
+                    const int32_t zKey =
+                        int32_t(std::lround(z * 16.0f));
+
+                    uint64_t bucketKey =
+                        14695981039346656037ull;
+                    hashValue(
+                        bucketKey,
+                        uint64_t(uint32_t(tileX)));
+                    hashValue(
+                        bucketKey,
+                        uint64_t(uint32_t(tileY)));
+                    hashValue(
+                        bucketKey,
+                        uint64_t(uint32_t(zKey)));
+
+                    auto& peers = buckets[bucketKey];
+                    for (const auto& peer : peers)
+                    {
+                        if (peer.tileX != tileX
+                            || peer.tileY != tileY
+                            || peer.zKey != zKey)
+                            continue;
+
+                        const float overlapX =
+                            std::min(maxX, peer.maxX)
+                            - std::max(minX, peer.minX);
+                        const float overlapY =
+                            std::min(maxY, peer.maxY)
+                            - std::max(minY, peer.minY);
+                        if (overlapX <= kMinimumOverlap
+                            || overlapY <= kMinimumOverlap)
+                            continue;
+
+                        const auto& other =
+                            packet.surfaces[
+                                peer.surfaceIndex];
+                        const uint32_t imageA =
+                            other.image.HasValue()
+                            ? other.image.GetIndex() : 0;
+                        const uint32_t imageB =
+                            surface.image.HasValue()
+                            ? surface.image.GetIndex() : 0;
+
+                        uint64_t conflictKey =
+                            14695981039346656037ull;
+                        hashValue(
+                            conflictKey,
+                            uint64_t(uint32_t(tileX)));
+                        hashValue(
+                            conflictKey,
+                            uint64_t(uint32_t(tileY)));
+                        hashValue(
+                            conflictKey,
+                            uint64_t(uint32_t(zKey)));
+                        hashValue(conflictKey, imageA);
+                        hashValue(conflictKey, imageB);
+                        hashValue(
+                            conflictKey,
+                            other.nativePaintOrdinal);
+                        hashValue(
+                            conflictKey,
+                            surface.nativePaintOrdinal);
+
+                        if (logsThisRegion
+                                < kMaxLogsPerRegion
+                            && loggedConflicts.insert(
+                                   conflictKey)
+                                   .second)
+                        {
+                            ++logsThisRegion;
+                            LOG_WARNING(
+                                "FP_COPLANAR tile=(%d,%d) z=%.2f overlap=(%.1f,%.1f) "
+                                "A[type=%s image=%u order=%llu] "
+                                "B[type=%s image=%u order=%llu]",
+                                tileX, tileY, double(z),
+                                double(overlapX),
+                                double(overlapY),
+                                surfaceType(other),
+                                imageA,
+                                static_cast<
+                                    unsigned long long>(
+                                        other.nativePaintOrdinal),
+                                surfaceType(surface),
+                                imageB,
+                                static_cast<
+                                    unsigned long long>(
+                                        surface.nativePaintOrdinal));
+                        }
+                    }
+
+                    peers.push_back({
+                        index, minX, minY, maxX, maxY, z,
+                        tileX, tileY, zKey
+                    });
+                }
+            }
+
             packet.textureDependencies.assign(
                 dependencies.begin(), dependencies.end());
             std::sort(

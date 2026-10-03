@@ -364,54 +364,6 @@ static uint32_t PublishFirstPersonParkEntranceGatePlane(
         true, false);
 }
 
-static void PublishFirstPersonParkEntranceCentreBody(
-    PaintSession& session, const EntranceElement& entranceEl,
-    ImageId image, const CoordsXYZ& artworkOffset,
-    uint32_t artworkGroup)
-{
-    if (session.FirstPersonSemanticComponentSink == nullptr)
-        return;
-
-    const float bottom = float(entranceEl.getBaseZ());
-    const float top = float(entranceEl.getClearanceZ());
-    if (!(top > bottom))
-        return;
-    const auto transform =
-        MakeFirstPersonParkEntranceTransform(
-            session, entranceEl);
-    const float beamBottom =
-        std::max(bottom, top - 12.0f);
-
-    // The centre tile is an archway: two narrow jambs and the overhead
-    // lintel/sign support. Texture projection is attached to those physical
-    // receivers instead of a single full-height card, while the walk-through
-    // opening remains genuinely empty.
-    for (const auto& bounds : std::array{
-             std::pair{
-                 FirstPersonPaintSemanticVec3{
-                     -14.0f, -3.0f, bottom },
-                 FirstPersonPaintSemanticVec3{
-                     -9.0f, 3.0f, top } },
-             std::pair{
-                 FirstPersonPaintSemanticVec3{
-                     9.0f, -3.0f, bottom },
-                 FirstPersonPaintSemanticVec3{
-                     14.0f, 3.0f, top } },
-             std::pair{
-                 FirstPersonPaintSemanticVec3{
-                     -9.0f, -3.0f, beamBottom },
-                 FirstPersonPaintSemanticVec3{
-                     9.0f, 3.0f, top } },
-         })
-    {
-        PaintSessionAddFirstPersonSemanticOrientedBox(
-            session,
-            FirstPersonPaintSemanticRole::structureBody,
-            transform, bounds.first, bounds.second,
-            image, artworkOffset, artworkGroup);
-    }
-}
-
 static uint32_t PublishFirstPersonParkEntranceSideBody(
     PaintSession& session, const EntranceElement& entranceEl,
     ImageId image, const CoordsXYZ& artworkOffset,
@@ -424,30 +376,20 @@ static uint32_t PublishFirstPersonParkEntranceSideBody(
     const auto transform =
         MakeFirstPersonParkEntranceTransform(
             session, entranceEl);
-
-    // The side sprite is facade artwork, not evidence for a tile-sized cube.
-    // Keep collision as a thin structural slab, and give the artwork its own
-    // non-colliding plane on the facade. This prevents the same sprite from
-    // being projected onto invented top/back/side faces.
-    PaintSessionAddFirstPersonSemanticOrientedBox(
+    return PaintSessionAddFirstPersonSemanticOrientedBox(
         session, FirstPersonPaintSemanticRole::structureBody,
         transform,
-        { -14.0f, -3.0f, bottom },
-        { 14.0f, 3.0f, top },
-        {}, artworkOffset, artworkGroup,
-        0, 0, true, false);
-    return PaintSessionAddFirstPersonSemanticOrientedQuad(
-        session, FirstPersonPaintSemanticRole::structureBody,
-        FirstPersonPaintSemanticPrimitiveKind::plane,
-        transform,
-        { {
-            { -16.0f, 0.0f, bottom },
-            { 16.0f, 0.0f, bottom },
-            { 16.0f, 0.0f, top },
-            { -16.0f, 0.0f, top },
-        } },
-        image, artworkOffset, artworkGroup,
-        false, false);
+        {
+            -float(kCoordsXYHalfTile),
+            -float(kCoordsXYHalfTile),
+            bottom,
+        },
+        {
+            float(kCoordsXYHalfTile),
+            float(kCoordsXYHalfTile),
+            top,
+        },
+        image, artworkOffset, artworkGroup);
 }
 
 static uint32_t PublishFirstPersonParkEntrancePathDeck(
@@ -612,7 +554,7 @@ static void PaintParkEntrance(PaintSession& session, uint8_t direction, int32_t 
                 const uint32_t bodyGroup =
                     PaintSessionBeginFirstPersonSemanticArtworkGroup(
                         session);
-                PublishFirstPersonParkEntranceCentreBody(
+                PublishFirstPersonParkEntranceGatePlane(
                     session, entranceEl, entranceImage,
                     { 0, 0, height }, bodyGroup);
                 {
