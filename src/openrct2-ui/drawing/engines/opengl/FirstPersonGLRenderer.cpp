@@ -948,11 +948,18 @@ void main() {
             streamedOwners;
         for (const auto* surface : streamedOpaque)
         {
-            appendVertices(
-                opaqueOrdinaryVertices, *surface,
-                false, true);
             if (surface->coplanarOwner)
+            {
+                // Owners are appearance/order layers, not contributors to the
+                // ordinary physical-depth snapshot. Render them only once,
+                // later, in authoritative owner order.
                 streamedOwners.push_back(surface);
+            }
+            else
+            {
+                appendVertices(
+                    opaqueOrdinaryVertices, *surface);
+            }
         }
         std::stable_sort(
             streamedOwners.begin(), streamedOwners.end(),
@@ -1010,15 +1017,10 @@ void main() {
             if (!ready && !_pendingRegion && packet.surfaceStorage && uploadBudget.available())
             {
                 const auto bytes = packet.vertexCount * sizeof(GPUVertex);
-                // Replacement must be possible even when there is no room for
-                // both versions. Drop the obsolete resident and let it pop in
-                // again after the bounded upload, instead of stalling forever.
-                if (bytes <= regionBudget && _staticRegionBytes + bytes > regionBudget
-                    && found != _staticOpaqueRegions.end())
-                {
-                    DiscardRegionBuffer(packet.key);
-                    found = _staticOpaqueRegions.end();
-                }
+                // A visible resident is the last-known-good world. Make room
+                // only by evicting invisible LRU regions; if that is still not
+                // enough, postpone this replacement rather than blanking the
+                // visible region while the bounded upload catches up.
                 while (_staticRegionBytes + bytes > regionBudget)
                 {
                     auto victim = _staticOpaqueRegions.end();
@@ -1064,31 +1066,70 @@ void main() {
                 };
                 while (uploadBudget.available())
                 {
-                    if (!pending.ownersPhase && pending.nextSurface == pending.surfaces->size())
+                    if (!pending.ownersPhase
+                        && pending.nextSurface == pending.surfaces->size())
                     {
                         flush();
-                        pending.buffer.ordinaryCount = GLsizei(pending.uploadedVertices);
+                        pending.buffer.ordinaryCount =
+                            GLsizei(pending.uploadedVertices);
                         pending.ownersPhase = true;
                     }
-                    if (pending.ownersPhase && pending.owners.empty()) break;
-                    const size_t index = pending.ownersPhase
-                        ? pending.owners.begin()->second[pending.nextOwner] : pending.nextSurface;
-                    const auto& surface = (*pending.surfaces)[index];
-                    if (!uploadBudget.take(6 * sizeof(GPUVertex))) break;
-                    if (!appendVertices(packed, surface, pending.ownersPhase, !pending.ownersPhase)) break;
+                    if (pending.ownersPhase && pending.owners.empty())
+                        break;
+
                     if (!pending.ownersPhase)
                     {
+                        const size_t index = pending.nextSurface++;
+                        const auto& surface =
+                            (*pending.surfaces)[index];
                         if (surface.coplanarOwner)
-                            pending.owners[surface.nativePaintOrdinal == 0
-                                ? std::numeric_limits<uint64_t>::max() : surface.nativePaintOrdinal].push_back(index);
-                        ++pending.nextSurface;
+                        {
+                            pending.owners[
+                                surface.nativePaintOrdinal == 0
+                                    ? std::numeric_limits<uint64_t>::max()
+                                    : surface.nativePaintOrdinal]
+                                .push_back(index);
+                            continue;
+                        }
+
+                        if (!uploadBudget.take(
+                                6 * sizeof(GPUVertex)))
+                        {
+                            --pending.nextSurface;
+                            break;
+                        }
+                        if (!appendVertices(
+                                packed, surface))
+                        {
+                            --pending.nextSurface;
+                            break;
+                        }
                     }
-                    else if (++pending.nextOwner == pending.owners.begin()->second.size())
+                    else
                     {
-                        pending.owners.erase(pending.owners.begin());
-                        pending.nextOwner = 0;
+                        const size_t index =
+                            pending.owners.begin()
+                                ->second[pending.nextOwner];
+                        const auto& surface =
+                            (*pending.surfaces)[index];
+                        if (!uploadBudget.take(
+                                6 * sizeof(GPUVertex)))
+                            break;
+                        if (!appendVertices(
+                                packed, surface, true, false))
+                            break;
+                        if (++pending.nextOwner
+                            == pending.owners.begin()
+                                   ->second.size())
+                        {
+                            pending.owners.erase(
+                                pending.owners.begin());
+                            pending.nextOwner = 0;
+                        }
                     }
-                    if (packed.size() >= 384) flush();
+
+                    if (packed.size() >= 384)
+                        flush();
                 }
                 flush();
                 if (pending.ownersPhase && pending.owners.empty())
@@ -1170,9 +1211,12 @@ void main() {
                         true, true, false);
             }
 
-            // Freeze ordinary physical depth once. Owners may replace only
-            // that same physical layer (within depth-buffer quantisation) or
-            // genuinely nearer space; they never receive a world-space bias.
+            // Freeze only non-owner physical depth. Coplanar owners were
+            // deliberately omitted from the ordinary pass, so they cannot
+            // self-authorise by winning a depth fight before ordered replay.
+            // Owners may replace only the same physical layer (within
+            // depth-buffer quantisation) or genuinely nearer space; they never
+            // receive a world-space bias.
             _opaqueSnapshot->BindDraw();
             front.BindRead();
             glCall(
