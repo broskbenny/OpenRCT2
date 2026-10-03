@@ -1603,6 +1603,22 @@
             uint32_t viewFlags, EntityId hidden, uint8_t hiddenSeatIndex,
             uint8_t rotation)
         {
+            const auto nodeSurfaceStart =
+                scene.surfaces.size();
+            const auto applyNativePaintOrdinal = [&]() {
+                if (ps.FirstPersonNativePaintOrdinal == 0)
+                    return;
+                for (size_t i = nodeSurfaceStart;
+                     i < scene.surfaces.size(); ++i)
+                {
+                    if (scene.surfaces[i].nativePaintOrdinal == 0)
+                    {
+                        scene.surfaces[i].nativePaintOrdinal =
+                            ps.FirstPersonNativePaintOrdinal;
+                    }
+                }
+            };
+
             const bool matchesHiddenEntity =
                 ps.Entity != nullptr && !hidden.IsNull()
                 && ps.Entity->id == hidden;
@@ -1668,6 +1684,7 @@
                         scene.surfaces.pop_back();
                     }
                 }
+                applyNativePaintOrdinal();
                 if (ps.Children != nullptr)
                 {
                     AppendRoot(
@@ -1767,6 +1784,7 @@
                         ps.FirstPersonSnapshot);
                 }
             }
+            applyNativePaintOrdinal();
             if (ps.Children != nullptr)
             {
                 AppendRoot(
@@ -1787,6 +1805,9 @@
                     if (scene.surfaces.size() > surfaceStart)
                         ApplyImmutablePaintSnapshot(scene.surfaces.back(), a->FirstPersonSnapshot);
                 }
+                // Attached entries do not carry independent semantic/physical
+                // ownership; they are pixel layers of this PaintStruct.
+                applyNativePaintOrdinal();
             }
         }
 

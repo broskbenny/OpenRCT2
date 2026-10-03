@@ -236,6 +236,10 @@ struct PaintStruct
         FirstPersonPaintSemanticRole::none;
     uint32_t FirstPersonPassengerSeatMask = 0;
     uint32_t FirstPersonSemanticArtworkGroup = 0;
+    // Arranged native paint order used only by first-person equal-depth
+    // replay. Child paint structs receive their own sequence position instead
+    // of inheriting an arbitrary root-level tie breaker.
+    uint64_t FirstPersonNativePaintOrdinal = 0;
     ImageId image_id;
     ScreenCoordsXY ScreenPos;
     CoordsXY MapPos;

@@ -3294,6 +3294,27 @@
                             return "none";
                     }
                 };
+            const auto intentionalSemanticArtworkLayers =
+                [](const FirstPersonSurface& a,
+                   const FirstPersonSurface& b) {
+                    // Components in the same explicit semantic artwork group
+                    // are reconstructed as one native composite. Coincident
+                    // faces in that group deliberately bypass physical
+                    // occlusion and are resolved by native paint order.
+                    return a.coplanarOwner
+                        && b.coplanarOwner
+                        && a.nativePaintOrdinal != 0
+                        && b.nativePaintOrdinal != 0
+                        && a.diagnosticSemanticGroup != 0
+                        && b.diagnosticSemanticGroup != 0
+                        && a.diagnosticSourceArtworkGroup != 0
+                        && a.diagnosticSourceArtworkGroup
+                            == b.diagnosticSourceArtworkGroup
+                        && a.diagnosticSourceTile.x
+                            == b.diagnosticSourceTile.x
+                        && a.diagnosticSourceTile.y
+                            == b.diagnosticSourceTile.y;
+                };
             const auto mutuallyExclusiveExteriorFaces =
                 [](const FirstPersonSurface& a,
                    const FirstPersonSurface& b) {
@@ -3463,6 +3484,8 @@
                             packet.surfaces[
                                 peer.surfaceIndex];
                         if (mutuallyExclusiveExteriorFaces(
+                                other, surface)
+                            || intentionalSemanticArtworkLayers(
                                 other, surface))
                             continue;
 
@@ -3821,6 +3844,8 @@
                                 packet.surfaces[
                                     peer.surfaceIndex];
                             if (mutuallyExclusiveExteriorFaces(
+                                    other, surface)
+                                || intentionalSemanticArtworkLayers(
                                     other, surface))
                                 continue;
 

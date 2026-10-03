@@ -485,7 +485,50 @@
 
                     PaintSessionArrange(*session);
                     _snapshotBudget = FirstPersonFrameBudget(64, std::chrono::microseconds(1500));
+
+                    // PaintSessionArrange orders roots; each root then owns an
+                    // explicit child chain that is painted immediately after
+                    // its parent. Flatten that native tree into the low-order
+                    // sequence so semantic decals/children retain the same
+                    // equal-depth order as the original renderer.
                     uint32_t nativePaintOrdinal = 1;
+                    const auto assignNativePaintOrdinals =
+                        [&](auto&& self, PaintStruct* ps,
+                            uint64_t prefix) -> void {
+                            if (ps == nullptr)
+                                return;
+                            ps->FirstPersonNativePaintOrdinal =
+                                prefix
+                                | uint64_t(std::min<uint32_t>(
+                                    nativePaintOrdinal++,
+                                    0xffffu));
+                            self(self, ps->Children, prefix);
+                        };
+                    for (auto* root = session->PaintHead;
+                         root != nullptr;
+                         root = root->NextQuadrantEntry)
+                    {
+                        const uint32_t tileX =
+                            uint32_t(std::clamp(
+                                root->MapPos.x
+                                    / kCoordsXYStep,
+                                0, 0xffff));
+                        const uint32_t tileY =
+                            uint32_t(std::clamp(
+                                root->MapPos.y
+                                    / kCoordsXYStep,
+                                0, 0xffff));
+                        const uint64_t prefix =
+                            (uint64_t(
+                                 root->QuadrantIndex + 1u)
+                             << 48)
+                            | (uint64_t(tileX) << 32)
+                            | (uint64_t(tileY) << 16);
+                        assignNativePaintOrdinals(
+                            assignNativePaintOrdinals,
+                            root, prefix);
+                    }
+
                     for (auto* root = session->PaintHead; root; root = root->NextQuadrantEntry)
                     {
                         // PaintSessionArrange provides the authoritative local
@@ -495,16 +538,8 @@
                         // global tie-breaker. Prefix it with native quadrant
                         // and stable world tile identity so equal-depth replay
                         // remains totally ordered after batching/caching.
-                        const uint32_t tileX = uint32_t(std::clamp(
-                            root->MapPos.x / kCoordsXYStep, 0, 0xffff));
-                        const uint32_t tileY = uint32_t(std::clamp(
-                            root->MapPos.y / kCoordsXYStep, 0, 0xffff));
                         const uint64_t rootPaintOrdinal =
-                            (uint64_t(root->QuadrantIndex + 1u) << 48)
-                            | (uint64_t(tileX) << 32)
-                            | (uint64_t(tileY) << 16)
-                            | uint64_t(std::min<uint32_t>(
-                                nativePaintOrdinal++, 0xffffu));
+                            root->FirstPersonNativePaintOrdinal;
                         const bool dynamic = IsFirstPersonEntityPaintRoot(*root);
                         const uint64_t key = TerrainKey(
                             root->MapPos.x / kCoordsXYStep, root->MapPos.y / kCoordsXYStep);
@@ -524,9 +559,7 @@
                             continue;
                         }
 
-                        if (!dynamic
-                            && root->FirstPersonSemanticRole
-                                != FirstPersonPaintSemanticRole::none)
+                        if (!dynamic)
                         {
                             const auto cacheIt =
                                 _staticPaintCache.find(key);
@@ -538,26 +571,44 @@
                                     cacheIt->second
                                         .rotations[rotation]
                                         .semanticComponents;
-                                for (auto& component :
-                                     components)
-                                {
-                                    if (component.artwork
-                                            .nativePaintOrdinal
-                                            != 0
-                                        || component.role
-                                            != root
-                                                ->FirstPersonSemanticRole
-                                        || component.mapPosition.x
-                                            != root->MapPos.x
-                                        || component.mapPosition.y
-                                            != root->MapPos.y
-                                        || component.artwork.image
-                                            != root->image_id)
-                                        continue;
-                                    component.artwork
-                                        .nativePaintOrdinal =
-                                        rootPaintOrdinal;
-                                }
+                                const auto assignSemanticPaintOrdinals =
+                                    [&](auto&& self,
+                                        const PaintStruct* ps)
+                                        -> void {
+                                        if (ps == nullptr)
+                                            return;
+                                        if (ps->FirstPersonSemanticRole
+                                                != FirstPersonPaintSemanticRole::none
+                                            && ps->FirstPersonNativePaintOrdinal
+                                                != 0)
+                                        {
+                                            for (auto& component :
+                                                 components)
+                                            {
+                                                if (component.artwork
+                                                        .nativePaintOrdinal
+                                                        != 0
+                                                    || component.role
+                                                        != ps->FirstPersonSemanticRole
+                                                    || component.mapPosition.x
+                                                        != ps->MapPos.x
+                                                    || component.mapPosition.y
+                                                        != ps->MapPos.y
+                                                    || component.artwork.image
+                                                        != ps->image_id
+                                                    || component.artwork.group
+                                                        != ps->FirstPersonSemanticArtworkGroup)
+                                                    continue;
+                                                component.artwork
+                                                    .nativePaintOrdinal =
+                                                    ps->FirstPersonNativePaintOrdinal;
+                                            }
+                                        }
+                                        self(self, ps->Children);
+                                    };
+                                assignSemanticPaintOrdinals(
+                                    assignSemanticPaintOrdinals,
+                                    root);
                             }
                         }
 
