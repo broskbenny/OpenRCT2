@@ -489,8 +489,23 @@
                     uint32_t nativePaintOrdinal = 1;
                     for (auto* root = session->PaintHead; root; root = root->NextQuadrantEntry)
                     {
-                        const uint32_t rootPaintOrdinal =
-                            nativePaintOrdinal++;
+                        // PaintSessionArrange provides the authoritative local
+                        // order, but first-person cache packets later merge
+                        // roots from many independently bounded sessions. A
+                        // session-local 1..N ordinal is therefore not a valid
+                        // global tie-breaker. Prefix it with native quadrant
+                        // and stable world tile identity so equal-depth replay
+                        // remains totally ordered after batching/caching.
+                        const uint32_t tileX = uint32_t(std::clamp(
+                            root->MapPos.x / kCoordsXYStep, 0, 0xffff));
+                        const uint32_t tileY = uint32_t(std::clamp(
+                            root->MapPos.y / kCoordsXYStep, 0, 0xffff));
+                        const uint64_t rootPaintOrdinal =
+                            (uint64_t(root->QuadrantIndex + 1u) << 48)
+                            | (uint64_t(tileX) << 32)
+                            | (uint64_t(tileY) << 16)
+                            | uint64_t(std::min<uint32_t>(
+                                nativePaintOrdinal++, 0xffffu));
                         const bool dynamic = IsFirstPersonEntityPaintRoot(*root);
                         const uint64_t key = TerrainKey(
                             root->MapPos.x / kCoordsXYStep, root->MapPos.y / kCoordsXYStep);
