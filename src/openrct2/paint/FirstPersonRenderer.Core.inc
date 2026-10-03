@@ -1194,9 +1194,7 @@
                         const auto artworkPoint =
                             splitTreeArtwork
                             ? FirstPersonSmallSceneryTreeArtworkPoint(
-                                *hull,
-                                visualFace.artworkQuarter,
-                                face.corners[i])
+                                *hull, face.corners[i])
                             : face.corners[i];
                         projected[i] =
                             Translate3DTo2DWithZ(
@@ -1370,9 +1368,7 @@
                             const auto artworkPoint =
                                 splitTreeArtwork
                                 ? FirstPersonSmallSceneryTreeArtworkPoint(
-                                    *hull,
-                                    visualFace.artworkQuarter,
-                                    point)
+                                    *hull, point)
                                 : point;
                             const auto projected =
                                 Translate3DTo2DWithZ(
@@ -1491,8 +1487,7 @@
                 // An unobserved bottom face may exist physically for collision,
                 // but inventing a flat material for it is not visual evidence.
                 if (face.kind
-                    == FirstPersonVisualHullFaceKind::bottom
-                    || visualFace.syntheticInterior)
+                    == FirstPersonVisualHullFaceKind::bottom)
                     continue;
 
                 // A normally visible face with no native-view material means
