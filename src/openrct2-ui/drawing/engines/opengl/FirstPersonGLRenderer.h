@@ -62,7 +62,7 @@ namespace OpenRCT2::Ui
             size_t nextSurface{};
             size_t uploadedVertices{};
             bool ownersPhase = false;
-            std::map<uint32_t, std::vector<size_t>> owners;
+            std::map<uint64_t, std::vector<size_t>> owners;
             size_t nextOwner{};
         };
         std::unique_ptr<PendingRegion> _pendingRegion;
