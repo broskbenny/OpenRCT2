@@ -1062,6 +1062,32 @@
                 return CachedRegionBounds(x0,y0,x1,y1);
             };
             VisitFirstPersonRegions(frustum,0,0,map.x,map.y,visit,bounds);
+
+            // Cold reconstruction is presentation work: when only a bounded
+            // amount can be admitted this frame, missing scenery nearest the
+            // eye must become ready first. Region traversal order is an
+            // implementation detail and previously made distant tiles pop in
+            // before nearby ones.
+            const auto eye = view.camera.position;
+            std::stable_sort(
+                scene.visibleTiles.begin(), scene.visibleTiles.end(),
+                [&](const CoordsXY& a, const CoordsXY& b) {
+                    const float ax =
+                        float(a.x + kCoordsXYHalfTile) - eye.x;
+                    const float ay =
+                        float(a.y + kCoordsXYHalfTile) - eye.y;
+                    const float bx =
+                        float(b.x + kCoordsXYHalfTile) - eye.x;
+                    const float by =
+                        float(b.y + kCoordsXYHalfTile) - eye.y;
+                    const float ad = ax * ax + ay * ay;
+                    const float bd = bx * bx + by * by;
+                    if (ad != bd)
+                        return ad < bd;
+                    if (a.x != b.x)
+                        return a.x < b.x;
+                    return a.y < b.y;
+                });
         }
 
         void CollectTerrain(FirstPersonScene& scene)
@@ -3285,32 +3311,59 @@
         void SubmitVisibleStaticRegions(
             FirstPersonScene& scene, const FirstPersonFrustum& frustum, uint64_t frame)
         {
-            std::unordered_set<uint64_t> visibleRegions;
-            visibleRegions.reserve(scene.visibleTiles.size() / 64 + 1);
+            std::vector<uint64_t> visibleRegions;
+            visibleRegions.reserve(scene.visibleTiles.size() / 64 + 8);
+            std::unordered_set<uint64_t> seenRegions;
+            seenRegions.reserve(scene.visibleTiles.size() / 64 + 8);
+            const auto addRegion = [&](uint64_t key) {
+                if (seenRegions.insert(key).second)
+                    visibleRegions.push_back(key);
+            };
             for (const auto tile : scene.visibleTiles)
-                visibleRegions.insert(FirstPersonGpuRegionKey(
+                addRegion(FirstPersonGpuRegionKey(
                     tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
             // A single physical track piece can cross a 32x32 GPU-region edge.
             // CollectTrackTrajectories already recorded every region belonging
             // to groups encountered by visible tiles. Reuse that exact set
             // instead of scanning the park-wide persistent trajectory cache.
-            visibleRegions.insert(
-                scene.activeTrackRegions.begin(),
-                scene.activeTrackRegions.end());
+            for (const auto key : scene.activeTrackRegions)
+                addRegion(key);
             if (_largeSceneryGeometryEnabled)
             {
-                visibleRegions.insert(
-                    _activeLargeSceneryRegions.begin(),
-                    _activeLargeSceneryRegions.end());
+                for (const auto key : _activeLargeSceneryRegions)
+                    addRegion(key);
             }
 
+            const auto eye = scene.resolvedView.camera.position;
+            const auto regionDistance2 = [&](uint64_t key) {
+                const int32_t regionX =
+                    int32_t(uint32_t(key >> 32)) - 1;
+                const int32_t regionY =
+                    int32_t(uint32_t(key & 0xffffffffu)) - 1;
+                const float centerX =
+                    float((regionX * 32 + 16) * kCoordsXYStep);
+                const float centerY =
+                    float((regionY * 32 + 16) * kCoordsXYStep);
+                const float dx = centerX - eye.x;
+                const float dy = centerY - eye.y;
+                return dx * dx + dy * dy;
+            };
+            std::stable_sort(
+                visibleRegions.begin(), visibleRegions.end(),
+                [&](uint64_t a, uint64_t b) {
+                    const float ad = regionDistance2(a);
+                    const float bd = regionDistance2(b);
+                    if (ad != bd)
+                        return ad < bd;
+                    return a < b;
+                });
+
             _snapshotBudget = FirstPersonFrameBudget(32, std::chrono::microseconds(1000));
-            static size_t materialCursor = 0;
             size_t examined = 0;
-            const size_t materialStart = scene.visibleTiles.empty() ? 0 : materialCursor % scene.visibleTiles.size();
-            while (examined < scene.visibleTiles.size() && _snapshotBudget.available())
+            while (examined < scene.visibleTiles.size()
+                && _snapshotBudget.available())
             {
-                const auto tile = scene.visibleTiles[(materialStart + examined++) % scene.visibleTiles.size()];
+                const auto tile = scene.visibleTiles[examined++];
                 const auto cached = _staticPaintCache.find(TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
                 if (cached == _staticPaintCache.end()) continue;
                 for (const auto& group : cached->second.reconstructionGroups)
@@ -3319,7 +3372,6 @@
                     if (track != _trackTrajectoryCache.end()) EnsureTrackMaterials(group.key, track->second);
                 }
             }
-            materialCursor = materialStart + examined;
             FirstPersonFrameBudget packetBudget(2, std::chrono::microseconds(1000));
             scene.staticRegions.reserve(visibleRegions.size());
             for (const auto key : visibleRegions)
