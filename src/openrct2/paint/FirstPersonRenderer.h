@@ -52,6 +52,10 @@ namespace OpenRCT2::Paint
 
     void SetFirstPersonDiagnosticMask(uint32_t mask);
     [[nodiscard]] uint32_t GetFirstPersonDiagnosticMask();
+    // One-shot diagnostic request. The next prepared first-person scene casts
+    // a ray through the centre of the view and prints the rendered hit plus
+    // authoritative map/cache provenance. No work is done on ordinary frames.
+    void RequestFirstPersonInspectorPick();
 
     [[nodiscard]] constexpr FirstPersonHiddenComponentDisposition
         FirstPersonHiddenComponentPolicy(
