@@ -116,13 +116,13 @@ static FirstPersonPaintSemanticTransform
     return transform;
 }
 
-static void PublishFirstPersonPathDeckGeometry(
+static uint32_t PublishFirstPersonPathDeckGeometry(
     PaintSession& session, const PathElement& pathElement,
     int32_t height, ImageId image)
 {
     if (session.FirstPersonSemanticComponentSink == nullptr
         || !image.HasValue())
-        return;
+        return 0;
 
     const uint8_t slope = pathElement.isSloped()
         ? kPathSlopeToLandSlope[pathElement.getSlopeDirection()]
@@ -168,6 +168,7 @@ static void PublishFirstPersonPathDeckGeometry(
             artworkGroup, false, false);
     }
     session.FirstPersonSemanticArtworkGroup = 0;
+    return artworkGroup;
 }
 
 static PaintStruct* PaintPathSemanticBoxAsParent(
@@ -217,20 +218,24 @@ static PaintStruct* PaintPathSemanticSignAsParent(
 
 static PaintStruct* PaintPathDeckImageAsParent(
     PaintSession& session, ImageId image,
-    const CoordsXYZ& offset, const BoundBoxXYZ& boundBox)
+    const CoordsXYZ& offset, const BoundBoxXYZ& boundBox,
+    uint32_t artworkGroup)
 {
     FirstPersonPaintSemanticScope scope(
-        session, FirstPersonPaintSemanticRole::pathDeck);
+        session, FirstPersonPaintSemanticRole::pathDeck,
+        artworkGroup);
     return PaintAddImageAsParent(
         session, image, offset, boundBox);
 }
 
 static PaintStruct* PaintPathDeckImageAsChild(
     PaintSession& session, ImageId image,
-    const CoordsXYZ& offset, const BoundBoxXYZ& boundBox)
+    const CoordsXYZ& offset, const BoundBoxXYZ& boundBox,
+    uint32_t artworkGroup)
 {
     FirstPersonPaintSemanticScope scope(
-        session, FirstPersonPaintSemanticRole::pathDeck);
+        session, FirstPersonPaintSemanticRole::pathDeck,
+        artworkGroup);
     return PaintAddImageAsChild(
         session, image, offset, boundBox);
 }
@@ -1135,14 +1140,17 @@ static void PathPaintBoxSupport(
     const auto surfaceBaseImageIndex = PathPaintGetBaseImage(session, pathElement, pathPaintInfo);
     const auto surfaceImage =
         imageTemplate.WithIndex(surfaceBaseImageIndex);
-    PublishFirstPersonPathDeckGeometry(
-        session, pathElement, height, surfaceImage);
+    const uint32_t pathArtworkGroup =
+        PublishFirstPersonPathDeckGeometry(
+            session, pathElement, height, surfaceImage);
     auto boundbox = PathPaintGetBoundbox(session, height, edges);
 
     const bool hasPassedSurface = (session.Flags & PaintSessionFlags::PassedSurface) != 0;
     if (!hasSupports || !hasPassedSurface)
     {
-        PaintPathDeckImageAsParent(session, surfaceImage, { 0, 0, height }, boundbox);
+        PaintPathDeckImageAsParent(
+            session, surfaceImage, { 0, 0, height },
+            boundbox, pathArtworkGroup);
     }
     else
     {
@@ -1161,7 +1169,9 @@ static void PathPaintBoxSupport(
 
         if (pathElement.isQueue() || (pathPaintInfo.railings.flags & RAILING_ENTRY_FLAG_DRAW_PATH_OVER_SUPPORTS))
         {
-            PaintPathDeckImageAsChild(session, surfaceImage, { 0, 0, height }, boundbox);
+            PaintPathDeckImageAsChild(
+                session, surfaceImage, { 0, 0, height },
+                boundbox, pathArtworkGroup);
         }
     }
 
@@ -1193,8 +1203,9 @@ static void PathPaintPoleSupport(
     const auto surfaceBaseImageIndex = PathPaintGetBaseImage(session, pathElement, pathPaintInfo);
     const auto surfaceImage =
         imageTemplate.WithIndex(surfaceBaseImageIndex);
-    PublishFirstPersonPathDeckGeometry(
-        session, pathElement, height, surfaceImage);
+    const uint32_t pathArtworkGroup =
+        PublishFirstPersonPathDeckGeometry(
+            session, pathElement, height, surfaceImage);
     auto boundbox = PathPaintGetBoundbox(session, height, edges);
 
     // Below Surface
