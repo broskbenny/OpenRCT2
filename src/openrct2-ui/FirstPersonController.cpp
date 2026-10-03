@@ -94,6 +94,7 @@ namespace OpenRCT2::Ui::FirstPerson
             bool previousResetDown = false;
             std::chrono::steady_clock::time_point lastUpdate = std::chrono::steady_clock::now();
             bool previousEscapeDown = false;
+            bool previousInspectMouseDown = false;
             SDL_bool previousRelativeMouseMode = SDL_FALSE;
             bool ownsRelativeMouseMode = false;
             WalkingFloorSample previousFloor{};
@@ -800,6 +801,16 @@ namespace OpenRCT2::Ui::FirstPerson
                 UpdateMouseLook(false);
                 PublishAudioListener();
             }
+
+            // Relative mouse mode makes the centre of the viewport the natural
+            // first-person cursor. A left-click requests one diagnostic pick;
+            // holding the button never produces repeated dumps.
+            const auto mouseButtons = SDL_GetMouseState(nullptr, nullptr);
+            const bool inspectDown =
+                (mouseButtons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
+            if (inspectDown && !_state.previousInspectMouseDown)
+                Paint::RequestFirstPersonInspectorPick();
+            _state.previousInspectMouseDown = inspectDown;
         }
 
         bool HandleEscape()
