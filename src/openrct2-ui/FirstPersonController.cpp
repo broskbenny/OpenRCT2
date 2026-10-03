@@ -19,6 +19,8 @@
 #include <unordered_set>
 #include <chrono>
 #include <openrct2/drawing/IDrawingEngine.h>
+#include <openrct2/drawing/PaletteIndex.h>
+#include <openrct2/drawing/Rectangle.h>
 #include <openrct2/audio/Audio.h>
 #include <openrct2/ride/CarEntry.h>
 #include <openrct2/ride/Ride.h>
@@ -101,6 +103,79 @@ namespace OpenRCT2::Ui::FirstPerson
         };
 
         State _state{};
+
+        void DrawInspectorCrosshair(
+            Drawing::RenderTarget& rt, const ScreenRect& viewport)
+        {
+            // This pixel is the same mathematical centre used by the
+            // inspector's camera-forward ray. The surrounding arms make it
+            // visible against both light and dark park artwork.
+            const int32_t centreX =
+                viewport.getLeft() + viewport.getWidth() / 2;
+            const int32_t centreY =
+                viewport.getTop() + viewport.getHeight() / 2;
+            constexpr int32_t kGap = 2;
+            constexpr int32_t kArmLength = 6;
+
+            const auto black =
+                Drawing::PaletteIndex::pi10;
+            const auto white =
+                Drawing::PaletteIndex::pi255;
+
+            const auto drawOutlinedArm =
+                [&](const ScreenRect& outline,
+                    const ScreenRect& core) {
+                    Drawing::Rectangle::fill(
+                        rt, outline, black);
+                    Drawing::Rectangle::fill(
+                        rt, core, white);
+                };
+
+            drawOutlinedArm(
+                { { centreX - kGap - kArmLength,
+                    centreY - 1 },
+                  { centreX - kGap - 1,
+                    centreY + 1 } },
+                { { centreX - kGap - kArmLength,
+                    centreY },
+                  { centreX - kGap - 1,
+                    centreY } });
+            drawOutlinedArm(
+                { { centreX + kGap + 1,
+                    centreY - 1 },
+                  { centreX + kGap + kArmLength,
+                    centreY + 1 } },
+                { { centreX + kGap + 1,
+                    centreY },
+                  { centreX + kGap + kArmLength,
+                    centreY } });
+            drawOutlinedArm(
+                { { centreX - 1,
+                    centreY - kGap - kArmLength },
+                  { centreX + 1,
+                    centreY - kGap - 1 } },
+                { { centreX,
+                    centreY - kGap - kArmLength },
+                  { centreX,
+                    centreY - kGap - 1 } });
+            drawOutlinedArm(
+                { { centreX - 1,
+                    centreY + kGap + 1 },
+                  { centreX + 1,
+                    centreY + kGap + kArmLength } },
+                { { centreX,
+                    centreY + kGap + 1 },
+                  { centreX,
+                    centreY + kGap + kArmLength } });
+
+            // Mark the exact ray origin on screen without obscuring the
+            // surrounding object more than one pixel.
+            Drawing::Rectangle::fill(
+                rt,
+                { { centreX, centreY },
+                  { centreX, centreY } },
+                white);
+        }
 
         // One authoritative ear/eye transform. On a ride this is the already
         // interpolated passenger camera, including independent head orientation;
@@ -1238,6 +1313,7 @@ namespace OpenRCT2::Ui::FirstPerson
         if (mainWindow != nullptr && mainWindow->viewport != nullptr)
             options.viewFlags = mainWindow->viewport->flags;
         Paint::RenderFirstPerson(rt, options, renderViewport);
+        DrawInspectorCrosshair(rt, renderViewport);
     }
 } // namespace OpenRCT2::Ui::FirstPerson
 
