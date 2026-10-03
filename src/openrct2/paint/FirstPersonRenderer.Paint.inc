@@ -52,8 +52,12 @@
                         && !cached.visibilityDirty
                         && cached.lastVisibilityGeneration
                             == sourceGeneration;
-                    if (!haveFreshVisibilitySignature)
-                        probedSignature = NativeTileSignature(tile);
+                    if (haveFreshVisibilitySignature)
+                        probedSignature =
+                            cached.visibilitySignature;
+                    else
+                        probedSignature =
+                            NativeTileSignature(tile);
                     probedAnimated = MapAnimations::IsTileAnimatedForFirstPerson(
                         TileCoordsXY(tx, ty));
                     cached.lastSemanticGeneration = sourceGeneration;
