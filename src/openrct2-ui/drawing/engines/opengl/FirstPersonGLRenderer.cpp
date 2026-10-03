@@ -807,7 +807,8 @@ void main() {
             std::vector<GPUVertex>& vertices,
             const Paint::FirstPersonSurface& surface,
             bool forceCoplanarOwner = false,
-            bool suppressCoplanarOwner = false) {
+            bool suppressCoplanarOwner = false,
+            uint32_t paintOrdinalOverride = 0) {
             const auto image=surface.image;
             if (!prepareMaterial(surface)) return false;
             const auto* g1 =
@@ -919,7 +920,11 @@ void main() {
                     {maskTex.coords.x,maskTex.coords.y,maskTex.coords.z,maskTex.coords.w},
                     {maskG1?float(maskG1->width):0.0f,maskG1?float(maskG1->height):0.0f},
                     maskG1?int32_t(maskTex.index):-1,
-                    std::min<uint32_t>(surface.nativePaintOrdinal,0x00ffffffu)});
+                    paintOrdinalOverride != 0
+                        ? paintOrdinalOverride
+                        : uint32_t(std::min<uint64_t>(
+                            surface.nativePaintOrdinal,
+                            0x00ffffffull))});
             return true;
         };
         std::vector<GPUVertex> opaqueOrdinaryVertices;
@@ -937,13 +942,13 @@ void main() {
         std::stable_sort(
             streamedOwners.begin(), streamedOwners.end(),
             [](const auto* a, const auto* second) {
-                const uint32_t ao =
+                const uint64_t ao =
                     a->nativePaintOrdinal == 0
-                    ? std::numeric_limits<uint32_t>::max()
+                    ? std::numeric_limits<uint64_t>::max()
                     : a->nativePaintOrdinal;
-                const uint32_t bo =
+                const uint64_t bo =
                     second->nativePaintOrdinal == 0
-                    ? std::numeric_limits<uint32_t>::max()
+                    ? std::numeric_limits<uint64_t>::max()
                     : second->nativePaintOrdinal;
                 return ao < bo;
             });
@@ -1060,7 +1065,7 @@ void main() {
                     {
                         if (surface.coplanarOwner)
                             pending.owners[surface.nativePaintOrdinal == 0
-                                ? std::numeric_limits<uint32_t>::max() : surface.nativePaintOrdinal].push_back(index);
+                                ? std::numeric_limits<uint64_t>::max() : surface.nativePaintOrdinal].push_back(index);
                         ++pending.nextSurface;
                     }
                     else if (++pending.nextOwner == pending.owners.begin()->second.size())
@@ -1214,6 +1219,26 @@ void main() {
 
         if (!streamedTransparent.empty())
         {
+            // The persistent CPU identity may be wider than the shader token.
+            // Sort once by that complete native order, then assign compact
+            // per-draw ranks. Equal-depth transparency therefore preserves the
+            // same total order even after independently painted cache batches
+            // have been merged.
+            std::stable_sort(
+                streamedTransparent.begin(),
+                streamedTransparent.end(),
+                [](const auto* a, const auto* b) {
+                    const uint64_t ao =
+                        a->nativePaintOrdinal == 0
+                        ? std::numeric_limits<uint64_t>::max()
+                        : a->nativePaintOrdinal;
+                    const uint64_t bo =
+                        b->nativePaintOrdinal == 0
+                        ? std::numeric_limits<uint64_t>::max()
+                        : b->nativePaintOrdinal;
+                    return ao < bo;
+                });
+
             // Material/atlas resolution is independent of screen-tile binning.
             // Pack every transparent surface once; a surface crossing several
             // 128x128 tiles should not redo G1 lookup, remap resolution and
@@ -1225,12 +1250,20 @@ void main() {
                 transparentVertexRanges;
             transparentVertexRanges.reserve(
                 streamedTransparent.size());
-            for (const auto* surface : streamedTransparent)
+            for (size_t transparentIndex = 0;
+                 transparentIndex < streamedTransparent.size();
+                 ++transparentIndex)
             {
+                const auto* surface =
+                    streamedTransparent[transparentIndex];
                 const size_t first =
                     packedTransparentVertices.size();
                 appendVertices(
-                    packedTransparentVertices, *surface);
+                    packedTransparentVertices, *surface,
+                    false, false,
+                    uint32_t(std::min<size_t>(
+                        transparentIndex + 1,
+                        size_t(0x00ffffffu))));
                 transparentVertexRanges.emplace_back(
                     first,
                     packedTransparentVertices.size()
