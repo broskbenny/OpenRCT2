@@ -936,7 +936,8 @@
                         {
                             tileCache.dirty = true;
                         }
-                        tileCache.signature = snapshot.signature;
+                        tileCache.visibilitySignature =
+                            snapshot.signature;
                         tileCache.visibilityMinZ = snapshot.minZ;
                         tileCache.visibilityMaxZ = snapshot.maxZ;
                         tileCache.visibilityBoundValid = true;
@@ -1011,9 +1012,11 @@
                     return std::nullopt;
                 }
 
-                if (cached.valid && cached.signature != snapshot.signature)
+                if (cached.valid
+                    && cached.signature != snapshot.signature)
                     cached.dirty = true;
-                cached.signature = snapshot.signature;
+                cached.visibilitySignature =
+                    snapshot.signature;
                 cached.visibilityMinZ = snapshot.minZ;
                 cached.visibilityMaxZ = snapshot.maxZ;
                 cached.visibilityBoundValid = true;
