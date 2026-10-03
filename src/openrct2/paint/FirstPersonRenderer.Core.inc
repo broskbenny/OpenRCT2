@@ -1289,7 +1289,8 @@
                                     && ownerMatchesVisualFace(
                                         found->second.owner,
                                         visualFace);
-                            });
+                            },
+                            std::numeric_limits<size_t>::max());
                     if (ownership < 0.20f)
                         continue;
 
