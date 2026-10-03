@@ -3570,6 +3570,13 @@
                 FirstPersonSurface surface{};
                 surface.image = fallbackImage;
                 surface.cameraIndependent = true;
+                // Large scenery is reconstructed as a closed physical hull
+                // (carved visual hull when available, authoritative occupancy
+                // shell otherwise). Its boundary face already carries the
+                // world-space outward normal, so use the same physical
+                // half-space visibility rule as reconstructed small scenery.
+                surface.exteriorOnly = true;
+                surface.outwardNormal = face.normal;
                 surface.reconstructionGroup =
                     group.key;
                 surface.diagnosticReconstructionKind = 1;
