@@ -21,13 +21,12 @@
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
                 view.nearClip, view.farClip);
-            // visibleTiles is already ordered nearest-first. Scan that
-            // order every frame and spend the bounded capture allowance on
-            // the nearest stale tiles; ready tiles cost no capture slot, so
-            // distant work still progresses naturally.
+            static size_t captureCursor = 0;
+            const size_t captureStart = scene.visibleTiles.empty() ? 0 : captureCursor % scene.visibleTiles.size();
+            captureCursor += nativeCapturesRemaining;
             for (size_t visit = 0; visit < scene.visibleTiles.size(); ++visit)
             {
-                const auto tile = scene.visibleTiles[visit];
+                const auto tile = scene.visibleTiles[(captureStart + visit) % scene.visibleTiles.size()];
                 const int32_t tx = tile.x / kCoordsXYStep;
                 const int32_t ty = tile.y / kCoordsXYStep;
                 const auto key = TerrainKey(tx, ty);
