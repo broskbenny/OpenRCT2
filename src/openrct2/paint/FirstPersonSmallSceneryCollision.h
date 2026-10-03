@@ -527,59 +527,147 @@ namespace OpenRCT2::Paint
         bool syntheticInterior = false;
     };
 
+    [[nodiscard]] inline bool FirstPersonSmallScenerySameFaceGeometry(
+        const FirstPersonVisualHullFace& a,
+        const FirstPersonVisualHullFace& b)
+    {
+        const auto samePoint = [](FirstPersonVec3 lhs, FirstPersonVec3 rhs) {
+            return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+        };
+        return std::all_of(
+            a.corners.begin(), a.corners.end(),
+            [&](FirstPersonVec3 point) {
+                return std::any_of(
+                    b.corners.begin(), b.corners.end(),
+                    [&](FirstPersonVec3 other) {
+                        return samePoint(point, other);
+                    });
+            });
+    }
+
     [[nodiscard]] inline std::vector<FirstPersonSmallSceneryVisualFace>
         BuildFirstPersonSmallSceneryVisualFaces(
             const FirstPersonVisualHull& hull, bool splitTreeArtwork)
     {
-        // Visual subdivision must never create physical faces. The earlier
-        // four-quarter tree treatment built four separate hull boundaries;
-        // their internal seams then participated in native-view depth
-        // ownership and could hide real exterior faces, forcing the whole
-        // object back to a billboard. Keep one authoritative boundary and
-        // subdivide only the artwork sampling domain below.
-        (void)splitTreeArtwork;
         std::vector<FirstPersonSmallSceneryVisualFace> result;
-        const auto faces = BuildFirstPersonVisualHullBoundaryFaces(hull);
-        result.reserve(faces.size());
-        for (const auto& face : faces)
+        // Tree quarters are visual artwork carriers only. Callers must keep
+        // native-view depth ownership on the unsplit authoritative hull; the
+        // synthetic centre seams below must never become physical occluders.
+        if (!splitTreeArtwork)
         {
-            result.push_back({
-                face,
-                kFirstPersonSmallSceneryUnsplitArtworkQuarter,
-                false
-            });
+            const auto faces = BuildFirstPersonVisualHullBoundaryFaces(hull);
+            result.reserve(faces.size());
+            for (const auto& face : faces)
+            {
+                result.push_back({
+                    face,
+                    kFirstPersonSmallSceneryUnsplitArtworkQuarter,
+                    false
+                });
+            }
+            return result;
         }
-        return result;
-    }
+        if (!hull.valid || hull.occupied.empty())
+            return result;
 
-    [[nodiscard]] inline uint8_t
-        FirstPersonSmallSceneryTreeArtworkQuarter(
-            const FirstPersonVisualHull& hull,
-            FirstPersonVec3 point)
-    {
+        const float minForward = hull.minForward;
+        const float minRight = hull.minRight;
         const float maxForward =
             hull.minForward + float(hull.sizeForward) * hull.step;
         const float maxRight =
             hull.minRight + float(hull.sizeRight) * hull.step;
         const float splitForward =
-            (hull.minForward + maxForward) * 0.5f;
+            (minForward + maxForward) * 0.5f;
         const float splitRight =
-            (hull.minRight + maxRight) * 0.5f;
-        const bool highForward = point.x >= splitForward;
-        const bool highRight = point.y >= splitRight;
-        if (highForward)
-            return uint8_t(highRight ? 0 : 1);
-        return uint8_t(highRight ? 3 : 2);
+            (minRight + maxRight) * 0.5f;
+
+        const auto quarterForPoint =
+            [&](FirstPersonVec3 point) {
+                const bool highForward =
+                    point.x >= splitForward;
+                const bool highRight =
+                    point.y >= splitRight;
+                if (highForward)
+                    return uint8_t(highRight ? 0 : 1);
+                return uint8_t(highRight ? 3 : 2);
+            };
+        const auto isSyntheticInterior =
+            [&](const FirstPersonVisualHullFace& face) {
+                switch (face.kind)
+                {
+                    case FirstPersonVisualHullFaceKind::minForward:
+                        return face.corners[0].x != minForward;
+                    case FirstPersonVisualHullFaceKind::maxForward:
+                        return face.corners[0].x != maxForward;
+                    case FirstPersonVisualHullFaceKind::minRight:
+                        return face.corners[0].y != minRight;
+                    case FirstPersonVisualHullFaceKind::maxRight:
+                        return face.corners[0].y != maxRight;
+                    case FirstPersonVisualHullFaceKind::bottom:
+                    case FirstPersonVisualHullFaceKind::top:
+                        return false;
+                }
+                return false;
+            };
+
+        for (uint8_t quarter = 0; quarter < 4; ++quarter)
+        {
+            auto quarterHull = hull;
+            for (int32_t up = 0; up < hull.sizeUp; ++up)
+            for (int32_t right = 0; right < hull.sizeRight; ++right)
+            for (int32_t forward = 0;
+                 forward < hull.sizeForward; ++forward)
+            {
+                if (!hull.contains(forward, right, up))
+                    continue;
+                if (quarterForPoint(
+                        hull.centre(forward, right, up))
+                    == quarter)
+                    continue;
+                const size_t index =
+                    (size_t(up) * size_t(hull.sizeRight)
+                        + size_t(right))
+                        * size_t(hull.sizeForward)
+                    + size_t(forward);
+                if (index < quarterHull.occupied.size())
+                    quarterHull.occupied[index] = 0;
+            }
+
+            const auto quarterFaces =
+                BuildFirstPersonVisualHullBoundaryFaces(
+                    quarterHull);
+            for (const auto& face : quarterFaces)
+            {
+                const bool synthetic =
+                    isSyntheticInterior(face);
+                const auto duplicate =
+                    std::find_if(
+                        result.begin(), result.end(),
+                        [&](const auto& existing) {
+                            return synthetic
+                                && existing.syntheticInterior
+                                && FirstPersonSmallScenerySameFaceGeometry(
+                                    existing.face, face);
+                        });
+                if (duplicate != result.end())
+                    continue;
+                result.push_back({
+                    face, quarter, synthetic
+                });
+            }
+        }
+        return result;
     }
 
     [[nodiscard]] inline FirstPersonVec3
         FirstPersonSmallSceneryTreeArtworkPoint(
             const FirstPersonVisualHull& hull,
+            uint8_t artworkQuarter,
             FirstPersonVec3 point)
     {
-        const uint8_t artworkQuarter =
-            FirstPersonSmallSceneryTreeArtworkQuarter(
-                hull, point);
+        if (artworkQuarter >= 4)
+            return point;
+
         const float minForward = hull.minForward;
         const float minRight = hull.minRight;
         const float maxForward =
@@ -608,9 +696,9 @@ namespace OpenRCT2::Paint
         const float quarterCentreRight =
             (quarterMinRight + quarterMaxRight) * 0.5f;
 
-        // Rotate only the texture lookup inside the quarter containing this
-        // sample. Physical/collision geometry and native-view ownership remain
-        // the single unsplit visual hull.
+        // Rotate only the artwork domain, never the physical/collision hull.
+        // Each quarter's former outer corner becomes its inward corner at the
+        // shared tree centre, moving the repeated trunk material inward.
         point.x =
             2.0f * quarterCentreForward - point.x;
         point.y =
