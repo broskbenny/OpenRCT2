@@ -1201,7 +1201,8 @@ uint32_t PaintSessionAddFirstPersonSemanticOrientedQuad(
     const FirstPersonPaintSemanticTransform& transform,
     const std::array<FirstPersonPaintSemanticVec3, 4>& localCorners,
     ImageId image, const CoordsXYZ& artworkOffset,
-    uint32_t artworkGroup, bool decal, bool collidable)
+    uint32_t artworkGroup, bool decal, bool collidable,
+    bool doubleSided)
 {
     if (kind != FirstPersonPaintSemanticPrimitiveKind::plane
         && kind !=
@@ -1218,6 +1219,7 @@ uint32_t PaintSessionAddFirstPersonSemanticOrientedQuad(
     component.artwork = MakeFirstPersonSemanticArtwork(
         session, image, artworkOffset, artworkGroup, decal);
     component.collidable = collidable;
+    component.doubleSided = doubleSided;
     return PublishFirstPersonSemanticComponent(
         session, std::move(component));
 }

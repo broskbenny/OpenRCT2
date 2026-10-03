@@ -120,6 +120,11 @@ float CoplanarDepthTolerance(float physicalDepth) {
 }
 
 void main() {
+    // First-person wall semantic quads are authored clockwise from their
+    // physical visible side. Keep global culling disabled, but reject the
+    // opposite (OpenGL front-facing) side for explicitly single-sided planes.
+    if ((fFlags & 64) != 0 && gl_FrontFacing) discard;
+
     uint col = 0u;
     if ((fFlags & 16) != 0) {
         // Geometry reconstructed from simulation semantics can carry a direct
@@ -915,6 +920,7 @@ void main() {
                         | (surface.physicalCoverage ? 8 : 0)
                         | (surface.solidColour != 0 ? 16 : 0)
                         | (surface.textureFallbackOnly ? 32 : 0)
+                        | (surface.singleSided ? 64 : 0)
                         | (coverageFallback << 8),
                     {maskTex.coords.x,maskTex.coords.y,maskTex.coords.z,maskTex.coords.w},
                     {maskG1?float(maskG1->width):0.0f,maskG1?float(maskG1->height):0.0f},

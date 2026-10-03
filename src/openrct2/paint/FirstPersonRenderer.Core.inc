@@ -4085,6 +4085,8 @@
                 ExtendStableKey(
                     fingerprint, surface.coplanarOwner ? 1 : 0);
                 ExtendStableKey(
+                    fingerprint, surface.singleSided ? 1 : 0);
+                ExtendStableKey(
                     fingerprint, surface.physicalCoverage ? 1 : 0);
                 ExtendStableKey(
                     fingerprint, surface.artworkCarrier ? 1 : 0);
@@ -4239,6 +4241,9 @@
                 ExtendStableKey(
                     fingerprint,
                     component.collidable ? 1 : 0);
+                ExtendStableKey(
+                    fingerprint,
+                    component.doubleSided ? 1 : 0);
             }
             return fingerprint;
         }

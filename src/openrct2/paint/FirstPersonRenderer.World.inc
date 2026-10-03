@@ -1462,6 +1462,8 @@
                 fingerprint, component.repetitionIndex);
             ExtendStableKey(
                 fingerprint, component.collidable ? 1 : 0);
+            ExtendStableKey(
+                fingerprint, component.doubleSided ? 1 : 0);
             const auto faces =
                 BuildFirstPersonSemanticPhysicalFaces(component);
             ExtendStableKey(fingerprint, faces.size());
@@ -2446,6 +2448,7 @@
 
                 FirstPersonSurface surface{};
                 surface.gpuRegion = gpuRegion;
+                surface.singleSided = !component.doubleSided;
                 // Geometry/collision and visible material are independent.
                 // Palette index zero is explicit native transparency, not a
                 // hole to fill merely because this component has a 3D shape.

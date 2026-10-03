@@ -109,6 +109,10 @@ namespace OpenRCT2::Paint
         // Cached upright sprites must always face the CURRENT camera: keep their
         // original native image-space offsets and world anchor, not old vertices.
         bool viewFacing = false;
+        // Single-sided semantic planes keep their authored physical winding.
+        // The GPU rejects only the opposite side; global culling stays disabled
+        // for terrain, sprites, and genuinely double-sided geometry.
+        bool singleSided = false;
         // Equal-depth ownership is logical paint evidence, not a geometry
         // offset. World-fixed native artwork can be replayed in authoritative
         // paint order against the frozen physical-depth result, so coincident
