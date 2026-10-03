@@ -1931,6 +1931,11 @@
             bool visibilityBoundValid = false;
             bool visibilityKnown = false;
             bool visibilityDirty = true;
+            // Discovery may observe a newer authoritative tile before the
+            // native paint/reconstruction cache consumes it. Keep that
+            // observation separate from the source signature so change
+            // detection never destroys its own previous-state evidence.
+            uint64_t visibilitySignature = 0;
             int32_t visibilityMinZ = 0;
             int32_t visibilityMaxZ = 0;
             uint32_t lastVisibilityGeneration = 0;
