@@ -502,6 +502,12 @@
                 }
             }
 
+            for (auto& surface : result.surfaces)
+            {
+                surface.diagnosticReconstructionKind = 2;
+                surface.diagnosticReconstructionAnchor =
+                    groupAnchor;
+            }
             UpdateTrackTrajectoryBounds(result);
             IndexTrackTrajectoryRegions(result);
             return result;
@@ -3275,6 +3281,19 @@
                 }
             }
 
+            const auto reconstructionKindName =
+                [](const FirstPersonSurface& surface)
+                    -> const char* {
+                    switch (surface.diagnosticReconstructionKind)
+                    {
+                        case 1:
+                            return "largeScenery";
+                        case 2:
+                            return "track";
+                        default:
+                            return "none";
+                    }
+                };
             const auto mutuallyExclusiveExteriorFaces =
                 [](const FirstPersonSurface& a,
                    const FirstPersonSurface& b) {
@@ -3881,11 +3900,11 @@
                             LOG_WARNING(
                                 "FP_PLANE region=(%d,%d) normal=(%.3f,%.3f,%.3f) "
                                 "distance=%.2f overlap=(%.1f,%.1f) "
-                                "A[type=%s image=%u reconGroup=%llu semanticGroup=%llu gpuRegion=%llu "
+                                "A[type=%s image=%u reconGroup=%llu reconKind=%s reconAnchor=(%.0f,%.0f,%.0f) semanticGroup=%llu gpuRegion=%llu "
                                 "owner=%d order=%llu exterior=%d normal=(%.1f,%.1f,%.1f) role=%u "
                                 "source=(tile=%d,%d comp=%u rot=%u artGroup=%u) "
                                 "material=(tile=%d,%d comp=%u rot=%u artGroup=%u order=%llu)] "
-                                "B[type=%s image=%u reconGroup=%llu semanticGroup=%llu gpuRegion=%llu "
+                                "B[type=%s image=%u reconGroup=%llu reconKind=%s reconAnchor=(%.0f,%.0f,%.0f) semanticGroup=%llu gpuRegion=%llu "
                                 "owner=%d order=%llu exterior=%d normal=(%.1f,%.1f,%.1f) role=%u "
                                 "source=(tile=%d,%d comp=%u rot=%u artGroup=%u) "
                                 "material=(tile=%d,%d comp=%u rot=%u artGroup=%u order=%llu)] "
@@ -3902,6 +3921,16 @@
                                 static_cast<
                                     unsigned long long>(
                                         other.reconstructionGroup),
+                                reconstructionKindName(other),
+                                double(
+                                    other
+                                        .diagnosticReconstructionAnchor.x),
+                                double(
+                                    other
+                                        .diagnosticReconstructionAnchor.y),
+                                double(
+                                    other
+                                        .diagnosticReconstructionAnchor.z),
                                 static_cast<
                                     unsigned long long>(
                                         other.diagnosticSemanticGroup),
@@ -3942,6 +3971,16 @@
                                 static_cast<
                                     unsigned long long>(
                                         surface.reconstructionGroup),
+                                reconstructionKindName(surface),
+                                double(
+                                    surface
+                                        .diagnosticReconstructionAnchor.x),
+                                double(
+                                    surface
+                                        .diagnosticReconstructionAnchor.y),
+                                double(
+                                    surface
+                                        .diagnosticReconstructionAnchor.z),
                                 static_cast<
                                     unsigned long long>(
                                         surface.diagnosticSemanticGroup),

@@ -181,6 +181,11 @@ namespace OpenRCT2::Paint
         // multi-tile reconstruction group whose native source rotation is
         // selected from one canonical object/track origin.
         uint64_t reconstructionGroup = 0;
+        // Diagnostic-only provenance for grouped reconstruction. Kind uses
+        // 0=none, 1=large scenery, 2=track. The anchor is the canonical
+        // physical group origin used to build the reconstruction key.
+        uint8_t diagnosticReconstructionKind = 0;
+        FirstPersonVec3 diagnosticReconstructionAnchor{};
         // Stable native painter order for logical tie breaking. Physical depth
         // remains authoritative; this ordinal is consulted only when surfaces
         // occupy the same physical layer (opaque owners or transparency).

@@ -2623,6 +2623,9 @@
                         imageTemplate.WithIndex(
                             localSurface.image.GetIndex());
                     surface.reconstructionGroup = group.key;
+                    surface.diagnosticReconstructionKind = 1;
+                    surface.diagnosticReconstructionAnchor =
+                        group.anchor;
                     for (auto& vertex : surface.triangles)
                     {
                         vertex.world.x += group.anchor.x;
@@ -3569,6 +3572,9 @@
                 surface.cameraIndependent = true;
                 surface.reconstructionGroup =
                     group.key;
+                surface.diagnosticReconstructionKind = 1;
+                surface.diagnosticReconstructionAnchor =
+                    group.anchor;
                 surface.gpuRegion =
                     FirstPersonGpuRegionKey(
                         int32_t(std::floor(
@@ -3795,6 +3801,8 @@
                     auto local =
                         sourceSurface;
                     local.reconstructionGroup = 0;
+                    local.diagnosticReconstructionKind = 0;
+                    local.diagnosticReconstructionAnchor = {};
                     local.gpuRegion = 0;
                     local.hasSemanticBounds = false;
                     local.semanticCenter = {};
