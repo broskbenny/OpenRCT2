@@ -1017,12 +1017,53 @@
             const auto faces =
                 BuildFirstPersonSmallSceneryVisualFaces(
                     *hull, splitTreeArtwork);
-            if (faces.empty())
+            const auto physicalFaces =
+                BuildFirstPersonVisualHullBoundaryFaces(
+                    *hull);
+            if (faces.empty() || physicalFaces.empty())
             {
                 baked.resolved = true;
                 baked.usable = false;
                 return false;
             }
+
+            const auto sameBoundaryPlane =
+                [](const FirstPersonVisualHullFace& visual,
+                   const FirstPersonVisualHullFace& physical) {
+                    if (visual.kind != physical.kind)
+                        return false;
+                    constexpr float kPlaneEpsilon = 0.01f;
+                    switch (visual.kind)
+                    {
+                        case FirstPersonVisualHullFaceKind::minForward:
+                        case FirstPersonVisualHullFaceKind::maxForward:
+                            return std::abs(
+                                visual.corners[0].x
+                                - physical.corners[0].x)
+                                <= kPlaneEpsilon;
+                        case FirstPersonVisualHullFaceKind::minRight:
+                        case FirstPersonVisualHullFaceKind::maxRight:
+                            return std::abs(
+                                visual.corners[0].y
+                                - physical.corners[0].y)
+                                <= kPlaneEpsilon;
+                        case FirstPersonVisualHullFaceKind::bottom:
+                        case FirstPersonVisualHullFaceKind::top:
+                            return std::abs(
+                                visual.corners[0].z
+                                - physical.corners[0].z)
+                                <= kPlaneEpsilon;
+                    }
+                    return false;
+                };
+            const auto ownerMatchesVisualFace =
+                [&](uint32_t owner,
+                    const FirstPersonSmallSceneryVisualFace& visual) {
+                    return owner < physicalFaces.size()
+                        && sameBoundaryPlane(
+                            visual.face,
+                            physicalFaces[owner]);
+                };
 
             const auto faceVisible =
                 [](FirstPersonVec3 normal,
@@ -1039,19 +1080,20 @@
                         sourceRotation);
                 };
 
-            // Ownership is computed independently of texture fit. A projective
-            // source is trustworthy only when this physical face is actually
-            // frontmost in that native isometric view.
+            // Ownership is computed from the one authoritative exterior
+            // hull only. Tree quarter seams are visual artwork carriers; they
+            // must never become native-view occluders or make a real exterior
+            // face appear unobservable.
             std::array<FirstPersonDepthOwnerMap, 4>
                 depthOwners{};
             for (uint8_t sourceRotation = 0;
                  sourceRotation < 4; ++sourceRotation)
             {
                 for (size_t faceIndex = 0;
-                     faceIndex < faces.size(); ++faceIndex)
+                     faceIndex < physicalFaces.size(); ++faceIndex)
                 {
-                    const auto& visualFace = faces[faceIndex];
-                    const auto& face = visualFace.face;
+                    const auto& face =
+                        physicalFaces[faceIndex];
                     if (!faceVisible(
                             face.normal, sourceRotation))
                         continue;
@@ -1155,7 +1197,10 @@
                 };
             const auto ownedNear =
                 [&](uint8_t sourceRotation,
-                    uint32_t owner, int32_t x, int32_t y) {
+                    const FirstPersonSmallSceneryVisualFace& visual,
+                    int32_t x, int32_t y) {
+                    if (visual.syntheticInterior)
+                        return true;
                     for (int32_t dy = -1; dy <= 1; ++dy)
                     for (int32_t dx = -1; dx <= 1; ++dx)
                     {
@@ -1165,7 +1210,8 @@
                                     x + dx, y + dy));
                         if (found
                                 != depthOwners[sourceRotation].end()
-                            && found->second.owner == owner)
+                            && ownerMatchesVisualFace(
+                                found->second.owner, visual))
                             return true;
                     }
                     return false;
@@ -1194,7 +1240,9 @@
                         const auto artworkPoint =
                             splitTreeArtwork
                             ? FirstPersonSmallSceneryTreeArtworkPoint(
-                                *hull, face.corners[i])
+                                *hull,
+                                visualFace.artworkQuarter,
+                                face.corners[i])
                             : face.corners[i];
                         projected[i] =
                             Translate3DTo2DWithZ(
@@ -1226,10 +1274,22 @@
                     AddFirstPersonSilhouetteQuad(
                         artworkSilhouette, artworkProjected);
                     const float ownership =
-                        FirstPersonDepthOwnerCoverage(
-                            depthOwners[source.rotation],
-                            uint32_t(faceIndex),
-                            silhouette);
+                        visualFace.syntheticInterior
+                        ? 1.0f
+                        : FirstPersonSilhouettePredicateCoverage(
+                            silhouette,
+                            [&](int32_t x, int32_t y) {
+                                const auto found =
+                                    depthOwners[source.rotation].find(
+                                        FirstPersonSilhouettePixelKey(
+                                            x, y));
+                                return found
+                                        != depthOwners[
+                                            source.rotation].end()
+                                    && ownerMatchesVisualFace(
+                                        found->second.owner,
+                                        visualFace);
+                            });
                     if (ownership < 0.20f)
                         continue;
 
@@ -1360,7 +1420,7 @@
                                     });
                             if (!ownedNear(
                                     sourceView.rotation,
-                                    uint32_t(faceIndex),
+                                    visualFace,
                                     physicalProjected.x,
                                     physicalProjected.y))
                                 continue;
@@ -1368,7 +1428,9 @@
                             const auto artworkPoint =
                                 splitTreeArtwork
                                 ? FirstPersonSmallSceneryTreeArtworkPoint(
-                                    *hull, point)
+                                    *hull,
+                                    visualFace.artworkQuarter,
+                                    point)
                                 : point;
                             const auto projected =
                                 Translate3DTo2DWithZ(
@@ -1487,7 +1549,8 @@
                 // An unobserved bottom face may exist physically for collision,
                 // but inventing a flat material for it is not visual evidence.
                 if (face.kind
-                    == FirstPersonVisualHullFaceKind::bottom)
+                    == FirstPersonVisualHullFaceKind::bottom
+                    || visualFace.syntheticInterior)
                     continue;
 
                 // A normally visible face with no native-view material means
