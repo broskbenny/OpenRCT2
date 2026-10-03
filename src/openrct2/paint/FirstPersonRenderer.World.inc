@@ -1234,6 +1234,11 @@
                             {
                                 FirstPersonSurface waterSurface{};
                                 waterSurface.image = waterMask;
+                                // The map defines a continuous physical water
+                                // sheet across the full tile. Transparency in
+                                // the native isometric mask is compositing
+                                // artwork, not absence of water in 3D.
+                                waterSurface.physicalCoverage = true;
                                 waterSurface.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
                                 std::array<FirstPersonVertex, 4> w{};
                                 const auto waterIso = Translate3DTo2DWithZ(
