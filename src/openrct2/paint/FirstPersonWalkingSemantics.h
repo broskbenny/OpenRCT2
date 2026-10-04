@@ -103,12 +103,15 @@ namespace OpenRCT2::Paint
         FirstPersonPassageAxisForConnections(
             uint8_t connectedSides)
     {
-        connectedSides &= 0x0F;
-        if ((connectedSides & 0x05u) == 0x05u)
-            return FirstPersonPassageAxis::x;
-        if ((connectedSides & 0x0Au) == 0x0Au)
-            return FirstPersonPassageAxis::y;
-        return FirstPersonPassageAxis::none;
+        switch (connectedSides & 0x0Fu)
+        {
+            case 0x05u:
+                return FirstPersonPassageAxis::x;
+            case 0x0Au:
+                return FirstPersonPassageAxis::y;
+            default:
+                return FirstPersonPassageAxis::none;
+        }
     }
 
     [[nodiscard]] constexpr uint8_t
