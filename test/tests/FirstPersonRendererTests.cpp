@@ -334,6 +334,23 @@ TEST(FirstPersonWalkingSemanticsTest, WidePathPublishesFullDeckWithoutChangingGr
     EXPECT_EQ(constraint.visualDeckEdgeMask, 0);
 }
 
+TEST(FirstPersonWalkingSemanticsTest, ConnectedPathEdgesPublishMaterialContinuity)
+{
+    OpenRCT2::PathElement path{};
+    path.setWide(false);
+    path.setSloped(false);
+    path.setIsQueue(false);
+    path.setEdges(0x05);
+    path.setCorners(0);
+
+    const auto constraint =
+        FirstPersonWalkabilityFromPath(
+            CoordsXY{ 0, 0 }, path);
+    EXPECT_FALSE(constraint.visualFullTileDeck);
+    EXPECT_EQ(constraint.connectedSides, 0x05);
+    EXPECT_EQ(constraint.visualDeckEdgeMask, 0x05);
+}
+
 TEST(FirstPersonWalkingSemanticsTest, ConnectionMasksRotateWithWorldOrientation)
 {
     EXPECT_EQ(
