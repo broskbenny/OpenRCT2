@@ -741,8 +741,8 @@ namespace OpenRCT2::Paint
                     walkability[i];
                 Console::WriteLine(
                     "  constraint[%zu] kind=%s baseZ=%d sides=0x%02x "
-                    "corners=0x%02x floor=%d through=%d fullDeck=%d "
-                    "sloped=%d slopeDirection=%u wide=%d",
+                    "corners=0x%02x floor=%d through=%d fullWalkDeck=%d "
+                    "visualEdges=0x%02x sloped=%d slopeDirection=%u wide=%d",
                     i,
                     FirstPersonInspectorWalkabilityKindName(
                         constraint.kind),
@@ -751,8 +751,8 @@ namespace OpenRCT2::Paint
                     unsigned(constraint.corners),
                     constraint.walkableFloor ? 1 : 0,
                     constraint.guaranteedThroughPassage ? 1 : 0,
-                    constraint.visualDeckShouldReachTileEdges
-                        ? 1 : 0,
+                    constraint.fullTileWalkableDeck ? 1 : 0,
+                    unsigned(constraint.visualDeckEdgeMask),
                     constraint.sloped ? 1 : 0,
                     unsigned(constraint.slopeDirection),
                     constraint.wide ? 1 : 0);
