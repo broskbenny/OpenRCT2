@@ -126,7 +126,8 @@ static uint32_t PublishFirstPersonPathDeckGeometry(
         return 0;
 
     const uint8_t slope = pathElement.isSloped()
-        ? kPathSlopeToLandSlope[pathElement.getSlopeDirection()]
+        ? OpenRCT2::Paint::FirstPersonPathLandSlope(
+            pathElement.getSlopeDirection())
         : kTileSlopeFlat;
     const auto heights = GetSlopeCornerHeights(height, slope);
     const auto heightAt = [&](float localX, float localY) {
