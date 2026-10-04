@@ -2311,6 +2311,7 @@
             uint64_t signature{};
             uint64_t lastSeen{};
             bool dirty = false;
+            bool visualHullRefined = false;
             uint32_t bodyImageFirst{};
             uint32_t bodyImageLast{};
             bool hasBounds = false;
@@ -2870,6 +2871,7 @@
                 uint64_t generation{};
                 bool resolved = false;
                 bool usable = false;
+                bool visualHullRefined = false;
                 FirstPersonVec3 localLow{};
                 FirstPersonVec3 localHigh{};
                 std::vector<FirstPersonSurface> localSurfaces;
@@ -2901,6 +2903,8 @@
                 if (!baked.usable)
                     return result;
 
+                result.visualHullRefined =
+                    baked.visualHullRefined;
                 result.surfaces.reserve(
                     baked.localSurfaces.size());
                 for (const auto& localSurface :
@@ -3437,6 +3441,8 @@
                 faces =
                     BuildFirstPersonVisualHullBoundaryFaces(
                         hull);
+                result.visualHullRefined =
+                    !faces.empty();
             }
 
             if (faces.empty())
@@ -4078,6 +4084,8 @@
                     bakedGeneration;
                 baked.resolved = true;
                 baked.usable = true;
+                baked.visualHullRefined =
+                    result.visualHullRefined;
                 baked.localLow = {
                     low.x - group.anchor.x,
                     low.y - group.anchor.y,
