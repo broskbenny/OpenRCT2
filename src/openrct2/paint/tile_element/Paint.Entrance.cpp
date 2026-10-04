@@ -387,7 +387,7 @@ static uint32_t PublishFirstPersonParkEntranceCentreBody(
         { -14.0f, -14.0f, bottom + 32.0f },
         { 14.0f, 14.0f, bottom + 79.0f },
         image, artworkOffset, artworkGroup,
-        0, 0, true, false);
+        0, 0, false, false);
 }
 
 static uint32_t PublishFirstPersonParkEntranceSideBody(
