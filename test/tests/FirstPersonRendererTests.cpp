@@ -256,15 +256,22 @@ TEST(FirstPersonSourceRotationTest, HysteresisBelongsToTheTrackedPoint)
 
 TEST(FirstPersonHullMaterialTest, MissingUndersideKeepsRaisedArtworkVisibleFromBelow)
 {
-    FirstPersonHullMaterialCoverage coverage(6);
+    std::array<FirstPersonVisualHullFace, 6> faces{};
+    faces[0].normal = { 1, 0, 0 };
+    faces[1].normal = { -1, 0, 0 };
+    faces[2].normal = { 0, 1, 0 };
+    faces[3].normal = { 0, -1, 0 };
+    faces[4].normal = { 0, 0, 1 };
+    faces[5].normal = { 0, 0, -1 };
+    FirstPersonHullMaterialCoverage coverage(faces);
+
     std::vector<FirstPersonSurface> surfaces(5);
     for (size_t i = 0; i < surfaces.size(); ++i)
     {
         coverage.recordFace(i, 32 * 48, 32 * 48);
-        surfaces[i].exteriorOnly = true;
+        surfaces[i].outwardNormal = faces[i].normal;
     }
     auto& top = surfaces.back();
-    top.outwardNormal = { 0, 0, 1 };
     top.triangles[0].world = { 4704, 2368, 216 };
     const FirstPersonVec3 towardEye{ 4895.187f - 4704, 2391.147f - 2368, 132 - 216 };
     ASSERT_LT(FpDot(top.outwardNormal, towardEye), 0.0f);
@@ -272,9 +279,11 @@ TEST(FirstPersonHullMaterialTest, MissingUndersideKeepsRaisedArtworkVisibleFromB
     coverage.applyTo(surfaces.begin(), surfaces.end());
 
     EXPECT_FALSE(coverage.isClosed());
+    for (size_t i = 0; i < 4; ++i)
+        EXPECT_TRUE(surfaces[i].exteriorOnly);
+    EXPECT_FALSE(top.exteriorOnly);
     for (const auto& surface : surfaces)
     {
-        EXPECT_FALSE(surface.exteriorOnly);
         EXPECT_EQ(surface.diagnosticHullBoundaryFaces, 6u);
         EXPECT_EQ(surface.diagnosticHullMaterialFaces, 5u);
         EXPECT_EQ(surface.diagnosticHullOpaqueFaces, 5u);
@@ -282,17 +291,24 @@ TEST(FirstPersonHullMaterialTest, MissingUndersideKeepsRaisedArtworkVisibleFromB
     EXPECT_FALSE(top.exteriorOnly && FpDot(top.outwardNormal, towardEye) <= 0.0f);
 }
 
-TEST(FirstPersonHullMaterialTest, LateTransparentFaceReclassifiesTheWholeBoundaryWithoutFillingPixels)
+TEST(FirstPersonHullMaterialTest, TransparentFaceExposesOnlyOpposingBoundaryWithoutFillingPixels)
 {
-    FirstPersonHullMaterialCoverage coverage(6);
+    std::array<FirstPersonVisualHullFace, 6> faces{};
+    faces[0].normal = { 1, 0, 0 };
+    faces[1].normal = { -1, 0, 0 };
+    faces[2].normal = { 0, 1, 0 };
+    faces[3].normal = { 0, -1, 0 };
+    faces[4].normal = { 0, 0, 1 };
+    faces[5].normal = { 0, 0, -1 };
+    FirstPersonHullMaterialCoverage coverage(faces);
+
     std::vector<FirstPersonSurface> surfaces(6);
     for (size_t i = 0; i < surfaces.size(); ++i)
     {
         auto& surface = surfaces[i];
-        surface.exteriorOnly = true;
-        surface.outwardNormal = { 1, 0, 0 };
+        surface.outwardNormal = faces[i].normal;
         surface.immutablePixels = { 17, 17, 17, 17 };
-        if (i == surfaces.size() - 1)
+        if (i == 0)
             surface.immutablePixels.back() = 0;
         coverage.recordFace(i, surface.immutablePixels.size(),
             size_t(std::count_if(surface.immutablePixels.begin(), surface.immutablePixels.end(),
@@ -303,14 +319,16 @@ TEST(FirstPersonHullMaterialTest, LateTransparentFaceReclassifiesTheWholeBoundar
     EXPECT_FALSE(coverage.isClosed());
     EXPECT_EQ(coverage.materialFaces(), 6u);
     EXPECT_EQ(coverage.opaqueFaces(), 5u);
+    EXPECT_TRUE(surfaces[0].exteriorOnly);
+    EXPECT_FALSE(surfaces[1].exteriorOnly);
+    for (size_t i = 2; i < surfaces.size(); ++i)
+        EXPECT_TRUE(surfaces[i].exteriorOnly);
     for (const auto& surface : surfaces)
     {
-        EXPECT_FALSE(surface.exteriorOnly);
         EXPECT_FALSE(surface.physicalCoverage);
         EXPECT_FALSE(surface.viewFacing);
-        EXPECT_FLOAT_EQ(surface.outwardNormal.x, 1.0f);
     }
-    EXPECT_EQ(surfaces.back().immutablePixels.back(), 0);
+    EXPECT_EQ(surfaces.front().immutablePixels.back(), 0);
 }
 
 TEST(FirstPersonHullMaterialTest, ClosedBoundaryRetainsSidednessAroundAGeometricOpening)
@@ -324,7 +342,7 @@ TEST(FirstPersonHullMaterialTest, ClosedBoundaryRetainsSidednessAroundAGeometric
     hull.occupied[4] = 0; // A real through-opening, with its own inner boundary.
     const auto faces = BuildFirstPersonVisualHullBoundaryFaces(hull);
     ASSERT_GT(faces.size(), 6u);
-    FirstPersonHullMaterialCoverage coverage(faces.size());
+    FirstPersonHullMaterialCoverage coverage(faces);
     std::vector<FirstPersonSurface> surfaces(faces.size());
     for (size_t i = 0; i < faces.size(); ++i)
     {
@@ -346,9 +364,18 @@ TEST(FirstPersonHullMaterialTest, ClosedBoundaryRetainsSidednessAroundAGeometric
 
 TEST(FirstPersonHullMaterialTest, AbsentFacesCannotBeCertifiedByDuplicateOrEmptySamples)
 {
-    FirstPersonHullMaterialCoverage empty(0);
+    std::array<FirstPersonVisualHullFace, 0> emptyFaces{};
+    FirstPersonHullMaterialCoverage empty(emptyFaces);
     EXPECT_FALSE(empty.isClosed());
-    FirstPersonHullMaterialCoverage coverage(6);
+
+    std::array<FirstPersonVisualHullFace, 6> faces{};
+    faces[0].normal = { 1, 0, 0 };
+    faces[1].normal = { -1, 0, 0 };
+    faces[2].normal = { 0, 1, 0 };
+    faces[3].normal = { 0, -1, 0 };
+    faces[4].normal = { 0, 0, 1 };
+    faces[5].normal = { 0, 0, -1 };
+    FirstPersonHullMaterialCoverage coverage(faces);
     for (size_t i = 0; i < 6; ++i)
         coverage.recordFace(0, 4, 4);
     EXPECT_EQ(coverage.materialFaces(), 1u);
@@ -366,22 +393,36 @@ TEST(FirstPersonHullMaterialTest, AbsentFacesCannotBeCertifiedByDuplicateOrEmpty
     EXPECT_FALSE(coverage.isClosed());
 }
 
-TEST(FirstPersonHullMaterialTest, ObjectRangePreservesAuthoredWallAndSurvivesCacheCopy)
+TEST(FirstPersonHullMaterialTest, ObjectRangePreservesAuthoredWallAndDirectionalSidednessAcrossCacheCopy)
 {
     std::vector<FirstPersonSurface> scene(3);
     scene.front().exteriorOnly = true; // Independently authored wall.
     scene.front().outwardNormal = { -1, 0, 0 };
-    FirstPersonHullMaterialCoverage coverage(6);
+
+    std::array<FirstPersonVisualHullFace, 6> faces{};
+    faces[0].normal = { 1, 0, 0 };
+    faces[1].normal = { -1, 0, 0 };
+    faces[2].normal = { 0, 1, 0 };
+    faces[3].normal = { 0, -1, 0 };
+    faces[4].normal = { 0, 0, 1 };
+    faces[5].normal = { 0, 0, -1 };
+    scene[1].outwardNormal = faces[0].normal;
+    scene[2].outwardNormal = faces[2].normal;
+
+    FirstPersonHullMaterialCoverage coverage(faces);
     coverage.recordFace(0, 4, 4);
     coverage.recordFace(1, 4, 3);
     coverage.applyTo(scene.begin() + 1, scene.end());
 
     EXPECT_TRUE(scene.front().exteriorOnly);
     EXPECT_EQ(scene.front().diagnosticHullBoundaryFaces, 0u);
+
     const std::vector<FirstPersonSurface> cached(scene.begin() + 1, scene.end());
+    ASSERT_EQ(cached.size(), 2u);
+    EXPECT_FALSE(cached[0].exteriorOnly);
+    EXPECT_TRUE(cached[1].exteriorOnly);
     for (const auto& surface : cached)
     {
-        EXPECT_FALSE(surface.exteriorOnly);
         EXPECT_EQ(surface.diagnosticHullBoundaryFaces, 6u);
         EXPECT_EQ(surface.diagnosticHullMaterialFaces, 2u);
         EXPECT_EQ(surface.diagnosticHullOpaqueFaces, 1u);
