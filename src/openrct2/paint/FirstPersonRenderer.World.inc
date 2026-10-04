@@ -2917,6 +2917,39 @@
 
                 std::vector<uint8_t> pixels(
                     size_t(width) * size_t(height), 0);
+
+                // A flat wide-path deck is deliberately published as one
+                // authoritative 32x32 footprint. Native path sprites retain
+                // the classic 3-unit transparent margin used by isometric
+                // composition, but that margin is not a physical hole in a
+                // wide plaza. After sampling the native artwork below, bleed
+                // the nearest interior deck texel across only that margin.
+                // Ordinary narrow paths, queues, corners and slopes retain
+                // their native alpha/footprint semantics.
+                const bool fullTileWidePathDeck =
+                    component.role
+                        == FirstPersonPaintSemanticRole::pathDeck
+                    && component.geometry.kind
+                        == FirstPersonPaintSemanticPrimitiveKind::
+                            footprint
+                    && component.geometry.pointCount >= 4
+                    && std::abs(
+                        FirstPersonSemanticEdgeLength(
+                            face[0], face[1])
+                        - float(kCoordsXYStep))
+                        <= 0.5f
+                    && std::abs(
+                        FirstPersonSemanticEdgeLength(
+                            face[0], face[3])
+                        - float(kCoordsXYStep))
+                        <= 0.5f
+                    && std::abs(face[0].z - face[1].z)
+                        <= 0.01f
+                    && std::abs(face[0].z - face[2].z)
+                        <= 0.01f
+                    && std::abs(face[0].z - face[3].z)
+                        <= 0.01f;
+
                 bool haveKnownMaterial = false;
                 bool haveUnknownMaterial = false;
                 for (int32_t y = 0; y < height; ++y)
@@ -3004,6 +3037,45 @@
                         size_t(y) * size_t(width)
                         + size_t(x)] =
                         selectedPixel;
+                }
+
+                if (fullTileWidePathDeck
+                    && width > 6 && height > 6)
+                {
+                    constexpr int32_t kNativePathMargin = 3;
+                    const auto sourcePixel =
+                        [&](int32_t x, int32_t y) {
+                            return pixels[
+                                size_t(y) * size_t(width)
+                                + size_t(x)];
+                        };
+                    for (int32_t y = 0; y < height; ++y)
+                    for (int32_t x = 0; x < width; ++x)
+                    {
+                        if (x >= kNativePathMargin
+                            && x < width - kNativePathMargin
+                            && y >= kNativePathMargin
+                            && y < height - kNativePathMargin)
+                            continue;
+
+                        auto& pixel =
+                            pixels[
+                                size_t(y) * size_t(width)
+                                + size_t(x)];
+                        if (pixel != 0)
+                            continue;
+
+                        const int32_t sampleX =
+                            std::clamp(
+                                x, kNativePathMargin,
+                                width - kNativePathMargin - 1);
+                        const int32_t sampleY =
+                            std::clamp(
+                                y, kNativePathMargin,
+                                height - kNativePathMargin - 1);
+                        pixel =
+                            sourcePixel(sampleX, sampleY);
+                    }
                 }
 
                 bool hasPixel = false;
