@@ -211,6 +211,58 @@
                 };
             }
 
+            if (element->getType() == TileElementType::entrance)
+            {
+                auto* entrance = element->asEntrance();
+                if (entrance == nullptr
+                    || entrance->getEntranceType()
+                        != EntranceType::parkEntrance)
+                    return std::nullopt;
+
+                const uint8_t direction =
+                    static_cast<uint8_t>(
+                        entrance->getDirection()) & 3u;
+                const CoordsXY side =
+                    CoordsDirectionDelta[
+                        (direction - 1u) & 3u];
+                CoordsXY centre = tile;
+                switch (entrance->getSequenceIndex())
+                {
+                    case ParkEntranceSequence::left:
+                        centre.x -= side.x;
+                        centre.y -= side.y;
+                        break;
+                    case ParkEntranceSequence::right:
+                        centre.x += side.x;
+                        centre.y += side.y;
+                        break;
+                    default:
+                        break;
+                }
+
+                const FirstPersonVec3 anchor{
+                    float(centre.x),
+                    float(centre.y),
+                    float(entrance->getBaseZ()),
+                };
+                uint64_t key = 14695981039346656037ull;
+                ExtendStableKey(key, 3);
+                ExtendStableKey(key, uint32_t(centre.x));
+                ExtendStableKey(key, uint32_t(centre.y));
+                ExtendStableKey(
+                    key, uint32_t(entrance->getBaseZ()));
+                ExtendStableKey(key, direction);
+                ExtendStableKey(
+                    key,
+                    entrance->getEntryIndex());
+                if (key == 0)
+                    key = 1;
+                return ReconstructionGroupInfo{
+                    key, anchor, tile,
+                    TileElementType::entrance
+                };
+            }
+
             return std::nullopt;
         }
         FirstPersonVec3 Anchor(const PaintStruct& ps)
