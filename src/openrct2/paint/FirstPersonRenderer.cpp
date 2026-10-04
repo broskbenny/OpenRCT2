@@ -1150,6 +1150,7 @@ namespace OpenRCT2::Paint
         gFirstPersonInspectorPickRequested = false;
         _reconstructionWorker.cancel();
         _largeSceneryJobs.clear();
+        _parkEntranceJobs.clear();
         _smallSceneryJobs.clear();
         _vehicleHullJobs.clear();
         _semanticJobs.clear();
@@ -1190,6 +1191,10 @@ namespace OpenRCT2::Paint
         _largeSceneryGroupsByBoundsRegion.clear();
         _activeLargeSceneryRegions.clear();
         _largeSceneryGeometryEnabled = false;
+        _parkEntranceGeometryCache.clear();
+        _parkEntranceGroupsByRegion.clear();
+        _parkEntranceGroupsByBoundsRegion.clear();
+        _parkEntranceGeometryEnabled = false;
         ClearFirstPersonSemanticComponents();
         _staticRegionPackets.clear();
     }
@@ -1198,7 +1203,9 @@ namespace OpenRCT2::Paint
         ClearFirstPersonLargeSceneryPhysicalProxies();
         if (_regionBounds.empty() && _terrainCache.entries.empty()
             && _staticPaintCache.empty() && _trackTrajectoryCache.empty()
-            && _largeSceneryGeometryCache.empty() && _staticRegionPackets.empty()) return;
+            && _largeSceneryGeometryCache.empty()
+            && _parkEntranceGeometryCache.empty()
+            && _staticRegionPackets.empty()) return;
         const auto floorTile = [](int32_t x) {return int32_t(std::floor(float(x)/kCoordsXYStep));};
         const auto x0 = floorTile(std::min(low.x,high.x));
         const auto y0 = floorTile(std::min(low.y,high.y));
@@ -1213,6 +1220,33 @@ namespace OpenRCT2::Paint
             if (changed) it = _largeSceneryJobs.erase(it);
             else ++it;
         }
+        for (auto it = _parkEntranceJobs.begin();
+             it != _parkEntranceJobs.end();)
+        {
+            const auto& job = *it->second;
+            const bool changed =
+                std::any_of(
+                    job.tileSignatures.begin(),
+                    job.tileSignatures.end(),
+                    [&](const auto& tile) {
+                        const int32_t tx =
+                            int32_t(std::floor(
+                                float(tile.first.x)
+                                / kCoordsXYStep));
+                        const int32_t ty =
+                            int32_t(std::floor(
+                                float(tile.first.y)
+                                / kCoordsXYStep));
+                        return tx >= x0 && tx <= x1
+                            && ty >= y0 && ty <= y1
+                            && NativeTileSignature(
+                                tile.first) != tile.second;
+                    });
+            if (changed)
+                it = _parkEntranceJobs.erase(it);
+            else
+                ++it;
+        }
         for (auto it = _trackGeometryRequests.begin(); it != _trackGeometryRequests.end();)
         {
             const auto p = it->second.tile;
@@ -1223,6 +1257,7 @@ namespace OpenRCT2::Paint
         }
         std::unordered_set<uint64_t> trackCandidates;
         std::unordered_set<uint64_t> largeSceneryCandidates;
+        std::unordered_set<uint64_t> parkEntranceCandidates;
         for (int32_t regionY = y0 / 32; regionY <= y1 / 32; ++regionY)
         for (int32_t regionX = x0 / 32; regionX <= x1 / 32; ++regionX)
         {
@@ -1251,6 +1286,16 @@ namespace OpenRCT2::Paint
                 largeSceneryCandidates.insert(
                     scenery->second.begin(),
                     scenery->second.end());
+            }
+            if (const auto entrances =
+                    _parkEntranceGroupsByBoundsRegion.find(
+                        regionKey);
+                entrances
+                    != _parkEntranceGroupsByBoundsRegion.end())
+            {
+                parkEntranceCandidates.insert(
+                    entrances->second.begin(),
+                    entrances->second.end());
             }
         }
         InvalidateFirstPersonRegionBounds(
@@ -1322,6 +1367,27 @@ namespace OpenRCT2::Paint
                 && y1 >= geometry.minTileY)
             {
                 MarkLargeSceneryGeometryRegionsDirty(geometry);
+                geometry.dirty = true;
+            }
+        }
+        for (const auto groupKey :
+             parkEntranceCandidates)
+        {
+            const auto found =
+                _parkEntranceGeometryCache.find(groupKey);
+            if (found
+                == _parkEntranceGeometryCache.end())
+                continue;
+            auto& geometry = found->second;
+            if (!geometry.hasBounds)
+                continue;
+            if (x0 <= geometry.maxTileX
+                && x1 >= geometry.minTileX
+                && y0 <= geometry.maxTileY
+                && y1 >= geometry.minTileY)
+            {
+                MarkParkEntranceGeometryRegionsDirty(
+                    geometry);
                 geometry.dirty = true;
             }
         }
