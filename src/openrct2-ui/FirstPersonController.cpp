@@ -703,13 +703,26 @@ namespace OpenRCT2::Ui::FirstPerson
                         tilePos);
                 if (components == nullptr)
                     continue;
+
+                // Navigation is authoritative negative geometry evidence.
+                // When the whole step through this tile stays inside a
+                // guaranteed route (currently the two-sided park-entrance
+                // corridor), semantic reconstruction is not allowed to close
+                // that route with a guessed solid body.
+                const bool guaranteedPassage =
+                    Paint::
+                        FirstPersonWalkStepUsesGuaranteedPassage(
+                            tilePos, from, to);
                 for (const auto& component : *components)
                 {
-                    if (Paint::
+                    if (!Paint::
                         FirstPersonSemanticComponentIntersectsWalkStep(
                             component, from, to,
                             kEyeHeight))
-                        return true;
+                        continue;
+                    if (guaranteedPassage)
+                        continue;
+                    return true;
                 }
             }
             return false;
