@@ -360,6 +360,40 @@ TEST(FirstPersonWalkingSemanticsTest, ParkEntranceCentrePublishesRotatedThroughP
     EXPECT_FALSE(side.guaranteedThroughPassage);
 }
 
+TEST(FirstPersonWalkingSemanticsTest, RideEntrancesRemainGraphEndpoints)
+{
+    OpenRCT2::EntranceElement entrance{};
+    entrance.setEntranceType(
+        OpenRCT2::EntranceType::rideEntrance);
+    entrance.setSequenceIndex(
+        OpenRCT2::ParkEntranceSequence::centre);
+    entrance.setBaseZ(80);
+    entrance.setDirection(Direction{ 3 });
+
+    auto constraint =
+        FirstPersonWalkabilityFromEntrance(
+            CoordsXY{ 64, 96 }, entrance);
+    EXPECT_EQ(
+        constraint.kind,
+        FirstPersonWalkabilityKind::rideEntrance);
+    EXPECT_EQ(constraint.connectedSides, 0x02);
+    EXPECT_FALSE(constraint.walkableFloor);
+    EXPECT_FALSE(
+        constraint.guaranteedThroughPassage);
+    EXPECT_EQ(constraint.visualDeckEdgeMask, 0);
+
+    entrance.setEntranceType(
+        OpenRCT2::EntranceType::rideExit);
+    constraint =
+        FirstPersonWalkabilityFromEntrance(
+            CoordsXY{ 64, 96 }, entrance);
+    EXPECT_EQ(
+        constraint.kind,
+        FirstPersonWalkabilityKind::rideExit);
+    EXPECT_EQ(constraint.connectedSides, 0x02);
+    EXPECT_FALSE(constraint.walkableFloor);
+}
+
 TEST(FirstPersonWalkingSemanticsTest, GuaranteedPassageDefinesOnlyTheWalkableCorridor)
 {
     FirstPersonWalkabilityConstraint entrance{};
