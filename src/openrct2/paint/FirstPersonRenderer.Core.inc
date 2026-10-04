@@ -1221,7 +1221,7 @@
 
             const size_t surfaceStart = scene.surfaces.size();
             size_t emittedFaces = 0;
-            FirstPersonHullMaterialCoverage materialCoverage(faces.size());
+            FirstPersonHullMaterialCoverage materialCoverage(faces);
             for (size_t faceIndex = 0;
                  faceIndex < faces.size(); ++faceIndex)
             {
@@ -3750,7 +3750,7 @@
 
             bool haveBounds = false;
             FirstPersonVec3 low{}, high{};
-            FirstPersonHullMaterialCoverage materialCoverage(faces.size());
+            FirstPersonHullMaterialCoverage materialCoverage(faces);
             for (size_t faceIndex = 0;
                  faceIndex < faces.size();
                  ++faceIndex)
