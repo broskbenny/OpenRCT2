@@ -2926,15 +2926,10 @@
                 // isometric composition margin; after sampling, only that
                 // margin is extended when the authoritative navigation model
                 // requires edge-to-edge deck continuity.
-                const auto visualDeckConstraint =
-                    component.role
-                            == FirstPersonPaintSemanticRole::pathDeck
-                        ? FindFirstPersonVisualDeckConstraint(
-                            component.mapPosition,
-                            int32_t(std::lround(face[0].z)))
-                        : std::nullopt;
                 const bool edgeContinuousPathDeck =
-                    visualDeckConstraint.has_value()
+                    component.role
+                        == FirstPersonPaintSemanticRole::pathDeck
+                    && component.visualDeckShouldReachTileEdges
                     && component.geometry.kind
                         == FirstPersonPaintSemanticPrimitiveKind::
                             footprint
