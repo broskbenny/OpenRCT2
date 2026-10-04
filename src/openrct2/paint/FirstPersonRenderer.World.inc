@@ -2918,17 +2918,23 @@
                 std::vector<uint8_t> pixels(
                     size_t(width) * size_t(height), 0);
 
-                // A flat wide-path deck is deliberately published as one
-                // authoritative 32x32 footprint. Native path sprites retain
-                // the classic 3-unit transparent margin used by isometric
-                // composition, but that margin is not a physical hole in a
-                // wide plaza. After sampling the native artwork below, bleed
-                // the nearest interior deck texel across only that margin.
-                // Ordinary narrow paths, queues, corners and slopes retain
-                // their native alpha/footprint semantics.
-                const bool fullTileWidePathDeck =
+                // Walkability, not sprite alpha, decides whether a deck
+                // must visually reach the tile boundary. This covers broad
+                // wide-path plazas and the guaranteed park-entrance passage
+                // without teaching the material sampler object-specific
+                // geometry rules. Native path sprites retain a transparent
+                // isometric composition margin; after sampling, only that
+                // margin is extended when the authoritative navigation model
+                // requires edge-to-edge deck continuity.
+                const auto visualDeckConstraint =
                     component.role
-                        == FirstPersonPaintSemanticRole::pathDeck
+                            == FirstPersonPaintSemanticRole::pathDeck
+                        ? FindFirstPersonVisualDeckConstraint(
+                            component.mapPosition,
+                            int32_t(std::lround(face[0].z)))
+                        : std::nullopt;
+                const bool edgeContinuousPathDeck =
+                    visualDeckConstraint.has_value()
                     && component.geometry.kind
                         == FirstPersonPaintSemanticPrimitiveKind::
                             footprint
@@ -3039,7 +3045,7 @@
                         selectedPixel;
                 }
 
-                if (fullTileWidePathDeck
+                if (edgeContinuousPathDeck
                     && width > 6 && height > 6)
                 {
                     constexpr int32_t kNativePathMargin = 3;
