@@ -311,7 +311,7 @@ TEST(FirstPersonWalkingSemanticsTest, ParkEntranceCentrePublishesRotatedThroughP
     entrance.setSequenceIndex(
         OpenRCT2::ParkEntranceSequence::centre);
     entrance.setBaseZ(96);
-    entrance.setDirection(OpenRCT2::Direction{ 1 });
+    entrance.setDirection(Direction{ 1 });
 
     const auto constraint =
         FirstPersonWalkabilityFromEntrance(
