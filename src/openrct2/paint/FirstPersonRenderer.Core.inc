@@ -4213,6 +4213,9 @@
                 uint64_t signature, uint64_t frame,
                 const FirstPersonSpriteSnapshot& sprites)
         {
+            (void)direction;
+            (void)sprites;
+
             ParkEntranceGeometryCacheEntry result{};
             result.signature = signature;
             result.lastSeen = frame;
@@ -4247,238 +4250,185 @@
                     std::max(result.maxTileY, ty);
             }
 
-            // Park entrances occupy a three-tile frontage. For first-person,
-            // use the collision-sized 32-unit cell as the only geometric
-            // primitive and make the front profile deliberately simple:
-            //
-            //     [ L ][ C ][ R ]
-            //     [ L ][   ][ R ]
-            //
-            // The lower centre cell is the walk-through opening. This is a
-            // five-solid-cell model: no visual hull, no voxel carving, no
-            // sprite-derived geometry and no asset-specific silhouette table.
-            constexpr int32_t kEntranceRows = 2;
-            if (clearanceHeight
-                < kEntranceRows * kCoordsXYStep)
+            if (clearanceHeight <= 0)
                 return result;
 
+            // Park-entrance appearance reconstruction is intentionally parked
+            // for now. Represent exactly the union of the three authoritative
+            // full-tile collision volumes and make the material explicitly
+            // unknown. This avoids pretending that sprite evidence tells us
+            // anything more precise about the 3D entrance shape.
             const int32_t baseZ =
                 int32_t(std::lround(group.anchor.z));
-            const float halfCell =
-                float(kCoordsXYHalfTile);
-            const float cellHeight =
-                float(kCoordsXYStep);
-            const float lowerBottom =
-                float(baseZ);
-            const float lowerTop =
-                lowerBottom + cellHeight;
-            const float upperBottom =
-                lowerTop;
-            const float upperTop =
-                upperBottom + cellHeight;
-
-            struct ParkEntranceCell
-            {
-                ParkEntranceSequence sequence;
-                uint8_t index;
-                float lowZ;
-                float highZ;
-            };
-
-            const std::array<ParkEntranceCell, 5>
-                cells{ {
-                    {
-                        ParkEntranceSequence::left,
-                        0, lowerBottom, lowerTop
-                    },
-                    {
-                        ParkEntranceSequence::right,
-                        1, lowerBottom, lowerTop
-                    },
-                    {
-                        ParkEntranceSequence::left,
-                        2, upperBottom, upperTop
-                    },
-                    {
-                        ParkEntranceSequence::centre,
-                        3, upperBottom, upperTop
-                    },
-                    {
-                        ParkEntranceSequence::right,
-                        4, upperBottom, upperTop
-                    },
-                } };
-
-            const auto makeViews =
-                [&](const ParkEntranceCell& cell) {
-                    std::array<
-                        FirstPersonPaintSemanticComponent, 4>
-                        views{};
-                    const size_t sequenceIndex =
-                        static_cast<size_t>(
-                            cell.sequence);
-                    const CoordsXY tile =
-                        ParkEntranceSequenceTile(
-                            group, direction,
-                            cell.sequence);
-                    const auto transform =
-                        MakeGroupedParkEntranceTransform(
-                            tile, direction);
-
-                    for (uint8_t sourceRotation = 0;
-                         sourceRotation < 4;
-                         ++sourceRotation)
-                    {
-                        auto& component =
-                            views[sourceRotation];
-                        component.id =
-                            uint32_t(
-                                size_t(cell.index) * 4u
-                                + sourceRotation + 1u);
-                        component.role =
-                            FirstPersonPaintSemanticRole::
-                                structureBody;
-                        component.mapPosition = tile;
-                        component.transform = transform;
-                        component.repetitionIndex =
-                            cell.index;
-                        component.artwork.image =
-                            ImageId(
-                                bodyImages[
-                                    sequenceIndex * 4u
-                                    + ((direction
-                                        + sourceRotation)
-                                       & 3u)]);
-                        component.artwork.screenPos =
-                            GroupedParkEntranceArtworkScreenPos(
-                                tile, baseZ,
-                                sourceRotation);
-                        component.artwork.group =
-                            uint32_t(
-                                sequenceIndex + 1u);
-                        component.artwork.sourceRotation =
-                            sourceRotation;
-                        component.artwork.decal = false;
-
-                        component.geometry.kind =
-                            FirstPersonPaintSemanticPrimitiveKind::
-                                box;
-                        component.geometry.pointCount = 2;
-                        component.geometry.points[0] = {
-                            -halfCell, -halfCell,
-                            cell.lowZ,
-                        };
-                        component.geometry.points[1] = {
-                            halfCell, halfCell,
-                            cell.highZ,
-                        };
-                        component.collidable = true;
-                    }
-                    return views;
-                };
-
-            const auto appendSurfaces =
-                [&](std::vector<FirstPersonSurface> surfaces) {
-                    for (auto& surface : surfaces)
-                    {
-                        surface.reconstructionGroup =
-                            group.key;
-                        surface.diagnosticReconstructionKind = 3;
-                        surface.diagnosticReconstructionAnchor =
-                            group.anchor;
-                        surface.cameraIndependent = true;
-
-                        const auto horizontal =
-                            Sub(
-                                surface.triangles[1].world,
-                                surface.triangles[0].world);
-                        const auto vertical =
-                            Sub(
-                                surface.triangles[5].world,
-                                surface.triangles[0].world);
-                        auto normal =
-                            FpCross(
-                                horizontal, vertical);
-                        const float normalLength =
-                            std::sqrt(
-                                FpDot(normal, normal));
-                        if (normalLength > 0.001f)
-                        {
-                            surface.exteriorOnly = true;
-                            surface.outwardNormal =
-                                Mul(
-                                    normal,
-                                    1.0f / normalLength);
-                        }
-                        result.surfaces.emplace_back(
-                            std::move(surface));
-                    }
-                };
-
-            for (const auto& cell : cells)
-            {
-                auto views = makeViews(cell);
-                std::array<
-                    const FirstPersonPaintSemanticComponent*, 4>
-                    observations{};
-                for (uint8_t sourceRotation = 0;
-                     sourceRotation < 4;
-                     ++sourceRotation)
-                {
-                    observations[sourceRotation] =
-                        &views[sourceRotation];
-                }
-
-                const auto& canonical = views[0];
-                const auto tile =
-                    canonical.mapPosition;
-                auto surfaces =
-                    BuildFirstPersonSemanticComponentSurfaces(
-                        canonical,
-                        FirstPersonGpuRegionKey(
-                            tile.x / kCoordsXYStep,
-                            tile.y / kCoordsXYStep),
-                        group.key,
-                        observations, nullptr, sprites,
-                        nullptr, false);
-                if (surfaces.empty())
-                {
-                    // Never publish a partial five-cell entrance. If native
-                    // artwork cannot texture one of the authoritative cells,
-                    // retain the native entrance until a complete grouped
-                    // replacement can be produced.
-                    result.surfaces.clear();
-                    return result;
-                }
-                appendSurfaces(std::move(surfaces));
-            }
-
-            if (result.surfaces.empty())
-                return result;
-
-            const FirstPersonVec3 boundsLow{
+            const FirstPersonVec3 low{
                 float(result.minTileX * kCoordsXYStep),
                 float(result.minTileY * kCoordsXYStep),
-                lowerBottom,
+                float(baseZ),
             };
-            const FirstPersonVec3 boundsHigh{
+            const FirstPersonVec3 high{
                 float((result.maxTileX + 1)
                     * kCoordsXYStep),
                 float((result.maxTileY + 1)
                     * kCoordsXYStep),
-                upperTop,
+                float(baseZ + clearanceHeight),
             };
+
+            const std::array<FirstPersonVec3, 8> p{ {
+                { low.x,  low.y,  low.z },
+                { high.x, low.y,  low.z },
+                { high.x, high.y, low.z },
+                { low.x,  high.y, low.z },
+                { low.x,  low.y,  high.z },
+                { high.x, low.y,  high.z },
+                { high.x, high.y, high.z },
+                { low.x,  high.y, high.z },
+            } };
+            const std::array<
+                std::array<FirstPersonVec3, 4>, 6>
+                faces{ {
+                    { p[0], p[1], p[5], p[4] },
+                    { p[1], p[2], p[6], p[5] },
+                    { p[2], p[3], p[7], p[6] },
+                    { p[3], p[0], p[4], p[7] },
+                    { p[4], p[5], p[6], p[7] },
+                    { p[3], p[2], p[1], p[0] },
+                } };
+
+            const auto edgeLength =
+                [](FirstPersonVec3 a, FirstPersonVec3 b) {
+                    const auto d = Sub(b, a);
+                    return std::sqrt(FpDot(d, d));
+                };
+
+            const ImageId diagnosticImage{
+                bodyImages[0]
+            };
+            for (const auto& face : faces)
+            {
+                FirstPersonSurface surface{};
+                surface.image = diagnosticImage;
+                surface.cameraIndependent = true;
+                surface.textureFallbackOnly = true;
+                surface.reconstructionGroup = group.key;
+                surface.diagnosticReconstructionKind = 3;
+                surface.diagnosticReconstructionAnchor =
+                    group.anchor;
+                surface.diagnosticSemanticGroup = group.key;
+                surface.diagnosticSemanticRole =
+                    static_cast<uint8_t>(
+                        FirstPersonPaintSemanticRole::
+                            structureBody);
+
+                const auto horizontal =
+                    Sub(face[1], face[0]);
+                const auto vertical =
+                    Sub(face[3], face[0]);
+                auto normal =
+                    FpCross(horizontal, vertical);
+                const float normalLength =
+                    std::sqrt(FpDot(normal, normal));
+                if (normalLength > 0.001f)
+                {
+                    normal =
+                        Mul(
+                            normal,
+                            1.0f / normalLength);
+                    surface.exteriorOnly = true;
+                    surface.outwardNormal = normal;
+                }
+
+                const FirstPersonVec3 faceCenter{
+                    0.25f * (
+                        face[0].x + face[1].x
+                        + face[2].x + face[3].x),
+                    0.25f * (
+                        face[0].y + face[1].y
+                        + face[2].y + face[3].y),
+                    0.25f * (
+                        face[0].z + face[1].z
+                        + face[2].z + face[3].z),
+                };
+                surface.gpuRegion =
+                    FirstPersonGpuRegionKey(
+                        int32_t(std::floor(
+                            faceCenter.x
+                            / float(kCoordsXYStep))),
+                        int32_t(std::floor(
+                            faceCenter.y
+                            / float(kCoordsXYStep))));
+
+                const int32_t width =
+                    std::clamp(
+                        int32_t(std::ceil(std::max(
+                            edgeLength(
+                                face[0], face[1]),
+                            edgeLength(
+                                face[3], face[2])))),
+                        1, 256);
+                const int32_t height =
+                    std::clamp(
+                        int32_t(std::ceil(std::max(
+                            edgeLength(
+                                face[0], face[3]),
+                            edgeLength(
+                                face[1], face[2])))),
+                        1, 256);
+                std::vector<uint8_t> pixels(
+                    size_t(width) * size_t(height));
+                uint64_t fingerprint =
+                    14695981039346656037ull;
+                ExtendStableKey(fingerprint, width);
+                ExtendStableKey(fingerprint, height);
+                for (int32_t y = 0; y < height; ++y)
+                for (int32_t x = 0; x < width; ++x)
+                {
+                    const uint8_t pixel =
+                        FirstPersonMissingMaterialPixel(
+                            x, y);
+                    pixels[
+                        size_t(y) * size_t(width)
+                        + size_t(x)] = pixel;
+                    fingerprint ^= pixel;
+                    fingerprint *= 1099511628211ull;
+                }
+
+                surface.persistentPixels =
+                    std::make_shared<
+                        std::vector<uint8_t>>(
+                            std::move(pixels));
+                surface.immutableWidth =
+                    int16_t(width);
+                surface.immutableHeight =
+                    int16_t(height);
+                surface.persistentBitmap = true;
+                surface.immutableFingerprint =
+                    fingerprint;
+
+                EmitQuad(
+                    surface,
+                    { {
+                        { face[0], 0.0f, 0.0f },
+                        { face[1], float(width), 0.0f },
+                        { face[2], float(width),
+                          float(height) },
+                        { face[3], 0.0f,
+                          float(height) },
+                    } });
+                result.surfaces.emplace_back(
+                    std::move(surface));
+            }
+
             const FirstPersonVec3 center{
-                0.5f * (boundsLow.x + boundsHigh.x),
-                0.5f * (boundsLow.y + boundsHigh.y),
-                0.5f * (boundsLow.z + boundsHigh.z),
+                0.5f * (low.x + high.x),
+                0.5f * (low.y + high.y),
+                0.5f * (low.z + high.z),
             };
             const float hx =
-                0.5f * (boundsHigh.x - boundsLow.x);
+                0.5f * (high.x - low.x);
             const float hy =
-                0.5f * (boundsHigh.y - boundsLow.y);
+                0.5f * (high.y - low.y);
             const float hz =
-                0.5f * (boundsHigh.z - boundsLow.z);
+                0.5f * (high.z - low.z);
             const float radius =
                 std::sqrt(
                     hx * hx + hy * hy + hz * hz)
