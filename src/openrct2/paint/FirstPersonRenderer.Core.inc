@@ -4483,7 +4483,10 @@
                             &views[sourceRotation];
                 }
                 if (canonical == nullptr)
-                    return ParkEntranceGeometryCacheEntry{};
+                {
+                    result.surfaces.clear();
+                    return result;
+                }
 
                 const CoordsXY tile =
                     canonical->mapPosition;
@@ -4496,7 +4499,10 @@
                         group.key,
                         observations, nullptr, sprites);
                 if (surfaces.empty())
-                    return ParkEntranceGeometryCacheEntry{};
+                {
+                    result.surfaces.clear();
+                    return result;
+                }
                 appendSurfaces(
                     std::move(surfaces), normal);
                 sequenceBuilt[
@@ -4537,7 +4543,10 @@
                         group.key,
                         observations, nullptr, sprites);
                 if (surfaces.empty())
-                    return ParkEntranceGeometryCacheEntry{};
+                {
+                    result.surfaces.clear();
+                    return result;
+                }
                 appendSurfaces(std::move(surfaces));
                 sequenceBuilt[
                     static_cast<size_t>(sequence)] = true;
