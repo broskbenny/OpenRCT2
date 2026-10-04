@@ -4133,6 +4133,99 @@
             return result;
         }
 
+        ParkEntranceGeometryCacheEntry
+            BuildParkEntranceInstanceGeometry(
+                ImageIndex realImageBase,
+                ImageIndex syntheticEntryImage,
+                uint8_t direction,
+                int32_t clearanceHeight,
+                const ReconstructionGroupInfo& group,
+                uint64_t signature, uint64_t frame,
+                const FirstPersonSpriteSnapshot& sprites,
+                uint64_t assetGeneration)
+        {
+            ParkEntranceGeometryCacheEntry result{};
+            result.signature = signature;
+            result.lastSeen = frame;
+            if (clearanceHeight <= 0)
+                return result;
+
+            const CoordsXY leftOffset =
+                CoordsDirectionDelta[3];
+            const CoordsXY rightOffset{
+                -leftOffset.x, -leftOffset.y
+            };
+            std::array<LargeSceneryTile, 3> tiles{ {
+                {
+                    { 0, 0, 0 },
+                    clearanceHeight,
+                    false, false, 0x0F, 0, 0
+                },
+                {
+                    { leftOffset.x, leftOffset.y, 0 },
+                    clearanceHeight,
+                    false, false, 0x0F, 0, 1
+                },
+                {
+                    { rightOffset.x, rightOffset.y, 0 },
+                    clearanceHeight,
+                    false, false, 0x0F, 0, 2
+                },
+            } };
+
+            LargeSceneryEntry syntheticEntry{};
+            syntheticEntry.image = syntheticEntryImage;
+            syntheticEntry.tiles = tiles;
+            syntheticEntry.text = nullptr;
+
+            LargeSceneryElement syntheticElement{};
+            syntheticElement.setDirection(direction & 3u);
+
+            const auto model =
+                BuildLargeSceneryAssetModel(
+                    syntheticEntry);
+            if (!model.usable)
+                return result;
+
+            auto built =
+                BuildLargeSceneryInstanceGeometry(
+                    syntheticElement, syntheticEntry,
+                    model, group, signature, frame,
+                    sprites, assetGeneration);
+
+            // The three entrance tiles are only a conservative candidate
+            // envelope. A full occupancy-shell fallback would close the
+            // walk-through gate, so entrance replacement is allowed only
+            // after all four composite native views produced a real carved
+            // visual hull.
+            if (!built.visualHullRefined
+                || built.surfaces.empty())
+                return result;
+
+            result.hasBounds = built.hasBounds;
+            result.minTileX = built.minTileX;
+            result.minTileY = built.minTileY;
+            result.maxTileX = built.maxTileX;
+            result.maxTileY = built.maxTileY;
+            result.surfaces =
+                std::move(built.surfaces);
+            for (auto& surface : result.surfaces)
+            {
+                // The baked bitmap is self-contained. Keep a real entrance
+                // image only as stable palette/material metadata; synthetic
+                // image ids exist solely inside the reconstruction snapshot.
+                surface.image =
+                    ImageId(realImageBase);
+                surface.reconstructionGroup =
+                    group.key;
+                surface.diagnosticReconstructionKind = 3;
+                surface.diagnosticReconstructionAnchor =
+                    group.anchor;
+                surface.cameraIndependent = true;
+            }
+            return result;
+        }
+
         struct LargeSceneryJob
         {
             LargeSceneryEntry entry{};
