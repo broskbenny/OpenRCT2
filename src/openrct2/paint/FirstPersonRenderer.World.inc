@@ -3389,8 +3389,23 @@
                         if (IsReconstructedParkEntranceBody(
                                 surface, frame))
                             continue;
-                        if (surface.gpuRegion == regionKey)
+                        if (surface.gpuRegion != regionKey)
+                            continue;
+
+                        if (surface.diagnosticSemanticRole
+                                == static_cast<uint8_t>(
+                                    FirstPersonPaintSemanticRole::sign)
+                            && surface.reconstructionGroup != 0)
+                        {
+                            auto presented = surface;
+                            AlignParkEntranceSignToGroupedBody(
+                                presented, frame);
+                            addSurface(presented);
+                        }
+                        else
+                        {
                             addSurface(surface);
+                        }
                     }
                 }
 
