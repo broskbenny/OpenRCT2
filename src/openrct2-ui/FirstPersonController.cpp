@@ -233,111 +233,63 @@ namespace OpenRCT2::Ui::FirstPerson
             _state.ownsRelativeMouseMode = false;
         }
 
-        [[nodiscard]] bool SameWalkingPath(
-            const WalkingSupportIdentity& a, const WalkingSupportIdentity& b)
+        [[nodiscard]] bool PointOnPathDeck(
+            const PathElement& path,
+            const CoordsXY& position)
         {
-            return a.path && b.path
-                && a.tile.x == b.tile.x && a.tile.y == b.tile.y
-                && a.baseZ == b.baseZ && a.surface == b.surface && a.railings == b.railings;
+            const auto constraint =
+                Paint::FirstPersonWalkabilityFromPath(
+                    position.toTileStart(), path);
+            return Paint::
+                FirstPersonWalkabilityContainsPoint(
+                    constraint, position);
         }
 
-        [[nodiscard]] bool PointOnPathDeck(const PathElement& path, const CoordsXY& position)
+        [[nodiscard]] WalkingFloorSample
+            WalkingConstraintSampleAt(
+                const Paint::FirstPersonWalkabilityConstraint&
+                    constraint,
+                const CoordsXY& position)
         {
-            const auto tile = position.toTileStart();
-            const int32_t x = position.x - tile.x;
-            const int32_t y = position.y - tile.y;
-            const auto in = [](int32_t value, int32_t low, int32_t high) {
-                return value >= low && value <= high;
-            };
-
-            // Central deck plus native edge arms and corner fills. This avoids
-            // treating the entire tile as floor for a narrow raised path.
-            if (in(x, 8, 24) && in(y, 8, 24))
-                return true;
-
-            const uint8_t edges = path.getEdges();
-            if ((edges & (1u << 0)) != 0 && x <= 16 && in(y, 8, 24))
-                return true; // -X
-            if ((edges & (1u << 1)) != 0 && y >= 16 && in(x, 8, 24))
-                return true; // +Y
-            if ((edges & (1u << 2)) != 0 && x >= 16 && in(y, 8, 24))
-                return true; // +X
-            if ((edges & (1u << 3)) != 0 && y <= 16 && in(x, 8, 24))
-                return true; // -Y
-
-            const uint8_t corners = path.getCorners();
-            if ((corners & (1u << 0)) != 0 && x <= 16 && y >= 16)
-                return true;
-            if ((corners & (1u << 1)) != 0 && x >= 16 && y >= 16)
-                return true;
-            if ((corners & (1u << 2)) != 0 && x >= 16 && y <= 16)
-                return true;
-            if ((corners & (1u << 3)) != 0 && x <= 16 && y <= 16)
-                return true;
-            return false;
-        }
-
-        [[nodiscard]] WalkingFloorSample WalkingPathSampleAt(
-            const PathElement& path, const CoordsXY& position)
-        {
-            auto pathZ = static_cast<float>(path.getBaseZ());
-            if (path.isSloped())
-            {
-                const auto slopeCorners = GetSlopeCornerHeights(
-                    path.getBaseZ(),
-                    kPathSlopeToLandSlope[path.getSlopeDirection()]);
-                pathZ = Paint::FirstPersonPathHeight(
-                    float(slopeCorners.south), float(slopeCorners.east),
-                    float(slopeCorners.north), float(slopeCorners.west),
-                    float(position.x & (kCoordsXYStep - 1)),
-                    float(position.y & (kCoordsXYStep - 1)));
-            }
-
             WalkingFloorSample sample{};
-            sample.z = pathZ;
-            sample.support.path = true;
-            sample.support.tile = position.toTileStart();
-            sample.support.baseZ = path.getBaseZ();
-            sample.support.surface = path.getSurfaceEntryIndex();
-            sample.support.railings = path.getRailingsEntryIndex();
-            sample.edges = path.getEdges();
-            sample.corners = path.getCorners();
+            sample.z =
+                Paint::FirstPersonWalkabilityHeightAt(
+                    constraint, position);
+            sample.hasWalkability =
+                constraint.walkableFloor;
+            sample.walkability = constraint;
             return sample;
         }
 
-        [[nodiscard]] bool WalkingPathsConnected(
-            const WalkingFloorSample& from, const WalkingFloorSample& to)
+        [[nodiscard]] WalkingFloorSample WalkingPathSampleAt(
+            const PathElement& path,
+            const CoordsXY& position)
         {
-            if (!from.IsPath() || !to.IsPath())
-                return false;
-            if (SameWalkingPath(from.support, to.support))
-                return true;
+            return WalkingConstraintSampleAt(
+                Paint::FirstPersonWalkabilityFromPath(
+                    position.toTileStart(), path),
+                position);
+        }
 
-            const int32_t dx = to.support.tile.x - from.support.tile.x;
-            const int32_t dy = to.support.tile.y - from.support.tile.y;
-            uint8_t direction = 0xFF;
-            if (dx == -kCoordsXYStep && dy == 0)
-                direction = 0;
-            else if (dx == 0 && dy == kCoordsXYStep)
-                direction = 1;
-            else if (dx == kCoordsXYStep && dy == 0)
-                direction = 2;
-            else if (dx == 0 && dy == -kCoordsXYStep)
-                direction = 3;
-            if (direction == 0xFF)
-                return false;
-
-            const uint8_t reverse = (direction + 2) & 3;
-            return (from.edges & (1u << direction)) != 0
-                && (to.edges & (1u << reverse)) != 0;
+        [[nodiscard]] bool WalkingSupportsConnected(
+            const WalkingFloorSample& from,
+            const WalkingFloorSample& to)
+        {
+            return from.IsWalkableSupport()
+                && to.IsWalkableSupport()
+                && Paint::
+                    FirstPersonWalkabilitySupportsConnect(
+                        from.walkability,
+                        to.walkability);
         }
 
         [[nodiscard]] WalkingFloorSample WalkingTerrainSampleAt(
             const CoordsXY& position)
         {
             WalkingFloorSample terrain{};
-            terrain.z = static_cast<float>(TileElementHeight(position));
-            terrain.support.tile = position.toTileStart();
+            terrain.z =
+                static_cast<float>(
+                    TileElementHeight(position));
             return terrain;
         }
 
@@ -349,28 +301,29 @@ namespace OpenRCT2::Ui::FirstPerson
             if (!MapIsLocationValid(position))
                 return std::nullopt;
 
-            if (previous.IsPath())
+            if (previous.IsWalkableSupport())
             {
-                for (auto* path :
-                    TileElementsView<PathElement>(position))
+                for (const auto& constraint :
+                     Paint::
+                        CollectFirstPersonWalkabilityConstraints(
+                            position.toTileStart()))
                 {
-                    if (path == nullptr || path->isGhost()
-                        || path->isInvisible()
-                        || !PointOnPathDeck(*path, position))
+                    if (!constraint.walkableFloor
+                        || !Paint::
+                            FirstPersonWalkabilityContainsPoint(
+                                constraint, position)
+                        || !Paint::
+                            SameFirstPersonWalkabilitySupport(
+                                previous.walkability,
+                                constraint))
                         continue;
-                    const auto candidate =
-                        WalkingPathSampleAt(*path, position);
-                    if (SameWalkingPath(
-                            previous.support,
-                            candidate.support))
-                    {
-                        return candidate;
-                    }
+                    return WalkingConstraintSampleAt(
+                        constraint, position);
                 }
 
                 // The support itself was removed or replaced by a map edit.
                 // Recover explicitly to terrain at the current XY instead of
-                // silently acquiring some unrelated nearby raised path.
+                // silently acquiring another nearby raised support.
                 return WalkingTerrainSampleAt(position);
             }
 
@@ -381,39 +334,54 @@ namespace OpenRCT2::Ui::FirstPerson
         }
 
         WalkingFloorSample ResolveWalkingFloorSample(
-            const CoordsXY& position, const WalkingFloorSample& previous)
+            const CoordsXY& position,
+            const WalkingFloorSample& previous)
         {
-            const auto terrain = WalkingTerrainSampleAt(position);
+            const auto terrain =
+                WalkingTerrainSampleAt(position);
 
-            float bestDelta = std::numeric_limits<float>::max();
-            std::optional<WalkingFloorSample> bestPath;
+            float bestDelta =
+                std::numeric_limits<float>::max();
+            std::optional<WalkingFloorSample>
+                bestWalkable;
 
-            for (auto* path : TileElementsView<PathElement>(position))
+            for (const auto& constraint :
+                 Paint::
+                    CollectFirstPersonWalkabilityConstraints(
+                        position.toTileStart()))
             {
-                if (path == nullptr || path->isGhost() || path->isInvisible())
-                    continue;
-                if (!PointOnPathDeck(*path, position))
+                if (!constraint.walkableFloor
+                    || !Paint::
+                        FirstPersonWalkabilityContainsPoint(
+                            constraint, position))
                     continue;
 
                 const auto candidate =
-                    WalkingPathSampleAt(*path, position);
-                const auto pathZ = candidate.z;
-
-                if (previous.IsPath()
-                    && !SameWalkingPath(previous.support, candidate.support)
-                    && !WalkingPathsConnected(previous, candidate))
+                    WalkingConstraintSampleAt(
+                        constraint, position);
+                if (previous.IsWalkableSupport()
+                    && !Paint::
+                        SameFirstPersonWalkabilitySupport(
+                            previous.walkability,
+                            candidate.walkability)
+                    && !WalkingSupportsConnected(
+                        previous, candidate))
                     continue;
 
-                const auto delta = std::abs(pathZ - previous.z);
+                const auto delta =
+                    std::abs(
+                        candidate.z - previous.z);
                 if (delta < bestDelta)
                 {
                     bestDelta = delta;
-                    bestPath = candidate;
+                    bestWalkable = candidate;
                 }
             }
 
-            if (bestPath.has_value() && bestDelta <= 2.0f * kCoordsZStep)
-                return *bestPath;
+            if (bestWalkable.has_value()
+                && bestDelta
+                    <= 2.0f * kCoordsZStep)
+                return *bestWalkable;
             return terrain;
         }
 
