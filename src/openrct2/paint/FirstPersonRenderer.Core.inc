@@ -4510,20 +4510,14 @@
                         ParkEntranceSequence::centre,
                         0);
 
-                uint64_t syntheticKey =
-                    14695981039346656037ull;
-                ExtendStableKey(
-                    syntheticKey,
-                    slot->realImageBase);
-                ExtendStableKey(
-                    syntheticKey,
-                    uint32_t(slot->clearanceHeight));
-                // Leave enough low bits for the 12 sequence/direction
-                // aliases consumed by the large-scenery hull baker.
+                // The reconstruction snapshot is private to this job, so
+                // reuse the entrance asset's own base as the synthetic
+                // large-scenery namespace. The baker expects body images at
+                // entry.image + 4 + sequence*4 + direction; capture() below
+                // aliases the real direction-major entrance sprites into
+                // exactly those local keys without touching the global atlas.
                 slot->syntheticBodyFirst =
-                    0x80000000u
-                    | (uint32_t(syntheticKey)
-                        & 0x3FFFFF00u);
+                    slot->realImageBase + 4;
 
                 uint64_t signature =
                     14695981039346656037ull;
