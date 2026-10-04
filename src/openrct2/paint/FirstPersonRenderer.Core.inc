@@ -5109,13 +5109,6 @@
                 || surface.immutableHeight <= 0)
                 return false;
 
-            const uint8_t materialRotation =
-                surface.diagnosticMaterialRotation < 4
-                ? surface.diagnosticMaterialRotation
-                : surface.diagnosticSourceRotation;
-            if (materialRotation >= 4)
-                return false;
-
             const std::array<FirstPersonVec3, 4>
                 sourceFace{ {
                     surface.triangles[0].world,
@@ -5140,106 +5133,6 @@
                     signNormal,
                     1.0f / signNormalLength);
 
-            const auto project =
-                [&](FirstPersonVec3 world) {
-                    const auto p =
-                        Translate3DTo2DWithZ(
-                            materialRotation,
-                            {
-                                int32_t(std::lround(
-                                    world.x)),
-                                int32_t(std::lround(
-                                    world.y)),
-                                int32_t(std::lround(
-                                    world.z)),
-                            });
-                    return std::array<float, 2>{
-                        float(p.x), float(p.y)
-                    };
-                };
-            std::array<std::array<float, 2>, 4>
-                sourceScreen{};
-            for (size_t i = 0;
-                 i < sourceScreen.size(); ++i)
-            {
-                sourceScreen[i] =
-                    project(sourceFace[i]);
-            }
-
-            const auto facePointFromScreen =
-                [&](const std::array<
-                        FirstPersonVec3, 4>& face,
-                    const std::array<float, 2>& screen)
-                    -> std::optional<FirstPersonVec3> {
-                    const auto p0 = project(face[0]);
-                    const auto p1 = project(face[1]);
-                    const auto p3 = project(face[3]);
-                    const float ux =
-                        p1[0] - p0[0];
-                    const float uy =
-                        p1[1] - p0[1];
-                    const float vx =
-                        p3[0] - p0[0];
-                    const float vy =
-                        p3[1] - p0[1];
-                    const float determinant =
-                        ux * vy - uy * vx;
-                    if (std::abs(determinant) < 0.5f)
-                        return std::nullopt;
-
-                    const float rx =
-                        screen[0] - p0[0];
-                    const float ry =
-                        screen[1] - p0[1];
-                    const float s =
-                        (rx * vy - ry * vx)
-                        / determinant;
-                    const float t =
-                        (ux * ry - uy * rx)
-                        / determinant;
-                    const auto lerp =
-                        [](FirstPersonVec3 a,
-                           FirstPersonVec3 b,
-                           float alpha) {
-                            return FirstPersonVec3{
-                                a.x + (b.x - a.x)
-                                    * alpha,
-                                a.y + (b.y - a.y)
-                                    * alpha,
-                                a.z + (b.z - a.z)
-                                    * alpha,
-                            };
-                        };
-                    return lerp(
-                        lerp(face[0], face[1], s),
-                        lerp(face[3], face[2], s),
-                        t);
-                };
-
-            const auto outside =
-                [](float value) {
-                    if (value < 0.0f)
-                        return -value;
-                    if (value > 1.0f)
-                        return value - 1.0f;
-                    return 0.0f;
-                };
-            const auto edgeLength =
-                [](FirstPersonVec3 a,
-                   FirstPersonVec3 b) {
-                    const float dx = b.x - a.x;
-                    const float dy = b.y - a.y;
-                    const float dz = b.z - a.z;
-                    return std::sqrt(
-                        dx * dx + dy * dy
-                        + dz * dz);
-                };
-
-            const FirstPersonSurface* best = nullptr;
-            FirstPersonVec3 bestNormal{};
-            float bestScore =
-                std::numeric_limits<float>::max();
-
             const FirstPersonVec3 sourceCenter{
                 0.25f * (
                     sourceFace[0].x
@@ -5258,14 +5151,20 @@
                     + sourceFace[3].z),
             };
 
+            const FirstPersonSurface* best = nullptr;
+            FirstPersonVec3 bestNormal{};
+            float bestPlaneDelta = 0.0f;
+            float bestDistance =
+                std::numeric_limits<float>::max();
+
             for (const auto& candidate :
                  geometry->second.surfaces)
             {
                 if (!candidate.exteriorOnly)
                     continue;
-                // The scrolling sign belongs to the centre entrance sequence.
-                // Never let proximity choose a side-tower surface from the
-                // same three-piece reconstruction group.
+                // Scrolling text is part of the centre entrance sequence.
+                // Side structures in the same grouped replacement are never
+                // eligible carriers.
                 if (candidate.diagnosticSourceTile.x
                         != surface.diagnosticSourceTile.x
                     || candidate.diagnosticSourceTile.y
@@ -5283,133 +5182,56 @@
                     Mul(
                         normal,
                         1.0f / normalLength);
-                const float normalAlignment =
-                    std::abs(
-                        FpDot(normal, signNormal));
+
+                // The native sign plane already establishes which physical
+                // side of the entrance owns the text. Preserve that sidedness
+                // rather than choosing a merely parallel opposite face.
                 if (std::abs(normal.z) > 0.25f
-                    || normalAlignment < 0.90f)
+                    || FpDot(normal, signNormal) < 0.90f)
                     continue;
-
-                const CoordsXY normalXY{
-                    int32_t(std::lround(normal.x)),
-                    int32_t(std::lround(normal.y)),
-                };
-                if (!FirstPersonFaceVisibleFromNativeView(
-                        normalXY,
-                        materialRotation))
-                    continue;
-
-                const std::array<
-                    FirstPersonVec3, 4>
-                    candidateFace{ {
-                        candidate.triangles[0].world,
-                        candidate.triangles[1].world,
-                        candidate.triangles[2].world,
-                        candidate.triangles[5].world,
-                    } };
-                const auto p0 =
-                    project(candidateFace[0]);
-                const auto p1 =
-                    project(candidateFace[1]);
-                const auto p3 =
-                    project(candidateFace[3]);
-                const float ux =
-                    p1[0] - p0[0];
-                const float uy =
-                    p1[1] - p0[1];
-                const float vx =
-                    p3[0] - p0[0];
-                const float vy =
-                    p3[1] - p0[1];
-                const float determinant =
-                    ux * vy - uy * vx;
-                if (std::abs(determinant) < 0.5f)
-                    continue;
-
-                const float width =
-                    std::max(
-                        1.0f,
-                        edgeLength(
-                            candidateFace[0],
-                            candidateFace[1]));
-                const float height =
-                    std::max(
-                        1.0f,
-                        edgeLength(
-                            candidateFace[0],
-                            candidateFace[3]));
-                float outsideDistance = 0.0f;
-                for (const auto& screen :
-                     sourceScreen)
-                {
-                    const float rx =
-                        screen[0] - p0[0];
-                    const float ry =
-                        screen[1] - p0[1];
-                    const float s =
-                        (rx * vy - ry * vx)
-                        / determinant;
-                    const float t =
-                        (ux * ry - uy * rx)
-                        / determinant;
-                    outsideDistance =
-                        std::max(
-                            outsideDistance,
-                            std::hypot(
-                                outside(s) * width,
-                                outside(t) * height));
-                }
 
                 const float plane =
                     FpDot(
                         normal,
-                        candidateFace[0]);
-                const float planeDistance =
-                    std::abs(
-                        plane
-                        - FpDot(
-                            normal,
-                            sourceCenter));
-                const float score =
-                    outsideDistance * 8.0f
-                    + planeDistance
-                    + (1.0f - normalAlignment)
-                        * 16.0f;
-                if (score >= bestScore)
+                        candidate.triangles[0].world);
+                const float planeDelta =
+                    plane
+                    - FpDot(
+                        normal,
+                        sourceCenter);
+                const float distance =
+                    std::abs(planeDelta);
+                if (distance >= bestDistance)
                     continue;
 
                 best = &candidate;
                 bestNormal = normal;
-                bestScore = score;
+                bestPlaneDelta = planeDelta;
+                bestDistance = distance;
             }
 
             if (best == nullptr)
                 return false;
 
-            const std::array<FirstPersonVec3, 4>
-                targetFace{ {
-                    best->triangles[0].world,
-                    best->triangles[1].world,
-                    best->triangles[2].world,
-                    best->triangles[5].world,
-                } };
-            std::array<FirstPersonVec3, 4>
-                mapped{};
-            for (size_t i = 0;
-                 i < mapped.size(); ++i)
+            // The semantic sign surface has already inverse-projected the
+            // exact scrolling-text raster rectangle onto the authoritative
+            // centre gate plane. That gives us the correct entrance-local
+            // horizontal and vertical placement. Moving that rectangle to a
+            // different depth and then preserving its old isometric screen
+            // coordinates would necessarily alter X/Z and make the text slide
+            // relative to the architecture. Keep its physical placement and
+            // translate only along the owning face normal.
+            std::array<FirstPersonVec3, 4> mapped{};
+            for (size_t i = 0; i < mapped.size(); ++i)
             {
-                const auto point =
-                    facePointFromScreen(
-                        targetFace,
-                        sourceScreen[i]);
-                if (!point.has_value())
-                    return false;
-                mapped[i] = *point;
+                mapped[i] =
+                    Add(
+                        sourceFace[i],
+                        Mul(
+                            bestNormal,
+                            bestPlaneDelta));
             }
 
-            // Reproject the exact native scrolling-text rectangle onto the
-            // grouped entrance boundary. The source pixels and UVs stay
-            // unchanged; only their authoritative world-space carrier changes.
             surface.triangles[0].world = mapped[0];
             surface.triangles[1].world = mapped[1];
             surface.triangles[2].world = mapped[2];
