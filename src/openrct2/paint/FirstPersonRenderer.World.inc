@@ -2926,30 +2926,31 @@
                 // isometric composition margin; after sampling, only that
                 // margin is extended when the authoritative navigation model
                 // requires edge-to-edge deck continuity.
-                const bool edgeContinuousPathDeck =
+                const uint8_t visualDeckEdgeMask =
                     component.role
-                        == FirstPersonPaintSemanticRole::pathDeck
-                    && component.visualDeckShouldReachTileEdges
-                    && component.geometry.kind
-                        == FirstPersonPaintSemanticPrimitiveKind::
-                            footprint
-                    && component.geometry.pointCount >= 4
-                    && std::abs(
-                        FirstPersonSemanticEdgeLength(
-                            face[0], face[1])
-                        - float(kCoordsXYStep))
-                        <= 0.5f
-                    && std::abs(
-                        FirstPersonSemanticEdgeLength(
-                            face[0], face[3])
-                        - float(kCoordsXYStep))
-                        <= 0.5f
-                    && std::abs(face[0].z - face[1].z)
-                        <= 0.01f
-                    && std::abs(face[0].z - face[2].z)
-                        <= 0.01f
-                    && std::abs(face[0].z - face[3].z)
-                        <= 0.01f;
+                            == FirstPersonPaintSemanticRole::pathDeck
+                        && component.geometry.kind
+                            == FirstPersonPaintSemanticPrimitiveKind::
+                                footprint
+                        && component.geometry.pointCount >= 4
+                        && std::abs(
+                            FirstPersonSemanticEdgeLength(
+                                face[0], face[1])
+                            - float(kCoordsXYStep))
+                            <= 0.5f
+                        && std::abs(
+                            FirstPersonSemanticEdgeLength(
+                                face[0], face[3])
+                            - float(kCoordsXYStep))
+                            <= 0.5f
+                        && std::abs(face[0].z - face[1].z)
+                            <= 0.01f
+                        && std::abs(face[0].z - face[2].z)
+                            <= 0.01f
+                        && std::abs(face[0].z - face[3].z)
+                            <= 0.01f
+                    ? component.visualDeckEdgeMask & 0x0Fu
+                    : 0u;
 
                 bool haveKnownMaterial = false;
                 bool haveUnknownMaterial = false;
@@ -3040,7 +3041,7 @@
                         selectedPixel;
                 }
 
-                if (edgeContinuousPathDeck
+                if (visualDeckEdgeMask != 0
                     && width > 6 && height > 6)
                 {
                     constexpr int32_t kNativePathMargin = 3;
@@ -3053,10 +3054,39 @@
                     for (int32_t y = 0; y < height; ++y)
                     for (int32_t x = 0; x < width; ++x)
                     {
-                        if (x >= kNativePathMargin
-                            && x < width - kNativePathMargin
-                            && y >= kNativePathMargin
-                            && y < height - kNativePathMargin)
+                        bool inMargin = false;
+                        bool edgeAllowed = true;
+                        if (x < kNativePathMargin)
+                        {
+                            inMargin = true;
+                            edgeAllowed &=
+                                (visualDeckEdgeMask
+                                    & (1u << 0)) != 0;
+                        }
+                        else if (x
+                            >= width - kNativePathMargin)
+                        {
+                            inMargin = true;
+                            edgeAllowed &=
+                                (visualDeckEdgeMask
+                                    & (1u << 2)) != 0;
+                        }
+                        if (y < kNativePathMargin)
+                        {
+                            inMargin = true;
+                            edgeAllowed &=
+                                (visualDeckEdgeMask
+                                    & (1u << 3)) != 0;
+                        }
+                        else if (y
+                            >= height - kNativePathMargin)
+                        {
+                            inMargin = true;
+                            edgeAllowed &=
+                                (visualDeckEdgeMask
+                                    & (1u << 1)) != 0;
+                        }
+                        if (!inMargin || !edgeAllowed)
                             continue;
 
                         auto& pixel =
