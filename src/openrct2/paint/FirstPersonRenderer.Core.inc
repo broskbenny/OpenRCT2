@@ -4413,6 +4413,384 @@
             // invalidation source.
         }
 
+        struct ParkEntranceJob
+        {
+            ReconstructionGroupInfo group{};
+            ObjectEntryIndex entryIndex{};
+            ImageIndex realImageBase = kImageIndexUndefined;
+            ImageIndex syntheticBodyFirst = kImageIndexUndefined;
+            uint8_t direction = 0;
+            int32_t clearanceHeight = 0;
+            uint64_t signature = 0;
+            std::array<
+                std::pair<CoordsXY, uint64_t>, 3>
+                tileSignatures{};
+            FirstPersonSpriteSnapshot sprites;
+            size_t nextImage = 0;
+            bool submitted = false;
+        };
+        static std::unordered_map<
+            uint64_t, std::shared_ptr<ParkEntranceJob>>
+            _parkEntranceJobs;
+
+        void QueueParkEntranceGeometry(
+            const EntranceElement& centre,
+            const EntranceObject& object,
+            const ReconstructionGroupInfo& group,
+            uint64_t frame)
+        {
+            if (!_snapshotBudget.available()
+                || !_reconstructionWorker.hasCapacity())
+                return;
+            if (!_parkEntranceJobs.contains(group.key)
+                && _parkEntranceJobs.size() >= 8)
+                return;
+
+            auto& slot =
+                _parkEntranceJobs[group.key];
+            if (!slot)
+            {
+                slot =
+                    std::make_shared<ParkEntranceJob>();
+                slot->group = group;
+                slot->entryIndex =
+                    centre.getEntryIndex();
+                slot->direction =
+                    static_cast<uint8_t>(
+                        centre.getDirection()) & 3u;
+                slot->clearanceHeight =
+                    centre.getClearanceZ()
+                    - centre.getBaseZ();
+                slot->realImageBase =
+                    object.GetImage(
+                        ParkEntranceSequence::centre,
+                        0);
+
+                uint64_t syntheticKey =
+                    14695981039346656037ull;
+                ExtendStableKey(
+                    syntheticKey,
+                    slot->realImageBase);
+                ExtendStableKey(
+                    syntheticKey,
+                    uint32_t(slot->clearanceHeight));
+                // Leave enough low bits for the 12 sequence/direction
+                // aliases consumed by the large-scenery hull baker.
+                slot->syntheticBodyFirst =
+                    0x80000000u
+                    | (uint32_t(syntheticKey)
+                        & 0x3FFFFF00u);
+
+                uint64_t signature =
+                    14695981039346656037ull;
+                ExtendStableKey(
+                    signature, group.key);
+                ExtendStableKey(
+                    signature,
+                    slot->realImageBase);
+                ExtendStableKey(
+                    signature,
+                    uint32_t(slot->clearanceHeight));
+
+                size_t index = 0;
+                for (const auto sequence : {
+                         ParkEntranceSequence::centre,
+                         ParkEntranceSequence::left,
+                         ParkEntranceSequence::right })
+                {
+                    const auto tile =
+                        ParkEntranceSequenceTile(
+                            group, slot->direction,
+                            sequence);
+                    const uint64_t tileSignature =
+                        NativeTileSignature(tile);
+                    slot->tileSignatures[index++] = {
+                        tile, tileSignature
+                    };
+                    ExtendStableKey(
+                        signature, tileSignature);
+                }
+                slot->signature = signature;
+            }
+
+            const auto job = slot;
+            if (job->submitted)
+                return;
+
+            while (job->nextImage < 12)
+            {
+                const size_t sequence =
+                    job->nextImage / 4;
+                const uint8_t nativeDirection =
+                    uint8_t(job->nextImage & 3u);
+                const auto parkSequence =
+                    static_cast<ParkEntranceSequence>(
+                        sequence);
+                const ImageIndex realImage =
+                    object.GetImage(
+                        parkSequence,
+                        nativeDirection);
+                const ImageIndex syntheticImage =
+                    job->syntheticBodyFirst
+                    + ImageIndex(sequence * 4)
+                    + nativeDirection;
+                if (!job->sprites.capture(
+                        syntheticImage,
+                        GfxGetG1Element(realImage),
+                        _snapshotBudget))
+                    return;
+                ++job->nextImage;
+            }
+
+            if (!ParkEntranceInstanceComplete(
+                    group, job->direction,
+                    job->entryIndex))
+            {
+                _parkEntranceJobs.erase(group.key);
+                return;
+            }
+
+            const auto epoch =
+                _reconstructionWorker.epoch();
+            job->submitted =
+                _reconstructionWorker.submit(
+                    [job, frame, epoch]() {
+                        auto result =
+                            BuildParkEntranceInstanceGeometry(
+                                job->realImageBase,
+                                job->syntheticBodyFirst - 4,
+                                job->direction,
+                                job->clearanceHeight,
+                                job->group,
+                                job->signature,
+                                frame,
+                                job->sprites,
+                                epoch);
+                        return [
+                            job,
+                            result =
+                                std::move(result)
+                        ]() mutable {
+                            const auto pending =
+                                _parkEntranceJobs.find(
+                                    job->group.key);
+                            if (pending
+                                    == _parkEntranceJobs.end()
+                                || pending->second != job)
+                                return;
+
+                            for (const auto& [
+                                     tile, signature] :
+                                 job->tileSignatures)
+                            {
+                                if (NativeTileSignature(tile)
+                                    != signature)
+                                {
+                                    _parkEntranceJobs.erase(
+                                        pending);
+                                    return;
+                                }
+                            }
+
+                            auto existing =
+                                _parkEntranceGeometryCache.find(
+                                    job->group.key);
+                            if (existing
+                                != _parkEntranceGeometryCache.end())
+                            {
+                                MarkParkEntranceGeometryRegionsDirty(
+                                    existing->second);
+                                UnregisterParkEntranceRegionMembership(
+                                    job->group.key,
+                                    existing->second);
+                            }
+
+                            MarkParkEntranceGeometryRegionsDirty(
+                                result);
+                            RegisterParkEntranceRegionMembership(
+                                job->group.key, result);
+                            _parkEntranceGeometryCache[
+                                job->group.key] =
+                                std::move(result);
+                            _parkEntranceJobs.erase(pending);
+                        };
+                    },
+                    [job] {
+                        const auto found =
+                            _parkEntranceJobs.find(
+                                job->group.key);
+                        if (found
+                                != _parkEntranceJobs.end()
+                            && found->second == job)
+                        {
+                            _parkEntranceJobs.erase(found);
+                        }
+                    });
+        }
+
+        void UpdateParkEntranceReconstructions(
+            FirstPersonScene& scene, uint64_t frame)
+        {
+            const bool enabled =
+                ParkEntranceGeometryAllowedForView(
+                    scene.options.viewFlags);
+            if (_parkEntranceGeometryEnabled != enabled)
+            {
+                for (const auto& [groupKey, cached] :
+                     _parkEntranceGeometryCache)
+                {
+                    (void)groupKey;
+                    MarkParkEntranceGeometryRegionsDirty(
+                        cached);
+                }
+                _parkEntranceGeometryEnabled = enabled;
+            }
+            if (!enabled)
+                return;
+
+            std::unordered_set<uint64_t> seenGroups;
+            seenGroups.reserve(
+                scene.visibleTiles.size() / 4 + 1);
+
+            for (const auto tile : scene.visibleTiles)
+            {
+                const auto tileKey =
+                    TerrainKey(
+                        tile.x / kCoordsXYStep,
+                        tile.y / kCoordsXYStep);
+                const auto paintCache =
+                    _staticPaintCache.find(tileKey);
+                if (paintCache
+                        == _staticPaintCache.end()
+                    || !paintCache->second.valid
+                    || paintCache->second.dirty)
+                    continue;
+
+                for (const auto& group :
+                     paintCache->second.reconstructionGroups)
+                {
+                    if (group.type
+                            != TileElementType::entrance
+                        || !seenGroups.insert(
+                                group.key).second)
+                        continue;
+
+                    auto cached =
+                        _parkEntranceGeometryCache.find(
+                            group.key);
+                    if (cached
+                            != _parkEntranceGeometryCache.end()
+                        && !cached->second.dirty)
+                    {
+                        cached->second.lastSeen = frame;
+                        continue;
+                    }
+
+                    EntranceElement* source = nullptr;
+                    auto* element =
+                        MapGetFirstElementAt(
+                            group.sourceTile);
+                    if (element != nullptr)
+                    {
+                        do
+                        {
+                            if (element->getType()
+                                    != TileElementType::entrance
+                                || element->isGhost()
+                                || element->isInvisible())
+                                continue;
+                            const auto candidateGroup =
+                                GetReconstructionGroup(
+                                    group.sourceTile,
+                                    element);
+                            if (candidateGroup.has_value()
+                                && candidateGroup->key
+                                    == group.key)
+                            {
+                                source =
+                                    element->asEntrance();
+                                break;
+                            }
+                        } while (!(element++)->isLastForTile());
+                    }
+
+                    if (source == nullptr)
+                    {
+                        if (cached
+                            != _parkEntranceGeometryCache.end())
+                        {
+                            MarkParkEntranceGeometryRegionsDirty(
+                                cached->second);
+                            UnregisterParkEntranceRegionMembership(
+                                group.key,
+                                cached->second);
+                            _parkEntranceGeometryCache.erase(
+                                cached);
+                        }
+                        continue;
+                    }
+
+                    const uint8_t direction =
+                        static_cast<uint8_t>(
+                            source->getDirection()) & 3u;
+                    const auto entryIndex =
+                        source->getEntryIndex();
+                    auto* centre =
+                        FindParkEntranceSequence(
+                            group, direction,
+                            entryIndex,
+                            ParkEntranceSequence::centre);
+                    auto& objectManager =
+                        GetContext()->GetObjectManager();
+                    const auto* object =
+                        objectManager.GetLoadedObject<
+                            EntranceObject>(
+                                entryIndex);
+                    if (centre == nullptr
+                        || object == nullptr
+                        || !ParkEntranceInstanceComplete(
+                            group, direction,
+                            entryIndex))
+                    {
+                        if (cached
+                            != _parkEntranceGeometryCache.end())
+                        {
+                            MarkParkEntranceGeometryRegionsDirty(
+                                cached->second);
+                            UnregisterParkEntranceRegionMembership(
+                                group.key,
+                                cached->second);
+                            _parkEntranceGeometryCache.erase(
+                                cached);
+                        }
+                        continue;
+                    }
+
+                    QueueParkEntranceGeometry(
+                        *centre, *object, group,
+                        frame);
+                }
+            }
+        }
+
+        [[nodiscard]] bool
+            IsReconstructedParkEntranceBody(
+                const FirstPersonSurface& surface,
+                uint64_t frame)
+        {
+            if (!_parkEntranceGeometryEnabled
+                || surface.reconstructionGroup == 0)
+                return false;
+            const auto found =
+                _parkEntranceGeometryCache.find(
+                    surface.reconstructionGroup);
+            return found
+                    != _parkEntranceGeometryCache.end()
+                && !found->second.dirty
+                && found->second.lastSeen == frame
+                && !found->second.surfaces.empty();
+        }
+
         [[nodiscard]] bool IsReconstructedLargeSceneryBody(
             const FirstPersonSurface& surface, uint64_t frame)
         {
