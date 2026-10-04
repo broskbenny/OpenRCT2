@@ -3386,6 +3386,9 @@
                          supportIt->second
                              .semanticResidentSurfaces)
                     {
+                        if (IsReconstructedParkEntranceBody(
+                                surface, frame))
+                            continue;
                         if (surface.gpuRegion == regionKey)
                             addSurface(surface);
                     }
@@ -3408,6 +3411,9 @@
                     for (const auto& surface :
                          variant.residentSurfaces)
                     {
+                        if (IsReconstructedParkEntranceBody(
+                                surface, frame))
+                            continue;
                         if (surface.reconstructionGroup != 0)
                         {
                             const auto trajectory =
@@ -3518,6 +3524,31 @@
                     }
                 }
             }
+            if (_parkEntranceGeometryEnabled)
+            {
+                if (const auto membership =
+                        _parkEntranceGroupsByRegion.find(regionKey);
+                    membership
+                        != _parkEntranceGroupsByRegion.end())
+                {
+                    for (const auto groupKey :
+                         membership->second)
+                    {
+                        const auto geometry =
+                            _parkEntranceGeometryCache.find(
+                                groupKey);
+                        if (geometry
+                                == _parkEntranceGeometryCache.end()
+                            || geometry->second.dirty)
+                            continue;
+                        for (const auto& surface :
+                             geometry->second.surfaces)
+                        {
+                            addSurface(surface);
+                        }
+                    }
+                }
+            }
 
             const auto reconstructionKindName =
                 [](const FirstPersonSurface& surface)
@@ -3528,6 +3559,8 @@
                             return "largeScenery";
                         case 2:
                             return "track";
+                        case 3:
+                            return "parkEntrance";
                         default:
                             return "none";
                     }
