@@ -4762,9 +4762,6 @@
             std::vector<std::pair<CoordsXY, uint64_t>> tileSignatures;
             ReconstructionGroupInfo group{};
             FirstPersonSpriteSnapshot sprites;
-            std::optional<
-                FirstPersonWalkabilityConstraint>
-                passage;
             size_t nextImage = 0;
             bool submitted = false;
             int32_t minX{}, minY{}, maxX{}, maxY{};
