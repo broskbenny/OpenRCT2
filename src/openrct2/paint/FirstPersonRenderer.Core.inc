@@ -2493,6 +2493,16 @@
         void MarkParkEntranceGeometryRegionsDirty(
             const ParkEntranceGeometryCacheEntry& cached)
         {
+            if (cached.hasBounds)
+            {
+                VisitFirstPersonGpuRegionsInTileBounds(
+                    cached.minTileX, cached.minTileY,
+                    cached.maxTileX, cached.maxTileY,
+                    [&](uint64_t regionKey) {
+                        _staticRegionPackets[
+                            regionKey].dirty = true;
+                    });
+            }
             for (const auto& surface : cached.surfaces)
             {
                 if (surface.gpuRegion != 0)
