@@ -213,12 +213,6 @@ namespace OpenRCT2::Paint
             result.guaranteedThroughPassage;
         result.visualDeckShouldReachTileEdges =
             result.guaranteedThroughPassage;
-        if (entrance.getPathSurfaceDescriptor()
-            != nullptr)
-        {
-            result.surface =
-                entrance.getSurfaceEntryIndex();
-        }
         return result;
     }
 
