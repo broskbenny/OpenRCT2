@@ -26,6 +26,7 @@
 #include "../../world/tile_element/TrackElement.h"
 #include "../Boundbox.h"
 #include "../FirstPersonPathGeometry.h"
+#include "../FirstPersonWalkingSemantics.h"
 #include "../Paint.SessionFlags.h"
 #include "../Paint.h"
 #include "../support/MetalSupports.h"
@@ -116,17 +117,6 @@ static FirstPersonPaintSemanticTransform
     return transform;
 }
 
-static bool FirstPersonPathUsesFullWideDeck(
-    const PathElement& pathElement)
-{
-    // Wide-path routing may deliberately omit logical edges inside a broad
-    // plaza. Those routing edges are not visual holes. A flat ordinary wide
-    // path therefore presents as one continuous full-tile deck.
-    return pathElement.isWide()
-        && !pathElement.isSloped()
-        && !pathElement.isQueue();
-}
-
 static uint32_t PublishFirstPersonPathDeckGeometry(
     PaintSession& session, const PathElement& pathElement,
     int32_t height, ImageId image)
@@ -154,7 +144,7 @@ static uint32_t PublishFirstPersonPathDeckGeometry(
     std::vector<
         OpenRCT2::Paint::FirstPersonPathFootprintCell>
         footprint;
-    if (FirstPersonPathUsesFullWideDeck(pathElement))
+    if (OpenRCT2::Paint::FirstPersonPathUsesFullTileDeck(pathElement))
     {
         footprint.push_back(
             { 0, 0, kCoordsXYStep, kCoordsXYStep });
@@ -1164,7 +1154,7 @@ static void PathPaintBoxSupport(
     const auto surfaceImage =
         imageTemplate.WithIndex(surfaceBaseImageIndex);
     const auto firstPersonSurfaceImage =
-        FirstPersonPathUsesFullWideDeck(pathElement)
+        OpenRCT2::Paint::FirstPersonPathUsesFullTileDeck(pathElement)
         ? imageTemplate.WithIndex(
             pathPaintInfo.surface.image
             + kPathEdgesAndCornersToSurfaceImageIndexOffset[0xFF])
@@ -1234,7 +1224,7 @@ static void PathPaintPoleSupport(
     const auto surfaceImage =
         imageTemplate.WithIndex(surfaceBaseImageIndex);
     const auto firstPersonSurfaceImage =
-        FirstPersonPathUsesFullWideDeck(pathElement)
+        OpenRCT2::Paint::FirstPersonPathUsesFullTileDeck(pathElement)
         ? imageTemplate.WithIndex(
             pathPaintInfo.surface.image
             + kPathEdgesAndCornersToSurfaceImageIndexOffset[0xFF])
