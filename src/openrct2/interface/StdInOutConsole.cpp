@@ -10,6 +10,10 @@
 #include "StdInOutConsole.h"
 
 #include "../Context.h"
+#include "../Date.h"
+#include "../PlatformEnvironment.h"
+#include "../core/Path.hpp"
+#include "../core/String.hpp"
 #include "../localisation/FormatCodes.h"
 #include "../platform/Platform.h"
 #include "../scripting/ScriptEngine.h"
@@ -23,8 +27,77 @@ using namespace OpenRCT2;
     #pragma warning(disable : 4996)
 #endif
 
+StdInOutConsole::~StdInOutConsole()
+{
+    StopLogging();
+}
+
+void StdInOutConsole::StartLogging()
+{
+    std::lock_guard<std::mutex> lock(_logMutex);
+    if (_logFile != nullptr || _logStartAttempted)
+        return;
+
+    auto* context = GetContext();
+    if (context == nullptr)
+        return;
+
+    _logStartAttempted = true;
+    const auto logDirectory = Path::Combine(
+        context->GetPlatformEnvironment().GetDirectoryPath(DirBase::user),
+        u8"console");
+    if (!Path::CreateDirectory(logDirectory))
+        return;
+
+    const auto date = Platform::GetDateLocal();
+    const auto time = Platform::GetTimeLocal();
+    const auto fileName = String::stdFormat(
+        "openrct2-console-%04d-%02u-%02u_%02u-%02u-%02u.log",
+        int(date.year), unsigned(date.month), unsigned(date.day),
+        unsigned(time.hour), unsigned(time.minute), unsigned(time.second));
+    _logPath = Path::Combine(logDirectory, fileName);
+
+#ifdef _WIN32
+    const auto pathW = String::toWideChar(_logPath);
+    _logFile = _wfopen(pathW.c_str(), L"ab");
+#else
+    _logFile = std::fopen(_logPath.c_str(), "ab");
+#endif
+}
+
+void StdInOutConsole::StopLogging()
+{
+    std::lock_guard<std::mutex> lock(_logMutex);
+    if (_logFile == nullptr)
+        return;
+
+    std::fflush(_logFile);
+    std::fclose(_logFile);
+    _logFile = nullptr;
+}
+
+void StdInOutConsole::WriteLogLine(const std::string& s)
+{
+    std::lock_guard<std::mutex> lock(_logMutex);
+    if (_logFile == nullptr)
+        return;
+
+    if (!s.empty())
+        std::fwrite(s.data(), 1, s.size(), _logFile);
+    std::fputc('\n', _logFile);
+    std::fflush(_logFile);
+}
+
 void StdInOutConsole::Start()
 {
+    StartLogging();
+    if (!_logPath.empty())
+    {
+        WriteLine(String::stdFormat(
+            "Console output is being saved to: %s",
+            _logPath.c_str()));
+    }
+
     // Only start if stdin/stdout is a TTY
     if (!isatty(fileno(stdin)) || !isatty(fileno(stdout)))
     {
@@ -117,6 +190,9 @@ void StdInOutConsole::Close()
 
 void StdInOutConsole::WriteLine(const std::string& s, FormatToken colourFormat)
 {
+    StartLogging();
+    WriteLogLine(s);
+
     std::string formatBegin;
     switch (colourFormat)
     {

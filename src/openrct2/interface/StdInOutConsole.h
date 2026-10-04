@@ -12,7 +12,9 @@
 #include "InteractiveConsole.h"
 
 #include <atomic>
+#include <cstdio>
 #include <future>
+#include <mutex>
 #include <queue>
 
 class StdInOutConsole final : public InteractiveConsole
@@ -20,8 +22,17 @@ class StdInOutConsole final : public InteractiveConsole
 private:
     std::queue<std::tuple<std::promise<void>, std::string>> _evalQueue;
     std::atomic<bool> _isPromptShowing{};
+    std::mutex _logMutex;
+    std::FILE* _logFile = nullptr;
+    std::string _logPath;
+    bool _logStartAttempted = false;
+
+    void StartLogging();
+    void StopLogging();
+    void WriteLogLine(const std::string& s);
 
 public:
+    ~StdInOutConsole() override;
     void Start();
     std::future<void> Eval(const std::string& s);
     void ProcessEvalQueue();
