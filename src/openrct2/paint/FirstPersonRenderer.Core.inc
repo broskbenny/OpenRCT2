@@ -4213,7 +4213,6 @@
                 uint64_t signature, uint64_t frame,
                 const FirstPersonSpriteSnapshot& sprites)
         {
-            (void)direction;
             (void)sprites;
 
             ParkEntranceGeometryCacheEntry result{};
@@ -4253,11 +4252,12 @@
             if (clearanceHeight <= 0)
                 return result;
 
-            // Park-entrance appearance reconstruction is intentionally parked
-            // for now. Represent exactly the union of the three authoritative
-            // full-tile collision volumes and make the material explicitly
-            // unknown. This avoids pretending that sprite evidence tells us
-            // anything more precise about the 3D entrance shape.
+            // Appearance reconstruction remains deliberately conservative:
+            // the park entrance is the collision-sized three-tile envelope
+            // with explicit unknown material. Walkability contributes only a
+            // negative geometric constraint. If the authoritative map says
+            // the centre entrance is traversable in two opposite directions,
+            // that guaranteed corridor is cut through this fallback shell.
             const int32_t baseZ =
                 int32_t(std::lround(group.anchor.z));
             const FirstPersonVec3 low{
@@ -4272,37 +4272,311 @@
                     * kCoordsXYStep),
                 float(baseZ + clearanceHeight),
             };
+            const auto centreTile =
+                ParkEntranceSequenceTile(
+                    group, direction,
+                    ParkEntranceSequence::centre);
+            const auto passage =
+                FindFirstPersonGuaranteedPassage(
+                    centreTile, baseZ);
+            const auto passageAxis =
+                passage.has_value()
+                ? FirstPersonPassageAxisForConnections(
+                    passage->connectedSides)
+                : FirstPersonPassageAxis::none;
+            const float passageTop =
+                std::min(
+                    high.z,
+                    low.z + float(kPathClearance));
 
-            const std::array<FirstPersonVec3, 8> p{ {
-                { low.x,  low.y,  low.z },
-                { high.x, low.y,  low.z },
-                { high.x, high.y, low.z },
-                { low.x,  high.y, low.z },
-                { low.x,  low.y,  high.z },
-                { high.x, low.y,  high.z },
-                { high.x, high.y, high.z },
-                { low.x,  high.y, high.z },
-            } };
-            const std::array<
-                std::array<FirstPersonVec3, 4>, 6>
-                faces{ {
-                    { p[0], p[1], p[5], p[4] },
-                    { p[1], p[2], p[6], p[5] },
-                    { p[2], p[3], p[7], p[6] },
-                    { p[3], p[0], p[4], p[7] },
-                    { p[4], p[5], p[6], p[7] },
-                    { p[3], p[2], p[1], p[0] },
-                } };
+            struct EntranceFallbackFace
+            {
+                std::array<FirstPersonVec3, 4> corners{};
+                FirstPersonVec3 normal{};
+            };
+            std::vector<EntranceFallbackFace> faces;
+            faces.reserve(16);
+
+            const auto addFace =
+                [&](FirstPersonVec3 a,
+                    FirstPersonVec3 b,
+                    FirstPersonVec3 c0,
+                    FirstPersonVec3 d,
+                    FirstPersonVec3 normal) {
+                    const auto ab = Sub(b, a);
+                    const auto ad = Sub(d, a);
+                    if (std::sqrt(FpDot(ab, ab)) < 0.01f
+                        || std::sqrt(FpDot(ad, ad)) < 0.01f)
+                        return;
+                    faces.push_back({
+                        { a, b, c0, d }, normal
+                    });
+                };
+
+            if (passageAxis
+                    == FirstPersonPassageAxis::x
+                && passageTop > low.z + 0.01f)
+            {
+                const float corridorLow =
+                    float(centreTile.y)
+                    + kFirstPersonPathDeckInset;
+                const float corridorHigh =
+                    float(centreTile.y)
+                    + kFirstPersonPathDeckMax;
+
+                addFace(
+                    { low.x, low.y, low.z },
+                    { high.x, low.y, low.z },
+                    { high.x, low.y, high.z },
+                    { low.x, low.y, high.z },
+                    { 0.0f, -1.0f, 0.0f });
+                addFace(
+                    { high.x, high.y, low.z },
+                    { low.x, high.y, low.z },
+                    { low.x, high.y, high.z },
+                    { high.x, high.y, high.z },
+                    { 0.0f, 1.0f, 0.0f });
+
+                for (const auto endX :
+                     { low.x, high.x })
+                {
+                    const float nx =
+                        endX == low.x ? -1.0f : 1.0f;
+                    addFace(
+                        { endX, low.y, low.z },
+                        { endX, corridorLow, low.z },
+                        { endX, corridorLow, high.z },
+                        { endX, low.y, high.z },
+                        { nx, 0.0f, 0.0f });
+                    addFace(
+                        { endX, corridorHigh, low.z },
+                        { endX, high.y, low.z },
+                        { endX, high.y, high.z },
+                        { endX, corridorHigh, high.z },
+                        { nx, 0.0f, 0.0f });
+                    if (passageTop < high.z - 0.01f)
+                    {
+                        addFace(
+                            { endX, corridorLow, passageTop },
+                            { endX, corridorHigh, passageTop },
+                            { endX, corridorHigh, high.z },
+                            { endX, corridorLow, high.z },
+                            { nx, 0.0f, 0.0f });
+                    }
+                }
+
+                addFace(
+                    { low.x, corridorLow, low.z },
+                    { high.x, corridorLow, low.z },
+                    { high.x, corridorLow, passageTop },
+                    { low.x, corridorLow, passageTop },
+                    { 0.0f, 1.0f, 0.0f });
+                addFace(
+                    { high.x, corridorHigh, low.z },
+                    { low.x, corridorHigh, low.z },
+                    { low.x, corridorHigh, passageTop },
+                    { high.x, corridorHigh, passageTop },
+                    { 0.0f, -1.0f, 0.0f });
+                if (passageTop < high.z - 0.01f)
+                {
+                    addFace(
+                        { low.x, corridorLow, passageTop },
+                        { high.x, corridorLow, passageTop },
+                        { high.x, corridorHigh, passageTop },
+                        { low.x, corridorHigh, passageTop },
+                        { 0.0f, 0.0f, -1.0f });
+                    addFace(
+                        { low.x, low.y, high.z },
+                        { high.x, low.y, high.z },
+                        { high.x, high.y, high.z },
+                        { low.x, high.y, high.z },
+                        { 0.0f, 0.0f, 1.0f });
+                }
+                else
+                {
+                    addFace(
+                        { low.x, low.y, high.z },
+                        { high.x, low.y, high.z },
+                        { high.x, corridorLow, high.z },
+                        { low.x, corridorLow, high.z },
+                        { 0.0f, 0.0f, 1.0f });
+                    addFace(
+                        { low.x, corridorHigh, high.z },
+                        { high.x, corridorHigh, high.z },
+                        { high.x, high.y, high.z },
+                        { low.x, high.y, high.z },
+                        { 0.0f, 0.0f, 1.0f });
+                }
+                addFace(
+                    { low.x, corridorLow, low.z },
+                    { high.x, corridorLow, low.z },
+                    { high.x, low.y, low.z },
+                    { low.x, low.y, low.z },
+                    { 0.0f, 0.0f, -1.0f });
+                addFace(
+                    { low.x, high.y, low.z },
+                    { high.x, high.y, low.z },
+                    { high.x, corridorHigh, low.z },
+                    { low.x, corridorHigh, low.z },
+                    { 0.0f, 0.0f, -1.0f });
+            }
+            else if (passageAxis
+                    == FirstPersonPassageAxis::y
+                && passageTop > low.z + 0.01f)
+            {
+                const float corridorLow =
+                    float(centreTile.x)
+                    + kFirstPersonPathDeckInset;
+                const float corridorHigh =
+                    float(centreTile.x)
+                    + kFirstPersonPathDeckMax;
+
+                addFace(
+                    { low.x, high.y, low.z },
+                    { low.x, low.y, low.z },
+                    { low.x, low.y, high.z },
+                    { low.x, high.y, high.z },
+                    { -1.0f, 0.0f, 0.0f });
+                addFace(
+                    { high.x, low.y, low.z },
+                    { high.x, high.y, low.z },
+                    { high.x, high.y, high.z },
+                    { high.x, low.y, high.z },
+                    { 1.0f, 0.0f, 0.0f });
+
+                for (const auto endY :
+                     { low.y, high.y })
+                {
+                    const float ny =
+                        endY == low.y ? -1.0f : 1.0f;
+                    addFace(
+                        { low.x, endY, low.z },
+                        { corridorLow, endY, low.z },
+                        { corridorLow, endY, high.z },
+                        { low.x, endY, high.z },
+                        { 0.0f, ny, 0.0f });
+                    addFace(
+                        { corridorHigh, endY, low.z },
+                        { high.x, endY, low.z },
+                        { high.x, endY, high.z },
+                        { corridorHigh, endY, high.z },
+                        { 0.0f, ny, 0.0f });
+                    if (passageTop < high.z - 0.01f)
+                    {
+                        addFace(
+                            { corridorLow, endY, passageTop },
+                            { corridorHigh, endY, passageTop },
+                            { corridorHigh, endY, high.z },
+                            { corridorLow, endY, high.z },
+                            { 0.0f, ny, 0.0f });
+                    }
+                }
+
+                addFace(
+                    { corridorLow, high.y, low.z },
+                    { corridorLow, low.y, low.z },
+                    { corridorLow, low.y, passageTop },
+                    { corridorLow, high.y, passageTop },
+                    { 1.0f, 0.0f, 0.0f });
+                addFace(
+                    { corridorHigh, low.y, low.z },
+                    { corridorHigh, high.y, low.z },
+                    { corridorHigh, high.y, passageTop },
+                    { corridorHigh, low.y, passageTop },
+                    { -1.0f, 0.0f, 0.0f });
+                if (passageTop < high.z - 0.01f)
+                {
+                    addFace(
+                        { corridorLow, low.y, passageTop },
+                        { corridorHigh, low.y, passageTop },
+                        { corridorHigh, high.y, passageTop },
+                        { corridorLow, high.y, passageTop },
+                        { 0.0f, 0.0f, -1.0f });
+                    addFace(
+                        { low.x, low.y, high.z },
+                        { high.x, low.y, high.z },
+                        { high.x, high.y, high.z },
+                        { low.x, high.y, high.z },
+                        { 0.0f, 0.0f, 1.0f });
+                }
+                else
+                {
+                    addFace(
+                        { low.x, low.y, high.z },
+                        { corridorLow, low.y, high.z },
+                        { corridorLow, high.y, high.z },
+                        { low.x, high.y, high.z },
+                        { 0.0f, 0.0f, 1.0f });
+                    addFace(
+                        { corridorHigh, low.y, high.z },
+                        { high.x, low.y, high.z },
+                        { high.x, high.y, high.z },
+                        { corridorHigh, high.y, high.z },
+                        { 0.0f, 0.0f, 1.0f });
+                }
+                addFace(
+                    { low.x, low.y, low.z },
+                    { corridorLow, low.y, low.z },
+                    { corridorLow, high.y, low.z },
+                    { low.x, high.y, low.z },
+                    { 0.0f, 0.0f, -1.0f });
+                addFace(
+                    { corridorHigh, low.y, low.z },
+                    { high.x, low.y, low.z },
+                    { high.x, high.y, low.z },
+                    { corridorHigh, high.y, low.z },
+                    { 0.0f, 0.0f, -1.0f });
+            }
+            else
+            {
+                addFace(
+                    { low.x, low.y, low.z },
+                    { high.x, low.y, low.z },
+                    { high.x, low.y, high.z },
+                    { low.x, low.y, high.z },
+                    { 0.0f, -1.0f, 0.0f });
+                addFace(
+                    { high.x, low.y, low.z },
+                    { high.x, high.y, low.z },
+                    { high.x, high.y, high.z },
+                    { high.x, low.y, high.z },
+                    { 1.0f, 0.0f, 0.0f });
+                addFace(
+                    { high.x, high.y, low.z },
+                    { low.x, high.y, low.z },
+                    { low.x, high.y, high.z },
+                    { high.x, high.y, high.z },
+                    { 0.0f, 1.0f, 0.0f });
+                addFace(
+                    { low.x, high.y, low.z },
+                    { low.x, low.y, low.z },
+                    { low.x, low.y, high.z },
+                    { low.x, high.y, high.z },
+                    { -1.0f, 0.0f, 0.0f });
+                addFace(
+                    { low.x, low.y, high.z },
+                    { high.x, low.y, high.z },
+                    { high.x, high.y, high.z },
+                    { low.x, high.y, high.z },
+                    { 0.0f, 0.0f, 1.0f });
+                addFace(
+                    { low.x, high.y, low.z },
+                    { high.x, high.y, low.z },
+                    { high.x, low.y, low.z },
+                    { low.x, low.y, low.z },
+                    { 0.0f, 0.0f, -1.0f });
+            }
 
             const auto edgeLength =
-                [](FirstPersonVec3 a, FirstPersonVec3 b) {
+                [](FirstPersonVec3 a,
+                    FirstPersonVec3 b) {
                     const auto d = Sub(b, a);
                     return std::sqrt(FpDot(d, d));
                 };
-
             const ImageId diagnosticImage{
                 bodyImages[0]
             };
+
             for (const auto& face : faces)
             {
                 FirstPersonSurface surface{};
@@ -4318,35 +4592,27 @@
                     static_cast<uint8_t>(
                         FirstPersonPaintSemanticRole::
                             structureBody);
-
-                const auto horizontal =
-                    Sub(face[1], face[0]);
-                const auto vertical =
-                    Sub(face[3], face[0]);
-                auto normal =
-                    FpCross(horizontal, vertical);
-                const float normalLength =
-                    std::sqrt(FpDot(normal, normal));
-                if (normalLength > 0.001f)
-                {
-                    normal =
-                        Mul(
-                            normal,
-                            1.0f / normalLength);
-                    surface.exteriorOnly = true;
-                    surface.outwardNormal = normal;
-                }
+                surface.diagnosticSourceTile =
+                    centreTile;
+                surface.exteriorOnly = true;
+                surface.outwardNormal = face.normal;
 
                 const FirstPersonVec3 faceCenter{
                     0.25f * (
-                        face[0].x + face[1].x
-                        + face[2].x + face[3].x),
+                        face.corners[0].x
+                        + face.corners[1].x
+                        + face.corners[2].x
+                        + face.corners[3].x),
                     0.25f * (
-                        face[0].y + face[1].y
-                        + face[2].y + face[3].y),
+                        face.corners[0].y
+                        + face.corners[1].y
+                        + face.corners[2].y
+                        + face.corners[3].y),
                     0.25f * (
-                        face[0].z + face[1].z
-                        + face[2].z + face[3].z),
+                        face.corners[0].z
+                        + face.corners[1].z
+                        + face.corners[2].z
+                        + face.corners[3].z),
                 };
                 surface.gpuRegion =
                     FirstPersonGpuRegionKey(
@@ -4361,17 +4627,21 @@
                     std::clamp(
                         int32_t(std::ceil(std::max(
                             edgeLength(
-                                face[0], face[1]),
+                                face.corners[0],
+                                face.corners[1]),
                             edgeLength(
-                                face[3], face[2])))),
+                                face.corners[3],
+                                face.corners[2])))),
                         1, 256);
                 const int32_t height =
                     std::clamp(
                         int32_t(std::ceil(std::max(
                             edgeLength(
-                                face[0], face[3]),
+                                face.corners[0],
+                                face.corners[3]),
                             edgeLength(
-                                face[1], face[2])))),
+                                face.corners[1],
+                                face.corners[2])))),
                         1, 256);
                 std::vector<uint8_t> pixels(
                     size_t(width) * size_t(height));
@@ -4403,15 +4673,18 @@
                 surface.persistentBitmap = true;
                 surface.immutableFingerprint =
                     fingerprint;
-
                 EmitQuad(
                     surface,
                     { {
-                        { face[0], 0.0f, 0.0f },
-                        { face[1], float(width), 0.0f },
-                        { face[2], float(width),
+                        { face.corners[0],
+                          0.0f, 0.0f },
+                        { face.corners[1],
+                          float(width), 0.0f },
+                        { face.corners[2],
+                          float(width),
                           float(height) },
-                        { face[3], 0.0f,
+                        { face.corners[3],
+                          0.0f,
                           float(height) },
                     } });
                 result.surfaces.emplace_back(
