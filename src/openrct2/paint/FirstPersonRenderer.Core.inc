@@ -4146,16 +4146,70 @@
             return result;
         }
 
+        [[nodiscard]] std::vector<FirstPersonSurface>
+            BuildFirstPersonSemanticComponentSurfaces(
+                const FirstPersonPaintSemanticComponent& component,
+                uint64_t gpuRegion,
+                uint64_t diagnosticSemanticGroup,
+                const std::array<
+                    const FirstPersonPaintSemanticComponent*, 4>&
+                    artworkViews,
+                const std::vector<
+                    const FirstPersonPaintSemanticComponent*>*
+                    depthPeers,
+                const FirstPersonSpriteSnapshot& sprites);
+
+        [[nodiscard]] FirstPersonPaintSemanticTransform
+            MakeGroupedParkEntranceTransform(
+                CoordsXY tile, uint8_t direction)
+        {
+            FirstPersonPaintSemanticTransform transform{};
+            transform.origin = {
+                float(tile.x + kCoordsXYHalfTile),
+                float(tile.y + kCoordsXYHalfTile),
+                0.0f,
+            };
+            switch (direction & 3u)
+            {
+                case 1:
+                    transform.axisX = { 0.0f, 1.0f, 0.0f };
+                    transform.axisY = { -1.0f, 0.0f, 0.0f };
+                    break;
+                case 2:
+                    transform.axisX = { -1.0f, 0.0f, 0.0f };
+                    transform.axisY = { 0.0f, -1.0f, 0.0f };
+                    break;
+                case 3:
+                    transform.axisX = { 0.0f, -1.0f, 0.0f };
+                    transform.axisY = { 1.0f, 0.0f, 0.0f };
+                    break;
+                default:
+                    break;
+            }
+            return transform;
+        }
+
+        [[nodiscard]] ScreenCoordsXY
+            GroupedParkEntranceArtworkScreenPos(
+                CoordsXY tile, int32_t baseZ,
+                uint8_t sourceRotation)
+        {
+            const auto spriteOrigin =
+                GetTileElementPaintSpritePosition(
+                    tile, sourceRotation);
+            return Translate3DTo2DWithZ(
+                sourceRotation,
+                { spriteOrigin, baseZ });
+        }
+
         ParkEntranceGeometryCacheEntry
             BuildParkEntranceInstanceGeometry(
-                ImageIndex realImageBase,
-                ImageIndex syntheticEntryImage,
+                const std::array<ImageIndex, 12>& bodyImages,
                 uint8_t direction,
                 int32_t clearanceHeight,
                 const ReconstructionGroupInfo& group,
                 uint64_t signature, uint64_t frame,
-                const FirstPersonSpriteSnapshot& sprites,
-                uint64_t assetGeneration)
+                const FirstPersonSpriteSnapshot& sprites)
         {
             ParkEntranceGeometryCacheEntry result{};
             result.signature = signature;
@@ -4194,81 +4248,345 @@
             if (clearanceHeight <= 0)
                 return result;
 
-            const CoordsXY leftOffset =
-                CoordsDirectionDelta[3];
-            const CoordsXY rightOffset{
-                -leftOffset.x, -leftOffset.y
+            const int32_t baseZ =
+                int32_t(std::lround(group.anchor.z));
+            const int32_t topZ =
+                baseZ + clearanceHeight;
+
+            const auto makeViews =
+                [&](ParkEntranceSequence sequence,
+                    bool reverseCentreWinding) {
+                    std::array<
+                        FirstPersonPaintSemanticComponent, 4>
+                        views{};
+                    const size_t sequenceIndex =
+                        static_cast<size_t>(sequence);
+                    const CoordsXY tile =
+                        ParkEntranceSequenceTile(
+                            group, direction, sequence);
+                    const auto transform =
+                        MakeGroupedParkEntranceTransform(
+                            tile, direction);
+
+                    for (uint8_t sourceRotation = 0;
+                         sourceRotation < 4;
+                         ++sourceRotation)
+                    {
+                        auto& component =
+                            views[sourceRotation];
+                        component.id =
+                            uint32_t(
+                                sequenceIndex * 4u
+                                + sourceRotation + 1u);
+                        component.role =
+                            FirstPersonPaintSemanticRole::
+                                structureBody;
+                        component.mapPosition = tile;
+                        component.transform = transform;
+                        component.repetitionIndex = 0;
+                        component.artwork.image =
+                            ImageId(
+                                bodyImages[
+                                    sequenceIndex * 4u
+                                    + ((direction
+                                        + sourceRotation)
+                                       & 3u)]);
+                        component.artwork.screenPos =
+                            GroupedParkEntranceArtworkScreenPos(
+                                tile, baseZ,
+                                sourceRotation);
+                        component.artwork.group =
+                            uint32_t(sequenceIndex + 1u);
+                        component.artwork.sourceRotation =
+                            sourceRotation;
+
+                        if (sequence
+                            == ParkEntranceSequence::centre)
+                        {
+                            component.geometry.kind =
+                                FirstPersonPaintSemanticPrimitiveKind::
+                                    plane;
+                            component.geometry.pointCount = 4;
+                            if (!reverseCentreWinding)
+                            {
+                                component.geometry.points = { {
+                                    {
+                                        -float(kCoordsXYHalfTile),
+                                        0.0f, float(baseZ)
+                                    },
+                                    {
+                                        float(kCoordsXYHalfTile),
+                                        0.0f, float(baseZ)
+                                    },
+                                    {
+                                        float(kCoordsXYHalfTile),
+                                        0.0f, float(topZ)
+                                    },
+                                    {
+                                        -float(kCoordsXYHalfTile),
+                                        0.0f, float(topZ)
+                                    },
+                                } };
+                            }
+                            else
+                            {
+                                component.geometry.points = { {
+                                    {
+                                        float(kCoordsXYHalfTile),
+                                        0.0f, float(baseZ)
+                                    },
+                                    {
+                                        -float(kCoordsXYHalfTile),
+                                        0.0f, float(baseZ)
+                                    },
+                                    {
+                                        -float(kCoordsXYHalfTile),
+                                        0.0f, float(topZ)
+                                    },
+                                    {
+                                        float(kCoordsXYHalfTile),
+                                        0.0f, float(topZ)
+                                    },
+                                } };
+                            }
+                            // This is the authoritative gate/arch carrier from
+                            // the native entrance painter: a transparent,
+                            // non-collision plane. Sprite alpha defines the
+                            // walk-through opening.
+                            component.artwork.decal = true;
+                            component.collidable = false;
+                        }
+                        else
+                        {
+                            component.geometry.kind =
+                                FirstPersonPaintSemanticPrimitiveKind::
+                                    box;
+                            component.geometry.pointCount = 2;
+                            component.geometry.points[0] = {
+                                -float(kCoordsXYHalfTile),
+                                -float(kCoordsXYHalfTile),
+                                float(baseZ),
+                            };
+                            component.geometry.points[1] = {
+                                float(kCoordsXYHalfTile),
+                                float(kCoordsXYHalfTile),
+                                float(topZ),
+                            };
+                            component.artwork.decal = false;
+                            component.collidable = true;
+                        }
+                    }
+                    return views;
+                };
+
+            const auto appendSurfaces =
+                [&](std::vector<FirstPersonSurface> surfaces,
+                    std::optional<FirstPersonVec3>
+                        forcedNormal = std::nullopt) {
+                    for (auto& surface : surfaces)
+                    {
+                        surface.reconstructionGroup =
+                            group.key;
+                        surface.diagnosticReconstructionKind = 3;
+                        surface.diagnosticReconstructionAnchor =
+                            group.anchor;
+                        surface.cameraIndependent = true;
+
+                        FirstPersonVec3 normal{};
+                        if (forcedNormal.has_value())
+                        {
+                            normal = *forcedNormal;
+                        }
+                        else
+                        {
+                            const auto horizontal =
+                                Sub(
+                                    surface.triangles[1].world,
+                                    surface.triangles[0].world);
+                            const auto vertical =
+                                Sub(
+                                    surface.triangles[5].world,
+                                    surface.triangles[0].world);
+                            normal =
+                                FpCross(
+                                    horizontal, vertical);
+                            const float length =
+                                std::sqrt(
+                                    FpDot(normal, normal));
+                            if (length > 0.001f)
+                                normal =
+                                    Mul(normal, 1.0f / length);
+                        }
+                        const float normalLength =
+                            std::sqrt(
+                                FpDot(normal, normal));
+                        if (normalLength > 0.001f)
+                        {
+                            surface.exteriorOnly = true;
+                            surface.outwardNormal =
+                                Mul(
+                                    normal,
+                                    1.0f / normalLength);
+                        }
+                        result.surfaces.emplace_back(
+                            std::move(surface));
+                    }
+                };
+
+            std::array<bool, 3> sequenceBuilt{};
+
+            // The centre is physically a plane, not a solid tile. Build its
+            // two physical sides explicitly and feed each side only the native
+            // views that can actually observe it. This preserves different
+            // front/back entrance artwork without inventing thickness.
+            for (bool reverse : { false, true })
+            {
+                auto views =
+                    makeViews(
+                        ParkEntranceSequence::centre,
+                        reverse);
+                const auto& transform =
+                    views[0].transform;
+                FirstPersonVec3 normal =
+                    reverse
+                    ? FirstPersonVec3{
+                        transform.axisY.x,
+                        transform.axisY.y,
+                        transform.axisY.z
+                    }
+                    : FirstPersonVec3{
+                        -transform.axisY.x,
+                        -transform.axisY.y,
+                        -transform.axisY.z
+                    };
+                const CoordsXY normalXY{
+                    int32_t(std::lround(normal.x)),
+                    int32_t(std::lround(normal.y)),
+                };
+
+                std::array<
+                    const FirstPersonPaintSemanticComponent*, 4>
+                    observations{};
+                const FirstPersonPaintSemanticComponent*
+                    canonical = nullptr;
+                for (uint8_t sourceRotation = 0;
+                     sourceRotation < 4;
+                     ++sourceRotation)
+                {
+                    if (!FirstPersonFaceVisibleFromNativeView(
+                            normalXY, sourceRotation))
+                        continue;
+                    observations[sourceRotation] =
+                        &views[sourceRotation];
+                    if (canonical == nullptr)
+                        canonical =
+                            &views[sourceRotation];
+                }
+                if (canonical == nullptr)
+                    return ParkEntranceGeometryCacheEntry{};
+
+                const CoordsXY tile =
+                    canonical->mapPosition;
+                auto surfaces =
+                    BuildFirstPersonSemanticComponentSurfaces(
+                        *canonical,
+                        FirstPersonGpuRegionKey(
+                            tile.x / kCoordsXYStep,
+                            tile.y / kCoordsXYStep),
+                        group.key,
+                        observations, nullptr, sprites);
+                if (surfaces.empty())
+                    return ParkEntranceGeometryCacheEntry{};
+                appendSurfaces(
+                    std::move(surfaces), normal);
+                sequenceBuilt[
+                    static_cast<size_t>(
+                        ParkEntranceSequence::centre)] = true;
+            }
+
+            // The side elements are the real structural envelopes published by
+            // the entrance painter. Refine each box independently with all four
+            // native views. They are no longer fused into a three-tile solid
+            // volume before carving.
+            for (const auto sequence : {
+                     ParkEntranceSequence::left,
+                     ParkEntranceSequence::right })
+            {
+                auto views =
+                    makeViews(sequence, false);
+                std::array<
+                    const FirstPersonPaintSemanticComponent*, 4>
+                    observations{};
+                for (uint8_t sourceRotation = 0;
+                     sourceRotation < 4;
+                     ++sourceRotation)
+                {
+                    observations[sourceRotation] =
+                        &views[sourceRotation];
+                }
+
+                const auto& canonical = views[0];
+                const auto tile =
+                    canonical.mapPosition;
+                auto surfaces =
+                    BuildFirstPersonSemanticComponentSurfaces(
+                        canonical,
+                        FirstPersonGpuRegionKey(
+                            tile.x / kCoordsXYStep,
+                            tile.y / kCoordsXYStep),
+                        group.key,
+                        observations, nullptr, sprites);
+                if (surfaces.empty())
+                    return ParkEntranceGeometryCacheEntry{};
+                appendSurfaces(std::move(surfaces));
+                sequenceBuilt[
+                    static_cast<size_t>(sequence)] = true;
+            }
+
+            if (!std::all_of(
+                    sequenceBuilt.begin(),
+                    sequenceBuilt.end(),
+                    [](bool built) { return built; })
+                || result.surfaces.empty())
+            {
+                result.surfaces.clear();
+                return result;
+            }
+
+            const FirstPersonVec3 boundsLow{
+                float(result.minTileX * kCoordsXYStep),
+                float(result.minTileY * kCoordsXYStep),
+                float(baseZ),
             };
-            std::array<LargeSceneryTile, 3> tiles{ {
-                {
-                    { 0, 0, 0 },
-                    clearanceHeight,
-                    false, false, 0x0F, 0, 0
-                },
-                {
-                    { leftOffset.x, leftOffset.y, 0 },
-                    clearanceHeight,
-                    false, false, 0x0F, 0, 1
-                },
-                {
-                    { rightOffset.x, rightOffset.y, 0 },
-                    clearanceHeight,
-                    false, false, 0x0F, 0, 2
-                },
-            } };
-
-            LargeSceneryEntry syntheticEntry{};
-            syntheticEntry.image = syntheticEntryImage;
-            syntheticEntry.tiles =
-                std::span<const LargeSceneryTile>(
-                    tiles.data(), tiles.size());
-            syntheticEntry.text = nullptr;
-
-            LargeSceneryElement syntheticElement{};
-            syntheticElement.setDirection(direction & 3u);
-
-            const auto model =
-                BuildLargeSceneryAssetModel(
-                    syntheticEntry);
-            if (!model.usable)
-                return result;
-
-            auto built =
-                BuildLargeSceneryInstanceGeometry(
-                    syntheticElement, syntheticEntry,
-                    model, group, signature, frame,
-                    sprites, assetGeneration);
-
-            // The three entrance tiles are only a conservative candidate
-            // envelope. A full occupancy-shell fallback would close the
-            // walk-through gate, so entrance replacement is allowed only
-            // after all four composite native views produced a real carved
-            // visual hull.
-            if (!built.visualHullRefined
-                || built.surfaces.empty())
-                return result;
-
-            result.hasBounds = built.hasBounds;
-            result.minTileX = built.minTileX;
-            result.minTileY = built.minTileY;
-            result.maxTileX = built.maxTileX;
-            result.maxTileY = built.maxTileY;
-            result.surfaces =
-                std::move(built.surfaces);
+            const FirstPersonVec3 boundsHigh{
+                float((result.maxTileX + 1)
+                    * kCoordsXYStep),
+                float((result.maxTileY + 1)
+                    * kCoordsXYStep),
+                float(topZ),
+            };
+            const FirstPersonVec3 center{
+                0.5f * (boundsLow.x + boundsHigh.x),
+                0.5f * (boundsLow.y + boundsHigh.y),
+                0.5f * (boundsLow.z + boundsHigh.z),
+            };
+            const float hx =
+                0.5f * (boundsHigh.x - boundsLow.x);
+            const float hy =
+                0.5f * (boundsHigh.y - boundsLow.y);
+            const float hz =
+                0.5f * (boundsHigh.z - boundsLow.z);
+            const float radius =
+                std::sqrt(
+                    hx * hx + hy * hy + hz * hz)
+                + 2.0f;
             for (auto& surface : result.surfaces)
             {
-                // The baked bitmap is self-contained. Keep a real entrance
-                // image only as stable palette/material metadata; synthetic
-                // image ids exist solely inside the reconstruction snapshot.
-                surface.image =
-                    ImageId(realImageBase);
-                surface.reconstructionGroup =
-                    group.key;
-                surface.diagnosticReconstructionKind = 3;
-                surface.diagnosticReconstructionAnchor =
-                    group.anchor;
-                surface.cameraIndependent = true;
+                surface.hasSemanticBounds = true;
+                surface.semanticCenter = center;
+                surface.semanticRadius = radius;
             }
+
             return result;
         }
 
@@ -4463,8 +4781,7 @@
         {
             ReconstructionGroupInfo group{};
             ObjectEntryIndex entryIndex{};
-            ImageIndex realImageBase = kImageIndexUndefined;
-            ImageIndex syntheticBodyFirst = kImageIndexUndefined;
+            std::array<ImageIndex, 12> bodyImages{};
             uint8_t direction = 0;
             int32_t clearanceHeight = 0;
             uint64_t signature = 0;
@@ -4507,30 +4824,34 @@
                 slot->clearanceHeight =
                     centre.getClearanceZ()
                     - centre.getBaseZ();
-                slot->realImageBase =
-                    object.GetImage(
-                        ParkEntranceSequence::centre,
-                        0);
-
-                // The reconstruction snapshot is private to this job, so
-                // reuse the entrance asset's own base as the synthetic
-                // large-scenery namespace. The baker expects body images at
-                // entry.image + 4 + sequence*4 + direction; capture() below
-                // aliases the real direction-major entrance sprites into
-                // exactly those local keys without touching the global atlas.
-                slot->syntheticBodyFirst =
-                    slot->realImageBase + 4;
-
                 uint64_t signature =
                     14695981039346656037ull;
                 ExtendStableKey(
                     signature, group.key);
                 ExtendStableKey(
                     signature,
-                    slot->realImageBase);
-                ExtendStableKey(
-                    signature,
                     uint32_t(slot->clearanceHeight));
+
+                size_t imageSlot = 0;
+                for (const auto sequence : {
+                         ParkEntranceSequence::centre,
+                         ParkEntranceSequence::left,
+                         ParkEntranceSequence::right })
+                {
+                    for (uint8_t nativeDirection = 0;
+                         nativeDirection < 4;
+                         ++nativeDirection)
+                    {
+                        const auto image =
+                            object.GetImage(
+                                sequence,
+                                nativeDirection);
+                        slot->bodyImages[
+                            imageSlot++] = image;
+                        ExtendStableKey(
+                            signature, image);
+                    }
+                }
 
                 size_t index = 0;
                 for (const auto sequence : {
@@ -4557,27 +4878,13 @@
             if (job->submitted)
                 return;
 
-            while (job->nextImage < 12)
+            while (job->nextImage
+                < job->bodyImages.size())
             {
-                const size_t sequence =
-                    job->nextImage / 4;
-                const uint8_t nativeDirection =
-                    uint8_t(job->nextImage & 3u);
-                const auto parkSequence =
-                    static_cast<ParkEntranceSequence>(
-                        sequence);
-                const ImageIndex realImage =
-                    object.GetImage(
-                        parkSequence,
-                        nativeDirection);
-                const ImageIndex syntheticImage =
-                    job->syntheticBodyFirst
-                    + ImageIndex(sequence * 4)
-                    + nativeDirection;
+                const ImageIndex image =
+                    job->bodyImages[job->nextImage];
                 if (!job->sprites.capture(
-                        syntheticImage,
-                        GfxGetG1Element(realImage),
-                        _snapshotBudget))
+                        image, _snapshotBudget))
                     return;
                 ++job->nextImage;
             }
@@ -4590,22 +4897,18 @@
                 return;
             }
 
-            const auto epoch =
-                _reconstructionWorker.epoch();
             job->submitted =
                 _reconstructionWorker.submit(
-                    [job, frame, epoch]() {
+                    [job, frame]() {
                         auto result =
                             BuildParkEntranceInstanceGeometry(
-                                job->realImageBase,
-                                job->syntheticBodyFirst - 4,
+                                job->bodyImages,
                                 job->direction,
                                 job->clearanceHeight,
                                 job->group,
                                 job->signature,
                                 frame,
-                                job->sprites,
-                                epoch);
+                                job->sprites);
                         return [
                             job,
                             result =
