@@ -62,6 +62,7 @@
 #include "../world/tile_element/WallElement.h"
 #include "../object/WallSceneryEntry.h"
 #include "../object/EntranceObject.h"
+#include "../object/ObjectManager.h"
 #include "../object/LargeSceneryEntry.h"
 #include "../object/SmallSceneryEntry.h"
 
