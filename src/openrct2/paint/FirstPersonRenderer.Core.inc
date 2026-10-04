@@ -4840,6 +4840,245 @@
                 && !found->second.surfaces.empty();
         }
 
+        [[nodiscard]] bool
+            AlignParkEntranceSignToGroupedBody(
+                FirstPersonSurface& surface,
+                uint64_t frame)
+        {
+            if (surface.reconstructionGroup == 0
+                || surface.diagnosticSemanticRole
+                    != static_cast<uint8_t>(
+                        FirstPersonPaintSemanticRole::sign)
+                || !surface.coplanarOwner)
+                return false;
+
+            const auto geometry =
+                _parkEntranceGeometryCache.find(
+                    surface.reconstructionGroup);
+            if (geometry
+                    == _parkEntranceGeometryCache.end()
+                || geometry->second.dirty
+                || geometry->second.lastSeen != frame
+                || geometry->second.surfaces.empty())
+                return false;
+
+            const auto& pixels =
+                surface.immutablePixelData();
+            const int32_t width =
+                surface.immutableWidth;
+            const int32_t height =
+                surface.immutableHeight;
+            if (pixels.empty()
+                || width <= 0 || height <= 0
+                || pixels.size()
+                    < size_t(width) * size_t(height))
+                return false;
+
+            int32_t minX = width;
+            int32_t minY = height;
+            int32_t maxX = -1;
+            int32_t maxY = -1;
+            for (int32_t y = 0; y < height; ++y)
+            for (int32_t x = 0; x < width; ++x)
+            {
+                if (pixels[
+                        size_t(y) * size_t(width)
+                        + size_t(x)] == 0)
+                    continue;
+                minX = std::min(minX, x);
+                minY = std::min(minY, y);
+                maxX = std::max(maxX, x);
+                maxY = std::max(maxY, y);
+            }
+            if (maxX < minX || maxY < minY)
+                return false;
+
+            const auto p0 =
+                surface.triangles[0].world;
+            const auto p1 =
+                surface.triangles[1].world;
+            const auto p2 =
+                surface.triangles[2].world;
+            const auto p3 =
+                surface.triangles[5].world;
+            const auto horizontal =
+                Sub(p1, p0);
+            const auto vertical =
+                Sub(p3, p0);
+            auto signNormal =
+                FpCross(horizontal, vertical);
+            const float signNormalLength =
+                std::sqrt(
+                    FpDot(signNormal, signNormal));
+            if (!(signNormalLength > 0.001f))
+                return false;
+            signNormal = Mul(
+                signNormal, 1.0f / signNormalLength);
+
+            const float s =
+                (0.5f
+                    * float(minX + maxX + 1))
+                / float(width);
+            const float t =
+                (0.5f
+                    * float(minY + maxY + 1))
+                / float(height);
+            const auto lerp =
+                [](FirstPersonVec3 a,
+                   FirstPersonVec3 b,
+                   float alpha) {
+                    return FirstPersonVec3{
+                        a.x + (b.x - a.x) * alpha,
+                        a.y + (b.y - a.y) * alpha,
+                        a.z + (b.z - a.z) * alpha,
+                    };
+                };
+            const auto visiblePoint =
+                lerp(
+                    lerp(p0, p1, s),
+                    lerp(p3, p2, s),
+                    t);
+
+            const uint8_t materialRotation =
+                surface.diagnosticMaterialRotation < 4
+                ? surface.diagnosticMaterialRotation
+                : surface.diagnosticSourceRotation;
+
+            const FirstPersonSurface* best = nullptr;
+            FirstPersonVec3 bestNormal{};
+            float bestDelta = 0.0f;
+            float bestScore =
+                std::numeric_limits<float>::max();
+
+            for (const auto& candidate :
+                 geometry->second.surfaces)
+            {
+                if (!candidate.exteriorOnly)
+                    continue;
+                auto normal =
+                    candidate.outwardNormal;
+                const float normalLength =
+                    std::sqrt(FpDot(normal, normal));
+                if (!(normalLength > 0.001f))
+                    continue;
+                normal =
+                    Mul(normal, 1.0f / normalLength);
+                if (std::abs(normal.z) > 0.25f
+                    || std::abs(
+                        FpDot(normal, signNormal))
+                        < 0.90f)
+                    continue;
+
+                if (materialRotation < 4)
+                {
+                    const CoordsXY normalXY{
+                        int32_t(std::lround(normal.x)),
+                        int32_t(std::lround(normal.y)),
+                    };
+                    if (!FirstPersonFaceVisibleFromNativeView(
+                            normalXY,
+                            materialRotation))
+                        continue;
+                }
+
+                const float plane =
+                    FpDot(
+                        normal,
+                        candidate.triangles[0].world);
+                const float delta =
+                    plane
+                    - FpDot(normal, visiblePoint);
+                const auto shifted =
+                    Add(
+                        visiblePoint,
+                        Mul(normal, delta));
+
+                FirstPersonVec3 low =
+                    candidate.triangles[0].world;
+                FirstPersonVec3 high = low;
+                for (const auto& vertex :
+                     candidate.triangles)
+                {
+                    low.x =
+                        std::min(
+                            low.x, vertex.world.x);
+                    low.y =
+                        std::min(
+                            low.y, vertex.world.y);
+                    low.z =
+                        std::min(
+                            low.z, vertex.world.z);
+                    high.x =
+                        std::max(
+                            high.x, vertex.world.x);
+                    high.y =
+                        std::max(
+                            high.y, vertex.world.y);
+                    high.z =
+                        std::max(
+                            high.z, vertex.world.z);
+                }
+
+                const auto outside =
+                    [](float value,
+                       float lowValue,
+                       float highValue) {
+                        if (value < lowValue)
+                            return lowValue - value;
+                        if (value > highValue)
+                            return value - highValue;
+                        return 0.0f;
+                    };
+                const float dx =
+                    outside(
+                        shifted.x,
+                        low.x - 2.0f,
+                        high.x + 2.0f);
+                const float dy =
+                    outside(
+                        shifted.y,
+                        low.y - 2.0f,
+                        high.y + 2.0f);
+                const float dz =
+                    outside(
+                        shifted.z,
+                        low.z - 2.0f,
+                        high.z + 2.0f);
+                const float outsideDistance =
+                    std::sqrt(
+                        dx * dx + dy * dy
+                        + dz * dz);
+                const float score =
+                    std::abs(delta)
+                    + outsideDistance * 8.0f;
+                if (score >= bestScore)
+                    continue;
+
+                best = &candidate;
+                bestNormal = normal;
+                bestDelta = delta;
+                bestScore = score;
+            }
+
+            if (best == nullptr)
+                return false;
+
+            // This is not a depth bias. Move the dynamic decal onto the exact
+            // reconstructed boundary plane that owns the native sign pixels.
+            // The body remains the physical depth provider; text is replayed
+            // as a coplanar owner on that same plane.
+            const auto translation =
+                Mul(bestNormal, bestDelta);
+            for (auto& vertex : surface.triangles)
+            {
+                vertex.world =
+                    Add(vertex.world, translation);
+            }
+            surface.exteriorOnly = true;
+            surface.outwardNormal = bestNormal;
+            return true;
+        }
+
         [[nodiscard]] bool IsReconstructedLargeSceneryBody(
             const FirstPersonSurface& surface, uint64_t frame)
         {
