@@ -402,7 +402,7 @@ namespace OpenRCT2::Ui::FirstPerson
                 return std::nullopt;
             auto floor = *revalidatedStart;
 
-            if (!floor.IsPath())
+            if (!floor.IsWalkableSupport())
             {
                 const float waterZ =
                     float(TileElementWaterHeight(startPosition));
