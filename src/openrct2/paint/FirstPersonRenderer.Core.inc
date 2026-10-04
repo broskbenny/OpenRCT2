@@ -4820,8 +4820,15 @@
                 const FirstPersonSurface& surface,
                 uint64_t frame)
         {
+            // The grouped hull replaces only the entrance object's semantic
+            // body. The same tile painter can also emit supports, the path
+            // deck and scrolling-sign artwork; those are separate native
+            // structures and must survive the body swap.
             if (!_parkEntranceGeometryEnabled
-                || surface.reconstructionGroup == 0)
+                || surface.reconstructionGroup == 0
+                || surface.diagnosticSemanticRole
+                    != static_cast<uint8_t>(
+                        FirstPersonPaintSemanticRole::structureBody))
                 return false;
             const auto found =
                 _parkEntranceGeometryCache.find(
