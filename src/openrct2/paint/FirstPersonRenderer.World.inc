@@ -2926,7 +2926,7 @@
                 // isometric composition margin; after sampling, only that
                 // margin is extended when the authoritative navigation model
                 // requires edge-to-edge deck continuity.
-                const uint8_t visualDeckEdgeMask =
+                const bool fullTilePathDeck =
                     component.role
                             == FirstPersonPaintSemanticRole::pathDeck
                         && component.geometry.kind
@@ -2942,15 +2942,111 @@
                             FirstPersonSemanticEdgeLength(
                                 face[0], face[3])
                             - float(kCoordsXYStep))
-                            <= 0.5f
-                        && std::abs(face[0].z - face[1].z)
-                            <= 0.01f
-                        && std::abs(face[0].z - face[2].z)
-                            <= 0.01f
-                        && std::abs(face[0].z - face[3].z)
-                            <= 0.01f
+                            <= 0.5f;
+                const uint8_t visualDeckEdgeMask =
+                    fullTilePathDeck
                     ? component.visualDeckEdgeMask & 0x0Fu
                     : 0u;
+                const auto samplePathMarginMaterial =
+                    [&](FirstPersonVec3 worldPoint) {
+                        if (component.role
+                                != FirstPersonPaintSemanticRole::
+                                    pathDeck)
+                            return uint8_t{ 0 };
+
+                        // Native path sprites reserve a three-unit transparent
+                        // isometric composition margin. Semantic path geometry
+                        // already says exactly which centre/arm/corner cells
+                        // physically contain paving, so transparency inside an
+                        // explicit margin cell is not evidence for a hole.
+                        // Borrow the nearest interior texel from the same native
+                        // material instead of exposing terrain through a valid
+                        // path connection.
+                        constexpr float kMargin = 3.0f;
+                        const float lowX =
+                            float(component.mapPosition.x)
+                            + kMargin + 0.5f;
+                        const float highX =
+                            float(
+                                component.mapPosition.x
+                                + kCoordsXYStep)
+                            - kMargin - 0.5f;
+                        const float lowY =
+                            float(component.mapPosition.y)
+                            + kMargin + 0.5f;
+                        const float highY =
+                            float(
+                                component.mapPosition.y
+                                + kCoordsXYStep)
+                            - kMargin - 0.5f;
+
+                        uint8_t requiredEdges = 0;
+                        if (worldPoint.x < lowX)
+                            requiredEdges |= 1u << 0;
+                        else if (worldPoint.x > highX)
+                            requiredEdges |= 1u << 2;
+                        if (worldPoint.y < lowY)
+                            requiredEdges |= 1u << 3;
+                        else if (worldPoint.y > highY)
+                            requiredEdges |= 1u << 1;
+                        if (requiredEdges == 0)
+                            return uint8_t{ 0 };
+
+                        // A non-full component is itself an authoritative
+                        // centre/arm/corner footprint cell. For a full-tile
+                        // component (wide path / entrance deck), navigation
+                        // explicitly limits which outer margins may be filled.
+                        if (fullTilePathDeck
+                            && (visualDeckEdgeMask
+                                    & requiredEdges)
+                                != requiredEdges)
+                            return uint8_t{ 0 };
+
+                        FirstPersonVec3 donor = worldPoint;
+                        donor.x =
+                            std::clamp(donor.x, lowX, highX);
+                        donor.y =
+                            std::clamp(donor.y, lowY, highY);
+
+                        // Preserve the path plane when borrowing material on a
+                        // slope; changing X/Y without this correction would
+                        // sample a slightly wrong native isometric row.
+                        const auto planeNormal =
+                            FpCross(
+                                Sub(face[1], face[0]),
+                                Sub(face[3], face[0]));
+                        if (std::abs(planeNormal.z) > 0.0001f)
+                        {
+                            donor.z = face[0].z
+                                - (planeNormal.x
+                                        * (donor.x - face[0].x)
+                                    + planeNormal.y
+                                        * (donor.y - face[0].y))
+                                    / planeNormal.z;
+                        }
+
+                        for (const auto& candidate :
+                             candidates)
+                        {
+                            const auto& view =
+                                decodedViews[
+                                    candidate.rotation];
+                            if (!SameFirstPersonMaterialTemplate(
+                                    surface.image,
+                                    view.component
+                                        ->artwork.image))
+                                continue;
+                            const auto sample =
+                                SampleFirstPersonSemanticArtwork(
+                                    view, donor,
+                                    candidate.rotation);
+                            if (sample.kind
+                                == FirstPersonSemanticArtworkSampleKind::
+                                    colour)
+                                return sample.pixel;
+                        }
+                        return uint8_t{ 0 };
+                    };
 
                 bool haveKnownMaterial = false;
                 bool haveUnknownMaterial = false;
@@ -3024,6 +3120,16 @@
                         break;
                     }
 
+                    if (texelKnown
+                        && selectedPixel == 0)
+                    {
+                        const uint8_t marginPixel =
+                            samplePathMarginMaterial(
+                                worldPoint);
+                        if (marginPixel != 0)
+                            selectedPixel = marginPixel;
+                    }
+
                     if (texelKnown)
                     {
                         haveKnownMaterial = true;
@@ -3039,74 +3145,6 @@
                         size_t(y) * size_t(width)
                         + size_t(x)] =
                         selectedPixel;
-                }
-
-                if (visualDeckEdgeMask != 0
-                    && width > 6 && height > 6)
-                {
-                    constexpr int32_t kNativePathMargin = 3;
-                    const auto sourcePixel =
-                        [&](int32_t x, int32_t y) {
-                            return pixels[
-                                size_t(y) * size_t(width)
-                                + size_t(x)];
-                        };
-                    for (int32_t y = 0; y < height; ++y)
-                    for (int32_t x = 0; x < width; ++x)
-                    {
-                        bool inMargin = false;
-                        bool edgeAllowed = true;
-                        if (x < kNativePathMargin)
-                        {
-                            inMargin = true;
-                            edgeAllowed &=
-                                (visualDeckEdgeMask
-                                    & (1u << 0)) != 0;
-                        }
-                        else if (x
-                            >= width - kNativePathMargin)
-                        {
-                            inMargin = true;
-                            edgeAllowed &=
-                                (visualDeckEdgeMask
-                                    & (1u << 2)) != 0;
-                        }
-                        if (y < kNativePathMargin)
-                        {
-                            inMargin = true;
-                            edgeAllowed &=
-                                (visualDeckEdgeMask
-                                    & (1u << 3)) != 0;
-                        }
-                        else if (y
-                            >= height - kNativePathMargin)
-                        {
-                            inMargin = true;
-                            edgeAllowed &=
-                                (visualDeckEdgeMask
-                                    & (1u << 1)) != 0;
-                        }
-                        if (!inMargin || !edgeAllowed)
-                            continue;
-
-                        auto& pixel =
-                            pixels[
-                                size_t(y) * size_t(width)
-                                + size_t(x)];
-                        if (pixel != 0)
-                            continue;
-
-                        const int32_t sampleX =
-                            std::clamp(
-                                x, kNativePathMargin,
-                                width - kNativePathMargin - 1);
-                        const int32_t sampleY =
-                            std::clamp(
-                                y, kNativePathMargin,
-                                height - kNativePathMargin - 1);
-                        pixel =
-                            sourcePixel(sampleX, sampleY);
-                    }
                 }
 
                 bool hasPixel = false;
@@ -4765,6 +4803,24 @@
                 visibleRegions.insert(
                     _activeLargeSceneryRegions.begin(),
                     _activeLargeSceneryRegions.end());
+            }
+
+            // Once a region has a published packet, its own authoritative
+            // geometry bounds decide whether that last-known-good packet is
+            // visible. Do not withdraw ready world data merely because none
+            // of its source tiles happened to pass tile admission this frame;
+            // that creates camera-dependent lifetime holes and makes otherwise
+            // stable scenery pop out while turning or crossing region edges.
+            for (const auto& [key, packet] :
+                 _staticRegionPackets)
+            {
+                if (packet.surfaceStorage != nullptr
+                    && !packet.surfaceStorage->empty()
+                    && frustum.visible(
+                        packet.center, packet.radius))
+                {
+                    visibleRegions.insert(key);
+                }
             }
 
             _snapshotBudget = FirstPersonFrameBudget(32, std::chrono::microseconds(1000));
