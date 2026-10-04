@@ -4251,12 +4251,8 @@
 
             const int32_t baseZ =
                 int32_t(std::lround(group.anchor.z));
-            const int32_t topZ =
-                baseZ + clearanceHeight;
-
             const auto makeViews =
-                [&](ParkEntranceSequence sequence,
-                    bool reverseCentreWinding) {
+                [&](ParkEntranceSequence sequence) {
                     std::array<
                         FirstPersonPaintSemanticComponent, 4>
                         views{};
@@ -4301,79 +4297,40 @@
                         component.artwork.sourceRotation =
                             sourceRotation;
 
+                        component.geometry.kind =
+                            FirstPersonPaintSemanticPrimitiveKind::
+                                box;
+                        component.geometry.pointCount = 2;
+                        component.artwork.decal = false;
                         if (sequence
                             == ParkEntranceSequence::centre)
                         {
-                            component.geometry.kind =
-                                FirstPersonPaintSemanticPrimitiveKind::
-                                    plane;
-                            component.geometry.pointCount = 4;
-                            if (!reverseCentreWinding)
-                            {
-                                component.geometry.points = { {
-                                    {
-                                        -float(kCoordsXYHalfTile),
-                                        0.0f, float(baseZ)
-                                    },
-                                    {
-                                        float(kCoordsXYHalfTile),
-                                        0.0f, float(baseZ)
-                                    },
-                                    {
-                                        float(kCoordsXYHalfTile),
-                                        0.0f, float(topZ)
-                                    },
-                                    {
-                                        -float(kCoordsXYHalfTile),
-                                        0.0f, float(topZ)
-                                    },
-                                } };
-                            }
-                            else
-                            {
-                                component.geometry.points = { {
-                                    {
-                                        float(kCoordsXYHalfTile),
-                                        0.0f, float(baseZ)
-                                    },
-                                    {
-                                        -float(kCoordsXYHalfTile),
-                                        0.0f, float(baseZ)
-                                    },
-                                    {
-                                        -float(kCoordsXYHalfTile),
-                                        0.0f, float(topZ)
-                                    },
-                                    {
-                                        float(kCoordsXYHalfTile),
-                                        0.0f, float(topZ)
-                                    },
-                                } };
-                            }
-                            // This is the authoritative gate/arch carrier from
-                            // the native entrance painter: a transparent,
-                            // non-collision plane. Sprite alpha defines the
-                            // walk-through opening.
-                            component.artwork.decal = true;
+                            // Native centre bounds:
+                            // (2,2,base+32) + (28,28,47).
+                            // This is the overhead arch/crosspiece envelope;
+                            // the entire lower centre remains open.
+                            component.geometry.points[0] = {
+                                -14.0f, -14.0f,
+                                float(baseZ + 32),
+                            };
+                            component.geometry.points[1] = {
+                                14.0f, 14.0f,
+                                float(baseZ + 79),
+                            };
                             component.collidable = false;
                         }
                         else
                         {
-                            component.geometry.kind =
-                                FirstPersonPaintSemanticPrimitiveKind::
-                                    box;
-                            component.geometry.pointCount = 2;
+                            // Native side bounds:
+                            // (3,3,base) + (26,26,79).
                             component.geometry.points[0] = {
-                                -float(kCoordsXYHalfTile),
-                                -float(kCoordsXYHalfTile),
+                                -13.0f, -13.0f,
                                 float(baseZ),
                             };
                             component.geometry.points[1] = {
-                                float(kCoordsXYHalfTile),
-                                float(kCoordsXYHalfTile),
-                                float(topZ),
+                                13.0f, 13.0f,
+                                float(baseZ + 79),
                             };
-                            component.artwork.decal = false;
                             component.collidable = true;
                         }
                     }
@@ -4436,76 +4393,45 @@
 
             std::array<bool, 3> sequenceBuilt{};
 
-            // The centre is physically a plane, not a solid tile. Build its
-            // two physical sides explicitly and feed each side only the native
-            // views that can actually observe it. This preserves different
-            // front/back entrance artwork without inventing thickness.
-            for (bool reverse : { false, true })
+            // The centre artwork is an upper volumetric arch/crosspiece,
+            // exactly matching the native PaintStruct envelope. Refine it from
+            // all four native views just like the side pieces; the lower
+            // 32-world-unit walk-through is not part of the candidate volume.
             {
                 auto views =
                     makeViews(
-                        ParkEntranceSequence::centre,
-                        reverse);
-                const auto& transform =
-                    views[0].transform;
-                FirstPersonVec3 normal =
-                    reverse
-                    ? FirstPersonVec3{
-                        transform.axisY.x,
-                        transform.axisY.y,
-                        transform.axisY.z
-                    }
-                    : FirstPersonVec3{
-                        -transform.axisY.x,
-                        -transform.axisY.y,
-                        -transform.axisY.z
-                    };
-                const CoordsXY normalXY{
-                    int32_t(std::lround(normal.x)),
-                    int32_t(std::lround(normal.y)),
-                };
-
+                        ParkEntranceSequence::centre);
                 std::array<
                     const FirstPersonPaintSemanticComponent*, 4>
                     observations{};
-                const FirstPersonPaintSemanticComponent*
-                    canonical = nullptr;
                 for (uint8_t sourceRotation = 0;
                      sourceRotation < 4;
                      ++sourceRotation)
                 {
-                    if (!FirstPersonFaceVisibleFromNativeView(
-                            normalXY, sourceRotation))
-                        continue;
                     observations[sourceRotation] =
                         &views[sourceRotation];
-                    if (canonical == nullptr)
-                        canonical =
-                            &views[sourceRotation];
-                }
-                if (canonical == nullptr)
-                {
-                    result.surfaces.clear();
-                    return result;
                 }
 
-                const CoordsXY tile =
-                    canonical->mapPosition;
+                const auto& canonical = views[0];
+                const auto tile =
+                    canonical.mapPosition;
+                bool visualHullRefined = false;
                 auto surfaces =
                     BuildFirstPersonSemanticComponentSurfaces(
-                        *canonical,
+                        canonical,
                         FirstPersonGpuRegionKey(
                             tile.x / kCoordsXYStep,
                             tile.y / kCoordsXYStep),
                         group.key,
-                        observations, nullptr, sprites);
-                if (surfaces.empty())
+                        observations, nullptr, sprites,
+                        &visualHullRefined);
+                if (!visualHullRefined
+                    || surfaces.empty())
                 {
                     result.surfaces.clear();
                     return result;
                 }
-                appendSurfaces(
-                    std::move(surfaces), normal);
+                appendSurfaces(std::move(surfaces));
                 sequenceBuilt[
                     static_cast<size_t>(
                         ParkEntranceSequence::centre)] = true;
@@ -4520,7 +4446,7 @@
                      ParkEntranceSequence::right })
             {
                 auto views =
-                    makeViews(sequence, false);
+                    makeViews(sequence);
                 std::array<
                     const FirstPersonPaintSemanticComponent*, 4>
                     observations{};
@@ -4576,7 +4502,7 @@
                     * kCoordsXYStep),
                 float((result.maxTileY + 1)
                     * kCoordsXYStep),
-                float(topZ),
+                float(baseZ + 79),
             };
             const FirstPersonVec3 center{
                 0.5f * (boundsLow.x + boundsHigh.x),
