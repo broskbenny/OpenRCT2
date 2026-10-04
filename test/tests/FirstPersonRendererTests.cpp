@@ -281,6 +281,22 @@ TEST(FirstPersonWalkingSemanticsTest, StableDoorStatesHaveAuthoritativeCollision
     EXPECT_TRUE(FirstPersonDoorBlocksWalking(15));
 }
 
+TEST(FirstPersonWalkingSemanticsTest, PathSlopeMappingMatchesNativePathDirections)
+{
+    EXPECT_EQ(
+        FirstPersonPathLandSlope(0),
+        kTileSlopeSWSideUp);
+    EXPECT_EQ(
+        FirstPersonPathLandSlope(1),
+        kTileSlopeNWSideUp);
+    EXPECT_EQ(
+        FirstPersonPathLandSlope(2),
+        kTileSlopeNESideUp);
+    EXPECT_EQ(
+        FirstPersonPathLandSlope(3),
+        kTileSlopeSESideUp);
+}
+
 TEST(FirstPersonWalkingSemanticsTest, ConnectionMasksRotateWithWorldOrientation)
 {
     EXPECT_EQ(
