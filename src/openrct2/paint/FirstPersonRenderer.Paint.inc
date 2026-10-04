@@ -948,6 +948,9 @@
                 for (const auto& semanticSurface :
                      cached.semanticStreamedSurfaces)
                 {
+                    if (IsReconstructedParkEntranceBody(
+                            semanticSurface, frame))
+                        continue;
                     if (SurfaceMayBeVisible(
                             semanticSurface, worldFrustum))
                     {
@@ -974,7 +977,9 @@
                     const auto appendSelected = [&](const std::vector<FirstPersonSurface>& surfaces) {
                         for (const auto& staticSurface : surfaces)
                         {
-                            if (IsReconstructedLargeSceneryBody(staticSurface, frame))
+                            if (IsReconstructedLargeSceneryBody(staticSurface, frame)
+                                || IsReconstructedParkEntranceBody(
+                                    staticSurface, frame))
                                 continue;
                             if (staticSurface.reconstructionGroup != 0)
                             {
