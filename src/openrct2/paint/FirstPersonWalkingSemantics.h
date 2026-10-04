@@ -59,7 +59,7 @@ namespace OpenRCT2::Paint
         bool wide = false;
         bool walkableFloor = false;
         bool guaranteedThroughPassage = false;
-        bool fullTileWalkableDeck = false;
+        bool visualFullTileDeck = false;
         uint8_t visualDeckEdgeMask = 0;
 
         // Path identity is retained so stacked/replaced path elements do not
@@ -160,10 +160,10 @@ namespace OpenRCT2::Paint
                 path.getSlopeDirection()) & 3u;
         result.wide = path.isWide();
         result.walkableFloor = true;
-        result.fullTileWalkableDeck =
+        result.visualFullTileDeck =
             FirstPersonPathUsesFullTileDeck(path);
         result.visualDeckEdgeMask =
-            result.fullTileWalkableDeck ? 0x0Fu : 0u;
+            result.visualFullTileDeck ? 0x0Fu : 0u;
         result.surface = path.getSurfaceEntryIndex();
         result.railings = path.getRailingsEntryIndex();
         return result;
@@ -343,15 +343,6 @@ namespace OpenRCT2::Paint
         if (x < tileMin || x > tileMax
             || y < tileMin || y > tileMax)
             return false;
-
-        if (constraint.fullTileWalkableDeck
-            && (constraint.kind
-                    == FirstPersonWalkabilityKind::path
-                || constraint.kind
-                    == FirstPersonWalkabilityKind::queue))
-        {
-            return true;
-        }
 
         if (constraint.kind
                 == FirstPersonWalkabilityKind::path
