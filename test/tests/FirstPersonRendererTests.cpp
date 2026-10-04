@@ -325,8 +325,10 @@ TEST(FirstPersonWalkingSemanticsTest, ParkEntranceCentrePublishesRotatedThroughP
     EXPECT_TRUE(constraint.walkableFloor);
     EXPECT_TRUE(
         constraint.guaranteedThroughPassage);
-    EXPECT_TRUE(
-        constraint.visualDeckShouldReachTileEdges);
+    EXPECT_FALSE(
+        constraint.fullTileWalkableDeck);
+    EXPECT_EQ(
+        constraint.visualDeckEdgeMask, 0x0A);
 
     entrance.setSequenceIndex(
         OpenRCT2::ParkEntranceSequence::left);
@@ -349,7 +351,7 @@ TEST(FirstPersonWalkingSemanticsTest, GuaranteedPassageDefinesOnlyTheWalkableCor
     entrance.connectedSides = 0x05;
     entrance.walkableFloor = true;
     entrance.guaranteedThroughPassage = true;
-    entrance.visualDeckShouldReachTileEdges = true;
+    entrance.visualDeckEdgeMask = 0x05;
 
     EXPECT_TRUE(
         FirstPersonWalkabilityContainsPoint(
@@ -412,7 +414,8 @@ TEST(FirstPersonWalkingSemanticsTest, WideVisualDeckCanReachTileBoundaryWithoutI
     wide.tile = CoordsXY{ 0, 0 };
     wide.walkableFloor = true;
     wide.wide = true;
-    wide.visualDeckShouldReachTileEdges = true;
+    wide.fullTileWalkableDeck = true;
+    wide.visualDeckEdgeMask = 0x0F;
     wide.connectedSides = 0;
 
     EXPECT_TRUE(
