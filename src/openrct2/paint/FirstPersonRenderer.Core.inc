@@ -4157,6 +4157,37 @@
             ParkEntranceGeometryCacheEntry result{};
             result.signature = signature;
             result.lastSeen = frame;
+
+            result.hasBounds = true;
+            result.minTileX =
+                result.maxTileX =
+                    int32_t(std::lround(group.anchor.x))
+                    / kCoordsXYStep;
+            result.minTileY =
+                result.maxTileY =
+                    int32_t(std::lround(group.anchor.y))
+                    / kCoordsXYStep;
+            for (const auto sequence : {
+                     ParkEntranceSequence::left,
+                     ParkEntranceSequence::right })
+            {
+                const auto tile =
+                    ParkEntranceSequenceTile(
+                        group, direction, sequence);
+                const int32_t tx =
+                    tile.x / kCoordsXYStep;
+                const int32_t ty =
+                    tile.y / kCoordsXYStep;
+                result.minTileX =
+                    std::min(result.minTileX, tx);
+                result.minTileY =
+                    std::min(result.minTileY, ty);
+                result.maxTileX =
+                    std::max(result.maxTileX, tx);
+                result.maxTileY =
+                    std::max(result.maxTileY, ty);
+            }
+
             if (clearanceHeight <= 0)
                 return result;
 
