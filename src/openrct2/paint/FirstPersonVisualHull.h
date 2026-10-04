@@ -98,16 +98,29 @@ namespace OpenRCT2::Paint
     };
 
     // A closed occupancy hull does not imply a closed rendered surface. Baking
-    // can omit unobserved faces or leave transparent texels on a boundary. Such
-    // surfaces carry artwork, and their reverse sides can be seen through those
-    // openings. Only a fully covered boundary permits interior-face rejection.
+    // can omit unobserved faces or leave transparent texels on a boundary.
+    // Missing material is directional evidence: an opening on one side can
+    // expose the reverse of the opposing boundary, but it must not make every
+    // unrelated face two-sided. This preserves open reconstructed artwork
+    // without reintroducing fighting between adjacent exterior wall planes.
     // This contract is for reconstructed hulls, not authored one-sided planes.
     class FirstPersonHullMaterialCoverage
     {
     public:
-        explicit FirstPersonHullMaterialCoverage(size_t boundaryFaces)
-            : _faces(boundaryFaces, FaceCoverage::absent)
+        template<typename FaceContainer>
+        explicit FirstPersonHullMaterialCoverage(
+            const FaceContainer& boundaryFaces)
+            : _faces(
+                  boundaryFaces.size(),
+                  FaceCoverage::absent)
+            , _normals(boundaryFaces.size())
         {
+            for (size_t i = 0;
+                 i < boundaryFaces.size(); ++i)
+            {
+                _normals[i] =
+                    boundaryFaces[i].normal;
+            }
         }
 
         void recordFace(size_t face, size_t texels, size_t opaqueTexels)
@@ -136,17 +149,45 @@ namespace OpenRCT2::Paint
             return !_faces.empty() && opaqueFaces() == _faces.size();
         }
 
+        [[nodiscard]] bool reverseSideExposed(
+            FirstPersonVec3 outwardNormal) const
+        {
+            const float lengthSquared =
+                outwardNormal.x * outwardNormal.x
+                + outwardNormal.y * outwardNormal.y
+                + outwardNormal.z * outwardNormal.z;
+            if (lengthSquared < 0.5f)
+                return true;
+
+            for (size_t i = 0; i < _faces.size(); ++i)
+            {
+                if (_faces[i] == FaceCoverage::opaque)
+                    continue;
+                const auto& openingNormal = _normals[i];
+                const float alignment =
+                    outwardNormal.x * openingNormal.x
+                    + outwardNormal.y * openingNormal.y
+                    + outwardNormal.z * openingNormal.z;
+                if (alignment < -0.5f)
+                    return true;
+            }
+            return false;
+        }
+
         // Finalize the whole object after baking, before any surfaces are cached
-        // or published. One missing face can expose the reverse of another face.
+        // or published. A missing/transparent boundary relaxes only surfaces
+        // facing the opposite direction that can actually be exposed through it.
         template<typename SurfaceIterator>
         void applyTo(SurfaceIterator begin, SurfaceIterator end) const
         {
             const auto materialCount = uint32_t(materialFaces());
             const auto opaqueCount = uint32_t(opaqueFaces());
-            const bool closed = !_faces.empty() && opaqueCount == _faces.size();
             for (auto it = begin; it != end; ++it)
             {
-                it->exteriorOnly = closed;
+                it->exteriorOnly =
+                    !_faces.empty()
+                    && !reverseSideExposed(
+                        it->outwardNormal);
                 it->diagnosticHullBoundaryFaces = uint32_t(_faces.size());
                 it->diagnosticHullMaterialFaces = materialCount;
                 it->diagnosticHullOpaqueFaces = opaqueCount;
@@ -161,6 +202,7 @@ namespace OpenRCT2::Paint
             opaque,
         };
         std::vector<FaceCoverage> _faces;
+        std::vector<FirstPersonVec3> _normals;
     };
 
     template<typename SampleFace, typename BuildFace>
