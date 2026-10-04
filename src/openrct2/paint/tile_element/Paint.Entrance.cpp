@@ -445,7 +445,7 @@ static uint32_t PublishFirstPersonParkEntrancePathDeck(
         } },
         image, artworkOffset, artworkGroup,
         false, false,
-        walkability.visualDeckShouldReachTileEdges);
+        walkability.visualDeckEdgeMask);
 }
 
 static void PaintParkEntranceScrollingText(
