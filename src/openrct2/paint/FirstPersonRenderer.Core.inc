@@ -4247,21 +4247,80 @@
                     std::max(result.maxTileY, ty);
             }
 
-            if (clearanceHeight <= 0)
+            // Park entrances occupy a three-tile frontage. For first-person,
+            // use the collision-sized 32-unit cell as the only geometric
+            // primitive and make the front profile deliberately simple:
+            //
+            //     [ L ][ C ][ R ]
+            //     [ L ][   ][ R ]
+            //
+            // The lower centre cell is the walk-through opening. This is a
+            // five-solid-cell model: no visual hull, no voxel carving, no
+            // sprite-derived geometry and no asset-specific silhouette table.
+            constexpr int32_t kEntranceRows = 2;
+            if (clearanceHeight
+                < kEntranceRows * kCoordsXYStep)
                 return result;
 
             const int32_t baseZ =
                 int32_t(std::lround(group.anchor.z));
+            const float halfCell =
+                float(kCoordsXYHalfTile);
+            const float cellHeight =
+                float(kCoordsXYStep);
+            const float lowerBottom =
+                float(baseZ);
+            const float lowerTop =
+                lowerBottom + cellHeight;
+            const float upperBottom =
+                lowerTop;
+            const float upperTop =
+                upperBottom + cellHeight;
+
+            struct ParkEntranceCell
+            {
+                ParkEntranceSequence sequence;
+                uint8_t index;
+                float lowZ;
+                float highZ;
+            };
+
+            const std::array<ParkEntranceCell, 5>
+                cells{ {
+                    {
+                        ParkEntranceSequence::left,
+                        0, lowerBottom, lowerTop
+                    },
+                    {
+                        ParkEntranceSequence::right,
+                        1, lowerBottom, lowerTop
+                    },
+                    {
+                        ParkEntranceSequence::left,
+                        2, upperBottom, upperTop
+                    },
+                    {
+                        ParkEntranceSequence::centre,
+                        3, upperBottom, upperTop
+                    },
+                    {
+                        ParkEntranceSequence::right,
+                        4, upperBottom, upperTop
+                    },
+                } };
+
             const auto makeViews =
-                [&](ParkEntranceSequence sequence) {
+                [&](const ParkEntranceCell& cell) {
                     std::array<
                         FirstPersonPaintSemanticComponent, 4>
                         views{};
                     const size_t sequenceIndex =
-                        static_cast<size_t>(sequence);
+                        static_cast<size_t>(
+                            cell.sequence);
                     const CoordsXY tile =
                         ParkEntranceSequenceTile(
-                            group, direction, sequence);
+                            group, direction,
+                            cell.sequence);
                     const auto transform =
                         MakeGroupedParkEntranceTransform(
                             tile, direction);
@@ -4274,14 +4333,15 @@
                             views[sourceRotation];
                         component.id =
                             uint32_t(
-                                sequenceIndex * 4u
+                                size_t(cell.index) * 4u
                                 + sourceRotation + 1u);
                         component.role =
                             FirstPersonPaintSemanticRole::
                                 structureBody;
                         component.mapPosition = tile;
                         component.transform = transform;
-                        component.repetitionIndex = 0;
+                        component.repetitionIndex =
+                            cell.index;
                         component.artwork.image =
                             ImageId(
                                 bodyImages[
@@ -4294,54 +4354,31 @@
                                 tile, baseZ,
                                 sourceRotation);
                         component.artwork.group =
-                            uint32_t(sequenceIndex + 1u);
+                            uint32_t(
+                                sequenceIndex + 1u);
                         component.artwork.sourceRotation =
                             sourceRotation;
+                        component.artwork.decal = false;
 
                         component.geometry.kind =
                             FirstPersonPaintSemanticPrimitiveKind::
                                 box;
                         component.geometry.pointCount = 2;
-                        component.artwork.decal = false;
-                        if (sequence
-                            == ParkEntranceSequence::centre)
-                        {
-                            // Native centre bounds:
-                            // (2,2,base+32) + (28,28,47).
-                            // This is the overhead arch/crosspiece envelope;
-                            // the entire lower centre remains open.
-                            component.geometry.points[0] = {
-                                -14.0f, -14.0f,
-                                float(baseZ + 32),
-                            };
-                            component.geometry.points[1] = {
-                                14.0f, 14.0f,
-                                float(baseZ + 79),
-                            };
-                            component.collidable = false;
-                        }
-                        else
-                        {
-                            // Native side bounds:
-                            // (3,3,base) + (26,26,79).
-                            component.geometry.points[0] = {
-                                -13.0f, -13.0f,
-                                float(baseZ),
-                            };
-                            component.geometry.points[1] = {
-                                13.0f, 13.0f,
-                                float(baseZ + 79),
-                            };
-                            component.collidable = true;
-                        }
+                        component.geometry.points[0] = {
+                            -halfCell, -halfCell,
+                            cell.lowZ,
+                        };
+                        component.geometry.points[1] = {
+                            halfCell, halfCell,
+                            cell.highZ,
+                        };
+                        component.collidable = true;
                     }
                     return views;
                 };
 
             const auto appendSurfaces =
-                [&](std::vector<FirstPersonSurface> surfaces,
-                    std::optional<FirstPersonVec3>
-                        forcedNormal = std::nullopt) {
+                [&](std::vector<FirstPersonSurface> surfaces) {
                     for (auto& surface : surfaces)
                     {
                         surface.reconstructionGroup =
@@ -4351,31 +4388,17 @@
                             group.anchor;
                         surface.cameraIndependent = true;
 
-                        FirstPersonVec3 normal{};
-                        if (forcedNormal.has_value())
-                        {
-                            normal = *forcedNormal;
-                        }
-                        else
-                        {
-                            const auto horizontal =
-                                Sub(
-                                    surface.triangles[1].world,
-                                    surface.triangles[0].world);
-                            const auto vertical =
-                                Sub(
-                                    surface.triangles[5].world,
-                                    surface.triangles[0].world);
-                            normal =
-                                FpCross(
-                                    horizontal, vertical);
-                            const float length =
-                                std::sqrt(
-                                    FpDot(normal, normal));
-                            if (length > 0.001f)
-                                normal =
-                                    Mul(normal, 1.0f / length);
-                        }
+                        const auto horizontal =
+                            Sub(
+                                surface.triangles[1].world,
+                                surface.triangles[0].world);
+                        const auto vertical =
+                            Sub(
+                                surface.triangles[5].world,
+                                surface.triangles[0].world);
+                        auto normal =
+                            FpCross(
+                                horizontal, vertical);
                         const float normalLength =
                             std::sqrt(
                                 FpDot(normal, normal));
@@ -4392,17 +4415,9 @@
                     }
                 };
 
-            std::array<bool, 3> sequenceBuilt{};
-
-            // The centre artwork is an upper volumetric arch/crosspiece,
-            // exactly matching the native PaintStruct envelope. Keep that
-            // envelope as stable geometry and use all four native views only
-            // as material evidence; the lower walk-through remains true empty
-            // space and no voxel boundary is introduced.
+            for (const auto& cell : cells)
             {
-                auto views =
-                    makeViews(
-                        ParkEntranceSequence::centre);
+                auto views = makeViews(cell);
                 std::array<
                     const FirstPersonPaintSemanticComponent*, 4>
                     observations{};
@@ -4428,79 +4443,30 @@
                         nullptr, false);
                 if (surfaces.empty())
                 {
+                    // Never publish a partial five-cell entrance. If native
+                    // artwork cannot texture one of the authoritative cells,
+                    // retain the native entrance until a complete grouped
+                    // replacement can be produced.
                     result.surfaces.clear();
                     return result;
                 }
                 appendSurfaces(std::move(surfaces));
-                sequenceBuilt[
-                    static_cast<size_t>(
-                        ParkEntranceSequence::centre)] = true;
             }
 
-            // The side elements use the exact structural envelopes published
-            // by the entrance painter. Keep each envelope stable and use all
-            // four native views for material evidence instead of voxel-carving
-            // the silhouette.
-            for (const auto sequence : {
-                     ParkEntranceSequence::left,
-                     ParkEntranceSequence::right })
-            {
-                auto views =
-                    makeViews(sequence);
-                std::array<
-                    const FirstPersonPaintSemanticComponent*, 4>
-                    observations{};
-                for (uint8_t sourceRotation = 0;
-                     sourceRotation < 4;
-                     ++sourceRotation)
-                {
-                    observations[sourceRotation] =
-                        &views[sourceRotation];
-                }
-
-                const auto& canonical = views[0];
-                const auto tile =
-                    canonical.mapPosition;
-                auto surfaces =
-                    BuildFirstPersonSemanticComponentSurfaces(
-                        canonical,
-                        FirstPersonGpuRegionKey(
-                            tile.x / kCoordsXYStep,
-                            tile.y / kCoordsXYStep),
-                        group.key,
-                        observations, nullptr, sprites,
-                        nullptr, false);
-                if (surfaces.empty())
-                {
-                    result.surfaces.clear();
-                    return result;
-                }
-                appendSurfaces(std::move(surfaces));
-                sequenceBuilt[
-                    static_cast<size_t>(sequence)] = true;
-            }
-
-            if (!std::all_of(
-                    sequenceBuilt.begin(),
-                    sequenceBuilt.end(),
-                    [](bool built) { return built; })
-                || result.surfaces.empty())
-            {
-                result.surfaces.clear();
+            if (result.surfaces.empty())
                 return result;
-            }
 
             const FirstPersonVec3 boundsLow{
                 float(result.minTileX * kCoordsXYStep),
                 float(result.minTileY * kCoordsXYStep),
-                float(baseZ),
+                lowerBottom,
             };
             const FirstPersonVec3 boundsHigh{
                 float((result.maxTileX + 1)
                     * kCoordsXYStep),
                 float((result.maxTileY + 1)
                     * kCoordsXYStep),
-                float(baseZ + 79),
+                upperTop,
             };
             const FirstPersonVec3 center{
                 0.5f * (boundsLow.x + boundsHigh.x),
