@@ -1386,6 +1386,25 @@ namespace OpenRCT2::Paint
                 && y0 <= geometry.maxTileY
                 && y1 >= geometry.minTileY)
             {
+                const bool sourceChanged =
+                    std::any_of(
+                        geometry.tileSignatures.begin(),
+                        geometry.tileSignatures.end(),
+                        [&](const auto& source) {
+                            const int32_t tx =
+                                source.first.x
+                                / kCoordsXYStep;
+                            const int32_t ty =
+                                source.first.y
+                                / kCoordsXYStep;
+                            return tx >= x0 && tx <= x1
+                                && ty >= y0 && ty <= y1
+                                && NativeTileSignature(
+                                    source.first)
+                                    != source.second;
+                        });
+                if (!sourceChanged)
+                    continue;
                 MarkParkEntranceGeometryRegionsDirty(
                     geometry);
                 geometry.dirty = true;
