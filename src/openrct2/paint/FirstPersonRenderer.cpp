@@ -303,6 +303,30 @@ namespace OpenRCT2::Paint
             return true;
         }
 
+        [[nodiscard]] const char*
+            FirstPersonInspectorWalkabilityKindName(
+                FirstPersonWalkabilityKind kind)
+        {
+            switch (kind)
+            {
+                case FirstPersonWalkabilityKind::path:
+                    return "path";
+                case FirstPersonWalkabilityKind::queue:
+                    return "queue";
+                case FirstPersonWalkabilityKind::parkEntrance:
+                    return "parkEntrance";
+                case FirstPersonWalkabilityKind::rideEntrance:
+                    return "rideEntrance";
+                case FirstPersonWalkabilityKind::rideExit:
+                    return "rideExit";
+                case FirstPersonWalkabilityKind::trackPortal:
+                    return "trackPortal";
+                case FirstPersonWalkabilityKind::none:
+                default:
+                    return "none";
+            }
+        }
+
         [[nodiscard]] const char* FirstPersonInspectorTileElementName(
             TileElementType type)
         {
@@ -702,6 +726,36 @@ namespace OpenRCT2::Paint
                 if (last)
                     break;
                 ++element;
+            }
+
+            const auto walkability =
+                CollectFirstPersonWalkabilityConstraints(
+                    tile);
+            Console::WriteLine(
+                "--- FP_PICK WALKABILITY count=%zu ---",
+                walkability.size());
+            for (size_t i = 0;
+                 i < walkability.size(); ++i)
+            {
+                const auto& constraint =
+                    walkability[i];
+                Console::WriteLine(
+                    "  constraint[%zu] kind=%s baseZ=%d sides=0x%02x "
+                    "corners=0x%02x floor=%d through=%d fullDeck=%d "
+                    "sloped=%d slopeDirection=%u wide=%d",
+                    i,
+                    FirstPersonInspectorWalkabilityKindName(
+                        constraint.kind),
+                    constraint.baseZ,
+                    unsigned(constraint.connectedSides),
+                    unsigned(constraint.corners),
+                    constraint.walkableFloor ? 1 : 0,
+                    constraint.guaranteedThroughPassage ? 1 : 0,
+                    constraint.visualDeckShouldReachTileEdges
+                        ? 1 : 0,
+                    constraint.sloped ? 1 : 0,
+                    unsigned(constraint.slopeDirection),
+                    constraint.wide ? 1 : 0);
             }
 
             DumpFirstPersonInspectorTileCache(tileX, tileY);
