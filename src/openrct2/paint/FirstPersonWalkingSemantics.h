@@ -163,7 +163,8 @@ namespace OpenRCT2::Paint
         result.visualFullTileDeck =
             FirstPersonPathUsesFullTileDeck(path);
         result.visualDeckEdgeMask =
-            result.visualFullTileDeck ? 0x0Fu : 0u;
+            result.visualFullTileDeck
+            ? 0x0Fu : result.connectedSides;
         result.surface = path.getSurfaceEntryIndex();
         result.railings = path.getRailingsEntryIndex();
         return result;
