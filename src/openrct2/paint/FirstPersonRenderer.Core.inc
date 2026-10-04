@@ -2470,6 +2470,193 @@
             }
         }
 
+        [[nodiscard]] bool
+            ParkEntranceGeometryAllowedForView(
+                uint32_t viewFlags)
+        {
+            constexpr uint32_t kIncompatible =
+                VIEWPORT_FLAG_CLIP_VIEW
+                | VIEWPORT_FLAG_CLIP_VIEW_SEE_THROUGH
+                | VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES;
+            if ((viewFlags & kIncompatible) != 0
+                || gTrackDesignSaveMode)
+                return false;
+
+            const auto* selected =
+                TileInspector::GetSelectedElement();
+            return selected == nullptr
+                || selected->getType()
+                    != TileElementType::entrance;
+        }
+
+        void MarkParkEntranceGeometryRegionsDirty(
+            const ParkEntranceGeometryCacheEntry& cached)
+        {
+            for (const auto& surface : cached.surfaces)
+            {
+                if (surface.gpuRegion != 0)
+                    _staticRegionPackets[
+                        surface.gpuRegion].dirty = true;
+            }
+        }
+
+        void UnregisterParkEntranceRegionMembership(
+            uint64_t groupKey,
+            const ParkEntranceGeometryCacheEntry& cached)
+        {
+            if (cached.hasBounds)
+            {
+                VisitFirstPersonGpuRegionsInTileBounds(
+                    cached.minTileX, cached.minTileY,
+                    cached.maxTileX, cached.maxTileY,
+                    [&](uint64_t regionKey) {
+                        const auto found =
+                            _parkEntranceGroupsByBoundsRegion.find(
+                                regionKey);
+                        if (found
+                            == _parkEntranceGroupsByBoundsRegion.end())
+                            return;
+                        found->second.erase(groupKey);
+                        if (found->second.empty())
+                        {
+                            _parkEntranceGroupsByBoundsRegion.erase(
+                                found);
+                        }
+                    });
+            }
+
+            std::unordered_set<uint64_t> regions;
+            for (const auto& surface : cached.surfaces)
+            {
+                if (surface.gpuRegion != 0)
+                    regions.insert(surface.gpuRegion);
+            }
+            for (const auto region : regions)
+            {
+                const auto found =
+                    _parkEntranceGroupsByRegion.find(region);
+                if (found == _parkEntranceGroupsByRegion.end())
+                    continue;
+                found->second.erase(groupKey);
+                if (found->second.empty())
+                    _parkEntranceGroupsByRegion.erase(found);
+            }
+        }
+
+        void RegisterParkEntranceRegionMembership(
+            uint64_t groupKey,
+            const ParkEntranceGeometryCacheEntry& cached)
+        {
+            if (cached.hasBounds)
+            {
+                VisitFirstPersonGpuRegionsInTileBounds(
+                    cached.minTileX, cached.minTileY,
+                    cached.maxTileX, cached.maxTileY,
+                    [&](uint64_t regionKey) {
+                        _parkEntranceGroupsByBoundsRegion[
+                            regionKey].insert(groupKey);
+                    });
+            }
+
+            for (const auto& surface : cached.surfaces)
+            {
+                if (surface.gpuRegion != 0)
+                {
+                    _parkEntranceGroupsByRegion[
+                        surface.gpuRegion].insert(groupKey);
+                }
+            }
+        }
+
+        [[nodiscard]] CoordsXY
+            ParkEntranceSequenceTile(
+                const ReconstructionGroupInfo& group,
+                uint8_t direction,
+                ParkEntranceSequence sequence)
+        {
+            CoordsXY result{
+                int32_t(std::lround(group.anchor.x)),
+                int32_t(std::lround(group.anchor.y)),
+            };
+            const CoordsXY side =
+                CoordsDirectionDelta[
+                    (direction - 1u) & 3u];
+            if (sequence == ParkEntranceSequence::left)
+            {
+                result.x += side.x;
+                result.y += side.y;
+            }
+            else if (sequence
+                == ParkEntranceSequence::right)
+            {
+                result.x -= side.x;
+                result.y -= side.y;
+            }
+            return result;
+        }
+
+        [[nodiscard]] EntranceElement*
+            FindParkEntranceSequence(
+                const ReconstructionGroupInfo& group,
+                uint8_t direction,
+                ObjectEntryIndex entryIndex,
+                ParkEntranceSequence sequence)
+        {
+            const CoordsXY tile =
+                ParkEntranceSequenceTile(
+                    group, direction, sequence);
+            auto* element =
+                MapGetFirstElementAt(tile);
+            if (element == nullptr)
+                return nullptr;
+
+            do
+            {
+                if (element->getType()
+                        != TileElementType::entrance
+                    || element->isGhost()
+                    || element->isInvisible())
+                    continue;
+                auto* entrance =
+                    element->asEntrance();
+                if (entrance == nullptr
+                    || entrance->getEntranceType()
+                        != EntranceType::parkEntrance
+                    || entrance->getSequenceIndex()
+                        != sequence
+                    || entrance->getEntryIndex()
+                        != entryIndex
+                    || (static_cast<uint8_t>(
+                            entrance->getDirection()) & 3u)
+                        != (direction & 3u)
+                    || entrance->getBaseZ()
+                        != int32_t(std::lround(
+                            group.anchor.z)))
+                    continue;
+                return entrance;
+            } while (!(element++)->isLastForTile());
+            return nullptr;
+        }
+
+        [[nodiscard]] bool ParkEntranceInstanceComplete(
+            const ReconstructionGroupInfo& group,
+            uint8_t direction,
+            ObjectEntryIndex entryIndex)
+        {
+            for (const auto sequence : {
+                     ParkEntranceSequence::centre,
+                     ParkEntranceSequence::left,
+                     ParkEntranceSequence::right })
+            {
+                if (FindParkEntranceSequence(
+                        group, direction, entryIndex,
+                        sequence)
+                    == nullptr)
+                    return false;
+            }
+            return true;
+        }
+
         [[nodiscard]] bool LargeSceneryInstanceMetadataMatches(
             const LargeSceneryElement& large, const LargeSceneryEntry& entry)
         {
