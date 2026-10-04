@@ -2326,6 +2326,26 @@
         static std::unordered_set<uint64_t> _activeLargeSceneryRegions;
         static bool _largeSceneryGeometryEnabled = false;
 
+        struct ParkEntranceGeometryCacheEntry
+        {
+            uint64_t signature{};
+            uint64_t lastSeen{};
+            bool dirty = false;
+            bool hasBounds = false;
+            int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
+            std::vector<FirstPersonSurface> surfaces;
+        };
+        static std::unordered_map<
+            uint64_t, ParkEntranceGeometryCacheEntry>
+            _parkEntranceGeometryCache;
+        static std::unordered_map<
+            uint64_t, std::unordered_set<uint64_t>>
+            _parkEntranceGroupsByRegion;
+        static std::unordered_map<
+            uint64_t, std::unordered_set<uint64_t>>
+            _parkEntranceGroupsByBoundsRegion;
+        static bool _parkEntranceGeometryEnabled = false;
+
         template<typename Visit>
         void VisitFirstPersonGpuRegionsInTileBounds(
             int32_t minTileX, int32_t minTileY,
