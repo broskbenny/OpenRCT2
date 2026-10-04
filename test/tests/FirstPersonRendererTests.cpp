@@ -410,8 +410,8 @@ TEST(FirstPersonHullMaterialTest, ObjectRangePreservesAuthoredWallAndDirectional
     scene[2].outwardNormal = faces[2].normal;
 
     FirstPersonHullMaterialCoverage coverage(faces);
-    coverage.recordFace(0, 4, 4);
-    coverage.recordFace(1, 4, 3);
+    for (size_t i = 0; i < faces.size(); ++i)
+        coverage.recordFace(i, 4, i == 1 ? 3 : 4);
     coverage.applyTo(scene.begin() + 1, scene.end());
 
     EXPECT_TRUE(scene.front().exteriorOnly);
@@ -424,8 +424,8 @@ TEST(FirstPersonHullMaterialTest, ObjectRangePreservesAuthoredWallAndDirectional
     for (const auto& surface : cached)
     {
         EXPECT_EQ(surface.diagnosticHullBoundaryFaces, 6u);
-        EXPECT_EQ(surface.diagnosticHullMaterialFaces, 2u);
-        EXPECT_EQ(surface.diagnosticHullOpaqueFaces, 1u);
+        EXPECT_EQ(surface.diagnosticHullMaterialFaces, 6u);
+        EXPECT_EQ(surface.diagnosticHullOpaqueFaces, 5u);
     }
 }
 
