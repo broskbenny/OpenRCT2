@@ -4279,6 +4279,44 @@
                 ParkEntranceSequenceTile(
                     group, direction,
                     ParkEntranceSequence::centre);
+            const std::array<CoordsXY, 3>
+                sequenceTiles{ {
+                    centreTile,
+                    ParkEntranceSequenceTile(
+                        group, direction,
+                        ParkEntranceSequence::left),
+                    ParkEntranceSequenceTile(
+                        group, direction,
+                        ParkEntranceSequence::right),
+                } };
+            const auto sourceTileForPoint =
+                [&](FirstPersonVec3 point) {
+                    CoordsXY best = sequenceTiles[0];
+                    float bestDistance =
+                        std::numeric_limits<float>::max();
+                    for (const auto& tile :
+                         sequenceTiles)
+                    {
+                        const float dx =
+                            point.x
+                            - float(
+                                tile.x
+                                + kCoordsXYHalfTile);
+                        const float dy =
+                            point.y
+                            - float(
+                                tile.y
+                                + kCoordsXYHalfTile);
+                        const float distance =
+                            dx * dx + dy * dy;
+                        if (distance < bestDistance)
+                        {
+                            best = tile;
+                            bestDistance = distance;
+                        }
+                    }
+                    return best;
+                };
             const auto passageAxis =
                 passage.has_value()
                 ? FirstPersonPassageAxisForConnections(
@@ -4592,8 +4630,6 @@
                     static_cast<uint8_t>(
                         FirstPersonPaintSemanticRole::
                             structureBody);
-                surface.diagnosticSourceTile =
-                    centreTile;
                 surface.exteriorOnly = true;
                 surface.outwardNormal = face.normal;
 
@@ -4614,6 +4650,8 @@
                         + face.corners[2].z
                         + face.corners[3].z),
                 };
+                surface.diagnosticSourceTile =
+                    sourceTileForPoint(faceCenter);
                 surface.gpuRegion =
                     FirstPersonGpuRegionKey(
                         int32_t(std::floor(
