@@ -68,16 +68,6 @@ namespace OpenRCT2::Ui::FirstPerson
             bool hasWalkability = false;
             Paint::FirstPersonWalkabilityConstraint walkability{};
 
-            [[nodiscard]] bool IsPath() const
-            {
-                if (!hasWalkability)
-                    return false;
-                return walkability.kind
-                        == Paint::FirstPersonWalkabilityKind::path
-                    || walkability.kind
-                        == Paint::FirstPersonWalkabilityKind::queue;
-            }
-
             [[nodiscard]] bool IsWalkableSupport() const
             {
                 return hasWalkability
