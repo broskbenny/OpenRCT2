@@ -313,12 +313,15 @@ TEST(FirstPersonWalkingSemanticsTest, WidePathPublishesFullDeckWithoutChangingGr
         constraint.kind,
         FirstPersonWalkabilityKind::path);
     EXPECT_TRUE(constraint.walkableFloor);
-    EXPECT_TRUE(constraint.fullTileWalkableDeck);
+    EXPECT_TRUE(constraint.visualFullTileDeck);
     EXPECT_EQ(constraint.visualDeckEdgeMask, 0x0F);
     EXPECT_EQ(constraint.connectedSides, 0);
-    EXPECT_TRUE(
+    EXPECT_FALSE(
         FirstPersonWalkabilityContainsPoint(
             constraint, CoordsXY{ 1, 1 }));
+    EXPECT_TRUE(
+        FirstPersonWalkabilityContainsPoint(
+            constraint, CoordsXY{ 16, 16 }));
 
     path.setIsQueue(true);
     constraint =
@@ -327,7 +330,7 @@ TEST(FirstPersonWalkingSemanticsTest, WidePathPublishesFullDeckWithoutChangingGr
     EXPECT_EQ(
         constraint.kind,
         FirstPersonWalkabilityKind::queue);
-    EXPECT_FALSE(constraint.fullTileWalkableDeck);
+    EXPECT_FALSE(constraint.visualFullTileDeck);
     EXPECT_EQ(constraint.visualDeckEdgeMask, 0);
 }
 
@@ -379,7 +382,7 @@ TEST(FirstPersonWalkingSemanticsTest, ParkEntranceCentrePublishesRotatedThroughP
     EXPECT_TRUE(
         constraint.guaranteedThroughPassage);
     EXPECT_FALSE(
-        constraint.fullTileWalkableDeck);
+        constraint.visualFullTileDeck);
     EXPECT_EQ(
         constraint.visualDeckEdgeMask, 0x0A);
 
@@ -501,16 +504,19 @@ TEST(FirstPersonWalkingSemanticsTest, WideVisualDeckCanReachTileBoundaryWithoutI
     wide.tile = CoordsXY{ 0, 0 };
     wide.walkableFloor = true;
     wide.wide = true;
-    wide.fullTileWalkableDeck = true;
+    wide.visualFullTileDeck = true;
     wide.visualDeckEdgeMask = 0x0F;
     wide.connectedSides = 0;
 
-    EXPECT_TRUE(
+    EXPECT_FALSE(
         FirstPersonWalkabilityContainsPoint(
             wide, CoordsXY{ 1, 1 }));
-    EXPECT_TRUE(
+    EXPECT_FALSE(
         FirstPersonWalkabilityContainsPoint(
             wide, CoordsXY{ 31, 31 }));
+    EXPECT_TRUE(
+        FirstPersonWalkabilityContainsPoint(
+            wide, CoordsXY{ 16, 16 }));
     // Visual continuity does not fabricate graph connectivity.
     FirstPersonWalkabilityConstraint neighbour = wide;
     neighbour.tile =
