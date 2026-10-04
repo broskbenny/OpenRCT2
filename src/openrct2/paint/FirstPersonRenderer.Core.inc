@@ -4956,6 +4956,9 @@
                 std::pair<CoordsXY, uint64_t>, 3>
                 tileSignatures{};
             FirstPersonSpriteSnapshot sprites;
+            std::optional<
+                FirstPersonWalkabilityConstraint>
+                passage;
             size_t nextImage = 0;
             bool submitted = false;
         };
