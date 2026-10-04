@@ -20,6 +20,14 @@
 
 #include <linenoise.hpp>
 
+#ifdef _WIN32
+    // Win32 defines CreateDirectory as CreateDirectoryW/A. Do not let that
+    // macro rewrite OpenRCT2::Path::CreateDirectory below.
+    #ifdef CreateDirectory
+        #undef CreateDirectory
+    #endif
+#endif
+
 using namespace OpenRCT2;
 
 // Ignore isatty warning on WIN32
