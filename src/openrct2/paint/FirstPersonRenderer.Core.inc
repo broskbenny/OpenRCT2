@@ -5702,6 +5702,10 @@
                 ExtendStableKey(
                     fingerprint,
                     component.collidable ? 1 : 0);
+                ExtendStableKey(
+                    fingerprint,
+                    component.visualDeckShouldReachTileEdges
+                        ? 1 : 0);
             }
             return fingerprint;
         }
