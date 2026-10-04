@@ -62,7 +62,8 @@ namespace OpenRCT2::Paint
         bool wide = false;
         bool walkableFloor = false;
         bool guaranteedThroughPassage = false;
-        bool visualDeckShouldReachTileEdges = false;
+        bool fullTileWalkableDeck = false;
+        uint8_t visualDeckEdgeMask = 0;
 
         // Path identity is retained so stacked/replaced path elements do not
         // silently become one another while the first-person walker moves.
@@ -159,8 +160,10 @@ namespace OpenRCT2::Paint
                 path.getSlopeDirection()) & 3u;
         result.wide = path.isWide();
         result.walkableFloor = true;
-        result.visualDeckShouldReachTileEdges =
+        result.fullTileWalkableDeck =
             FirstPersonPathUsesFullTileDeck(path);
+        result.visualDeckEdgeMask =
+            result.fullTileWalkableDeck ? 0x0Fu : 0u;
         result.surface = path.getSurfaceEntryIndex();
         result.railings = path.getRailingsEntryIndex();
         return result;
@@ -211,8 +214,9 @@ namespace OpenRCT2::Paint
                 != FirstPersonPassageAxis::none;
         result.walkableFloor =
             result.guaranteedThroughPassage;
-        result.visualDeckShouldReachTileEdges =
-            result.guaranteedThroughPassage;
+        result.visualDeckEdgeMask =
+            result.guaranteedThroughPassage
+            ? result.connectedSides : 0u;
         return result;
     }
 
@@ -340,7 +344,7 @@ namespace OpenRCT2::Paint
             || y < tileMin || y > tileMax)
             return false;
 
-        if (constraint.visualDeckShouldReachTileEdges
+        if (constraint.fullTileWalkableDeck
             && (constraint.kind
                     == FirstPersonWalkabilityKind::path
                 || constraint.kind
@@ -523,24 +527,6 @@ namespace OpenRCT2::Paint
             && (to.connectedSides
                     & (1u << reverse))
                 != 0;
-    }
-
-    [[nodiscard]] inline std::optional<
-        FirstPersonWalkabilityConstraint>
-        FindFirstPersonVisualDeckConstraint(
-            CoordsXY tile, int32_t baseZ)
-    {
-        for (const auto& constraint :
-             CollectFirstPersonWalkabilityConstraints(
-                 tile))
-        {
-            if (!constraint
-                    .visualDeckShouldReachTileEdges
-                || constraint.baseZ != baseZ)
-                continue;
-            return constraint;
-        }
-        return std::nullopt;
     }
 
     [[nodiscard]] inline std::optional<
