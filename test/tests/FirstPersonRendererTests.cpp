@@ -297,6 +297,40 @@ TEST(FirstPersonWalkingSemanticsTest, PathSlopeMappingMatchesNativePathDirection
         kTileSlopeSESideUp);
 }
 
+TEST(FirstPersonWalkingSemanticsTest, WidePathPublishesFullDeckWithoutChangingGraphEdges)
+{
+    OpenRCT2::PathElement path{};
+    path.setWide(true);
+    path.setSloped(false);
+    path.setIsQueue(false);
+    path.setEdges(0);
+    path.setCorners(0);
+
+    auto constraint =
+        FirstPersonWalkabilityFromPath(
+            CoordsXY{ 0, 0 }, path);
+    EXPECT_EQ(
+        constraint.kind,
+        FirstPersonWalkabilityKind::path);
+    EXPECT_TRUE(constraint.walkableFloor);
+    EXPECT_TRUE(constraint.fullTileWalkableDeck);
+    EXPECT_EQ(constraint.visualDeckEdgeMask, 0x0F);
+    EXPECT_EQ(constraint.connectedSides, 0);
+    EXPECT_TRUE(
+        FirstPersonWalkabilityContainsPoint(
+            constraint, CoordsXY{ 1, 1 }));
+
+    path.setIsQueue(true);
+    constraint =
+        FirstPersonWalkabilityFromPath(
+            CoordsXY{ 0, 0 }, path);
+    EXPECT_EQ(
+        constraint.kind,
+        FirstPersonWalkabilityKind::queue);
+    EXPECT_FALSE(constraint.fullTileWalkableDeck);
+    EXPECT_EQ(constraint.visualDeckEdgeMask, 0);
+}
+
 TEST(FirstPersonWalkingSemanticsTest, ConnectionMasksRotateWithWorldOrientation)
 {
     EXPECT_EQ(
