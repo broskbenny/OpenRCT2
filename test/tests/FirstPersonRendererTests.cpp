@@ -303,6 +303,42 @@ TEST(FirstPersonWalkingSemanticsTest, ConnectionMasksRotateWithWorldOrientation)
         FirstPersonPassageAxis::none);
 }
 
+TEST(FirstPersonWalkingSemanticsTest, ParkEntranceCentrePublishesRotatedThroughPassage)
+{
+    OpenRCT2::EntranceElement entrance{};
+    entrance.setEntranceType(
+        OpenRCT2::EntranceType::parkEntrance);
+    entrance.setSequenceIndex(
+        OpenRCT2::ParkEntranceSequence::centre);
+    entrance.setBaseZ(96);
+    entrance.setDirection(OpenRCT2::Direction{ 1 });
+
+    const auto constraint =
+        FirstPersonWalkabilityFromEntrance(
+            OpenRCT2::CoordsXY{ 320, 640 },
+            entrance);
+    EXPECT_EQ(
+        constraint.kind,
+        FirstPersonWalkabilityKind::parkEntrance);
+    EXPECT_EQ(constraint.baseZ, 96);
+    EXPECT_EQ(constraint.connectedSides, 0x0A);
+    EXPECT_TRUE(constraint.walkableFloor);
+    EXPECT_TRUE(
+        constraint.guaranteedThroughPassage);
+    EXPECT_TRUE(
+        constraint.visualDeckShouldReachTileEdges);
+
+    entrance.setSequenceIndex(
+        OpenRCT2::ParkEntranceSequence::left);
+    const auto side =
+        FirstPersonWalkabilityFromEntrance(
+            OpenRCT2::CoordsXY{ 288, 640 },
+            entrance);
+    EXPECT_EQ(side.connectedSides, 0);
+    EXPECT_FALSE(side.walkableFloor);
+    EXPECT_FALSE(side.guaranteedThroughPassage);
+}
+
 TEST(FirstPersonWalkingSemanticsTest, GuaranteedPassageDefinesOnlyTheWalkableCorridor)
 {
     FirstPersonWalkabilityConstraint entrance{};
