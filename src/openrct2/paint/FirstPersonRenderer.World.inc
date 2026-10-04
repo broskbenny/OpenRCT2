@@ -3398,7 +3398,7 @@
                             && surface.reconstructionGroup != 0)
                         {
                             auto presented = surface;
-                            AlignParkEntranceSignToGroupedBody(
+                            (void)AlignParkEntranceSignToGroupedBody(
                                 presented, frame);
                             addSurface(presented);
                         }

@@ -974,7 +974,7 @@
                                 FirstPersonPaintSemanticRole::sign)
                         && presented.reconstructionGroup != 0)
                     {
-                        AlignParkEntranceSignToGroupedBody(
+                        (void)AlignParkEntranceSignToGroupedBody(
                             presented, frame);
                     }
                     if (SurfaceMayBeVisible(
