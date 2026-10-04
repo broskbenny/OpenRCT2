@@ -4211,7 +4211,10 @@
                 int32_t clearanceHeight,
                 const ReconstructionGroupInfo& group,
                 uint64_t signature, uint64_t frame,
-                const FirstPersonSpriteSnapshot& sprites)
+                const FirstPersonSpriteSnapshot& sprites,
+                const std::optional<
+                    FirstPersonWalkabilityConstraint>&
+                    passage)
         {
             (void)sprites;
 
@@ -4276,9 +4279,6 @@
                 ParkEntranceSequenceTile(
                     group, direction,
                     ParkEntranceSequence::centre);
-            const auto passage =
-                FindFirstPersonGuaranteedPassage(
-                    centreTile, baseZ);
             const auto passageAxis =
                 passage.has_value()
                 ? FirstPersonPassageAxisForConnections(
@@ -4724,6 +4724,9 @@
             std::vector<std::pair<CoordsXY, uint64_t>> tileSignatures;
             ReconstructionGroupInfo group{};
             FirstPersonSpriteSnapshot sprites;
+            std::optional<
+                FirstPersonWalkabilityConstraint>
+                passage;
             size_t nextImage = 0;
             bool submitted = false;
             int32_t minX{}, minY{}, maxX{}, maxY{};
@@ -4950,6 +4953,14 @@
                 slot->clearanceHeight =
                     centre.getClearanceZ()
                     - centre.getBaseZ();
+                const auto centreTile =
+                    ParkEntranceSequenceTile(
+                        group, slot->direction,
+                        ParkEntranceSequence::centre);
+                slot->passage =
+                    FindFirstPersonGuaranteedPassage(
+                        centreTile,
+                        centre.getBaseZ());
                 uint64_t signature =
                     14695981039346656037ull;
                 ExtendStableKey(
@@ -4957,6 +4968,24 @@
                 ExtendStableKey(
                     signature,
                     uint32_t(slot->clearanceHeight));
+                ExtendStableKey(
+                    signature,
+                    slot->passage.has_value() ? 1u : 0u);
+                if (slot->passage.has_value())
+                {
+                    ExtendStableKey(
+                        signature,
+                        uint32_t(slot->passage->baseZ));
+                    ExtendStableKey(
+                        signature,
+                        uint32_t(
+                            slot->passage->connectedSides));
+                    ExtendStableKey(
+                        signature,
+                        slot->passage
+                                ->guaranteedThroughPassage
+                            ? 1u : 0u);
+                }
 
                 size_t imageSlot = 0;
                 for (const auto sequence : {
@@ -5034,7 +5063,8 @@
                                 job->group,
                                 job->signature,
                                 frame,
-                                job->sprites);
+                                job->sprites,
+                                job->passage);
                         return [
                             job,
                             result =
