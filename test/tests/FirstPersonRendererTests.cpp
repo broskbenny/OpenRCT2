@@ -281,6 +281,119 @@ TEST(FirstPersonWalkingSemanticsTest, StableDoorStatesHaveAuthoritativeCollision
     EXPECT_TRUE(FirstPersonDoorBlocksWalking(15));
 }
 
+TEST(FirstPersonWalkingSemanticsTest, ConnectionMasksRotateWithWorldOrientation)
+{
+    EXPECT_EQ(
+        RotateFirstPersonConnectionMask(0x05, 0),
+        0x05);
+    EXPECT_EQ(
+        RotateFirstPersonConnectionMask(0x05, 1),
+        0x0A);
+    EXPECT_EQ(
+        RotateFirstPersonConnectionMask(0x05, 2),
+        0x05);
+    EXPECT_EQ(
+        FirstPersonPassageAxisForConnections(0x05),
+        FirstPersonPassageAxis::x);
+    EXPECT_EQ(
+        FirstPersonPassageAxisForConnections(0x0A),
+        FirstPersonPassageAxis::y);
+    EXPECT_EQ(
+        FirstPersonPassageAxisForConnections(0x01),
+        FirstPersonPassageAxis::none);
+}
+
+TEST(FirstPersonWalkingSemanticsTest, GuaranteedPassageDefinesOnlyTheWalkableCorridor)
+{
+    FirstPersonWalkabilityConstraint entrance{};
+    entrance.kind =
+        FirstPersonWalkabilityKind::parkEntrance;
+    entrance.tile = OpenRCT2::CoordsXY{ 320, 640 };
+    entrance.baseZ = 96;
+    entrance.connectedSides = 0x05;
+    entrance.walkableFloor = true;
+    entrance.guaranteedThroughPassage = true;
+    entrance.visualDeckShouldReachTileEdges = true;
+
+    EXPECT_TRUE(
+        FirstPersonWalkabilityContainsPoint(
+            entrance,
+            OpenRCT2::CoordsXY{ 321, 656 }));
+    EXPECT_TRUE(
+        FirstPersonWalkabilityContainsPoint(
+            entrance,
+            OpenRCT2::CoordsXY{ 351, 656 }));
+    EXPECT_FALSE(
+        FirstPersonWalkabilityContainsPoint(
+            entrance,
+            OpenRCT2::CoordsXY{ 336, 647 }));
+    // A walking body radius narrows the permitted centre line rather than
+    // widening the carved opening.
+    EXPECT_FALSE(
+        FirstPersonWalkabilityContainsPoint(
+            entrance,
+            OpenRCT2::CoordsXY{ 336, 649 },
+            2.0f));
+    EXPECT_TRUE(
+        FirstPersonWalkabilityContainsPoint(
+            entrance,
+            OpenRCT2::CoordsXY{ 336, 650 },
+            2.0f));
+}
+
+TEST(FirstPersonWalkingSemanticsTest, PathAndParkEntranceShareGraphEdges)
+{
+    FirstPersonWalkabilityConstraint path{};
+    path.kind = FirstPersonWalkabilityKind::path;
+    path.tile = OpenRCT2::CoordsXY{ 0, 0 };
+    path.baseZ = 80;
+    path.connectedSides = 1u << 2;
+    path.walkableFloor = true;
+
+    FirstPersonWalkabilityConstraint entrance{};
+    entrance.kind =
+        FirstPersonWalkabilityKind::parkEntrance;
+    entrance.tile =
+        OpenRCT2::CoordsXY{ kCoordsXYStep, 0 };
+    entrance.baseZ = 80;
+    entrance.connectedSides = 0x05;
+    entrance.walkableFloor = true;
+    entrance.guaranteedThroughPassage = true;
+
+    EXPECT_TRUE(
+        FirstPersonWalkabilitySupportsConnect(
+            path, entrance));
+    entrance.connectedSides = 1u << 2;
+    EXPECT_FALSE(
+        FirstPersonWalkabilitySupportsConnect(
+            path, entrance));
+}
+
+TEST(FirstPersonWalkingSemanticsTest, WideVisualDeckCanReachTileBoundaryWithoutInventingEdges)
+{
+    FirstPersonWalkabilityConstraint wide{};
+    wide.kind = FirstPersonWalkabilityKind::path;
+    wide.tile = OpenRCT2::CoordsXY{ 0, 0 };
+    wide.walkableFloor = true;
+    wide.wide = true;
+    wide.visualDeckShouldReachTileEdges = true;
+    wide.connectedSides = 0;
+
+    EXPECT_TRUE(
+        FirstPersonWalkabilityContainsPoint(
+            wide, OpenRCT2::CoordsXY{ 1, 1 }));
+    EXPECT_TRUE(
+        FirstPersonWalkabilityContainsPoint(
+            wide, OpenRCT2::CoordsXY{ 31, 31 }));
+    // Visual continuity does not fabricate graph connectivity.
+    FirstPersonWalkabilityConstraint neighbour = wide;
+    neighbour.tile =
+        OpenRCT2::CoordsXY{ kCoordsXYStep, 0 };
+    EXPECT_FALSE(
+        FirstPersonWalkabilitySupportsConnect(
+            wide, neighbour));
+}
+
 TEST(FirstPersonSmallSceneryCollisionTest, PartialWalkingMaskCannotReplaceTallArtwork)
 {
     EXPECT_TRUE(
