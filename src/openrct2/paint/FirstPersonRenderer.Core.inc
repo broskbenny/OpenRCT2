@@ -4157,7 +4157,8 @@
                 const std::vector<
                     const FirstPersonPaintSemanticComponent*>*
                     depthPeers,
-                const FirstPersonSpriteSnapshot& sprites);
+                const FirstPersonSpriteSnapshot& sprites,
+                bool* visualHullRefinedOut = nullptr);
 
         [[nodiscard]] FirstPersonPaintSemanticTransform
             MakeGroupedParkEntranceTransform(
@@ -4534,6 +4535,7 @@
                 const auto& canonical = views[0];
                 const auto tile =
                     canonical.mapPosition;
+                bool visualHullRefined = false;
                 auto surfaces =
                     BuildFirstPersonSemanticComponentSurfaces(
                         canonical,
@@ -4541,8 +4543,10 @@
                             tile.x / kCoordsXYStep,
                             tile.y / kCoordsXYStep),
                         group.key,
-                        observations, nullptr, sprites);
-                if (surfaces.empty())
+                        observations, nullptr, sprites,
+                        &visualHullRefined);
+                if (!visualHullRefined
+                    || surfaces.empty())
                 {
                     result.surfaces.clear();
                     return result;

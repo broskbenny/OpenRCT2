@@ -2447,8 +2447,11 @@
                 const std::vector<
                     const FirstPersonPaintSemanticComponent*>*
                     depthPeers,
-                const FirstPersonSpriteSnapshot& sprites)
+                const FirstPersonSpriteSnapshot& sprites,
+                bool* visualHullRefinedOut)
         {
+            if (visualHullRefinedOut != nullptr)
+                *visualHullRefinedOut = false;
             std::vector<FirstPersonSurface> result;
             auto faces =
                 BuildFirstPersonSemanticPhysicalFaces(component);
@@ -2485,6 +2488,8 @@
             {
                 faces = *carved;
                 visualHullRefined = true;
+                if (visualHullRefinedOut != nullptr)
+                    *visualHullRefinedOut = true;
             }
 
             std::vector<std::array<FirstPersonVec3, 4>>
