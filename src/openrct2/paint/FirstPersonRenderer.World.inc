@@ -2712,6 +2712,183 @@
                     surface.diagnosticMaterialRotation =
                         materialRotation;
                 }
+                // Mutable semantic decals (notably park-entrance scrolling
+                // text) are artwork patches, not copies of the whole physical
+                // carrier plane. Preserve the exact native raster rectangle
+                // and inverse-project that rectangle onto the semantic plane.
+                // This gives grouped reconstruction a stable, authoritative
+                // screen-space footprint to transfer onto the final hull.
+                if (component.role
+                        == FirstPersonPaintSemanticRole::sign
+                    && component.artwork.decal
+                    && materialRotation < 4)
+                {
+                    const auto& sourceView =
+                        decodedViews[materialRotation];
+                    if (sourceView.component != nullptr
+                        && sourceView.g1 != nullptr
+                        && !sourceView.pixels.empty()
+                        && !sourceView.component
+                                ->artwork.immutablePixels.empty()
+                        && sourceView.component
+                                ->artwork.immutableWidth
+                            == sourceView.g1->width
+                        && sourceView.component
+                                ->artwork.immutableHeight
+                            == sourceView.g1->height)
+                    {
+                        const auto project =
+                            [&](FirstPersonVec3 world) {
+                                const auto p =
+                                    Translate3DTo2DWithZ(
+                                        materialRotation,
+                                        {
+                                            int32_t(std::lround(
+                                                world.x)),
+                                            int32_t(std::lround(
+                                                world.y)),
+                                            int32_t(std::lround(
+                                                world.z)),
+                                        });
+                                return std::array<float, 2>{
+                                    float(p.x), float(p.y)
+                                };
+                            };
+                        const auto p0 = project(face[0]);
+                        const auto p1 = project(face[1]);
+                        const auto p3 = project(face[3]);
+                        const float ux = p1[0] - p0[0];
+                        const float uy = p1[1] - p0[1];
+                        const float vx = p3[0] - p0[0];
+                        const float vy = p3[1] - p0[1];
+                        const float determinant =
+                            ux * vy - uy * vx;
+
+                        if (std::abs(determinant) >= 0.5f)
+                        {
+                            const auto inverseProject =
+                                [&](float screenX,
+                                    float screenY) {
+                                    const float rx =
+                                        screenX - p0[0];
+                                    const float ry =
+                                        screenY - p0[1];
+                                    const float s =
+                                        (rx * vy - ry * vx)
+                                        / determinant;
+                                    const float t =
+                                        (ux * ry - uy * rx)
+                                        / determinant;
+                                    return FirstPersonSemanticFacePoint(
+                                        face, s, t);
+                                };
+
+                            const float left =
+                                float(sourceView.component
+                                          ->artwork.screenPos.x
+                                    + sourceView.g1->xOffset);
+                            const float top =
+                                float(sourceView.component
+                                          ->artwork.screenPos.y
+                                    + sourceView.g1->yOffset);
+                            const float right =
+                                left + float(sourceView.g1->width);
+                            const float bottom =
+                                top + float(sourceView.g1->height);
+                            const std::array<
+                                FirstPersonVec3, 4>
+                                decalFace{ {
+                                    inverseProject(left, top),
+                                    inverseProject(right, top),
+                                    inverseProject(right, bottom),
+                                    inverseProject(left, bottom),
+                                } };
+
+                            surface.immutablePixels =
+                                sourceView.pixels;
+                            surface.immutableWidth =
+                                int16_t(sourceView.g1->width);
+                            surface.immutableHeight =
+                                int16_t(sourceView.g1->height);
+                            // The pixels are a per-frame scrolling-text
+                            // snapshot. Keeping this non-persistent makes the
+                            // decal stream with its current immutable frame
+                            // instead of baking a stale resident texture.
+                            surface.persistentBitmap = false;
+
+                            uint64_t fingerprint =
+                                14695981039346656037ull;
+                            ExtendStableKey(
+                                fingerprint,
+                                surface.image.GetRemap());
+                            ExtendStableKey(
+                                fingerprint,
+                                surface.image.HasPrimary()
+                                    ? EnumValue(
+                                        surface.image.GetPrimary())
+                                    : 0xffu);
+                            ExtendStableKey(
+                                fingerprint,
+                                surface.image.HasSecondary()
+                                    ? EnumValue(
+                                        surface.image.GetSecondary())
+                                    : 0xffu);
+                            ExtendStableKey(
+                                fingerprint,
+                                surface.image.HasTertiary()
+                                    ? EnumValue(
+                                        surface.image.GetTertiary())
+                                    : 0xffu);
+                            ExtendStableKey(
+                                fingerprint,
+                                sourceView.g1->width);
+                            ExtendStableKey(
+                                fingerprint,
+                                sourceView.g1->height);
+                            for (const auto pixel :
+                                 surface.immutablePixels)
+                            {
+                                fingerprint ^= pixel;
+                                fingerprint *=
+                                    1099511628211ull;
+                            }
+                            surface.immutableFingerprint =
+                                fingerprint;
+
+                            EmitQuad(
+                                surface,
+                                { {
+                                    {
+                                        decalFace[0],
+                                        0.0f, 0.0f
+                                    },
+                                    {
+                                        decalFace[1],
+                                        float(
+                                            sourceView.g1->width),
+                                        0.0f
+                                    },
+                                    {
+                                        decalFace[2],
+                                        float(
+                                            sourceView.g1->width),
+                                        float(
+                                            sourceView.g1->height)
+                                    },
+                                    {
+                                        decalFace[3],
+                                        0.0f,
+                                        float(
+                                            sourceView.g1->height)
+                                    },
+                                } });
+                            result.emplace_back(
+                                std::move(surface));
+                            continue;
+                        }
+                    }
+                }
+
                 const int32_t width =
                     std::clamp(
                         int32_t(std::ceil(std::max(

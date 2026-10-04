@@ -4864,216 +4864,310 @@
 
             const auto& pixels =
                 surface.immutablePixelData();
-            const int32_t width =
-                surface.immutableWidth;
-            const int32_t height =
-                surface.immutableHeight;
             if (pixels.empty()
-                || width <= 0 || height <= 0
-                || pixels.size()
-                    < size_t(width) * size_t(height))
+                || surface.immutableWidth <= 0
+                || surface.immutableHeight <= 0)
                 return false;
-
-            int32_t minX = width;
-            int32_t minY = height;
-            int32_t maxX = -1;
-            int32_t maxY = -1;
-            for (int32_t y = 0; y < height; ++y)
-            for (int32_t x = 0; x < width; ++x)
-            {
-                if (pixels[
-                        size_t(y) * size_t(width)
-                        + size_t(x)] == 0)
-                    continue;
-                minX = std::min(minX, x);
-                minY = std::min(minY, y);
-                maxX = std::max(maxX, x);
-                maxY = std::max(maxY, y);
-            }
-            if (maxX < minX || maxY < minY)
-                return false;
-
-            const auto p0 =
-                surface.triangles[0].world;
-            const auto p1 =
-                surface.triangles[1].world;
-            const auto p2 =
-                surface.triangles[2].world;
-            const auto p3 =
-                surface.triangles[5].world;
-            const auto horizontal =
-                Sub(p1, p0);
-            const auto vertical =
-                Sub(p3, p0);
-            auto signNormal =
-                FpCross(horizontal, vertical);
-            const float signNormalLength =
-                std::sqrt(
-                    FpDot(signNormal, signNormal));
-            if (!(signNormalLength > 0.001f))
-                return false;
-            signNormal = Mul(
-                signNormal, 1.0f / signNormalLength);
-
-            const float s =
-                (0.5f
-                    * float(minX + maxX + 1))
-                / float(width);
-            const float t =
-                (0.5f
-                    * float(minY + maxY + 1))
-                / float(height);
-            const auto lerp =
-                [](FirstPersonVec3 a,
-                   FirstPersonVec3 b,
-                   float alpha) {
-                    return FirstPersonVec3{
-                        a.x + (b.x - a.x) * alpha,
-                        a.y + (b.y - a.y) * alpha,
-                        a.z + (b.z - a.z) * alpha,
-                    };
-                };
-            const auto visiblePoint =
-                lerp(
-                    lerp(p0, p1, s),
-                    lerp(p3, p2, s),
-                    t);
 
             const uint8_t materialRotation =
                 surface.diagnosticMaterialRotation < 4
                 ? surface.diagnosticMaterialRotation
                 : surface.diagnosticSourceRotation;
+            if (materialRotation >= 4)
+                return false;
+
+            const std::array<FirstPersonVec3, 4>
+                sourceFace{ {
+                    surface.triangles[0].world,
+                    surface.triangles[1].world,
+                    surface.triangles[2].world,
+                    surface.triangles[5].world,
+                } };
+            const auto sourceHorizontal =
+                Sub(sourceFace[1], sourceFace[0]);
+            const auto sourceVertical =
+                Sub(sourceFace[3], sourceFace[0]);
+            auto signNormal =
+                FpCross(
+                    sourceHorizontal, sourceVertical);
+            const float signNormalLength =
+                std::sqrt(
+                    FpDot(signNormal, signNormal));
+            if (!(signNormalLength > 0.001f))
+                return false;
+            signNormal =
+                Mul(
+                    signNormal,
+                    1.0f / signNormalLength);
+
+            const auto project =
+                [&](FirstPersonVec3 world) {
+                    const auto p =
+                        Translate3DTo2DWithZ(
+                            materialRotation,
+                            {
+                                int32_t(std::lround(
+                                    world.x)),
+                                int32_t(std::lround(
+                                    world.y)),
+                                int32_t(std::lround(
+                                    world.z)),
+                            });
+                    return std::array<float, 2>{
+                        float(p.x), float(p.y)
+                    };
+                };
+            std::array<std::array<float, 2>, 4>
+                sourceScreen{};
+            for (size_t i = 0;
+                 i < sourceScreen.size(); ++i)
+            {
+                sourceScreen[i] =
+                    project(sourceFace[i]);
+            }
+
+            const auto facePointFromScreen =
+                [&](const std::array<
+                        FirstPersonVec3, 4>& face,
+                    const std::array<float, 2>& screen)
+                    -> std::optional<FirstPersonVec3> {
+                    const auto p0 = project(face[0]);
+                    const auto p1 = project(face[1]);
+                    const auto p3 = project(face[3]);
+                    const float ux =
+                        p1[0] - p0[0];
+                    const float uy =
+                        p1[1] - p0[1];
+                    const float vx =
+                        p3[0] - p0[0];
+                    const float vy =
+                        p3[1] - p0[1];
+                    const float determinant =
+                        ux * vy - uy * vx;
+                    if (std::abs(determinant) < 0.5f)
+                        return std::nullopt;
+
+                    const float rx =
+                        screen[0] - p0[0];
+                    const float ry =
+                        screen[1] - p0[1];
+                    const float s =
+                        (rx * vy - ry * vx)
+                        / determinant;
+                    const float t =
+                        (ux * ry - uy * rx)
+                        / determinant;
+                    const auto lerp =
+                        [](FirstPersonVec3 a,
+                           FirstPersonVec3 b,
+                           float alpha) {
+                            return FirstPersonVec3{
+                                a.x + (b.x - a.x)
+                                    * alpha,
+                                a.y + (b.y - a.y)
+                                    * alpha,
+                                a.z + (b.z - a.z)
+                                    * alpha,
+                            };
+                        };
+                    return lerp(
+                        lerp(face[0], face[1], s),
+                        lerp(face[3], face[2], s),
+                        t);
+                };
+
+            const auto outside =
+                [](float value) {
+                    if (value < 0.0f)
+                        return -value;
+                    if (value > 1.0f)
+                        return value - 1.0f;
+                    return 0.0f;
+                };
+            const auto edgeLength =
+                [](FirstPersonVec3 a,
+                   FirstPersonVec3 b) {
+                    const float dx = b.x - a.x;
+                    const float dy = b.y - a.y;
+                    const float dz = b.z - a.z;
+                    return std::sqrt(
+                        dx * dx + dy * dy
+                        + dz * dz);
+                };
 
             const FirstPersonSurface* best = nullptr;
             FirstPersonVec3 bestNormal{};
-            float bestDelta = 0.0f;
             float bestScore =
                 std::numeric_limits<float>::max();
+
+            const FirstPersonVec3 sourceCenter{
+                0.25f * (
+                    sourceFace[0].x
+                    + sourceFace[1].x
+                    + sourceFace[2].x
+                    + sourceFace[3].x),
+                0.25f * (
+                    sourceFace[0].y
+                    + sourceFace[1].y
+                    + sourceFace[2].y
+                    + sourceFace[3].y),
+                0.25f * (
+                    sourceFace[0].z
+                    + sourceFace[1].z
+                    + sourceFace[2].z
+                    + sourceFace[3].z),
+            };
 
             for (const auto& candidate :
                  geometry->second.surfaces)
             {
                 if (!candidate.exteriorOnly)
                     continue;
+
                 auto normal =
                     candidate.outwardNormal;
                 const float normalLength =
-                    std::sqrt(FpDot(normal, normal));
+                    std::sqrt(
+                        FpDot(normal, normal));
                 if (!(normalLength > 0.001f))
                     continue;
                 normal =
-                    Mul(normal, 1.0f / normalLength);
+                    Mul(
+                        normal,
+                        1.0f / normalLength);
+                const float normalAlignment =
+                    std::abs(
+                        FpDot(normal, signNormal));
                 if (std::abs(normal.z) > 0.25f
-                    || std::abs(
-                        FpDot(normal, signNormal))
-                        < 0.90f)
+                    || normalAlignment < 0.90f)
                     continue;
 
-                if (materialRotation < 4)
+                const CoordsXY normalXY{
+                    int32_t(std::lround(normal.x)),
+                    int32_t(std::lround(normal.y)),
+                };
+                if (!FirstPersonFaceVisibleFromNativeView(
+                        normalXY,
+                        materialRotation))
+                    continue;
+
+                const std::array<
+                    FirstPersonVec3, 4>
+                    candidateFace{ {
+                        candidate.triangles[0].world,
+                        candidate.triangles[1].world,
+                        candidate.triangles[2].world,
+                        candidate.triangles[5].world,
+                    } };
+                const auto p0 =
+                    project(candidateFace[0]);
+                const auto p1 =
+                    project(candidateFace[1]);
+                const auto p3 =
+                    project(candidateFace[3]);
+                const float ux =
+                    p1[0] - p0[0];
+                const float uy =
+                    p1[1] - p0[1];
+                const float vx =
+                    p3[0] - p0[0];
+                const float vy =
+                    p3[1] - p0[1];
+                const float determinant =
+                    ux * vy - uy * vx;
+                if (std::abs(determinant) < 0.5f)
+                    continue;
+
+                const float width =
+                    std::max(
+                        1.0f,
+                        edgeLength(
+                            candidateFace[0],
+                            candidateFace[1]));
+                const float height =
+                    std::max(
+                        1.0f,
+                        edgeLength(
+                            candidateFace[0],
+                            candidateFace[3]));
+                float outsideDistance = 0.0f;
+                for (const auto& screen :
+                     sourceScreen)
                 {
-                    const CoordsXY normalXY{
-                        int32_t(std::lround(normal.x)),
-                        int32_t(std::lround(normal.y)),
-                    };
-                    if (!FirstPersonFaceVisibleFromNativeView(
-                            normalXY,
-                            materialRotation))
-                        continue;
+                    const float rx =
+                        screen[0] - p0[0];
+                    const float ry =
+                        screen[1] - p0[1];
+                    const float s =
+                        (rx * vy - ry * vx)
+                        / determinant;
+                    const float t =
+                        (ux * ry - uy * rx)
+                        / determinant;
+                    outsideDistance =
+                        std::max(
+                            outsideDistance,
+                            std::hypot(
+                                outside(s) * width,
+                                outside(t) * height));
                 }
 
                 const float plane =
                     FpDot(
                         normal,
-                        candidate.triangles[0].world);
-                const float delta =
-                    plane
-                    - FpDot(normal, visiblePoint);
-                const auto shifted =
-                    Add(
-                        visiblePoint,
-                        Mul(normal, delta));
-
-                FirstPersonVec3 low =
-                    candidate.triangles[0].world;
-                FirstPersonVec3 high = low;
-                for (const auto& vertex :
-                     candidate.triangles)
-                {
-                    low.x =
-                        std::min(
-                            low.x, vertex.world.x);
-                    low.y =
-                        std::min(
-                            low.y, vertex.world.y);
-                    low.z =
-                        std::min(
-                            low.z, vertex.world.z);
-                    high.x =
-                        std::max(
-                            high.x, vertex.world.x);
-                    high.y =
-                        std::max(
-                            high.y, vertex.world.y);
-                    high.z =
-                        std::max(
-                            high.z, vertex.world.z);
-                }
-
-                const auto outside =
-                    [](float value,
-                       float lowValue,
-                       float highValue) {
-                        if (value < lowValue)
-                            return lowValue - value;
-                        if (value > highValue)
-                            return value - highValue;
-                        return 0.0f;
-                    };
-                const float dx =
-                    outside(
-                        shifted.x,
-                        low.x - 2.0f,
-                        high.x + 2.0f);
-                const float dy =
-                    outside(
-                        shifted.y,
-                        low.y - 2.0f,
-                        high.y + 2.0f);
-                const float dz =
-                    outside(
-                        shifted.z,
-                        low.z - 2.0f,
-                        high.z + 2.0f);
-                const float outsideDistance =
-                    std::sqrt(
-                        dx * dx + dy * dy
-                        + dz * dz);
+                        candidateFace[0]);
+                const float planeDistance =
+                    std::abs(
+                        plane
+                        - FpDot(
+                            normal,
+                            sourceCenter));
                 const float score =
-                    std::abs(delta)
-                    + outsideDistance * 8.0f;
+                    outsideDistance * 8.0f
+                    + planeDistance
+                    + (1.0f - normalAlignment)
+                        * 16.0f;
                 if (score >= bestScore)
                     continue;
 
                 best = &candidate;
                 bestNormal = normal;
-                bestDelta = delta;
                 bestScore = score;
             }
 
             if (best == nullptr)
                 return false;
 
-            // This is not a depth bias. Move the dynamic decal onto the exact
-            // reconstructed boundary plane that owns the native sign pixels.
-            // The body remains the physical depth provider; text is replayed
-            // as a coplanar owner on that same plane.
-            const auto translation =
-                Mul(bestNormal, bestDelta);
-            for (auto& vertex : surface.triangles)
+            const std::array<FirstPersonVec3, 4>
+                targetFace{ {
+                    best->triangles[0].world,
+                    best->triangles[1].world,
+                    best->triangles[2].world,
+                    best->triangles[5].world,
+                } };
+            std::array<FirstPersonVec3, 4>
+                mapped{};
+            for (size_t i = 0;
+                 i < mapped.size(); ++i)
             {
-                vertex.world =
-                    Add(vertex.world, translation);
+                const auto point =
+                    facePointFromScreen(
+                        targetFace,
+                        sourceScreen[i]);
+                if (!point.has_value())
+                    return false;
+                mapped[i] = *point;
             }
+
+            // Reproject the exact native scrolling-text rectangle onto the
+            // grouped entrance boundary. The source pixels and UVs stay
+            // unchanged; only their authoritative world-space carrier changes.
+            surface.triangles[0].world = mapped[0];
+            surface.triangles[1].world = mapped[1];
+            surface.triangles[2].world = mapped[2];
+            surface.triangles[3].world = mapped[0];
+            surface.triangles[4].world = mapped[2];
+            surface.triangles[5].world = mapped[3];
             surface.exteriorOnly = true;
             surface.outwardNormal = bestNormal;
             return true;
