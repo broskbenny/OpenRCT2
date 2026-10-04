@@ -426,20 +426,24 @@ namespace OpenRCT2::Ui::FirstPerson
                     return std::nullopt;
 
                 const auto nextFloor = ResolveWalkingFloorSample(position, floor);
-                if (!nextFloor.IsPath())
+                if (!nextFloor.IsWalkableSupport())
                 {
-                    const float waterZ = float(TileElementWaterHeight(position));
+                    const float waterZ =
+                        float(TileElementWaterHeight(position));
                     if (waterZ > nextFloor.z + 0.5f)
                         return std::nullopt;
 
-                    // Do not step sideways from a raised deck onto the terrain
-                    // beneath its unused tile area / railing boundary.
-                    if (floor.IsPath() && floor.z > nextFloor.z + 0.5f)
+                    // Do not step sideways from a raised navigable deck onto
+                    // terrain beneath its unused tile area or boundary.
+                    if (floor.IsWalkableSupport()
+                        && floor.z > nextFloor.z + 0.5f)
                         return std::nullopt;
                 }
 
-                if (floor.IsPath() && nextFloor.IsPath()
-                    && !WalkingPathsConnected(floor, nextFloor))
+                if (floor.IsWalkableSupport()
+                    && nextFloor.IsWalkableSupport()
+                    && !WalkingSupportsConnected(
+                        floor, nextFloor))
                     return std::nullopt;
 
                 if (!Paint::FirstPersonWalkingHeightTransitionAllowed(
@@ -1043,8 +1047,6 @@ namespace OpenRCT2::Ui::FirstPerson
             == ViewportInteractionItem::terrain)
         {
             initialFloor.z = float(spawn.z);
-            initialFloor.support.tile =
-                CoordsXY{ spawn.x, spawn.y }.toTileStart();
             pickedWalkableSupport = true;
         }
 
@@ -1054,8 +1056,6 @@ namespace OpenRCT2::Ui::FirstPerson
         if (!pickedWalkableSupport)
         {
             initialFloor.z = float(spawn.z);
-            initialFloor.support.tile =
-                CoordsXY{ spawn.x, spawn.y }.toTileStart();
             initialFloor = ResolveWalkingFloorSample(
                 CoordsXY{ spawn.x, spawn.y }, initialFloor);
         }
