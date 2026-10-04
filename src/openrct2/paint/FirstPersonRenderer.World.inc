@@ -3322,8 +3322,42 @@
             return fingerprint;
         }
 
+        [[nodiscard]] uint64_t
+            FirstPersonParkEntranceGroupAt(
+                CoordsXY position)
+        {
+            auto* element =
+                MapGetFirstElementAt(position);
+            if (element == nullptr)
+                return 0;
+
+            do
+            {
+                if (element->getType()
+                        != TileElementType::entrance
+                    || element->isGhost()
+                    || element->isInvisible())
+                    continue;
+                const auto* entrance =
+                    element->asEntrance();
+                if (entrance == nullptr
+                    || entrance->getEntranceType()
+                        != EntranceType::parkEntrance)
+                    continue;
+                const auto entranceGroup =
+                    GetReconstructionGroup(
+                        position, element);
+                if (entranceGroup.has_value())
+                    return entranceGroup->key;
+            } while (!(element++)->isLastForTile());
+            return 0;
+        }
+
         void BuildFirstPersonSemanticSurfaceCache(
-            StaticPaintCacheEntry& cached, const FirstPersonSpriteSnapshot& sprites)
+            StaticPaintCacheEntry& cached,
+            const FirstPersonSpriteSnapshot& sprites,
+            const std::unordered_map<uint64_t, uint64_t>&
+                groupedReplacementByTile)
         {
             const uint64_t fingerprint =
                 FirstPersonSemanticViewSetFingerprint(
@@ -3396,35 +3430,15 @@
                     || canonical->role
                         == FirstPersonPaintSemanticRole::sign)
                 {
-                    auto* element =
-                        MapGetFirstElementAt(
-                            canonical->mapPosition);
-                    if (element != nullptr)
+                    const auto groupIt =
+                        groupedReplacementByTile.find(
+                            FirstPersonPhysicalTileKey(
+                                canonical->mapPosition));
+                    if (groupIt
+                        != groupedReplacementByTile.end())
                     {
-                        do
-                        {
-                            if (element->getType()
-                                    != TileElementType::entrance
-                                || element->isGhost()
-                                || element->isInvisible())
-                                continue;
-                            const auto* entrance =
-                                element->asEntrance();
-                            if (entrance == nullptr
-                                || entrance->getEntranceType()
-                                    != EntranceType::parkEntrance)
-                                continue;
-                            const auto entranceGroup =
-                                GetReconstructionGroup(
-                                    canonical->mapPosition,
-                                    element);
-                            if (entranceGroup.has_value())
-                            {
-                                parkEntranceGroup =
-                                    entranceGroup->key;
-                                break;
-                            }
-                        } while (!(element++)->isLastForTile());
+                        parkEntranceGroup =
+                            groupIt->second;
                     }
                 }
                 if (parkEntranceGroup != 0)
@@ -3494,6 +3508,8 @@
             uint64_t fingerprint{};
             uint64_t request{};
             uint64_t revision{};
+            std::unordered_map<uint64_t, uint64_t>
+                groupedReplacementByTile;
             bool submitted = false;
         };
         static std::unordered_map<uint64_t, std::shared_ptr<SemanticJob>> _semanticJobs;
@@ -3530,6 +3546,29 @@
                     target.semanticFingerprint = source.semanticFingerprint;
                     target.lastAnimationGeneration = source.lastAnimationGeneration;
                     target.semanticComponents = source.semanticComponents;
+                    for (const auto& component :
+                         target.semanticComponents)
+                    {
+                        if (component.role
+                                != FirstPersonPaintSemanticRole::structureBody
+                            && component.role
+                                != FirstPersonPaintSemanticRole::sign)
+                            continue;
+                        const uint64_t tileKey =
+                            FirstPersonPhysicalTileKey(
+                                component.mapPosition);
+                        if (slot->groupedReplacementByTile
+                                .contains(tileKey))
+                            continue;
+                        const uint64_t groupKey =
+                            FirstPersonParkEntranceGroupAt(
+                                component.mapPosition);
+                        if (groupKey != 0)
+                        {
+                            slot->groupedReplacementByTile[
+                                tileKey] = groupKey;
+                        }
+                    }
                 }
                 cached.semanticRequest = slot->request;
             }
@@ -3544,7 +3583,9 @@
             job->submitted = _reconstructionWorker.submit([job, key] {
                 // All components, artwork and peer geometry belong to this job.
                 auto result = job->snapshot;
-                BuildFirstPersonSemanticSurfaceCache(result, job->sprites);
+                BuildFirstPersonSemanticSurfaceCache(
+                    result, job->sprites,
+                    job->groupedReplacementByTile);
                 return [job, key, result = std::move(result)]() mutable {
                     const auto pending = _semanticJobs.find(key);
                     if (pending == _semanticJobs.end() || pending->second != job) return;
