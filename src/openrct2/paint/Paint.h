@@ -192,6 +192,11 @@ struct FirstPersonPaintSemanticComponent
     FirstPersonPaintSemanticArtwork artwork{};
     uint16_t repetitionIndex = 0;
     bool collidable = true;
+    // Snapshot of a navigation-derived presentation constraint. It does not
+    // change physical geometry or graph connectivity; it only tells async
+    // material reconstruction that a walkable deck must visually meet the
+    // tile boundary rather than preserve an isometric sprite margin.
+    bool visualDeckShouldReachTileEdges = false;
 };
 
 struct PassengerPaintAnchor
@@ -477,7 +482,8 @@ uint32_t PaintSessionAddFirstPersonSemanticOrientedQuad(
     const std::array<FirstPersonPaintSemanticVec3, 4>& localCorners,
     ImageId image = {}, const CoordsXYZ& artworkOffset = {},
     uint32_t artworkGroup = 0, bool decal = false,
-    bool collidable = true);
+    bool collidable = true,
+    bool visualDeckShouldReachTileEdges = false);
 
 uint32_t PaintSessionAddFirstPersonSemanticOrientedBox(
     PaintSession& session, FirstPersonPaintSemanticRole role,
