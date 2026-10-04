@@ -3280,7 +3280,9 @@
 
                 uint64_t parkEntranceGroup = 0;
                 if (canonical->role
-                    == FirstPersonPaintSemanticRole::structureBody)
+                        == FirstPersonPaintSemanticRole::structureBody
+                    || canonical->role
+                        == FirstPersonPaintSemanticRole::sign)
                 {
                     auto* element =
                         MapGetFirstElementAt(
