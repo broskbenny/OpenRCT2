@@ -62,25 +62,26 @@ namespace OpenRCT2::Ui::FirstPerson
         constexpr float kMouseSensitivity = 0.0035f;
         constexpr float kMaxPitch = 1.35f;
 
-        struct WalkingSupportIdentity
-        {
-            bool path = false;
-            CoordsXY tile{};
-            int32_t baseZ = 0;
-            ObjectEntryIndex surface{};
-            ObjectEntryIndex railings{};
-        };
-
         struct WalkingFloorSample
         {
             float z{};
-            WalkingSupportIdentity support{};
-            uint8_t edges = 0;
-            uint8_t corners = 0;
+            bool hasWalkability = false;
+            Paint::FirstPersonWalkabilityConstraint walkability{};
 
             [[nodiscard]] bool IsPath() const
             {
-                return support.path;
+                if (!hasWalkability)
+                    return false;
+                return walkability.kind
+                        == Paint::FirstPersonWalkabilityKind::path
+                    || walkability.kind
+                        == Paint::FirstPersonWalkabilityKind::queue;
+            }
+
+            [[nodiscard]] bool IsWalkableSupport() const
+            {
+                return hasWalkability
+                    && walkability.walkableFloor;
             }
         };
 
