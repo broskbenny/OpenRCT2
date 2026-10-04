@@ -313,6 +313,7 @@
 
             _snapshotBudget = FirstPersonFrameBudget(64, std::chrono::microseconds(1500));
             UpdateLargeSceneryReconstructions(scene, frame);
+            UpdateParkEntranceReconstructions(scene, frame);
 
             struct PaintWorkItem
             {
