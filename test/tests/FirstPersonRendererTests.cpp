@@ -315,7 +315,7 @@ TEST(FirstPersonWalkingSemanticsTest, ParkEntranceCentrePublishesRotatedThroughP
 
     const auto constraint =
         FirstPersonWalkabilityFromEntrance(
-            OpenRCT2::CoordsXY{ 320, 640 },
+            CoordsXY{ 320, 640 },
             entrance);
     EXPECT_EQ(
         constraint.kind,
@@ -332,7 +332,7 @@ TEST(FirstPersonWalkingSemanticsTest, ParkEntranceCentrePublishesRotatedThroughP
         OpenRCT2::ParkEntranceSequence::left);
     const auto side =
         FirstPersonWalkabilityFromEntrance(
-            OpenRCT2::CoordsXY{ 288, 640 },
+            CoordsXY{ 288, 640 },
             entrance);
     EXPECT_EQ(side.connectedSides, 0);
     EXPECT_FALSE(side.walkableFloor);
@@ -344,7 +344,7 @@ TEST(FirstPersonWalkingSemanticsTest, GuaranteedPassageDefinesOnlyTheWalkableCor
     FirstPersonWalkabilityConstraint entrance{};
     entrance.kind =
         FirstPersonWalkabilityKind::parkEntrance;
-    entrance.tile = OpenRCT2::CoordsXY{ 320, 640 };
+    entrance.tile = CoordsXY{ 320, 640 };
     entrance.baseZ = 96;
     entrance.connectedSides = 0x05;
     entrance.walkableFloor = true;
@@ -354,26 +354,26 @@ TEST(FirstPersonWalkingSemanticsTest, GuaranteedPassageDefinesOnlyTheWalkableCor
     EXPECT_TRUE(
         FirstPersonWalkabilityContainsPoint(
             entrance,
-            OpenRCT2::CoordsXY{ 321, 656 }));
+            CoordsXY{ 321, 656 }));
     EXPECT_TRUE(
         FirstPersonWalkabilityContainsPoint(
             entrance,
-            OpenRCT2::CoordsXY{ 351, 656 }));
+            CoordsXY{ 351, 656 }));
     EXPECT_FALSE(
         FirstPersonWalkabilityContainsPoint(
             entrance,
-            OpenRCT2::CoordsXY{ 336, 647 }));
+            CoordsXY{ 336, 647 }));
     // A walking body radius narrows the permitted centre line rather than
     // widening the carved opening.
     EXPECT_FALSE(
         FirstPersonWalkabilityContainsPoint(
             entrance,
-            OpenRCT2::CoordsXY{ 336, 649 },
+            CoordsXY{ 336, 649 },
             2.0f));
     EXPECT_TRUE(
         FirstPersonWalkabilityContainsPoint(
             entrance,
-            OpenRCT2::CoordsXY{ 336, 650 },
+            CoordsXY{ 336, 650 },
             2.0f));
 }
 
@@ -381,7 +381,7 @@ TEST(FirstPersonWalkingSemanticsTest, PathAndParkEntranceShareGraphEdges)
 {
     FirstPersonWalkabilityConstraint path{};
     path.kind = FirstPersonWalkabilityKind::path;
-    path.tile = OpenRCT2::CoordsXY{ 0, 0 };
+    path.tile = CoordsXY{ 0, 0 };
     path.baseZ = 80;
     path.connectedSides = 1u << 2;
     path.walkableFloor = true;
@@ -390,7 +390,7 @@ TEST(FirstPersonWalkingSemanticsTest, PathAndParkEntranceShareGraphEdges)
     entrance.kind =
         FirstPersonWalkabilityKind::parkEntrance;
     entrance.tile =
-        OpenRCT2::CoordsXY{ OpenRCT2::kCoordsXYStep, 0 };
+        CoordsXY{ kCoordsXYStep, 0 };
     entrance.baseZ = 80;
     entrance.connectedSides = 0x05;
     entrance.walkableFloor = true;
@@ -409,7 +409,7 @@ TEST(FirstPersonWalkingSemanticsTest, WideVisualDeckCanReachTileBoundaryWithoutI
 {
     FirstPersonWalkabilityConstraint wide{};
     wide.kind = FirstPersonWalkabilityKind::path;
-    wide.tile = OpenRCT2::CoordsXY{ 0, 0 };
+    wide.tile = CoordsXY{ 0, 0 };
     wide.walkableFloor = true;
     wide.wide = true;
     wide.visualDeckShouldReachTileEdges = true;
@@ -417,14 +417,14 @@ TEST(FirstPersonWalkingSemanticsTest, WideVisualDeckCanReachTileBoundaryWithoutI
 
     EXPECT_TRUE(
         FirstPersonWalkabilityContainsPoint(
-            wide, OpenRCT2::CoordsXY{ 1, 1 }));
+            wide, CoordsXY{ 1, 1 }));
     EXPECT_TRUE(
         FirstPersonWalkabilityContainsPoint(
-            wide, OpenRCT2::CoordsXY{ 31, 31 }));
+            wide, CoordsXY{ 31, 31 }));
     // Visual continuity does not fabricate graph connectivity.
     FirstPersonWalkabilityConstraint neighbour = wide;
     neighbour.tile =
-        OpenRCT2::CoordsXY{ OpenRCT2::kCoordsXYStep, 0 };
+        CoordsXY{ kCoordsXYStep, 0 };
     EXPECT_FALSE(
         FirstPersonWalkabilitySupportsConnect(
             wide, neighbour));
