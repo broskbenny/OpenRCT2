@@ -1221,6 +1221,7 @@
 
             const size_t surfaceStart = scene.surfaces.size();
             size_t emittedFaces = 0;
+            FirstPersonHullMaterialCoverage materialCoverage(faces.size());
             for (size_t faceIndex = 0;
                  faceIndex < faces.size(); ++faceIndex)
             {
@@ -1323,7 +1324,7 @@
                 // is still alpha-tested artwork. Do not turn transparent sprite
                 // pixels into visible matter merely because a hull face exists.
                 surface.cameraIndependent = true;
-                surface.exteriorOnly = true;
+                // Visibility is finalized from the entire baked boundary below.
                 surface.outwardNormal = face.normal;
 
                 if (!candidates.empty())
@@ -1440,6 +1441,8 @@
                     if (visiblePixelCount == 0)
                         continue;
 
+                    materialCoverage.recordFace(faceIndex, pixels.size(), visiblePixelCount);
+
                     uint64_t fingerprint =
                         14695981039346656037ull;
                     ExtendStableKey(fingerprint, width);
@@ -1513,6 +1516,8 @@
                 return false;
             }
 
+            materialCoverage.applyTo(
+                scene.surfaces.begin() + surfaceStart, scene.surfaces.end());
             baked.localSurfaces.clear();
             if (emittedFaces != 0)
             {
@@ -3745,6 +3750,7 @@
 
             bool haveBounds = false;
             FirstPersonVec3 low{}, high{};
+            FirstPersonHullMaterialCoverage materialCoverage(faces.size());
             for (size_t faceIndex = 0;
                  faceIndex < faces.size();
                  ++faceIndex)
@@ -3877,12 +3883,8 @@
                 FirstPersonSurface surface{};
                 surface.image = fallbackImage;
                 surface.cameraIndependent = true;
-                // Large scenery is reconstructed as a closed physical hull
-                // (carved visual hull when available, authoritative occupancy
-                // shell otherwise). Its boundary face already carries the
-                // world-space outward normal, so use the same physical
-                // half-space visibility rule as reconstructed small scenery.
-                surface.exteriorOnly = true;
+                // The input hull is closed, but the material bake can omit
+                // boundaries. Finalize sidedness after all faces are processed.
                 surface.outwardNormal = face.normal;
                 surface.reconstructionGroup =
                     group.key;
@@ -4008,6 +4010,8 @@
                 if (visiblePixelCount == 0)
                     continue;
 
+                materialCoverage.recordFace(faceIndex, pixels.size(), visiblePixelCount);
+
                 uint64_t fingerprint =
                     14695981039346656037ull;
                 ExtendStableKey(
@@ -4049,6 +4053,7 @@
                     std::move(surface));
             }
 
+            materialCoverage.applyTo(result.surfaces.begin(), result.surfaces.end());
             if (haveBounds
                 && !result.surfaces.empty())
             {

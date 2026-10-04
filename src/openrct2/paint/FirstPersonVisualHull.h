@@ -97,6 +97,72 @@ namespace OpenRCT2::Paint
         FirstPersonVisualHullFaceKind kind{};
     };
 
+    // A closed occupancy hull does not imply a closed rendered surface. Baking
+    // can omit unobserved faces or leave transparent texels on a boundary. Such
+    // surfaces carry artwork, and their reverse sides can be seen through those
+    // openings. Only a fully covered boundary permits interior-face rejection.
+    // This contract is for reconstructed hulls, not authored one-sided planes.
+    class FirstPersonHullMaterialCoverage
+    {
+    public:
+        explicit FirstPersonHullMaterialCoverage(size_t boundaryFaces)
+            : _faces(boundaryFaces, FaceCoverage::absent)
+        {
+        }
+
+        void recordFace(size_t face, size_t texels, size_t opaqueTexels)
+        {
+            if (face >= _faces.size())
+                return;
+            _faces[face] = texels == 0 || opaqueTexels == 0 || opaqueTexels > texels
+                ? FaceCoverage::absent
+                : opaqueTexels == texels ? FaceCoverage::opaque : FaceCoverage::partial;
+        }
+
+        [[nodiscard]] size_t materialFaces() const
+        {
+            return size_t(std::count_if(_faces.begin(), _faces.end(), [](auto coverage) {
+                return coverage != FaceCoverage::absent;
+            }));
+        }
+
+        [[nodiscard]] size_t opaqueFaces() const
+        {
+            return size_t(std::count(_faces.begin(), _faces.end(), FaceCoverage::opaque));
+        }
+
+        [[nodiscard]] bool isClosed() const
+        {
+            return !_faces.empty() && opaqueFaces() == _faces.size();
+        }
+
+        // Finalize the whole object after baking, before any surfaces are cached
+        // or published. One missing face can expose the reverse of another face.
+        template<typename SurfaceIterator>
+        void applyTo(SurfaceIterator begin, SurfaceIterator end) const
+        {
+            const auto materialCount = uint32_t(materialFaces());
+            const auto opaqueCount = uint32_t(opaqueFaces());
+            const bool closed = !_faces.empty() && opaqueCount == _faces.size();
+            for (auto it = begin; it != end; ++it)
+            {
+                it->exteriorOnly = closed;
+                it->diagnosticHullBoundaryFaces = uint32_t(_faces.size());
+                it->diagnosticHullMaterialFaces = materialCount;
+                it->diagnosticHullOpaqueFaces = opaqueCount;
+            }
+        }
+
+    private:
+        enum class FaceCoverage : uint8_t
+        {
+            absent,
+            partial,
+            opaque,
+        };
+        std::vector<FaceCoverage> _faces;
+    };
+
     template<typename SampleFace, typename BuildFace>
     inline void AppendFirstPersonGreedyHullFaceSlices(
         std::vector<FirstPersonVisualHullFace>& result,

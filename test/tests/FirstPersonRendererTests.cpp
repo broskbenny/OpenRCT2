@@ -254,6 +254,140 @@ TEST(FirstPersonSourceRotationTest, HysteresisBelongsToTheTrackedPoint)
         1);
 }
 
+TEST(FirstPersonHullMaterialTest, MissingUndersideKeepsRaisedArtworkVisibleFromBelow)
+{
+    FirstPersonHullMaterialCoverage coverage(6);
+    std::vector<FirstPersonSurface> surfaces(5);
+    for (size_t i = 0; i < surfaces.size(); ++i)
+    {
+        coverage.recordFace(i, 32 * 48, 32 * 48);
+        surfaces[i].exteriorOnly = true;
+    }
+    auto& top = surfaces.back();
+    top.outwardNormal = { 0, 0, 1 };
+    top.triangles[0].world = { 4704, 2368, 216 };
+    const FirstPersonVec3 towardEye{ 4895.187f - 4704, 2391.147f - 2368, 132 - 216 };
+    ASSERT_LT(FpDot(top.outwardNormal, towardEye), 0.0f);
+
+    coverage.applyTo(surfaces.begin(), surfaces.end());
+
+    EXPECT_FALSE(coverage.isClosed());
+    for (const auto& surface : surfaces)
+    {
+        EXPECT_FALSE(surface.exteriorOnly);
+        EXPECT_EQ(surface.diagnosticHullBoundaryFaces, 6u);
+        EXPECT_EQ(surface.diagnosticHullMaterialFaces, 5u);
+        EXPECT_EQ(surface.diagnosticHullOpaqueFaces, 5u);
+    }
+    EXPECT_FALSE(top.exteriorOnly && FpDot(top.outwardNormal, towardEye) <= 0.0f);
+}
+
+TEST(FirstPersonHullMaterialTest, LateTransparentFaceReclassifiesTheWholeBoundaryWithoutFillingPixels)
+{
+    FirstPersonHullMaterialCoverage coverage(6);
+    std::vector<FirstPersonSurface> surfaces(6);
+    for (size_t i = 0; i < surfaces.size(); ++i)
+    {
+        auto& surface = surfaces[i];
+        surface.exteriorOnly = true;
+        surface.outwardNormal = { 1, 0, 0 };
+        surface.immutablePixels = { 17, 17, 17, 17 };
+        if (i == surfaces.size() - 1)
+            surface.immutablePixels.back() = 0;
+        coverage.recordFace(i, surface.immutablePixels.size(),
+            size_t(std::count_if(surface.immutablePixels.begin(), surface.immutablePixels.end(),
+                [](uint8_t pixel) { return pixel != 0; })));
+    }
+    coverage.applyTo(surfaces.begin(), surfaces.end());
+
+    EXPECT_FALSE(coverage.isClosed());
+    EXPECT_EQ(coverage.materialFaces(), 6u);
+    EXPECT_EQ(coverage.opaqueFaces(), 5u);
+    for (const auto& surface : surfaces)
+    {
+        EXPECT_FALSE(surface.exteriorOnly);
+        EXPECT_FALSE(surface.physicalCoverage);
+        EXPECT_FALSE(surface.viewFacing);
+        EXPECT_FLOAT_EQ(surface.outwardNormal.x, 1.0f);
+    }
+    EXPECT_EQ(surfaces.back().immutablePixels.back(), 0);
+}
+
+TEST(FirstPersonHullMaterialTest, ClosedBoundaryRetainsSidednessAroundAGeometricOpening)
+{
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 2.0f;
+    hull.sizeForward = hull.sizeRight = 3;
+    hull.sizeUp = 1;
+    hull.occupied.assign(9, 1);
+    hull.occupied[4] = 0; // A real through-opening, with its own inner boundary.
+    const auto faces = BuildFirstPersonVisualHullBoundaryFaces(hull);
+    ASSERT_GT(faces.size(), 6u);
+    FirstPersonHullMaterialCoverage coverage(faces.size());
+    std::vector<FirstPersonSurface> surfaces(faces.size());
+    for (size_t i = 0; i < faces.size(); ++i)
+    {
+        surfaces[i].outwardNormal = faces[i].normal;
+        coverage.recordFace(i, 4, 4);
+    }
+    coverage.applyTo(surfaces.begin(), surfaces.end());
+
+    EXPECT_TRUE(coverage.isClosed());
+    EXPECT_FALSE(hull.contains(1, 1, 0));
+    for (size_t i = 0; i < faces.size(); ++i)
+    {
+        EXPECT_TRUE(surfaces[i].exteriorOnly);
+        EXPECT_FLOAT_EQ(surfaces[i].outwardNormal.x, faces[i].normal.x);
+        EXPECT_FLOAT_EQ(surfaces[i].outwardNormal.y, faces[i].normal.y);
+        EXPECT_FLOAT_EQ(surfaces[i].outwardNormal.z, faces[i].normal.z);
+    }
+}
+
+TEST(FirstPersonHullMaterialTest, AbsentFacesCannotBeCertifiedByDuplicateOrEmptySamples)
+{
+    FirstPersonHullMaterialCoverage empty(0);
+    EXPECT_FALSE(empty.isClosed());
+    FirstPersonHullMaterialCoverage coverage(6);
+    for (size_t i = 0; i < 6; ++i)
+        coverage.recordFace(0, 4, 4);
+    EXPECT_EQ(coverage.materialFaces(), 1u);
+    EXPECT_FALSE(coverage.isClosed());
+    for (size_t i = 1; i < 6; ++i)
+        coverage.recordFace(i, 4, 4);
+    EXPECT_TRUE(coverage.isClosed());
+    coverage.recordFace(5, 4, 0);
+    EXPECT_FALSE(coverage.isClosed());
+    coverage.recordFace(5, 0, 0);
+    EXPECT_FALSE(coverage.isClosed());
+    coverage.recordFace(5, 4, 5);
+    EXPECT_FALSE(coverage.isClosed());
+    coverage.recordFace(6, 4, 4);
+    EXPECT_FALSE(coverage.isClosed());
+}
+
+TEST(FirstPersonHullMaterialTest, ObjectRangePreservesAuthoredWallAndSurvivesCacheCopy)
+{
+    std::vector<FirstPersonSurface> scene(3);
+    scene.front().exteriorOnly = true; // Independently authored wall.
+    scene.front().outwardNormal = { -1, 0, 0 };
+    FirstPersonHullMaterialCoverage coverage(6);
+    coverage.recordFace(0, 4, 4);
+    coverage.recordFace(1, 4, 3);
+    coverage.applyTo(scene.begin() + 1, scene.end());
+
+    EXPECT_TRUE(scene.front().exteriorOnly);
+    EXPECT_EQ(scene.front().diagnosticHullBoundaryFaces, 0u);
+    const std::vector<FirstPersonSurface> cached(scene.begin() + 1, scene.end());
+    for (const auto& surface : cached)
+    {
+        EXPECT_FALSE(surface.exteriorOnly);
+        EXPECT_EQ(surface.diagnosticHullBoundaryFaces, 6u);
+        EXPECT_EQ(surface.diagnosticHullMaterialFaces, 2u);
+        EXPECT_EQ(surface.diagnosticHullOpaqueFaces, 1u);
+    }
+}
+
 TEST(FirstPersonAssetReconstructionTest, VerticalCoverageCanSplitOneWallIntoSeveralStrips)
 {
     const auto exposed = SubtractFirstPersonVerticalCoverage(

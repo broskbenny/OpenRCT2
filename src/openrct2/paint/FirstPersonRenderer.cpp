@@ -407,6 +407,15 @@ namespace OpenRCT2::Paint
                 surface.diagnosticMaterialTile.y,
                 surface.diagnosticSourceComponent,
                 surface.diagnosticMaterialComponent);
+            if (surface.diagnosticHullBoundaryFaces != 0)
+            {
+                Console::WriteLine(
+                    "  hullMaterial=%s boundaryFaces=%u materialFaces=%u opaqueFaces=%u",
+                    surface.exteriorOnly ? "closed-shell" : "open-artwork",
+                    surface.diagnosticHullBoundaryFaces,
+                    surface.diagnosticHullMaterialFaces,
+                    surface.diagnosticHullOpaqueFaces);
+            }
             Console::WriteLine(
                 "  outwardNormal=(%.3f,%.3f,%.3f) semanticBounds=%d "
                 "semanticCenter=(%.3f,%.3f,%.3f) semanticRadius=%.3f",
