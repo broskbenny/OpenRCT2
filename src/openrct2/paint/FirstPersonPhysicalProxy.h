@@ -7,6 +7,7 @@
 #include "Paint.h"
 #include "FirstPersonSmallSceneryCollision.h"
 #include "FirstPersonTrackTrajectory.h"
+#include "FirstPersonWalkingSemantics.h"
 
 #include "../ride/CarEntry.h"
 #include "../ride/Ride.h"
@@ -434,7 +435,7 @@ namespace OpenRCT2::Paint
             const uint8_t direction =
                 path.getSlopeDirection() & 3u;
             if (surface->getSlope()
-                != kPathSlopeToLandSlope[direction])
+                != FirstPersonPathLandSlope(direction))
                 return true;
         }
         else if (surface->getSlope() != kTileSlopeFlat)
