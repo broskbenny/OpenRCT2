@@ -4219,7 +4219,9 @@
 
             LargeSceneryEntry syntheticEntry{};
             syntheticEntry.image = syntheticEntryImage;
-            syntheticEntry.tiles = tiles;
+            syntheticEntry.tiles =
+                std::span<const LargeSceneryTile>(
+                    tiles.data(), tiles.size());
             syntheticEntry.text = nullptr;
 
             LargeSceneryElement syntheticElement{};
