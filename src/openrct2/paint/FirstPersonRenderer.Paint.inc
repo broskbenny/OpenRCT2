@@ -266,6 +266,21 @@
                             needsGroupSourceView = false;
                         }
                     }
+                    else if (
+                        group.type
+                            == TileElementType::entrance)
+                    {
+                        const auto geometry =
+                            _parkEntranceGeometryCache.find(
+                                group.key);
+                        if (geometry
+                                != _parkEntranceGeometryCache.end()
+                            && !geometry->second.dirty
+                            && !geometry->second.surfaces.empty())
+                        {
+                            needsGroupSourceView = false;
+                        }
+                    }
 
                     if (needsGroupSourceView)
                     {
