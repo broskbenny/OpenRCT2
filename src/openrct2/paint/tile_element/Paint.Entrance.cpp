@@ -8,6 +8,7 @@
  *****************************************************************************/
 
 #include "../Paint.h"
+#include "../FirstPersonWalkingSemantics.h"
 
 #include "../../Context.h"
 #include "../../GameState.h"
@@ -427,6 +428,11 @@ static uint32_t PublishFirstPersonParkEntrancePathDeck(
         0.0f,
     };
     const float z = float(entranceEl.getBaseZ());
+    const auto walkability =
+        OpenRCT2::Paint::
+            FirstPersonWalkabilityFromEntrance(
+                session.MapPosition,
+                entranceEl);
     return PaintSessionAddFirstPersonSemanticOrientedQuad(
         session, FirstPersonPaintSemanticRole::pathDeck,
         FirstPersonPaintSemanticPrimitiveKind::footprint,
@@ -438,7 +444,8 @@ static uint32_t PublishFirstPersonParkEntrancePathDeck(
             { 0.0f, float(kCoordsXYStep), z },
         } },
         image, artworkOffset, artworkGroup,
-        false, false);
+        false, false,
+        walkability.visualDeckShouldReachTileEdges);
 }
 
 static void PaintParkEntranceScrollingText(
