@@ -116,6 +116,17 @@ static FirstPersonPaintSemanticTransform
     return transform;
 }
 
+static bool FirstPersonPathUsesFullWideDeck(
+    const PathElement& pathElement)
+{
+    // Wide-path routing may deliberately omit logical edges inside a broad
+    // plaza. Those routing edges are not visual holes. A flat ordinary wide
+    // path therefore presents as one continuous full-tile deck.
+    return pathElement.isWide()
+        && !pathElement.isSloped()
+        && !pathElement.isQueue();
+}
+
 static uint32_t PublishFirstPersonPathDeckGeometry(
     PaintSession& session, const PathElement& pathElement,
     int32_t height, ImageId image)
@@ -140,10 +151,22 @@ static uint32_t PublishFirstPersonPathDeckGeometry(
             + float(heights.west) * (1.0f - x) * y;
     };
 
-    const auto footprint =
-        OpenRCT2::Paint::BuildFirstPersonPathFootprint(
-            pathElement.getEdges(), pathElement.getCorners(),
-            pathElement.isQueue());
+    std::vector<
+        OpenRCT2::Paint::FirstPersonPathFootprintCell>
+        footprint;
+    if (FirstPersonPathUsesFullWideDeck(pathElement))
+    {
+        footprint.push_back(
+            { 0, 0, kCoordsXYStep, kCoordsXYStep });
+    }
+    else
+    {
+        footprint =
+            OpenRCT2::Paint::BuildFirstPersonPathFootprint(
+                pathElement.getEdges(),
+                pathElement.getCorners(),
+                pathElement.isQueue());
+    }
     const auto transform =
         FirstPersonWorldTileTransform(session);
     const uint32_t artworkGroup =
@@ -1140,9 +1163,16 @@ static void PathPaintBoxSupport(
     const auto surfaceBaseImageIndex = PathPaintGetBaseImage(session, pathElement, pathPaintInfo);
     const auto surfaceImage =
         imageTemplate.WithIndex(surfaceBaseImageIndex);
+    const auto firstPersonSurfaceImage =
+        FirstPersonPathUsesFullWideDeck(pathElement)
+        ? imageTemplate.WithIndex(
+            pathPaintInfo.surface.image
+            + kPathEdgesAndCornersToSurfaceImageIndexOffset[0xFF])
+        : surfaceImage;
     const uint32_t pathArtworkGroup =
         PublishFirstPersonPathDeckGeometry(
-            session, pathElement, height, surfaceImage);
+            session, pathElement, height,
+            firstPersonSurfaceImage);
     auto boundbox = PathPaintGetBoundbox(session, height, edges);
 
     const bool hasPassedSurface = (session.Flags & PaintSessionFlags::PassedSurface) != 0;
@@ -1203,9 +1233,16 @@ static void PathPaintPoleSupport(
     const auto surfaceBaseImageIndex = PathPaintGetBaseImage(session, pathElement, pathPaintInfo);
     const auto surfaceImage =
         imageTemplate.WithIndex(surfaceBaseImageIndex);
+    const auto firstPersonSurfaceImage =
+        FirstPersonPathUsesFullWideDeck(pathElement)
+        ? imageTemplate.WithIndex(
+            pathPaintInfo.surface.image
+            + kPathEdgesAndCornersToSurfaceImageIndexOffset[0xFF])
+        : surfaceImage;
     const uint32_t pathArtworkGroup =
         PublishFirstPersonPathDeckGeometry(
-            session, pathElement, height, surfaceImage);
+            session, pathElement, height,
+            firstPersonSurfaceImage);
     auto boundbox = PathPaintGetBoundbox(session, height, edges);
 
     // Below Surface
