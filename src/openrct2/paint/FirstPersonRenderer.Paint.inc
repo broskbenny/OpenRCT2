@@ -966,11 +966,22 @@
                     if (IsReconstructedParkEntranceBody(
                             semanticSurface, frame))
                         continue;
+
+                    auto presented =
+                        semanticSurface;
+                    if (presented.diagnosticSemanticRole
+                            == static_cast<uint8_t>(
+                                FirstPersonPaintSemanticRole::sign)
+                        && presented.reconstructionGroup != 0)
+                    {
+                        AlignParkEntranceSignToGroupedBody(
+                            presented, frame);
+                    }
                     if (SurfaceMayBeVisible(
-                            semanticSurface, worldFrustum))
+                            presented, worldFrustum))
                     {
                         scene.surfaces.emplace_back(
-                            semanticSurface);
+                            std::move(presented));
                     }
                 }
 
