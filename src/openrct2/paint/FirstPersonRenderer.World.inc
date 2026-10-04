@@ -3100,6 +3100,51 @@
                         group.views,
                         depthPeers.empty()
                             ? nullptr : &depthPeers, sprites);
+
+                uint64_t parkEntranceGroup = 0;
+                if (canonical->role
+                    == FirstPersonPaintSemanticRole::structureBody)
+                {
+                    auto* element =
+                        MapGetFirstElementAt(
+                            canonical->mapPosition);
+                    if (element != nullptr)
+                    {
+                        do
+                        {
+                            if (element->getType()
+                                    != TileElementType::entrance
+                                || element->isGhost()
+                                || element->isInvisible())
+                                continue;
+                            const auto* entrance =
+                                element->asEntrance();
+                            if (entrance == nullptr
+                                || entrance->getEntranceType()
+                                    != EntranceType::parkEntrance)
+                                continue;
+                            const auto entranceGroup =
+                                GetReconstructionGroup(
+                                    canonical->mapPosition,
+                                    element);
+                            if (entranceGroup.has_value())
+                            {
+                                parkEntranceGroup =
+                                    entranceGroup->key;
+                                break;
+                            }
+                        } while (!(element++)->isLastForTile());
+                    }
+                }
+                if (parkEntranceGroup != 0)
+                {
+                    for (auto& surface : surfaces)
+                    {
+                        surface.reconstructionGroup =
+                            parkEntranceGroup;
+                    }
+                }
+
                 if (moving)
                 {
                     MovingSemanticMesh mesh;
