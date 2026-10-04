@@ -2334,6 +2334,9 @@
             bool dirty = false;
             bool hasBounds = false;
             int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
+            std::array<
+                std::pair<CoordsXY, uint64_t>, 3>
+                tileSignatures{};
             std::vector<FirstPersonSurface> surfaces;
         };
         static std::unordered_map<
@@ -4646,6 +4649,8 @@
                                     existing->second);
                             }
 
+                            result.tileSignatures =
+                                job->tileSignatures;
                             MarkParkEntranceGeometryRegionsDirty(
                                 result);
                             RegisterParkEntranceRegionMembership(
