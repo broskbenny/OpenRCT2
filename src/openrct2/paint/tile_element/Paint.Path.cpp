@@ -159,10 +159,11 @@ static uint32_t PublishFirstPersonPathDeckGeometry(
     }
     const auto transform =
         FirstPersonWorldTileTransform(session);
-    const bool edgeContinuousDeck =
+    const uint8_t visualDeckEdgeMask =
         OpenRCT2::Paint::
             FirstPersonPathUsesFullTileDeck(
-                pathElement);
+                pathElement)
+        ? 0x0Fu : 0u;
     const uint32_t artworkGroup =
         PaintSessionBeginFirstPersonSemanticArtworkGroup(session);
     for (const auto& cell : footprint)
@@ -183,7 +184,7 @@ static uint32_t PublishFirstPersonPathDeckGeometry(
             FirstPersonPaintSemanticPrimitiveKind::footprint,
             transform, corners, image, { 0, 0, height },
             artworkGroup, false, false,
-            edgeContinuousDeck);
+            visualDeckEdgeMask);
     }
     session.FirstPersonSemanticArtworkGroup = 0;
     return artworkGroup;
