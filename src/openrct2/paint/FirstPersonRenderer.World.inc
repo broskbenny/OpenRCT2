@@ -3563,11 +3563,8 @@
                         const uint64_t groupKey =
                             FirstPersonParkEntranceGroupAt(
                                 component.mapPosition);
-                        if (groupKey != 0)
-                        {
-                            slot->groupedReplacementByTile[
-                                tileKey] = groupKey;
-                        }
+                        slot->groupedReplacementByTile[
+                            tileKey] = groupKey;
                     }
                 }
                 cached.semanticRequest = slot->request;
