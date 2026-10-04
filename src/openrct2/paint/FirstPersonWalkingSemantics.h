@@ -538,14 +538,4 @@ namespace OpenRCT2::Paint
         return std::nullopt;
     }
 
-    [[nodiscard]] constexpr bool
-        FirstPersonWalkingHeightTransitionAllowed(
-            float fromZ, float toZ, float maximumStep)
-    {
-        const float delta =
-            fromZ >= toZ
-            ? fromZ - toZ
-            : toZ - fromZ;
-        return delta <= maximumStep;
-    }
 } // namespace OpenRCT2::Paint
