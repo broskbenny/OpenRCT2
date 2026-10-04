@@ -301,6 +301,9 @@ TEST(FirstPersonWalkingSemanticsTest, ConnectionMasksRotateWithWorldOrientation)
     EXPECT_EQ(
         FirstPersonPassageAxisForConnections(0x01),
         FirstPersonPassageAxis::none);
+    EXPECT_EQ(
+        FirstPersonPassageAxisForConnections(0x0F),
+        FirstPersonPassageAxis::none);
 }
 
 TEST(FirstPersonWalkingSemanticsTest, ParkEntranceCentrePublishesRotatedThroughPassage)
