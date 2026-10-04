@@ -354,7 +354,7 @@ TEST(FirstPersonWalkingSemanticsTest, PathAndParkEntranceShareGraphEdges)
     entrance.kind =
         FirstPersonWalkabilityKind::parkEntrance;
     entrance.tile =
-        OpenRCT2::CoordsXY{ kCoordsXYStep, 0 };
+        OpenRCT2::CoordsXY{ OpenRCT2::kCoordsXYStep, 0 };
     entrance.baseZ = 80;
     entrance.connectedSides = 0x05;
     entrance.walkableFloor = true;
@@ -388,7 +388,7 @@ TEST(FirstPersonWalkingSemanticsTest, WideVisualDeckCanReachTileBoundaryWithoutI
     // Visual continuity does not fabricate graph connectivity.
     FirstPersonWalkabilityConstraint neighbour = wide;
     neighbour.tile =
-        OpenRCT2::CoordsXY{ kCoordsXYStep, 0 };
+        OpenRCT2::CoordsXY{ OpenRCT2::kCoordsXYStep, 0 };
     EXPECT_FALSE(
         FirstPersonWalkabilitySupportsConnect(
             wide, neighbour));
