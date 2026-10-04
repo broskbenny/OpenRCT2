@@ -2448,7 +2448,8 @@
                     const FirstPersonPaintSemanticComponent*>*
                     depthPeers,
                 const FirstPersonSpriteSnapshot& sprites,
-                bool* visualHullRefinedOut)
+                bool* visualHullRefinedOut,
+                bool allowVisualHull)
         {
             if (visualHullRefinedOut != nullptr)
                 *visualHullRefinedOut = false;
@@ -2481,15 +2482,18 @@
             }
 
             bool visualHullRefined = false;
-            if (const auto carved =
-                    BuildFirstPersonSemanticVisualHullFaces(
-                        component, decodedViews);
-                carved.has_value() && !carved->empty())
+            if (allowVisualHull)
             {
-                faces = *carved;
-                visualHullRefined = true;
-                if (visualHullRefinedOut != nullptr)
-                    *visualHullRefinedOut = true;
+                if (const auto carved =
+                        BuildFirstPersonSemanticVisualHullFaces(
+                            component, decodedViews);
+                    carved.has_value() && !carved->empty())
+                {
+                    faces = *carved;
+                    visualHullRefined = true;
+                    if (visualHullRefinedOut != nullptr)
+                        *visualHullRefinedOut = true;
+                }
             }
 
             std::vector<std::array<FirstPersonVec3, 4>>

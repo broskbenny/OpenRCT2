@@ -4158,7 +4158,8 @@
                     const FirstPersonPaintSemanticComponent*>*
                     depthPeers,
                 const FirstPersonSpriteSnapshot& sprites,
-                bool* visualHullRefinedOut = nullptr);
+                bool* visualHullRefinedOut = nullptr,
+                bool allowVisualHull = true);
 
         [[nodiscard]] FirstPersonPaintSemanticTransform
             MakeGroupedParkEntranceTransform(
@@ -4394,9 +4395,10 @@
             std::array<bool, 3> sequenceBuilt{};
 
             // The centre artwork is an upper volumetric arch/crosspiece,
-            // exactly matching the native PaintStruct envelope. Refine it from
-            // all four native views just like the side pieces; the lower
-            // 32-world-unit walk-through is not part of the candidate volume.
+            // exactly matching the native PaintStruct envelope. Keep that
+            // envelope as stable geometry and use all four native views only
+            // as material evidence; the lower walk-through remains true empty
+            // space and no voxel boundary is introduced.
             {
                 auto views =
                     makeViews(
@@ -4415,7 +4417,6 @@
                 const auto& canonical = views[0];
                 const auto tile =
                     canonical.mapPosition;
-                bool visualHullRefined = false;
                 auto surfaces =
                     BuildFirstPersonSemanticComponentSurfaces(
                         canonical,
@@ -4424,9 +4425,8 @@
                             tile.y / kCoordsXYStep),
                         group.key,
                         observations, nullptr, sprites,
-                        &visualHullRefined);
-                if (!visualHullRefined
-                    || surfaces.empty())
+                        nullptr, false);
+                if (surfaces.empty())
                 {
                     result.surfaces.clear();
                     return result;
@@ -4437,10 +4437,10 @@
                         ParkEntranceSequence::centre)] = true;
             }
 
-            // The side elements are the real structural envelopes published by
-            // the entrance painter. Refine each box independently with all four
-            // native views. They are no longer fused into a three-tile solid
-            // volume before carving.
+            // The side elements use the exact structural envelopes published
+            // by the entrance painter. Keep each envelope stable and use all
+            // four native views for material evidence instead of voxel-carving
+            // the silhouette.
             for (const auto sequence : {
                      ParkEntranceSequence::left,
                      ParkEntranceSequence::right })
@@ -4461,7 +4461,6 @@
                 const auto& canonical = views[0];
                 const auto tile =
                     canonical.mapPosition;
-                bool visualHullRefined = false;
                 auto surfaces =
                     BuildFirstPersonSemanticComponentSurfaces(
                         canonical,
@@ -4470,9 +4469,8 @@
                             tile.y / kCoordsXYStep),
                         group.key,
                         observations, nullptr, sprites,
-                        &visualHullRefined);
-                if (!visualHullRefined
-                    || surfaces.empty())
+                        nullptr, false);
+                if (surfaces.empty())
                 {
                     result.surfaces.clear();
                     return result;
@@ -5264,6 +5262,14 @@
                  geometry->second.surfaces)
             {
                 if (!candidate.exteriorOnly)
+                    continue;
+                // The scrolling sign belongs to the centre entrance sequence.
+                // Never let proximity choose a side-tower surface from the
+                // same three-piece reconstruction group.
+                if (candidate.diagnosticSourceTile.x
+                        != surface.diagnosticSourceTile.x
+                    || candidate.diagnosticSourceTile.y
+                        != surface.diagnosticSourceTile.y)
                     continue;
 
                 auto normal =
