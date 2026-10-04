@@ -9,7 +9,6 @@
 #include "../Identifiers.h"
 #include "../ride/TrackData.h"
 #include "../ride/ted/TrackElementDescriptor.h"
-#include "../world/Footpath.h"
 #include "../world/Map.h"
 #include "../world/TileElementsView.h"
 #include "../world/tile_element/EntranceElement.h"
@@ -18,8 +17,6 @@
 #include "../world/tile_element/TrackElement.h"
 
 #include <algorithm>
-#include <array>
-#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <vector>
