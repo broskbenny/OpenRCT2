@@ -62,6 +62,8 @@
 #include "../world/tile_element/TileElementType.h"
 #include "../world/tile_element/WallElement.h"
 #include "../object/WallSceneryEntry.h"
+#include "../object/Object.h"
+#include "../object/ObjectList.h"
 #include "../object/EntranceObject.h"
 #include "../object/ObjectManager.h"
 #include "../object/LargeSceneryEntry.h"
@@ -73,6 +75,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -85,6 +88,63 @@ namespace OpenRCT2::Paint
             kFirstPersonDiagnosticDefaultMask;
         uint64_t gFirstPersonDiagnosticGeneration = 1;
         bool gFirstPersonInspectorPickRequested = false;
+
+        [[nodiscard]] std::string
+            FirstPersonDiagnosticImageLabel(uint32_t imageIndex)
+        {
+            std::string label = std::to_string(imageIndex);
+            auto* context = GetContext();
+            if (context == nullptr)
+                return label;
+
+            auto& objectManager = context->GetObjectManager();
+            for (const auto objectType : getAllObjectTypes())
+            {
+                const size_t limit =
+                    getObjectTypeLimit(objectType);
+                for (size_t index = 0;
+                     index < limit; ++index)
+                {
+                    auto* object =
+                        objectManager.GetLoadedObject(
+                            objectType, index);
+                    if (object == nullptr)
+                        continue;
+
+                    const ImageIndex base =
+                        object->GetBaseImageId();
+                    if (base == kImageIndexUndefined)
+                        continue;
+                    const uint64_t begin = base;
+                    const uint64_t end =
+                        begin + object->GetNumImages();
+                    if (uint64_t(imageIndex) < begin
+                        || uint64_t(imageIndex) >= end)
+                        continue;
+
+                    const auto identifier =
+                        object->GetIdentifier();
+                    const auto name = object->GetName();
+                    label += "{";
+                    if (!identifier.empty())
+                        label += identifier;
+                    else
+                        label +=
+                            object->GetDescriptor().ToString();
+                    if (!name.empty())
+                    {
+                        label += "|";
+                        label += name;
+                    }
+                    label += "+";
+                    label += std::to_string(
+                        uint64_t(imageIndex) - begin);
+                    label += "}";
+                    return label;
+                }
+            }
+            return label;
+        }
 
         #include "FirstPersonRenderer.Core.inc"
         #include "FirstPersonRenderer.World.inc"
