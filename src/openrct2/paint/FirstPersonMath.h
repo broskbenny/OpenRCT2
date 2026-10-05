@@ -4,6 +4,7 @@
  *****************************************************************************/
 #pragma once
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -33,6 +34,111 @@ namespace OpenRCT2::Paint
     inline float FpDot(FirstPersonVec3 a, FirstPersonVec3 b)
     {
         return a.x*b.x + a.y*b.y + a.z*b.z;
+    }
+
+    [[nodiscard]] inline float FirstPersonCoplanarTriangleOverlapAreaXY(
+        const std::array<FirstPersonVec3, 3>& subject,
+        const std::array<FirstPersonVec3, 3>& clip,
+        float epsilon = 0.01f)
+    {
+        const auto cross2 =
+            [](FirstPersonVec3 a, FirstPersonVec3 b, FirstPersonVec3 c) {
+                return (b.x - a.x) * (c.y - a.y)
+                    - (b.y - a.y) * (c.x - a.x);
+            };
+        const float clipOrientation =
+            cross2(clip[0], clip[1], clip[2]);
+        if (std::abs(clipOrientation) <= epsilon)
+            return 0.0f;
+
+        std::array<FirstPersonVec3, 8> input{};
+        std::array<FirstPersonVec3, 8> output{};
+        size_t inputCount = 3;
+        for (size_t i = 0; i < 3; ++i)
+            input[i] = subject[i];
+
+        for (size_t edgeIndex = 0;
+             edgeIndex < 3; ++edgeIndex)
+        {
+            const auto edgeA = clip[edgeIndex];
+            const auto edgeB = clip[(edgeIndex + 1) % 3];
+            const auto inside =
+                [&](FirstPersonVec3 point) {
+                    const float side =
+                        cross2(edgeA, edgeB, point);
+                    return clipOrientation > 0.0f
+                        ? side >= -epsilon
+                        : side <= epsilon;
+                };
+            const auto intersection =
+                [&](FirstPersonVec3 a,
+                    FirstPersonVec3 b) {
+                    const FirstPersonVec3 segment{
+                        b.x - a.x,
+                        b.y - a.y,
+                        0.0f,
+                    };
+                    const FirstPersonVec3 edge{
+                        edgeB.x - edgeA.x,
+                        edgeB.y - edgeA.y,
+                        0.0f,
+                    };
+                    const float denominator =
+                        segment.x * edge.y
+                        - segment.y * edge.x;
+                    if (std::abs(denominator) <= epsilon)
+                        return b;
+                    const FirstPersonVec3 delta{
+                        edgeA.x - a.x,
+                        edgeA.y - a.y,
+                        0.0f,
+                    };
+                    const float t =
+                        (delta.x * edge.y
+                            - delta.y * edge.x)
+                        / denominator;
+                    return FirstPersonVec3{
+                        a.x + segment.x * t,
+                        a.y + segment.y * t,
+                        0.0f,
+                    };
+                };
+
+            if (inputCount == 0)
+                return 0.0f;
+            size_t outputCount = 0;
+            auto previous = input[inputCount - 1];
+            bool previousInside = inside(previous);
+            for (size_t i = 0; i < inputCount; ++i)
+            {
+                const auto current = input[i];
+                const bool currentInside = inside(current);
+                if (currentInside != previousInside
+                    && outputCount < output.size())
+                {
+                    output[outputCount++] =
+                        intersection(previous, current);
+                }
+                if (currentInside
+                    && outputCount < output.size())
+                    output[outputCount++] = current;
+                previous = current;
+                previousInside = currentInside;
+            }
+            input = output;
+            inputCount = outputCount;
+        }
+
+        if (inputCount < 3)
+            return 0.0f;
+        float twiceArea = 0.0f;
+        for (size_t i = 0; i < inputCount; ++i)
+        {
+            const auto& a = input[i];
+            const auto& b = input[(i + 1) % inputCount];
+            twiceArea += a.x * b.y - b.x * a.y;
+        }
+        return 0.5f * std::abs(twiceArea);
     }
     inline FirstPersonBasis GetFirstPersonBasis(const FirstPersonCamera& c)
     {
