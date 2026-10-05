@@ -218,6 +218,46 @@ TEST(FirstPersonAssetReconstructionTest, AdjacentQuarterCellsDropInternalWall)
         2);
 }
 
+TEST(FirstPersonDiagnosticGeometryTest, SharedBoundsWithoutSharedAreaAreNotOverlaps)
+{
+    const std::array<FirstPersonVec3, 3> lowerLeft{ {
+        { 0.0f, 0.0f, 10.0f },
+        { 32.0f, 0.0f, 10.0f },
+        { 0.0f, 32.0f, 10.0f },
+    } };
+    const std::array<FirstPersonVec3, 3> upperRight{ {
+        { 32.0f, 32.0f, 10.0f },
+        { 0.0f, 32.0f, 10.0f },
+        { 32.0f, 0.0f, 10.0f },
+    } };
+
+    // Both triangles have the same 32x32 AABB, but meet only along the
+    // diagonal. The old horizontal diagnostic reported this as a full overlap.
+    EXPECT_NEAR(
+        FirstPersonCoplanarTriangleOverlapAreaXY(
+            lowerLeft, upperRight),
+        0.0f, 0.001f);
+}
+
+TEST(FirstPersonDiagnosticGeometryTest, GenuineCoplanarTriangleOverlapRetainsArea)
+{
+    const std::array<FirstPersonVec3, 3> triangle{ {
+        { 0.0f, 0.0f, 10.0f },
+        { 32.0f, 0.0f, 10.0f },
+        { 0.0f, 32.0f, 10.0f },
+    } };
+    const std::array<FirstPersonVec3, 3> reversed{ {
+        { 0.0f, 32.0f, 10.0f },
+        { 32.0f, 0.0f, 10.0f },
+        { 0.0f, 0.0f, 10.0f },
+    } };
+
+    EXPECT_NEAR(
+        FirstPersonCoplanarTriangleOverlapAreaXY(
+            triangle, reversed),
+        512.0f, 0.001f);
+}
+
 TEST(FirstPersonSourceRotationTest, CameraRelativePointOwnsNativeQuadrant)
 {
     FirstPersonCamera camera{};
