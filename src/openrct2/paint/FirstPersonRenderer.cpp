@@ -423,17 +423,25 @@ namespace OpenRCT2::Paint
                 label, double(hit.distance),
                 double(hit.point.x), double(hit.point.y),
                 double(hit.point.z), double(hit.u), double(hit.v));
+            const auto imageLabel =
+                surface.image.HasValue()
+                ? FirstPersonDiagnosticImageLabel(
+                    surface.image.GetIndex())
+                : std::string("none");
+            const auto maskLabel =
+                surface.mask.HasValue()
+                ? FirstPersonDiagnosticImageLabel(
+                    surface.mask.GetIndex())
+                : std::string("none");
             Console::WriteLine(
-                "  source=%s surfaceIndex=%zu region=%llu image=%d mask=%d",
+                "  source=%s surfaceIndex=%zu region=%llu image=%s mask=%s",
                 hit.region != nullptr ? "staticRegion" : "streamed",
                 hit.surfaceIndex,
                 hit.region != nullptr
                     ? static_cast<unsigned long long>(hit.region->key)
                     : 0ull,
-                surface.image.HasValue()
-                    ? int32_t(surface.image.GetIndex()) : -1,
-                surface.mask.HasValue()
-                    ? int32_t(surface.mask.GetIndex()) : -1);
+                imageLabel.c_str(),
+                maskLabel.c_str());
             Console::WriteLine(
                 "  gpuRegion=%llu cameraIndependent=%d viewFacing=%d physicalCoverage=%d "
                 "coplanarOwner=%d nativePaintOrdinal=%llu exteriorOnly=%d",
