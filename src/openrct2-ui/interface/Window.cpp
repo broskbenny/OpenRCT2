@@ -14,6 +14,7 @@
 
 #include <SDL_video.h>
 #include <algorithm>
+#include <openrct2-ui/FirstPersonController.h>
 #include <openrct2-ui/windows/Windows.h>
 #include <openrct2/Context.h>
 #include <openrct2/GameState.h>
@@ -264,6 +265,11 @@ namespace OpenRCT2::Ui
         int32_t pixel_scroll = relative_wheel * kWindowScrollPixels;
         _previousAbsoluteWheel = absolute_wheel;
 
+        // Consume wheel deltas while the camera owns the mouse, so they neither
+        // change hidden viewport/tool state nor replay after leaving POV.
+        if (FirstPerson::HasInputFocus())
+            return;
+
         if (relative_wheel == 0)
             return;
 
@@ -274,6 +280,9 @@ namespace OpenRCT2::Ui
             WindowBase* w = windowMgr->FindFromPoint(cursorState->position);
             if (w != nullptr)
             {
+                if (FirstPerson::IsActive() && w->classification == WindowClass::mainWindow)
+                    return;
+
                 // Check if main window
                 if (w->classification == WindowClass::mainWindow || w->classification == WindowClass::viewport)
                 {
@@ -1103,3 +1112,4 @@ namespace OpenRCT2::Ui::Windows
             WindowZoomOut(*mainWindow, atCursor);
     }
 } // namespace OpenRCT2::Ui::Windows
+

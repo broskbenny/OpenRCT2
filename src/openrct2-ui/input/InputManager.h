@@ -12,6 +12,7 @@
 #include <openrct2/interface/ScreenCoords.hpp>
 #include <queue>
 #include <string_view>
+#include <unordered_set>
 
 typedef struct _SDL_GameController SDL_GameController;
 typedef union SDL_Event SDL_Event;
@@ -67,6 +68,9 @@ namespace OpenRCT2::Ui
         uint32_t _mouseState{};
         std::vector<uint8_t> _keyboardState;
         uint8_t _modifierKeyState;
+        // Keep a camera-owned key gesture through release, even when its first
+        // key-down exits POV. Repeated Escape must not close ordinary windows.
+        std::unordered_set<uint32_t> _firstPersonKeys;
 
         void checkJoysticks();
         void processAnalogueInput();
@@ -84,10 +88,12 @@ namespace OpenRCT2::Ui
         bool getState(const RegisteredShortcut& shortcut) const;
         bool getState(const ShortcutInput& shortcut) const;
 
-        bool hasTextInputFocus() const;
-
     public:
         InputManager();
+
+        // Text entry, modal dialogs and shortcut rebinding own input ahead of
+        // both gameplay shortcuts and held first-person camera controls.
+        bool hasUiInputFocus() const;
 
         bool isModifierKeyPressed(ModifierKey modifier) const;
         void queueInputEvent(const SDL_Event& e);
@@ -95,3 +101,4 @@ namespace OpenRCT2::Ui
         void process();
     };
 } // namespace OpenRCT2::Ui
+

@@ -14,6 +14,7 @@
 #include <SDL_events.h>
 #include <SDL_timer.h>
 #include <cmath>
+#include <openrct2-ui/FirstPersonController.h>
 #include <openrct2-ui/UiContext.h>
 #include <openrct2-ui/input/MouseInput.h>
 #include <openrct2-ui/input/ShortcutManager.h>
@@ -223,6 +224,11 @@ void InputManager::process()
 
 void InputManager::handleViewScrolling()
 {
+    // The main viewport still stores an overhead camera while POV is active.
+    // Do not move that hidden camera with walking keys, a gamepad or edge scroll.
+    if (FirstPerson::IsActive())
+        return;
+
     if (gLegacyScene == LegacyScene::titleSequence)
         return;
 
@@ -339,6 +345,17 @@ void InputManager::processEvents()
 
 void InputManager::process(const InputEvent& e)
 {
+    if (e.deviceKind == InputDeviceKind::keyboard)
+    {
+        const auto captured = _firstPersonKeys.find(e.button);
+        if (captured != _firstPersonKeys.end())
+        {
+            if (e.state == InputEventState::release)
+                _firstPersonKeys.erase(captured);
+            return;
+        }
+    }
+
     auto& shortcutManager = GetShortcutManager();
     if (e.deviceKind == InputDeviceKind::keyboard)
     {
@@ -401,7 +418,13 @@ void InputManager::process(const InputEvent& e)
             }
         }
     }
-    shortcutManager.processEvent(e);
+    if (FirstPerson::HandleInput(e))
+    {
+        if (e.deviceKind == InputDeviceKind::keyboard && e.state == InputEventState::down)
+            _firstPersonKeys.insert(e.button);
+    }
+    else
+        shortcutManager.processEvent(e);
 }
 
 void InputManager::processInGameConsole(const InputEvent& e)
@@ -466,7 +489,10 @@ void InputManager::processHoldEvents()
     _viewScroll = { 0, 0 };
 
     if (!ContextHasFocus())
+    {
+        _firstPersonKeys.clear();
         return;
+    }
 
     // Get mouse state
     _mouseState = SDL_GetMouseState(nullptr, nullptr);
@@ -478,7 +504,7 @@ void InputManager::processHoldEvents()
     std::memcpy(_keyboardState.data(), keys, numkeys);
 
     // Check view scroll shortcuts
-    if (!hasTextInputFocus())
+    if (!hasUiInputFocus())
     {
         auto& shortcutManager = GetShortcutManager();
         if (!shortcutManager.isPendingShortcutChange())
@@ -586,14 +612,16 @@ bool InputManager::getState(const ShortcutInput& shortcut) const
     return false;
 }
 
-bool InputManager::hasTextInputFocus() const
+bool InputManager::hasUiInputFocus() const
 {
     if (Windows::IsUsingWidgetTextBox() || gChatOpen)
         return true;
 
     auto* windowMgr = GetWindowManager();
-    auto w = windowMgr->FindByClass(WindowClass::textinput);
-    if (w != nullptr)
+    if (windowMgr->FindByClass(WindowClass::textinput) != nullptr
+        || windowMgr->FindByClass(WindowClass::loadsave) != nullptr
+        || windowMgr->FindByClass(WindowClass::loadsaveOverwritePrompt) != nullptr
+        || GetShortcutManager().isPendingShortcutChange())
         return true;
 
     auto& console = GetInGameConsole();
@@ -602,3 +630,4 @@ bool InputManager::hasTextInputFocus() const
 
     return false;
 }
+

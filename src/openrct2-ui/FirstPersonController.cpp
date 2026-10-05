@@ -9,6 +9,9 @@
 
 #include "FirstPersonController.h"
 
+#include "UiContext.h"
+#include "input/InputManager.h"
+
 #include <SDL_keyboard.h>
 #include <SDL_mouse.h>
 #include <array>
@@ -31,6 +34,7 @@
 #include <openrct2/entity/Yaw.hpp>
 #include <openrct2/entity/EntityTweener.h>
 #include <openrct2/interface/Viewport.h>
+#include <openrct2/interface/Window.h>
 #include <openrct2/paint/FirstPersonRenderer.h>
 #include <openrct2/paint/FirstPersonPhysicalProxy.h>
 #include <openrct2/paint/FirstPersonSmallSceneryCollision.h>
@@ -84,10 +88,7 @@ namespace OpenRCT2::Ui::FirstPerson
             uint8_t attachedSeat = 0;
             float headYaw = 0.0f;
             float headPitch = 0.0f;
-            bool previousResetDown = false;
             std::chrono::steady_clock::time_point lastUpdate = std::chrono::steady_clock::now();
-            bool previousEscapeDown = false;
-            bool previousInspectMouseDown = false;
             SDL_bool previousRelativeMouseMode = SDL_FALSE;
             bool ownsRelativeMouseMode = false;
             WalkingFloorSample previousFloor{};
@@ -209,8 +210,10 @@ namespace OpenRCT2::Ui::FirstPerson
                 return;
 
             _state.previousRelativeMouseMode = SDL_GetRelativeMouseMode();
-            SDL_SetRelativeMouseMode(SDL_TRUE);
+            if (SDL_SetRelativeMouseMode(SDL_TRUE) != 0)
+                return;
             SDL_GetRelativeMouseState(nullptr, nullptr);
+            _state.lastUpdate = std::chrono::steady_clock::now();
             _state.ownsRelativeMouseMode = true;
         }
 
@@ -221,6 +224,19 @@ namespace OpenRCT2::Ui::FirstPerson
 
             SDL_SetRelativeMouseMode(_state.previousRelativeMouseMode);
             _state.ownsRelativeMouseMode = false;
+        }
+
+        bool UpdateInputCapture()
+        {
+            if (!HasInputFocus())
+            {
+                ReleaseMouse();
+                SDL_GetRelativeMouseState(nullptr, nullptr);
+                _state.lastUpdate = std::chrono::steady_clock::now();
+                return false;
+            }
+            CaptureMouse();
+            return true;
         }
 
         [[nodiscard]] bool PointOnPathDeck(
@@ -827,7 +843,7 @@ namespace OpenRCT2::Ui::FirstPerson
         // 40 Hz simulation tick. Walking translation remains fixed-step.
         void UpdatePresentationInput()
         {
-            if (!ContextHasFocus())
+            if (!UpdateInputCapture())
                 return;
             if (_state.mode == Mode::rideAttached)
             {
@@ -839,35 +855,10 @@ namespace OpenRCT2::Ui::FirstPerson
                 UpdateMouseLook(false);
                 PublishAudioListener();
             }
-
-            // Relative mouse mode makes the centre of the viewport the natural
-            // first-person cursor. A left-click requests one diagnostic pick;
-            // holding the button never produces repeated dumps.
-            const auto mouseButtons = SDL_GetMouseState(nullptr, nullptr);
-            const bool inspectDown =
-                (mouseButtons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
-            if (inspectDown && !_state.previousInspectMouseDown)
-                Paint::RequestFirstPersonInspectorPick();
-            _state.previousInspectMouseDown = inspectDown;
-        }
-
-        bool HandleEscape()
-        {
-            int count = 0;
-            const auto* keys = SDL_GetKeyboardState(&count);
-            const bool escapeDown = SDL_SCANCODE_ESCAPE < count && keys[SDL_SCANCODE_ESCAPE] != 0;
-            const bool pressed = escapeDown && !_state.previousEscapeDown;
-            _state.previousEscapeDown = escapeDown;
-            if (pressed)
-                Exit();
-            return pressed;
         }
 
         void UpdateWalking()
         {
-            if (!ContextHasFocus())
-                return;
-
             const float dt = DeltaSeconds();
 
             int count = 0;
@@ -941,15 +932,6 @@ namespace OpenRCT2::Ui::FirstPerson
                 Exit();
                 return;
             }
-            int count = 0;
-            const auto* keys = SDL_GetKeyboardState(&count);
-            const bool resetDown = SDL_SCANCODE_R < count && keys[SDL_SCANCODE_R] != 0;
-            if (resetDown && !_state.previousResetDown)
-            {
-                _state.headYaw = _state.headPitch = 0.0f;
-                PublishRideAudioAttachment();
-            }
-            _state.previousResetDown = resetDown;
         }
     } // namespace
 
@@ -961,6 +943,72 @@ namespace OpenRCT2::Ui::FirstPerson
     bool IsActive()
     {
         return _state.mode != Mode::off;
+    }
+
+    bool HasInputFocus()
+    {
+        return IsActive() && ContextHasFocus()
+            && !GetInputManager().hasUiInputFocus();
+    }
+
+    bool HandleInput(const InputEvent& event)
+    {
+        if (!HasInputFocus())
+            return false;
+
+        if (event.deviceKind == InputDeviceKind::mouse)
+        {
+            if (event.button == SDL_BUTTON_LEFT
+                && event.state == InputEventState::down)
+                Paint::RequestFirstPersonInspectorPick();
+            return true;
+        }
+        if (event.deviceKind != InputDeviceKind::keyboard)
+            return false;
+
+        // Modified commands belong to the native shortcut manager (Ctrl+S is
+        // screenshot). Shift alone remains the walking speed modifier.
+        if ((event.modifiers & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)) != 0)
+            return false;
+
+        // Match the physical keys used by SDL_GetKeyboardState for movement,
+        // including on keyboard layouts whose keycodes differ from QWERTY.
+        const auto key = SDL_GetScancodeFromKey(static_cast<SDL_Keycode>(event.button));
+        if (key == SDL_SCANCODE_ESCAPE)
+        {
+            if (event.state == InputEventState::down)
+                Exit();
+            return true;
+        }
+        if (_state.mode == Mode::rideAttached && key == SDL_SCANCODE_R)
+        {
+            if (event.state == InputEventState::down)
+            {
+                _state.headYaw = _state.headPitch = 0.0f;
+                PublishRideAudioAttachment();
+            }
+            return true;
+        }
+        if (_state.mode == Mode::walking)
+        {
+            switch (key)
+            {
+                case SDL_SCANCODE_W:
+                case SDL_SCANCODE_A:
+                case SDL_SCANCODE_S:
+                case SDL_SCANCODE_D:
+                case SDL_SCANCODE_UP:
+                case SDL_SCANCODE_DOWN:
+                case SDL_SCANCODE_LEFT:
+                case SDL_SCANCODE_RIGHT:
+                case SDL_SCANCODE_LSHIFT:
+                case SDL_SCANCODE_RSHIFT:
+                    return true;
+                default:
+                    break;
+            }
+        }
+        return false;
     }
 
     void ToggleWalking()
@@ -1051,6 +1099,7 @@ namespace OpenRCT2::Ui::FirstPerson
         }
 
         Exit();
+        ToolCancel();
 
         _state.mode = Mode::walking;
         _state.camera.position = {
@@ -1062,10 +1111,9 @@ namespace OpenRCT2::Ui::FirstPerson
             float(viewport->rotation) * (kPi * 0.5f);
         _state.camera.pitch = 0.0f;
         _state.previousFloor = initialFloor;
-        _state.previousEscapeDown = false;
         PublishTweenView();
         PublishAudioListener();
-        CaptureMouse();
+        UpdateInputCapture();
         mainWindow->invalidate();
         return true;
     }
@@ -1095,6 +1143,7 @@ namespace OpenRCT2::Ui::FirstPerson
             Paint::FirstPersonVehicleSimulationOrientation(*vehicle);
 
         Exit();
+        ToolCancel();
 
         _state.mode = Mode::rideAttached;
         EntityTweener::get().setTrackedVehicle(vehicleId);
@@ -1107,10 +1156,9 @@ namespace OpenRCT2::Ui::FirstPerson
         _state.camera.roll = initialOrientation.roll;
         _state.camera.hasExplicitBasis = true;
         _state.camera.explicitBasis = initialPassenger.basis;
-        _state.previousEscapeDown = false;
         PublishTweenView();
         PublishRideAudioAttachment();
-        CaptureMouse();
+        UpdateInputCapture();
 
         if (auto* mainWindow = WindowGetMain(); mainWindow != nullptr)
             mainWindow->invalidate();
@@ -1147,13 +1195,15 @@ namespace OpenRCT2::Ui::FirstPerson
             return;
         }
 
-        if (HandleEscape())
-            return;
+        const bool hasInputFocus = UpdateInputCapture();
 
         switch (_state.mode)
         {
             case Mode::walking:
-                UpdateWalking();
+                if (hasInputFocus && (SDL_GetModState() & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)) == 0)
+                    UpdateWalking();
+                else
+                    _state.lastUpdate = std::chrono::steady_clock::now();
                 PublishAudioListener();
                 break;
             case Mode::rideAttached:
@@ -1275,4 +1325,5 @@ namespace OpenRCT2::Ui::FirstPerson
         DrawInspectorCrosshair(rt, renderViewport);
     }
 } // namespace OpenRCT2::Ui::FirstPerson
+
 

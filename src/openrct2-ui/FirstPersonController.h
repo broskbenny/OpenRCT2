@@ -16,6 +16,11 @@ namespace OpenRCT2::Drawing
     struct RenderTarget;
 }
 
+namespace OpenRCT2::Ui
+{
+    struct InputEvent;
+}
+
 namespace OpenRCT2::Ui::FirstPerson
 {
     enum class Mode
@@ -27,6 +32,9 @@ namespace OpenRCT2::Ui::FirstPerson
 
     [[nodiscard]] Mode GetMode();
     [[nodiscard]] bool IsActive();
+    // Shared ownership gate for camera controls, shortcuts and native mouse tools.
+    [[nodiscard]] bool HasInputFocus();
+    bool HandleInput(const InputEvent& event);
 
     void ToggleWalking();
     bool EnterWalking();
@@ -36,4 +44,5 @@ namespace OpenRCT2::Ui::FirstPerson
     void Update();
     void Render(Drawing::RenderTarget& rt);
 } // namespace OpenRCT2::Ui::FirstPerson
+
 

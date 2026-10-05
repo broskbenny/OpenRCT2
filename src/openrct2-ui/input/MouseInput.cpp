@@ -13,6 +13,7 @@
 #include <cassert>
 #include <cmath>
 #include <iterator>
+#include <openrct2-ui/FirstPersonController.h>
 #include <openrct2-ui/UiContext.h>
 #include <openrct2-ui/input/InputManager.h>
 #include <openrct2-ui/interface/Dropdown.h>
@@ -109,6 +110,18 @@ namespace OpenRCT2
     void GameHandleInput()
     {
         InvalidateAllWindowsAfterInput();
+
+        if (FirstPerson::HasInputFocus())
+        {
+            // Drain the native queue even on the frame that enters POV. Its
+            // cursor position describes the overhead UI, not the camera ray.
+            _mouseInputQueueReadIndex = _mouseInputQueueWriteIndex;
+            InputSetState(InputState::normal);
+            gInputFlags.unset(InputFlag::widgetPressed);
+            gInputFlags.unset(InputFlag::leftMousePressed);
+            gInputFlags.unset(InputFlag::rightMousePressed);
+            return;
+        }
 
         MouseState state;
         ScreenCoordsXY screenCoords;
@@ -276,6 +289,10 @@ namespace OpenRCT2
      */
     static void GameHandleInputMouse(const ScreenCoordsXY& screenCoords, MouseState state)
     {
+        // A preceding event in this same queue can have entered POV.
+        if (FirstPerson::HasInputFocus())
+            return;
+
         WindowBase* w;
         Widget* widget;
         WidgetIndex widgetIndex;
@@ -284,6 +301,11 @@ namespace OpenRCT2
 
         // Get window and widget under cursor position
         w = windowMgr->FindFromPoint(screenCoords);
+        // Modal UI can release the cursor during POV, but the main window is
+        // still a perspective view and cannot use overhead picking coordinates.
+        if (FirstPerson::IsActive() && w == WindowGetMain()
+            && (_inputState == InputState::normal || _inputState == InputState::reset))
+            return;
         widgetIndex = w == nullptr ? kWidgetIndexNull : windowMgr->FindWidgetFromPoint(*w, screenCoords);
         widget = widgetIndex == kWidgetIndexNull ? nullptr : &w->widgets[widgetIndex];
 
@@ -1155,6 +1177,9 @@ namespace OpenRCT2
      */
     void ProcessMouseOver(const ScreenCoordsXY& screenCoords)
     {
+        if (FirstPerson::HasInputFocus())
+            return;
+
         CursorID cursorId = CursorID::arrow;
         auto ft = Formatter();
         ft.Add<StringId>(kStringIdNone);
@@ -1162,6 +1187,12 @@ namespace OpenRCT2
 
         auto* windowMgr = GetWindowManager();
         WindowBase* window = windowMgr->FindFromPoint(screenCoords);
+
+        if (FirstPerson::IsActive() && window == WindowGetMain())
+        {
+            SetCursor(CursorID::arrow);
+            return;
+        }
 
         if (window != nullptr)
         {
@@ -1233,6 +1264,9 @@ namespace OpenRCT2
      */
     void ProcessMouseTool(const ScreenCoordsXY& screenCoords)
     {
+        if (FirstPerson::IsActive())
+            return;
+
         if (gInputFlags.has(InputFlag::toolActive))
         {
             auto* windowMgr = GetWindowManager();
@@ -1596,6 +1630,11 @@ namespace OpenRCT2
      */
     void StoreMouseInput(MouseState state, const ScreenCoordsXY& screenCoords)
     {
+        // Camera button events are handled by InputManager. Do not leave a
+        // second copy queued for a tool, including when Escape exits this frame.
+        if (FirstPerson::HasInputFocus())
+            return;
+
         uint32_t writeIndex = _mouseInputQueueWriteIndex;
         uint32_t nextWriteIndex = (writeIndex + 1) % std::size(_mouseInputQueue);
 
@@ -1752,3 +1791,4 @@ namespace OpenRCT2
         gInputFlags.set(InputFlag::viewportScrolling);
     }
 } // namespace OpenRCT2
+
