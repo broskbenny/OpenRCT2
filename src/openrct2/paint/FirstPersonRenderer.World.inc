@@ -4268,25 +4268,31 @@
                                    .second)
                         {
                             ++logsThisRegion;
+                            const auto imageALabel =
+                                FirstPersonDiagnosticImageLabel(
+                                    imageA);
+                            const auto imageBLabel =
+                                FirstPersonDiagnosticImageLabel(
+                                    imageB);
                             LOG_WARNING(
                                 "FP_HORIZONTAL[%s] region=(%d,%d) tile=(%d,%d) z=%.2f "
                                 "overlap=(%.1f,%.1f) "
-                                "A[type=%s image=%u owner=%d physical=%d order=%llu] "
-                                "B[type=%s image=%u owner=%d physical=%d order=%llu]",
+                                "A[type=%s image=%s owner=%d physical=%d order=%llu] "
+                                "B[type=%s image=%s owner=%d physical=%d order=%llu]",
                                 diagnosticName,
                                 regionX, regionY,
                                 tileX, tileY, double(z),
                                 double(overlapX),
                                 double(overlapY),
                                 surfaceType(other),
-                                imageA,
+                                imageALabel.c_str(),
                                 other.coplanarOwner ? 1 : 0,
                                 other.physicalCoverage ? 1 : 0,
                                 static_cast<
                                     unsigned long long>(
                                         other.nativePaintOrdinal),
                                 surfaceType(surface),
-                                imageB,
+                                imageBLabel.c_str(),
                                 surface.coplanarOwner ? 1 : 0,
                                 surface.physicalCoverage ? 1 : 0,
                                 static_cast<
@@ -4638,14 +4644,20 @@
                                 continue;
 
                             ++planeLogsThisRegion;
+                            const auto imageALabel =
+                                FirstPersonDiagnosticImageLabel(
+                                    imageA);
+                            const auto imageBLabel =
+                                FirstPersonDiagnosticImageLabel(
+                                    imageB);
                             LOG_WARNING(
                                 "FP_PLANE region=(%d,%d) normal=(%.3f,%.3f,%.3f) "
                                 "distance=%.2f overlap=(%.1f,%.1f) "
-                                "A[type=%s image=%u reconGroup=%llu reconKind=%s reconAnchor=(%.0f,%.0f,%.0f) semanticGroup=%llu gpuRegion=%llu "
+                                "A[type=%s image=%s reconGroup=%llu reconKind=%s reconAnchor=(%.0f,%.0f,%.0f) semanticGroup=%llu gpuRegion=%llu "
                                 "owner=%d order=%llu exterior=%d normal=(%.1f,%.1f,%.1f) role=%u "
                                 "source=(tile=%d,%d comp=%u rot=%u artGroup=%u) "
                                 "material=(tile=%d,%d comp=%u rot=%u artGroup=%u order=%llu)] "
-                                "B[type=%s image=%u reconGroup=%llu reconKind=%s reconAnchor=(%.0f,%.0f,%.0f) semanticGroup=%llu gpuRegion=%llu "
+                                "B[type=%s image=%s reconGroup=%llu reconKind=%s reconAnchor=(%.0f,%.0f,%.0f) semanticGroup=%llu gpuRegion=%llu "
                                 "owner=%d order=%llu exterior=%d normal=(%.1f,%.1f,%.1f) role=%u "
                                 "source=(tile=%d,%d comp=%u rot=%u artGroup=%u) "
                                 "material=(tile=%d,%d comp=%u rot=%u artGroup=%u order=%llu)] "
@@ -4658,7 +4670,7 @@
                                 double(overlapU),
                                 double(overlapV),
                                 surfaceType(other),
-                                imageA,
+                                imageALabel.c_str(),
                                 static_cast<
                                     unsigned long long>(
                                         other.reconstructionGroup),
@@ -4708,7 +4720,7 @@
                                         other
                                             .diagnosticMaterialPaintOrdinal),
                                 surfaceType(surface),
-                                imageB,
+                                imageBLabel.c_str(),
                                 static_cast<
                                     unsigned long long>(
                                         surface.reconstructionGroup),
