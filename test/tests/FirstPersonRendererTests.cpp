@@ -21,6 +21,7 @@
 #include <openrct2/paint/FirstPersonTrackTrajectory.h>
 #include <openrct2/paint/FirstPersonTunnelGeometry.h>
 #include <openrct2/paint/FirstPersonSmallSceneryCollision.h>
+#include <openrct2/paint/FirstPersonSmallSceneryAppearance.h>
 #include <openrct2/paint/FirstPersonVehicleBodyHull.h>
 #include <openrct2/paint/FirstPersonVisualHull.h>
 #include <openrct2/paint/FirstPersonWalkingSemantics.h>
@@ -819,6 +820,140 @@ TEST(FirstPersonAssetReconstructionTest, KnownSpriteBoundsClassifyOutsideAsTrans
         FirstPersonArtworkSampleCoverageForPoint(
             true, 7, 7, 8, 8),
         FirstPersonArtworkSampleCoverage::raster);
+}
+
+TEST(FirstPersonSmallSceneryAppearanceTest, TreePolicyUsesCrossedPlanesInsteadOfHullBoundary)
+{
+    SmallSceneryEntry entry{};
+    entry.height = 152;
+    entry.flags.set(SmallSceneryFlag::isTree);
+    SmallSceneryElement element{};
+    element.setOccupiedQuadrants(0x0F);
+
+    EXPECT_EQ(
+        FirstPersonSmallSceneryAppearanceFor(entry),
+        FirstPersonSmallSceneryAppearanceKind::crossedTree);
+    const auto plan =
+        BuildFirstPersonSmallSceneryAppearancePlan(
+            entry, element, nullptr);
+    ASSERT_TRUE(plan.valid());
+    EXPECT_FALSE(plan.usesDepthOwnership);
+    EXPECT_FALSE(plan.certifiesHullMaterial);
+    EXPECT_TRUE(plan.oneSidedArtwork);
+    EXPECT_FALSE(plan.mergesMaterialViews);
+    ASSERT_EQ(plan.faces.size(), 4u);
+
+    size_t xCentred = 0;
+    size_t yCentred = 0;
+    for (const auto& face : plan.faces)
+    {
+        EXPECT_FLOAT_EQ(face.normal.z, 0.0f);
+        for (const auto& corner : face.corners)
+        {
+            EXPECT_TRUE(
+                corner.z == 0.0f
+                || corner.z == 152.0f);
+        }
+        if (std::abs(face.normal.x) > 0.5f)
+        {
+            ++xCentred;
+            for (const auto& corner : face.corners)
+                EXPECT_FLOAT_EQ(corner.x, 16.0f);
+        }
+        if (std::abs(face.normal.y) > 0.5f)
+        {
+            ++yCentred;
+            for (const auto& corner : face.corners)
+                EXPECT_FLOAT_EQ(corner.y, 16.0f);
+        }
+    }
+    EXPECT_EQ(xCentred, 2u);
+    EXPECT_EQ(yCentred, 2u);
+}
+
+TEST(FirstPersonSmallSceneryAppearanceTest, CrossIsCentredInsideAuthoritativeOccupiedRectangle)
+{
+    const auto full =
+        BuildFirstPersonSmallSceneryFootprint(0x0F, 64);
+    ASSERT_TRUE(full.valid);
+    EXPECT_FLOAT_EQ(full.minForward, 0.0f);
+    EXPECT_FLOAT_EQ(full.maxForward, 32.0f);
+    EXPECT_FLOAT_EQ(full.minRight, 0.0f);
+    EXPECT_FLOAT_EQ(full.maxRight, 32.0f);
+    EXPECT_FLOAT_EQ(full.centreForward(), 16.0f);
+    EXPECT_FLOAT_EQ(full.centreRight(), 16.0f);
+
+    const auto quarter =
+        BuildFirstPersonSmallSceneryFootprint(1u << 0, 48);
+    ASSERT_TRUE(quarter.valid);
+    EXPECT_FLOAT_EQ(quarter.minForward, 16.0f);
+    EXPECT_FLOAT_EQ(quarter.maxForward, 32.0f);
+    EXPECT_FLOAT_EQ(quarter.minRight, 16.0f);
+    EXPECT_FLOAT_EQ(quarter.maxRight, 32.0f);
+    EXPECT_FLOAT_EQ(quarter.centreForward(), 24.0f);
+    EXPECT_FLOAT_EQ(quarter.centreRight(), 24.0f);
+
+    const auto half =
+        BuildFirstPersonSmallSceneryFootprint(
+            uint8_t((1u << 1) | (1u << 2)), 40);
+    ASSERT_TRUE(half.valid);
+    EXPECT_FLOAT_EQ(half.minForward, 0.0f);
+    EXPECT_FLOAT_EQ(half.maxForward, 32.0f);
+    EXPECT_FLOAT_EQ(half.minRight, 0.0f);
+    EXPECT_FLOAT_EQ(half.maxRight, 16.0f);
+    EXPECT_FLOAT_EQ(half.centreForward(), 16.0f);
+    EXPECT_FLOAT_EQ(half.centreRight(), 8.0f);
+}
+
+TEST(FirstPersonSmallSceneryAppearanceTest, NonTreeKeepsReconstructedHullPolicy)
+{
+    SmallSceneryEntry entry{};
+    entry.height = 24;
+    SmallSceneryElement element{};
+    element.setOccupiedQuadrants(0x0F);
+
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 4.0f;
+    hull.sizeForward = 1;
+    hull.sizeRight = 1;
+    hull.sizeUp = 1;
+    hull.occupied.assign(1, 1);
+
+    const auto plan =
+        BuildFirstPersonSmallSceneryAppearancePlan(
+            entry, element, &hull);
+    ASSERT_TRUE(plan.valid());
+    EXPECT_EQ(
+        plan.kind,
+        FirstPersonSmallSceneryAppearanceKind::reconstructedHull);
+    EXPECT_TRUE(plan.usesDepthOwnership);
+    EXPECT_TRUE(plan.certifiesHullMaterial);
+    EXPECT_FALSE(plan.oneSidedArtwork);
+    EXPECT_TRUE(plan.mergesMaterialViews);
+    EXPECT_EQ(plan.faces.size(), 6u);
+}
+
+TEST(FirstPersonSmallSceneryAppearanceTest, CrossCarriesOpposedOneSidedPairsWithoutBoundaryPlanes)
+{
+    const auto footprint =
+        BuildFirstPersonSmallSceneryFootprint(0x0F, 80);
+    const auto faces =
+        BuildFirstPersonCrossedTreeFaces(footprint);
+    ASSERT_EQ(faces.size(), 4u);
+
+    EXPECT_FLOAT_EQ(
+        faces[0].normal.x + faces[1].normal.x, 0.0f);
+    EXPECT_FLOAT_EQ(
+        faces[2].normal.y + faces[3].normal.y, 0.0f);
+    for (const auto& corner : faces[0].corners)
+        EXPECT_FLOAT_EQ(corner.x, 16.0f);
+    for (const auto& corner : faces[1].corners)
+        EXPECT_FLOAT_EQ(corner.x, 16.0f);
+    for (const auto& corner : faces[2].corners)
+        EXPECT_FLOAT_EQ(corner.y, 16.0f);
+    for (const auto& corner : faces[3].corners)
+        EXPECT_FLOAT_EQ(corner.y, 16.0f);
 }
 
 TEST(FirstPersonSmallSceneryCollisionTest, QuarterMappingMatchesNativeConstructionQuadrants)
