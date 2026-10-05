@@ -187,39 +187,79 @@ namespace OpenRCT2::Ui
         }
     }
 
-    bool ViewportInteractionLeftClick(const ScreenCoordsXY& screenCoords)
+    ViewportInteractionActionResult
+        ViewportInteractionDispatchLeftClick(
+            const InteractionInfo& info)
     {
-        auto info = ViewportInteractionGetItemLeft(screenCoords);
+        ViewportInteractionActionResult result{};
         auto& gameState = getGameState();
+
+        // Keep direct perspective dispatch within the same gameplay contexts
+        // as ordinary viewport interaction. The target itself came from native
+        // paint ownership, but it may have been selected without a 2D viewport.
+        if (gLegacyScene == LegacyScene::scenarioEditor
+            || gLegacyScene
+                == LegacyScene::trackDesignsManager)
+            return result;
+        if (gLegacyScene == LegacyScene::trackDesigner
+            && gameState.editorStep
+                != Editor::Step::rollerCoasterDesigner)
+            return result;
+
+        if (gLegacyScene == LegacyScene::titleSequence)
+        {
+            if (info.interactionType
+                    != ViewportInteractionItem::entity
+                || info.Entity == nullptr
+                || (!info.Entity->is<Balloon>()
+                    && !info.Entity->is<Duck>()))
+                return result;
+        }
 
         switch (info.interactionType)
         {
             case ViewportInteractionItem::entity:
             {
-                auto entity = info.Entity;
+                auto* entity = info.Entity;
+                if (entity == nullptr)
+                    return result;
                 switch (entity->type)
                 {
                     case EntityType::vehicle:
                     {
-                        auto intent = Intent(WindowDetail::vehicle);
-                        intent.PutExtra(INTENT_EXTRA_VEHICLE, entity);
+                        auto* vehicle =
+                            entity->as<Vehicle>();
+                        if (vehicle == nullptr
+                            || vehicle->IsCableLift())
+                            return result;
+                        auto intent =
+                            Intent(WindowDetail::vehicle);
+                        intent.PutExtra(
+                            INTENT_EXTRA_VEHICLE, entity);
                         ContextOpenIntent(&intent);
+                        result.openedWindow = true;
                         break;
                     }
                     case EntityType::guest:
                     case EntityType::staff:
                     {
-                        auto intent = Intent(WindowClass::peep);
-                        intent.PutExtra(INTENT_EXTRA_PEEP, entity);
+                        auto intent =
+                            Intent(WindowClass::peep);
+                        intent.PutExtra(
+                            INTENT_EXTRA_PEEP, entity);
                         ContextOpenIntent(&intent);
+                        result.openedWindow = true;
                         break;
                     }
                     case EntityType::balloon:
                     {
                         if (GameIsNotPaused())
                         {
-                            auto balloonPress = GameActions::BalloonPressAction(entity->id);
-                            GameActions::Execute(&balloonPress, gameState);
+                            auto balloonPress =
+                                GameActions::BalloonPressAction(
+                                    entity->id);
+                            GameActions::Execute(
+                                &balloonPress, gameState);
                         }
                     }
                     break;
@@ -227,32 +267,51 @@ namespace OpenRCT2::Ui
                     {
                         if (GameIsNotPaused())
                         {
-                            auto duck = entity->as<Duck>();
+                            auto* duck =
+                                entity->as<Duck>();
                             if (duck != nullptr)
-                            {
                                 duck->press();
-                            }
                         }
                     }
                     break;
                     default:
                         break;
                 }
-                return true;
+                result.handled = true;
+                return result;
             }
             case ViewportInteractionItem::ride:
             {
-                auto intent = Intent(WindowDetail::track);
-                intent.PutExtra(INTENT_EXTRA_TILE_ELEMENT, info.Element);
+                if (info.Element == nullptr)
+                    return result;
+                auto intent =
+                    Intent(WindowDetail::track);
+                intent.PutExtra(
+                    INTENT_EXTRA_TILE_ELEMENT,
+                    info.Element);
                 ContextOpenIntent(&intent);
-                return true;
+                result.handled = true;
+                result.openedWindow = true;
+                return result;
             }
             case ViewportInteractionItem::parkEntrance:
-                ContextOpenWindow(WindowClass::parkInformation);
-                return true;
+                ContextOpenWindow(
+                    WindowClass::parkInformation);
+                result.handled = true;
+                result.openedWindow = true;
+                return result;
             default:
-                return false;
+                return result;
         }
+    }
+
+    bool ViewportInteractionLeftClick(
+        const ScreenCoordsXY& screenCoords)
+    {
+        const auto info =
+            ViewportInteractionGetItemLeft(screenCoords);
+        return ViewportInteractionDispatchLeftClick(
+            info).handled;
     }
 
     /**

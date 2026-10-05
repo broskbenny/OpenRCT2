@@ -41,7 +41,7 @@ PRELUDE = r"""
 
 enum SDL_bool { SDL_FALSE, SDL_TRUE };
 using SDL_Keycode = int32_t;
-enum SDL_Scancode { SDL_SCANCODE_ESCAPE, SDL_SCANCODE_R, SDL_SCANCODE_W,
+enum SDL_Scancode { SDL_SCANCODE_ESCAPE, SDL_SCANCODE_E, SDL_SCANCODE_R, SDL_SCANCODE_W,
     SDL_SCANCODE_A, SDL_SCANCODE_S, SDL_SCANCODE_D, SDL_SCANCODE_UP,
     SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT,
     SDL_SCANCODE_LSHIFT, SDL_SCANCODE_RSHIFT, SDL_SCANCODE_F10 };
@@ -70,11 +70,12 @@ struct Context {
     DrawingEngine GetDrawingEngineType() { return engine; }
 } context;
 Context* GetContext() { return &context; }
-int walks = 0, looks = 0, inspections = 0, exits = 0, rideAudio = 0;
+int walks = 0, looks = 0, inspections = 0, interactions = 0, exits = 0, rideAudio = 0;
 int consoleInputs = 0, chatInputs = 0, dialogInputs = 0;
 
 namespace OpenRCT2::Paint {
 void RequestFirstPersonInspectorPick() { ++inspections; }
+void RequestFirstPersonInteractionPick() { ++interactions; }
 }
 namespace OpenRCT2::Ui {
 enum class InputDeviceKind { mouse, keyboard, joyButton, joyHat, joyAxis };
@@ -129,6 +130,7 @@ struct State {
     std::chrono::steady_clock::time_point lastUpdate{};
     SDL_bool previousRelativeMouseMode = SDL_FALSE;
     bool ownsRelativeMouseMode = false;
+    bool nativeUiInputSuspended = false;
 } _state;
 bool IsActive();
 bool HasInputFocus();
@@ -140,6 +142,7 @@ void PublishTweenView() {}
 void UpdateMouseLook(bool) { ++looks; mouseDelta = 0; }
 void UpdateWalking() { ++walks; }
 void UpdateRideAttached() {}
+void ProcessPendingFirstPersonInteraction() {}
 """
 
 MOUSE = r"""
@@ -194,6 +197,10 @@ int main() {
     }
     key(1000); key(1000, InputEventState::release);
     assert(shortcuts.actions == 0);
+    key(SDL_SCANCODE_E);
+    key(SDL_SCANCODE_E);
+    key(SDL_SCANCODE_E, InputEventState::release);
+    assert(interactions == 1 && shortcuts.actions == 0);
     // Ctrl+S remains a screenshot command and cannot also walk backwards.
     modifiers = KMOD_CTRL;
     inputManager.process({InputDeviceKind::keyboard, modifiers, SDL_SCANCODE_S, InputEventState::down});
@@ -245,6 +252,13 @@ int main() {
     appFocus = false; Update(); UpdatePresentationInput();
     assert(walks == 0 && looks == 0);
     appFocus = true;
+    _state.nativeUiInputSuspended = true;
+    ReleaseMouse();
+    assert(!HasInputFocus() && relativeMode == SDL_FALSE);
+    assert(ResumeInputFromMainViewport());
+    assert(HasInputFocus() && relativeMode == SDL_TRUE);
+    assert(!ResumeInputFromMainViewport());
+    ReleaseMouse();
     _state.lastUpdate = std::chrono::steady_clock::now() - std::chrono::hours(1);
     mouseDelta = 999;
     assert(UpdateInputCapture());
@@ -301,9 +315,10 @@ def main():
     manager = (ui / "input/InputManager.cpp").read_text(encoding="utf-8")
     mouse = (ui / "input/MouseInput.cpp").read_text(encoding="utf-8")
     signatures = [
-        "bool IsActive()", "bool HasInputFocus()", "bool HandleInput(const InputEvent& event)",
-        "void CaptureMouse()", "void ReleaseMouse()", "bool UpdateInputCapture()",
-        "float DeltaSeconds()", "void UpdatePresentationInput()", "void Update()",
+        "bool IsActive()", "bool HasInputFocus()", "void CaptureMouse()", "void ReleaseMouse()",
+        "bool UpdateInputCapture()", "bool ResumeInputFromMainViewport()",
+        "bool HandleInput(const InputEvent& event)", "float DeltaSeconds()",
+        "void UpdatePresentationInput()", "void Update()",
     ]
     source = PRELUDE + "\n".join(function(controller, s) for s in signatures) + "\n}}\n"
     source += "using namespace OpenRCT2::Ui;\n"

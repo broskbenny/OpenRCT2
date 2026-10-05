@@ -35,6 +35,9 @@ namespace OpenRCT2::Ui::FirstPerson
     // Shared ownership gate for camera controls, shortcuts and native mouse tools.
     [[nodiscard]] bool HasInputFocus();
     bool HandleInput(const InputEvent& event);
+    // Native windows opened from a perspective interaction temporarily own the
+    // cursor. A click back into the perspective viewport resumes camera input.
+    bool ResumeInputFromMainViewport();
 
     void ToggleWalking();
     bool EnterWalking();

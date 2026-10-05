@@ -28,10 +28,12 @@
 #include <openrct2/ride/CarEntry.h>
 #include <openrct2/ride/Ride.h>
 #include <openrct2/ride/RideData.h>
+#include <openrct2-ui/interface/ViewportInteraction.h>
 #include <openrct2-ui/interface/Window.h>
 #include <openrct2/Context.h>
 #include <openrct2/GameState.h>
 #include <openrct2/entity/Yaw.hpp>
+#include <openrct2/entity/EntityBase.h>
 #include <openrct2/entity/EntityTweener.h>
 #include <openrct2/interface/Viewport.h>
 #include <openrct2/interface/Window.h>
@@ -91,6 +93,7 @@ namespace OpenRCT2::Ui::FirstPerson
             std::chrono::steady_clock::time_point lastUpdate = std::chrono::steady_clock::now();
             SDL_bool previousRelativeMouseMode = SDL_FALSE;
             bool ownsRelativeMouseMode = false;
+            bool nativeUiInputSuspended = false;
             WalkingFloorSample previousFloor{};
         };
 
@@ -811,6 +814,84 @@ namespace OpenRCT2::Ui::FirstPerson
             return false;
         }
 
+        [[nodiscard]] std::optional<InteractionInfo>
+            ResolveFirstPersonInteractionInfo(
+                const Paint::FirstPersonInteractionTarget& target)
+        {
+            if (!Paint::
+                    IsFirstPersonInteractionTargetCurrent(
+                        target))
+                return std::nullopt;
+
+            InteractionInfo info{};
+            info.interactionType =
+                target.interactionType;
+            info.Loc = target.mapPosition;
+
+            if (target.interactionType
+                == ViewportInteractionItem::entity)
+            {
+                auto* entity =
+                    getGameState().entities
+                        .tryGetEntity<EntityBase>(
+                            target.entity);
+                if (entity == nullptr)
+                    return std::nullopt;
+                info.Entity = entity;
+                const auto location =
+                    entity->getLocation();
+                info.Loc = {
+                    location.x, location.y
+                };
+                return info;
+            }
+
+            auto* element =
+                MapGetFirstElementAt(
+                    target.mapPosition);
+            for (uint16_t index = 0;
+                 element != nullptr
+                    && index
+                        < target.tileElementIndex;
+                 ++index)
+            {
+                if (element->isLastForTile())
+                    return std::nullopt;
+                ++element;
+            }
+            if (element == nullptr)
+                return std::nullopt;
+            info.Element = element;
+            return info;
+        }
+
+        void SuspendInputForNativeUi()
+        {
+            _state.nativeUiInputSuspended = true;
+            ReleaseMouse();
+            SDL_GetRelativeMouseState(nullptr, nullptr);
+            _state.lastUpdate =
+                std::chrono::steady_clock::now();
+        }
+
+        void ProcessPendingFirstPersonInteraction()
+        {
+            const auto target =
+                Paint::ConsumeFirstPersonInteractionPick();
+            if (!target.has_value())
+                return;
+            const auto info =
+                ResolveFirstPersonInteractionInfo(*target);
+            if (!info.has_value())
+                return;
+
+            const auto result =
+                ViewportInteractionDispatchLeftClick(
+                    *info);
+            if (result.openedWindow)
+                SuspendInputForNativeUi();
+        }
+
         void UpdateMouseLook(bool riding)
         {
             int32_t dx = 0;
@@ -947,8 +1028,22 @@ namespace OpenRCT2::Ui::FirstPerson
 
     bool HasInputFocus()
     {
-        return IsActive() && ContextHasFocus()
+        return IsActive()
+            && !_state.nativeUiInputSuspended
+            && ContextHasFocus()
             && !GetInputManager().hasUiInputFocus();
+    }
+
+    bool ResumeInputFromMainViewport()
+    {
+        if (!IsActive()
+            || !_state.nativeUiInputSuspended)
+            return false;
+        _state.nativeUiInputSuspended = false;
+        _state.lastUpdate =
+            std::chrono::steady_clock::now();
+        UpdateInputCapture();
+        return true;
     }
 
     bool HandleInput(const InputEvent& event)
@@ -978,6 +1073,12 @@ namespace OpenRCT2::Ui::FirstPerson
         {
             if (event.state == InputEventState::down)
                 Exit();
+            return true;
+        }
+        if (key == SDL_SCANCODE_E)
+        {
+            if (event.state == InputEventState::down)
+                Paint::RequestFirstPersonInteractionPick();
             return true;
         }
         if (_state.mode == Mode::rideAttached && key == SDL_SCANCODE_R)
@@ -1195,6 +1296,7 @@ namespace OpenRCT2::Ui::FirstPerson
             return;
         }
 
+        ProcessPendingFirstPersonInteraction();
         const bool hasInputFocus = UpdateInputCapture();
 
         switch (_state.mode)

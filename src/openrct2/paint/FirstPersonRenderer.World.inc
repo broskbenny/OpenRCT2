@@ -369,7 +369,8 @@
             const std::optional<FirstPersonTrackTrajectory>& next,
             const FirstPersonVec3& groupAnchor,
             uint64_t groupKey, uint64_t signature,
-            const FirstPersonTrackTrajectory& trajectory, uint64_t frame)
+            const FirstPersonTrackTrajectory& trajectory, uint64_t frame,
+            const FirstPersonInteractionTarget& interactionTarget)
         {
             TrackTrajectoryCacheEntry result{};
             result.signature = signature;
@@ -507,6 +508,8 @@
                 surface.diagnosticReconstructionKind = 2;
                 surface.diagnosticReconstructionAnchor =
                     groupAnchor;
+                surface.interactionTarget =
+                    interactionTarget;
             }
             UpdateTrackTrajectoryBounds(result);
             IndexTrackTrajectoryRegions(result);
@@ -706,6 +709,11 @@
                         continue;
                     }
 
+                    const auto interactionTarget =
+                        BuildFirstPersonTileInteractionTarget(
+                            ViewportInteractionItem::ride,
+                            { sampleOrigin->x, sampleOrigin->y },
+                            originElement);
                     const auto trajectory =
                         BuildFirstPersonTrackTrajectory(
                             track->getTrackType(),
@@ -745,9 +753,11 @@
                     const auto serial = ++_nextReconstructionRequest;
                     const auto anchor = group->anchor;
                     if (_reconstructionWorker.submit([profile = *profile, next, topColour, sideColour,
-                            tunnelHeight, tunnelColour, key, serial, anchor, signature, frame, trajectory = *trajectory] {
+                            tunnelHeight, tunnelColour, key, serial, anchor, signature, frame,
+                            interactionTarget, trajectory = *trajectory] {
                         auto result = BuildTrackTrajectoryGeometry(profile, topColour, sideColour,
-                            tunnelHeight, tunnelColour, next, anchor, key, signature, trajectory, frame);
+                            tunnelHeight, tunnelColour, next, anchor, key, signature, trajectory, frame,
+                            interactionTarget);
                         return [key, serial, result = std::move(result)]() mutable {
                             const auto request = _trackGeometryRequests.find(key);
                             if (request == _trackGeometryRequests.end() || request->second.serial != serial) return;

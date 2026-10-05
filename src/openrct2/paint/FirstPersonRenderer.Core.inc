@@ -1640,6 +1640,67 @@
             return true; // pending geometry deliberately absent
         }
 
+        [[nodiscard]] FirstPersonInteractionTarget
+            BuildFirstPersonTileInteractionTarget(
+                ViewportInteractionItem interactionType,
+                CoordsXY position, const TileElement* owner)
+        {
+            FirstPersonInteractionTarget target{};
+            if (owner == nullptr)
+                return target;
+
+            const auto tile = position.toTileStart();
+            auto* element = MapGetFirstElementAt(tile);
+            uint32_t index = 0;
+            while (element != nullptr)
+            {
+                if (element == owner)
+                {
+                    if (index >= 0xFFFFu)
+                        return {};
+                    target.interactionType = interactionType;
+                    target.mapPosition = tile;
+                    target.tileElementIndex =
+                        static_cast<uint16_t>(index);
+                    target.tileSignature =
+                        NativeTileSignature(tile);
+                    return target;
+                }
+                if (element->isLastForTile())
+                    break;
+                ++element;
+                ++index;
+            }
+            return target;
+        }
+
+        [[nodiscard]] FirstPersonInteractionTarget
+            FirstPersonInteractionTargetForPaintStruct(
+                const PaintStruct& ps)
+        {
+            switch (ps.InteractionItem)
+            {
+                case ViewportInteractionItem::entity:
+                {
+                    FirstPersonInteractionTarget target{};
+                    if (ps.Entity == nullptr)
+                        return target;
+                    target.interactionType =
+                        ViewportInteractionItem::entity;
+                    target.mapPosition = ps.MapPos;
+                    target.entity = ps.Entity->id;
+                    return target;
+                }
+                case ViewportInteractionItem::ride:
+                case ViewportInteractionItem::parkEntrance:
+                    return BuildFirstPersonTileInteractionTarget(
+                        ps.InteractionItem, ps.MapPos,
+                        ps.Element);
+                default:
+                    return {};
+            }
+        }
+
         [[nodiscard]] bool IsHiddenPassengerTileComponent(
             const PaintStruct& ps, EntityId hiddenEntity, uint8_t hiddenSeatIndex)
         {
@@ -1662,16 +1723,24 @@
         {
             const auto nodeSurfaceStart =
                 scene.surfaces.size();
-            const auto applyNativePaintOrdinal = [&]() {
-                if (ps.FirstPersonNativePaintOrdinal == 0)
-                    return;
+            const auto interactionTarget =
+                FirstPersonInteractionTargetForPaintStruct(ps);
+            const auto applyNativeMetadata = [&]() {
                 for (size_t i = nodeSurfaceStart;
                      i < scene.surfaces.size(); ++i)
                 {
-                    if (scene.surfaces[i].nativePaintOrdinal == 0)
+                    auto& surface = scene.surfaces[i];
+                    if (ps.FirstPersonNativePaintOrdinal != 0
+                        && surface.nativePaintOrdinal == 0)
                     {
-                        scene.surfaces[i].nativePaintOrdinal =
+                        surface.nativePaintOrdinal =
                             ps.FirstPersonNativePaintOrdinal;
+                    }
+                    if (interactionTarget.hasValue()
+                        && !surface.interactionTarget.hasValue())
+                    {
+                        surface.interactionTarget =
+                            interactionTarget;
                     }
                 }
             };
@@ -1741,7 +1810,7 @@
                         scene.surfaces.pop_back();
                     }
                 }
-                applyNativePaintOrdinal();
+                applyNativeMetadata();
                 if (ps.Children != nullptr)
                 {
                     AppendRoot(
@@ -1841,7 +1910,7 @@
                         ps.FirstPersonSnapshot);
                 }
             }
-            applyNativePaintOrdinal();
+            applyNativeMetadata();
             if (ps.Children != nullptr)
             {
                 AppendRoot(
@@ -1864,7 +1933,7 @@
                 }
                 // Attached entries do not carry independent semantic/physical
                 // ownership; they are pixel layers of this PaintStruct.
-                applyNativePaintOrdinal();
+                applyNativeMetadata();
             }
         }
 
@@ -4219,7 +4288,9 @@
                 const FirstPersonSpriteSnapshot& sprites,
                 const std::optional<
                     FirstPersonWalkabilityConstraint>&
-                    passage)
+                    passage,
+                const FirstPersonInteractionTarget&
+                    interactionTarget)
         {
             (void)sprites;
 
@@ -4754,6 +4825,8 @@
                 surface.hasSemanticBounds = true;
                 surface.semanticCenter = center;
                 surface.semanticRadius = radius;
+                surface.interactionTarget =
+                    interactionTarget;
             }
 
             return result;
@@ -4961,6 +5034,7 @@
             std::optional<
                 FirstPersonWalkabilityConstraint>
                 passage;
+            FirstPersonInteractionTarget interactionTarget{};
             size_t nextImage = 0;
             bool submitted = false;
         };
@@ -5000,6 +5074,11 @@
                     ParkEntranceSequenceTile(
                         group, slot->direction,
                         ParkEntranceSequence::centre);
+                slot->interactionTarget =
+                    BuildFirstPersonTileInteractionTarget(
+                        ViewportInteractionItem::parkEntrance,
+                        centreTile,
+                        centre.as<TileElement>());
                 slot->passage =
                     FindFirstPersonGuaranteedPassage(
                         centreTile,
@@ -5107,7 +5186,8 @@
                                 job->signature,
                                 frame,
                                 job->sprites,
-                                job->passage);
+                                job->passage,
+                                job->interactionTarget);
                         return [
                             job,
                             result =

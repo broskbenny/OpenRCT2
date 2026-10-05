@@ -12,10 +12,24 @@
 struct CoordsXY;
 struct ScreenCoordsXY;
 
+namespace OpenRCT2
+{
+    struct InteractionInfo;
+}
+
 namespace OpenRCT2::Ui
 {
+    struct ViewportInteractionActionResult
+    {
+        bool handled = false;
+        bool openedWindow = false;
+    };
+
     bool ViewportInteractionLeftOver(const ScreenCoordsXY& screenCoords);
     bool ViewportInteractionLeftClick(const ScreenCoordsXY& screenCoords);
+    [[nodiscard]] ViewportInteractionActionResult
+        ViewportInteractionDispatchLeftClick(
+            const InteractionInfo& info);
     bool ViewportInteractionRightOver(const ScreenCoordsXY& screenCoords);
     bool ViewportInteractionRightClick(const ScreenCoordsXY& screenCoords);
 

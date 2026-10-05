@@ -88,6 +88,9 @@ namespace OpenRCT2::Paint
             kFirstPersonDiagnosticDefaultMask;
         uint64_t gFirstPersonDiagnosticGeneration = 1;
         bool gFirstPersonInspectorPickRequested = false;
+        bool gFirstPersonInteractionPickRequested = false;
+        std::optional<FirstPersonInteractionTarget>
+            gFirstPersonInteractionPickResult;
 
         [[nodiscard]] std::string
             FirstPersonDiagnosticImageLabel(uint32_t imageIndex)
@@ -170,6 +173,62 @@ namespace OpenRCT2::Paint
     void RequestFirstPersonInspectorPick()
     {
         gFirstPersonInspectorPickRequested = true;
+    }
+
+    void RequestFirstPersonInteractionPick()
+    {
+        gFirstPersonInteractionPickRequested = true;
+        gFirstPersonInteractionPickResult.reset();
+    }
+
+    std::optional<FirstPersonInteractionTarget>
+        ConsumeFirstPersonInteractionPick()
+    {
+        auto result =
+            gFirstPersonInteractionPickResult;
+        gFirstPersonInteractionPickResult.reset();
+        return result;
+    }
+
+    bool IsFirstPersonInteractionTargetCurrent(
+        const FirstPersonInteractionTarget& target)
+    {
+        if (!target.hasValue())
+            return false;
+        if (target.interactionType
+            == ViewportInteractionItem::entity)
+        {
+            return !target.entity.IsNull()
+                && getGameState().entities
+                    .tryGetEntity<EntityBase>(
+                        target.entity) != nullptr;
+        }
+
+        if (target.tileElementIndex == 0xFFFF
+            || !MapIsLocationValid(
+                target.mapPosition))
+            return false;
+        if (NativeTileSignature(
+                target.mapPosition)
+            != target.tileSignature)
+            return false;
+
+        auto* element =
+            MapGetFirstElementAt(
+                target.mapPosition);
+        for (uint16_t index = 0;
+             element != nullptr
+                 && index
+                     < target.tileElementIndex;
+             ++index)
+        {
+            if (element->isLastForTile())
+                return false;
+            ++element;
+        }
+        return element != nullptr
+            && !element->isGhost()
+            && !element->isInvisible();
     }
 
     namespace
@@ -871,45 +930,58 @@ namespace OpenRCT2::Paint
                     tileX, tileY + 1, "hit +Y boundary");
         }
 
-        void DumpFirstPersonInspectorPick(
-            const FirstPersonScene& scene)
+        struct FirstPersonInspectorSelection
         {
-            const auto& camera = scene.resolvedView.camera;
+            std::vector<FirstPersonInspectorHit> visible;
+            size_t primaryIndex = 0;
+        };
+
+        [[nodiscard]] std::optional<
+            FirstPersonInspectorSelection>
+            SelectFirstPersonInspectorHit(
+                const FirstPersonScene& scene)
+        {
+            const auto& camera =
+                scene.resolvedView.camera;
             const auto direction =
                 GetFirstPersonBasis(camera).forward;
 
-            std::vector<FirstPersonInspectorHit> intersections;
+            std::vector<FirstPersonInspectorHit>
+                intersections;
             intersections.reserve(
                 scene.surfaces.size()
                 + scene.staticRegions.size() * 32);
 
-            for (size_t i = 0; i < scene.surfaces.size(); ++i)
+            for (size_t i = 0;
+                 i < scene.surfaces.size(); ++i)
             {
                 FirstPersonInspectorHit hit{};
                 if (!IntersectFirstPersonInspectorSurface(
-                        scene.surfaces[i], camera.position,
-                        direction, hit))
-                    continue;
-                if (hit.distance > scene.resolvedView.farClip)
+                        scene.surfaces[i],
+                        camera.position, direction, hit)
+                    || hit.distance
+                        > scene.resolvedView.farClip)
                     continue;
                 hit.surfaceIndex = i;
                 intersections.emplace_back(hit);
             }
 
-            for (const auto& region : scene.staticRegions)
+            for (const auto& region :
+                 scene.staticRegions)
             {
                 if (region.surfaceStorage == nullptr)
                     continue;
                 const auto& surfaces =
                     *region.surfaceStorage;
-                for (size_t i = 0; i < surfaces.size(); ++i)
+                for (size_t i = 0;
+                     i < surfaces.size(); ++i)
                 {
                     FirstPersonInspectorHit hit{};
                     if (!IntersectFirstPersonInspectorSurface(
-                            surfaces[i], camera.position,
-                            direction, hit))
-                        continue;
-                    if (hit.distance > scene.resolvedView.farClip)
+                            surfaces[i],
+                            camera.position, direction, hit)
+                        || hit.distance
+                            > scene.resolvedView.farClip)
                         continue;
                     hit.region = &region;
                     hit.surfaceIndex = i;
@@ -918,7 +990,8 @@ namespace OpenRCT2::Paint
             }
 
             std::sort(
-                intersections.begin(), intersections.end(),
+                intersections.begin(),
+                intersections.end(),
                 [](const auto& a, const auto& b) {
                     if (a.distance != b.distance)
                         return a.distance < b.distance;
@@ -928,6 +1001,64 @@ namespace OpenRCT2::Paint
                     return a.surface->nativePaintOrdinal
                         > b.surface->nativePaintOrdinal;
                 });
+
+            FirstPersonInspectorSelection selection;
+            constexpr float kCoplanarBand = 0.25f;
+            float firstVisibleDistance =
+                std::numeric_limits<float>::max();
+            for (const auto& hit : intersections)
+            {
+                if (firstVisibleDistance
+                        != std::numeric_limits<float>::max()
+                    && hit.distance
+                        > firstVisibleDistance
+                            + kCoplanarBand)
+                    break;
+                if (!FirstPersonInspectorSurfaceVisibleAtHit(
+                        hit))
+                    continue;
+                if (firstVisibleDistance
+                    == std::numeric_limits<float>::max())
+                    firstVisibleDistance = hit.distance;
+                selection.visible.push_back(hit);
+            }
+
+            if (selection.visible.empty())
+                return std::nullopt;
+
+            for (size_t i = 1;
+                 i < selection.visible.size(); ++i)
+            {
+                if (std::abs(
+                        selection.visible[i].distance
+                        - firstVisibleDistance)
+                    > kCoplanarBand)
+                    continue;
+                const auto& candidate =
+                    *selection.visible[i].surface;
+                const auto& primary =
+                    *selection.visible[
+                        selection.primaryIndex].surface;
+                if (candidate.coplanarOwner
+                    && (!primary.coplanarOwner
+                        || candidate.nativePaintOrdinal
+                            > primary.nativePaintOrdinal))
+                {
+                    selection.primaryIndex = i;
+                }
+            }
+            return selection;
+        }
+
+        void DumpFirstPersonInspectorPick(
+            const FirstPersonScene& scene)
+        {
+            const auto& camera =
+                scene.resolvedView.camera;
+            const auto direction =
+                GetFirstPersonBasis(camera).forward;
+            const auto selection =
+                SelectFirstPersonInspectorHit(scene);
 
             Console::WriteLine("========== FP_PICK ==========");
             Console::WriteLine(
@@ -941,27 +1072,7 @@ namespace OpenRCT2::Paint
                 scene.surfaces.size(),
                 scene.staticRegions.size());
 
-            std::vector<FirstPersonInspectorHit> visible;
-            constexpr float kCoplanarBand = 0.25f;
-            float firstVisibleDistance =
-                std::numeric_limits<float>::max();
-            for (const auto& hit : intersections)
-            {
-                if (firstVisibleDistance
-                        != std::numeric_limits<float>::max()
-                    && hit.distance
-                        > firstVisibleDistance
-                            + kCoplanarBand)
-                    break;
-                if (!FirstPersonInspectorSurfaceVisibleAtHit(hit))
-                    continue;
-                if (firstVisibleDistance
-                    == std::numeric_limits<float>::max())
-                    firstVisibleDistance = hit.distance;
-                visible.push_back(hit);
-            }
-
-            if (visible.empty())
+            if (!selection.has_value())
             {
                 Console::WriteLine(
                     "no visible first-person surface intersects the centre ray");
@@ -969,27 +1080,10 @@ namespace OpenRCT2::Paint
                 return;
             }
 
-            size_t primaryIndex = 0;
-            for (size_t i = 1; i < visible.size(); ++i)
-            {
-                if (std::abs(
-                        visible[i].distance
-                        - firstVisibleDistance)
-                    > kCoplanarBand)
-                    continue;
-                const auto& candidate =
-                    *visible[i].surface;
-                const auto& primary =
-                    *visible[primaryIndex].surface;
-                if (candidate.coplanarOwner
-                    && (!primary.coplanarOwner
-                        || candidate.nativePaintOrdinal
-                            > primary.nativePaintOrdinal))
-                {
-                    primaryIndex = i;
-                }
-            }
-
+            const auto& visible = selection->visible;
+            const size_t primaryIndex =
+                selection->primaryIndex;
+            constexpr float kCoplanarBand = 0.25f;
             DumpFirstPersonInspectorSurface(
                 visible[primaryIndex], "PRIMARY", true);
             Console::WriteLine(
@@ -1281,6 +1375,8 @@ namespace OpenRCT2::Paint
     void ResetFirstPersonPresentationCache()
     {
         gFirstPersonInspectorPickRequested = false;
+        gFirstPersonInteractionPickRequested = false;
+        gFirstPersonInteractionPickResult.reset();
         _reconstructionWorker.cancel();
         _largeSceneryJobs.clear();
         _parkEntranceJobs.clear();
@@ -1646,6 +1742,24 @@ namespace OpenRCT2::Paint
                 _preparedFrame.drawingEngine =
                     rt.DrawingEngine;
                 _preparedFrame.valid = true;
+            }
+        }
+
+        if (gFirstPersonInteractionPickRequested)
+        {
+            gFirstPersonInteractionPickRequested = false;
+            gFirstPersonInteractionPickResult.reset();
+            if (const auto selection =
+                    SelectFirstPersonInspectorHit(*scene);
+                selection.has_value())
+            {
+                const auto& target =
+                    selection->visible[
+                        selection->primaryIndex]
+                        .surface->interactionTarget;
+                if (target.hasValue())
+                    gFirstPersonInteractionPickResult =
+                        target;
             }
         }
 

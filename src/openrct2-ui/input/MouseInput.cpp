@@ -305,7 +305,14 @@ namespace OpenRCT2
         // still a perspective view and cannot use overhead picking coordinates.
         if (FirstPerson::IsActive() && w == WindowGetMain()
             && (_inputState == InputState::normal || _inputState == InputState::reset))
+        {
+            if (state == MouseState::leftPress
+                || state == MouseState::rightPress)
+            {
+                FirstPerson::ResumeInputFromMainViewport();
+            }
             return;
+        }
         widgetIndex = w == nullptr ? kWidgetIndexNull : windowMgr->FindWidgetFromPoint(*w, screenCoords);
         widget = widgetIndex == kWidgetIndexNull ? nullptr : &w->widgets[widgetIndex];
 

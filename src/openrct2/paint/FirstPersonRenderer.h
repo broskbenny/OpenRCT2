@@ -57,6 +57,30 @@ namespace OpenRCT2::Paint
     // authoritative map/cache provenance. No work is done on ordinary frames.
     void RequestFirstPersonInspectorPick();
 
+    // Perspective interaction is captured with the rendered surface, but tile
+    // ownership is stored as a stale-safe locator rather than a TileElement*
+    // that could outlive a map edit or an asynchronous reconstruction.
+    struct FirstPersonInteractionTarget
+    {
+        ViewportInteractionItem interactionType =
+            static_cast<ViewportInteractionItem>(0);
+        CoordsXY mapPosition{};
+        EntityId entity = EntityId::GetNull();
+        uint16_t tileElementIndex = 0xFFFF;
+        uint64_t tileSignature = 0;
+
+        [[nodiscard]] bool hasValue() const
+        {
+            return static_cast<uint8_t>(interactionType) != 0;
+        }
+    };
+
+    void RequestFirstPersonInteractionPick();
+    [[nodiscard]] std::optional<FirstPersonInteractionTarget>
+        ConsumeFirstPersonInteractionPick();
+    [[nodiscard]] bool IsFirstPersonInteractionTargetCurrent(
+        const FirstPersonInteractionTarget& target);
+
     [[nodiscard]] constexpr FirstPersonHiddenComponentDisposition
         FirstPersonHiddenComponentPolicy(
             bool matchesHiddenEntity, bool entityPainted,
@@ -199,6 +223,9 @@ namespace OpenRCT2::Paint
         // remains authoritative; this ordinal is consulted only when surfaces
         // occupy the same physical layer (opaque owners or transparency).
         uint64_t nativePaintOrdinal = 0;
+        // Native left-click ownership follows the visible first-person surface.
+        // Tile targets are validated against live map state before dispatch.
+        FirstPersonInteractionTarget interactionTarget{};
         uint64_t gpuRegion = 0; // Nonzero only for static WORLD-FIXED source art.
         FirstPersonVec3 billboardAnchor{};
         float billboardLeft{}, billboardTop{}, billboardWidth{}, billboardHeight{};
