@@ -4059,140 +4059,6 @@
                 constexpr float kMinimumOverlap = 0.5f;
                 constexpr float kActualOverlapAreaEpsilon = 0.01f;
 
-                struct DiagnosticPoint2
-                {
-                    float x = 0.0f;
-                    float y = 0.0f;
-                };
-                const auto cross2 =
-                    [](DiagnosticPoint2 a,
-                       DiagnosticPoint2 b,
-                       DiagnosticPoint2 c) {
-                        return (b.x - a.x) * (c.y - a.y)
-                            - (b.y - a.y) * (c.x - a.x);
-                    };
-                const auto triangleOverlapArea =
-                    [&](const std::array<FirstPersonVec3, 3>& subject,
-                        const std::array<FirstPersonVec3, 3>& clip) {
-                        std::array<DiagnosticPoint2, 8> input{};
-                        std::array<DiagnosticPoint2, 8> output{};
-                        size_t inputCount = 3;
-                        for (size_t i = 0; i < 3; ++i)
-                        {
-                            input[i] = {
-                                subject[i].x,
-                                subject[i].y,
-                            };
-                        }
-
-                        const std::array<DiagnosticPoint2, 3> clipPoints{ {
-                            { clip[0].x, clip[0].y },
-                            { clip[1].x, clip[1].y },
-                            { clip[2].x, clip[2].y },
-                        } };
-                        const float clipOrientation =
-                            cross2(
-                                clipPoints[0],
-                                clipPoints[1],
-                                clipPoints[2]);
-                        if (std::abs(clipOrientation)
-                            <= kActualOverlapAreaEpsilon)
-                            return 0.0f;
-
-                        for (size_t edgeIndex = 0;
-                             edgeIndex < 3; ++edgeIndex)
-                        {
-                            const auto edgeA =
-                                clipPoints[edgeIndex];
-                            const auto edgeB =
-                                clipPoints[(edgeIndex + 1) % 3];
-                            const auto inside =
-                                [&](DiagnosticPoint2 p) {
-                                    const float side =
-                                        cross2(edgeA, edgeB, p);
-                                    return clipOrientation > 0.0f
-                                        ? side
-                                            >= -kActualOverlapAreaEpsilon
-                                        : side
-                                            <= kActualOverlapAreaEpsilon;
-                                };
-                            const auto intersection =
-                                [&](DiagnosticPoint2 a,
-                                    DiagnosticPoint2 b) {
-                                    const DiagnosticPoint2 segment{
-                                        b.x - a.x,
-                                        b.y - a.y,
-                                    };
-                                    const DiagnosticPoint2 edge{
-                                        edgeB.x - edgeA.x,
-                                        edgeB.y - edgeA.y,
-                                    };
-                                    const float denominator =
-                                        segment.x * edge.y
-                                        - segment.y * edge.x;
-                                    if (std::abs(denominator)
-                                        <= kActualOverlapAreaEpsilon)
-                                        return b;
-                                    const DiagnosticPoint2 delta{
-                                        edgeA.x - a.x,
-                                        edgeA.y - a.y,
-                                    };
-                                    const float t =
-                                        (delta.x * edge.y
-                                            - delta.y * edge.x)
-                                        / denominator;
-                                    return DiagnosticPoint2{
-                                        a.x + segment.x * t,
-                                        a.y + segment.y * t,
-                                    };
-                                };
-
-                            size_t outputCount = 0;
-                            if (inputCount == 0)
-                                return 0.0f;
-                            auto previous =
-                                input[inputCount - 1];
-                            bool previousInside =
-                                inside(previous);
-                            for (size_t i = 0;
-                                 i < inputCount; ++i)
-                            {
-                                const auto current = input[i];
-                                const bool currentInside =
-                                    inside(current);
-                                if (currentInside
-                                    != previousInside)
-                                {
-                                    output[outputCount++] =
-                                        intersection(
-                                            previous,
-                                            current);
-                                }
-                                if (currentInside)
-                                    output[outputCount++] =
-                                        current;
-                                previous = current;
-                                previousInside =
-                                    currentInside;
-                            }
-                            input = output;
-                            inputCount = outputCount;
-                        }
-
-                        if (inputCount < 3)
-                            return 0.0f;
-                        float twiceArea = 0.0f;
-                        for (size_t i = 0;
-                             i < inputCount; ++i)
-                        {
-                            const auto& a = input[i];
-                            const auto& b =
-                                input[(i + 1) % inputCount];
-                            twiceArea +=
-                                a.x * b.y - b.x * a.y;
-                        }
-                        return 0.5f * std::abs(twiceArea);
-                    };
                 const auto horizontalSurfaceOverlapArea =
                     [&](const FirstPersonSurface& a,
                         const FirstPersonSurface& b) {
@@ -4219,8 +4085,9 @@
                                 b.triangles[bBase + 2].world,
                             } };
                             area +=
-                                triangleOverlapArea(
-                                    aPoints, bPoints);
+                                FirstPersonCoplanarTriangleOverlapAreaXY(
+                                    aPoints, bPoints,
+                                    kActualOverlapAreaEpsilon);
                         }
                         return area;
                     };
