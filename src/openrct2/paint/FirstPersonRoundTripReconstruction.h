@@ -29,6 +29,7 @@ namespace OpenRCT2::Paint
     {
         uint8_t imageDirection{};
         FirstPersonSilhouetteFit fit{};
+        size_t symmetricDifferencePixels{};
     };
 
     struct FirstPersonRoundTripCertificate
@@ -40,6 +41,8 @@ namespace OpenRCT2::Paint
         float minimumCandidateCoverage = 0.0f;
         float minimumObservedCoverage = 0.0f;
         int32_t maximumEdgeError = 0;
+        size_t symmetricDifferencePixels = 0;
+        size_t maximumViewSymmetricDifferencePixels = 0;
         std::vector<FirstPersonRoundTripViewFit> views;
 
         [[nodiscard]] const FirstPersonSilhouetteFit*
@@ -54,6 +57,46 @@ namespace OpenRCT2::Paint
                 ? nullptr : &found->fit;
         }
     };
+
+    [[nodiscard]] inline size_t
+        FirstPersonSilhouetteSymmetricDifference(
+            const FirstPersonSilhouette& a,
+            const FirstPersonSilhouette& b)
+    {
+        size_t intersection = 0;
+        const auto& smaller =
+            a.size() < b.size() ? a : b;
+        const auto& larger =
+            a.size() < b.size() ? b : a;
+        for (const auto pixel : smaller.pixels)
+        {
+            if (larger.pixels.contains(pixel))
+                ++intersection;
+        }
+        return a.size() + b.size()
+            - intersection * 2;
+    }
+
+    [[nodiscard]] inline bool
+        FirstPersonRoundTripStrictlyImproves(
+            const FirstPersonRoundTripCertificate& candidate,
+            const FirstPersonRoundTripCertificate& baseline)
+    {
+        if (!candidate.valid || !baseline.valid
+            || candidate.viewCount != baseline.viewCount)
+            return false;
+
+        // Promotion is evidence-conservative: total native-pixel disagreement
+        // must fall, while neither the worst single view nor the silhouette
+        // edge error may regress. This avoids inventing a subjective
+        // "smoothness" score or an uncalibrated absolute threshold.
+        return candidate.symmetricDifferencePixels
+                < baseline.symmetricDifferencePixels
+            && candidate.maximumViewSymmetricDifferencePixels
+                <= baseline.maximumViewSymmetricDifferencePixels
+            && candidate.maximumEdgeError
+                <= baseline.maximumEdgeError;
+    }
 
     template<typename FaceRange>
     [[nodiscard]] inline std::vector<FirstPersonReconstructionTriangle>
@@ -156,12 +199,23 @@ namespace OpenRCT2::Paint
             if (!fit.valid)
                 return {};
 
+            const size_t disagreement =
+                FirstPersonSilhouetteSymmetricDifference(
+                    observation.observed, predicted);
             seenDirections[direction] = true;
             FirstPersonRoundTripViewFit viewFit{};
             viewFit.imageDirection = direction;
             viewFit.fit = fit;
+            viewFit.symmetricDifferencePixels =
+                disagreement;
             result.views.push_back(viewFit);
             ++result.viewCount;
+            result.symmetricDifferencePixels +=
+                disagreement;
+            result.maximumViewSymmetricDifferencePixels =
+                std::max(
+                    result.maximumViewSymmetricDifferencePixels,
+                    disagreement);
             result.averageIntersectionOverUnion +=
                 fit.intersectionOverUnion;
             result.minimumIntersectionOverUnion =

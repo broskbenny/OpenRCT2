@@ -1281,6 +1281,176 @@ TEST(FirstPersonRoundTripReconstructionTest, ProjectsBoundaryInsteadOfInflatedVo
     EXPECT_EQ(projected.size(), 64u);
 }
 
+TEST(FirstPersonVisualHullTest, ContinuousSupportFieldWinsOnlyWhenNativeRoundTripImproves)
+{
+    FirstPersonVisualHull source{};
+    source.valid = true;
+    source.step = 4.0f;
+    source.sizeForward = 2;
+    source.sizeRight = 1;
+    source.sizeUp = 2;
+    // Stair profile in X/Z: two cells on the lower level, one on top.
+    source.occupied = { 1, 1, 1, 0 };
+
+    const auto voxelFaces =
+        BuildFirstPersonVisualHullVoxelBoundaryFaces(source);
+    ASSERT_FALSE(voxelFaces.empty());
+    constexpr float kTargetBlend = 2.0f / 3.0f;
+    const auto targetFaces =
+        BuildFirstPersonVisualHullContinuousCandidateFaces(
+            source, voxelFaces, kTargetBlend);
+    ASSERT_FALSE(targetFaces.empty());
+
+    const auto project =
+        [](uint8_t, FirstPersonVec3 point) {
+            return std::array<float, 2>{
+                point.x, point.z
+            };
+        };
+    const auto targetTriangles =
+        TriangulateFirstPersonReconstructionFaces(
+            targetFaces);
+
+    std::vector<FirstPersonVisualHullView> views(4);
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        views[direction].imageDirection = direction;
+        views[direction].observed =
+            RenderFirstPersonReconstructionSilhouette(
+                targetTriangles, direction, project);
+        ASSERT_FALSE(views[direction].observed.empty());
+    }
+
+    FirstPersonVisualHullBounds bounds{};
+    bounds.maxForward = 8.0f;
+    bounds.maxRight = 4.0f;
+    bounds.maxUp = 8.0f;
+    bounds.step = 4.0f;
+
+    FirstPersonVisualHullConfig config{};
+    config.minimumViews = 4;
+    config.minimumOccupiedCells = 3;
+    config.maximumOccupiedCells = 4;
+    config.maximumGridCells = 4;
+    config.maximumAxisCells = 2;
+    config.allowContinuousSurfaceRefinement = true;
+    config.continuousSurfaceSearchSteps = 3;
+    config.minimumCandidateCoverage = 0.0f;
+    config.minimumObservedCoverage = 0.0f;
+    config.maximumEdgeError = 64;
+
+    const auto reconstructed =
+        BuildFirstPersonVisualHull(
+            views, bounds, config, project,
+            [](FirstPersonVec3 point) {
+                return point.x < 4.0f
+                    || point.z < 4.0f;
+            },
+            [](const FirstPersonVisualHullView&,
+               FirstPersonVec3) {
+                return true;
+            });
+
+    ASSERT_TRUE(reconstructed.valid);
+    EXPECT_TRUE(
+        reconstructed.continuousSurfaceRefined);
+    EXPECT_LT(
+        reconstructed.roundTripSymmetricDifference,
+        reconstructed.voxelRoundTripSymmetricDifference);
+    EXPECT_EQ(
+        reconstructed.roundTripSymmetricDifference,
+        0u);
+
+    const auto selectedFaces =
+        BuildFirstPersonVisualHullBoundaryFaces(
+            reconstructed);
+    ASSERT_FALSE(selectedFaces.empty());
+    const bool hasNonAxisAlignedFace =
+        std::any_of(
+            selectedFaces.begin(), selectedFaces.end(),
+            [](const auto& face) {
+                const int components =
+                    (std::abs(face.normal.x) > 0.05f ? 1 : 0)
+                    + (std::abs(face.normal.y) > 0.05f ? 1 : 0)
+                    + (std::abs(face.normal.z) > 0.05f ? 1 : 0);
+                return components >= 2;
+            });
+    EXPECT_TRUE(hasNonAxisAlignedFace);
+}
+
+TEST(FirstPersonVisualHullTest, PerfectVoxelEvidenceDoesNotPromoteSmoothing)
+{
+    FirstPersonVisualHull source{};
+    source.valid = true;
+    source.step = 4.0f;
+    source.sizeForward = 2;
+    source.sizeRight = 1;
+    source.sizeUp = 2;
+    source.occupied = { 1, 1, 1, 0 };
+
+    const auto voxelFaces =
+        BuildFirstPersonVisualHullVoxelBoundaryFaces(source);
+    const auto voxelTriangles =
+        TriangulateFirstPersonReconstructionFaces(
+            voxelFaces);
+    const auto project =
+        [](uint8_t, FirstPersonVec3 point) {
+            return std::array<float, 2>{
+                point.x, point.z
+            };
+        };
+
+    std::vector<FirstPersonVisualHullView> views(4);
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        views[direction].imageDirection = direction;
+        views[direction].observed =
+            RenderFirstPersonReconstructionSilhouette(
+                voxelTriangles, direction, project);
+    }
+
+    FirstPersonVisualHullBounds bounds{};
+    bounds.maxForward = 8.0f;
+    bounds.maxRight = 4.0f;
+    bounds.maxUp = 8.0f;
+    bounds.step = 4.0f;
+
+    FirstPersonVisualHullConfig config{};
+    config.minimumViews = 4;
+    config.minimumOccupiedCells = 3;
+    config.maximumOccupiedCells = 4;
+    config.maximumGridCells = 4;
+    config.maximumAxisCells = 2;
+    config.allowContinuousSurfaceRefinement = true;
+    config.continuousSurfaceSearchSteps = 3;
+    config.minimumCandidateCoverage = 0.0f;
+    config.minimumObservedCoverage = 0.0f;
+    config.maximumEdgeError = 64;
+
+    const auto reconstructed =
+        BuildFirstPersonVisualHull(
+            views, bounds, config, project,
+            [](FirstPersonVec3 point) {
+                return point.x < 4.0f
+                    || point.z < 4.0f;
+            },
+            [](const FirstPersonVisualHullView&,
+               FirstPersonVec3) {
+                return true;
+            });
+
+    ASSERT_TRUE(reconstructed.valid);
+    EXPECT_FALSE(
+        reconstructed.continuousSurfaceRefined);
+    EXPECT_TRUE(reconstructed.refinedFaces.empty());
+    EXPECT_EQ(
+        reconstructed.roundTripSymmetricDifference,
+        0u);
+    EXPECT_EQ(
+        reconstructed.voxelRoundTripSymmetricDifference,
+        0u);
+}
+
 TEST(FirstPersonVisualHullTest, ExactSurfaceCertificateRejectsInflatedCentreProxy)
 {
     // For an 8-unit voxel the old verifier splatted a 13x13 square around

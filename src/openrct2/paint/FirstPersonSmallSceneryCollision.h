@@ -443,6 +443,10 @@ namespace OpenRCT2::Paint
         config.maximumOccupiedCells = 32768;
         config.maximumGridCells = 131072;
         config.maximumAxisCells = 128;
+        // Small-scenery silhouette reconstruction uses the same native
+        // projective material path for arbitrary quads, so it may compete a
+        // support-field relaxation against the voxel boundary.
+        config.allowContinuousSurfaceRefinement = true;
         config.minimumCandidateCoverage = 0.55f;
         config.minimumObservedCoverage = 0.30f;
         config.maximumEdgeError = 8;

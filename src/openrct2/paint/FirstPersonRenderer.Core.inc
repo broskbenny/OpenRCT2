@@ -2828,6 +2828,11 @@
             hullConfig.maximumOccupiedCells = 131072;
             hullConfig.maximumGridCells = 131072;
             hullConfig.maximumAxisCells = 96;
+            // Grouped large scenery already bakes projective native material
+            // onto arbitrary reconstructed quads. Let the round-trip evidence
+            // decide whether the continuous support-field relaxation improves
+            // the actual four canonical observations.
+            hullConfig.allowContinuousSurfaceRefinement = true;
             // Multi-view support itself performs the carving. Do not reject a
             // valid carved hull merely because decorative sprite pixels extend
             // beyond collision/occupancy metadata.

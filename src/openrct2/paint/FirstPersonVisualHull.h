@@ -25,6 +25,23 @@ namespace OpenRCT2::Paint
         ImageIndex image{};
     };
 
+    enum class FirstPersonVisualHullFaceKind : uint8_t
+    {
+        minForward,
+        maxForward,
+        minRight,
+        maxRight,
+        bottom,
+        top,
+    };
+
+    struct FirstPersonVisualHullFace
+    {
+        std::array<FirstPersonVec3, 4> corners{};
+        FirstPersonVec3 normal{};
+        FirstPersonVisualHullFaceKind kind{};
+    };
+
     struct FirstPersonVisualHull
     {
         bool valid = false;
@@ -37,15 +54,22 @@ namespace OpenRCT2::Paint
         uint8_t sizeUp{};
         std::vector<uint8_t> occupied;
         std::vector<FirstPersonVisualHullTextureView> textureViews;
-        // Exact surface-level round-trip evidence. The legacy
-        // coverage fields remain directly readable because several
-        // reconstruction policies use them as conservative admission gates.
+        // When native evidence proves that a continuous relaxation reproduces
+        // the observations better than the raw voxel boundary, these are the
+        // renderable faces. Occupancy/collision remains the original grid.
+        std::vector<FirstPersonVisualHullFace> refinedFaces;
+        bool continuousSurfaceRefined = false;
+        // Exact surface-level round-trip evidence. The legacy coverage fields
+        // remain directly readable because reconstruction policies use them as
+        // conservative admission gates.
         float averageIntersectionOverUnion{};
         float minimumIntersectionOverUnion{};
         float minimumCandidateCoverage{};
         float minimumObservedCoverage{};
         int32_t maximumEdgeError{};
         size_t roundTripViewCount{};
+        size_t voxelRoundTripSymmetricDifference{};
+        size_t roundTripSymmetricDifference{};
 
         [[nodiscard]] bool contains(
             int32_t forward, int32_t right, int32_t up) const
@@ -85,23 +109,6 @@ namespace OpenRCT2::Paint
                 (point.z - minUp) / step));
             return contains(forward, right, up);
         }
-    };
-
-    enum class FirstPersonVisualHullFaceKind : uint8_t
-    {
-        minForward,
-        maxForward,
-        minRight,
-        maxRight,
-        bottom,
-        top,
-    };
-
-    struct FirstPersonVisualHullFace
-    {
-        std::array<FirstPersonVec3, 4> corners{};
-        FirstPersonVec3 normal{};
-        FirstPersonVisualHullFaceKind kind{};
     };
 
     // A closed occupancy hull does not imply a closed rendered surface. Baking
@@ -267,7 +274,7 @@ namespace OpenRCT2::Paint
     }
 
     [[nodiscard]] inline std::vector<FirstPersonVisualHullFace>
-        BuildFirstPersonVisualHullBoundaryFaces(
+        BuildFirstPersonVisualHullVoxelBoundaryFaces(
             const FirstPersonVisualHull& hull)
     {
         std::vector<FirstPersonVisualHullFace> result;
@@ -383,6 +390,267 @@ namespace OpenRCT2::Paint
         return result;
     }
 
+    [[nodiscard]] inline FirstPersonVec3
+        FirstPersonVisualHullLatticePoint(
+            const FirstPersonVisualHull& hull,
+            int32_t forward, int32_t right, int32_t up)
+    {
+        return {
+            hull.minForward
+                + float(forward) * hull.step,
+            hull.minRight
+                + float(right) * hull.step,
+            hull.minUp
+                + float(up) * hull.step,
+        };
+    }
+
+    [[nodiscard]] inline FirstPersonVec3
+        FirstPersonVisualHullRelaxedVertexTarget(
+            const FirstPersonVisualHull& hull,
+            int32_t vertexForward,
+            int32_t vertexRight,
+            int32_t vertexUp)
+    {
+        const auto original =
+            FirstPersonVisualHullLatticePoint(
+                hull, vertexForward,
+                vertexRight, vertexUp);
+
+        // The lower envelope is hard placement evidence. A continuous visual
+        // candidate may taper or slope above it, but must not make the object
+        // float or slide its contact footprint away from the authoritative
+        // base plane.
+        if (vertexUp == 0)
+            return original;
+
+        FirstPersonVec3 sum{};
+        size_t count = 0;
+        const auto addFaceCentre =
+            [&](float f, float r, float u) {
+                sum.x += hull.minForward
+                    + f * hull.step;
+                sum.y += hull.minRight
+                    + r * hull.step;
+                sum.z += hull.minUp
+                    + u * hull.step;
+                ++count;
+            };
+
+        // A lattice vertex can touch at most eight occupied cells. The target
+        // is the centroid of the exposed unit-face centres incident on that
+        // vertex. On a flat surface these contributions cancel back to the
+        // original lattice point; at voxel stair-steps they define a natural
+        // continuous relaxation direction from the support field itself.
+        for (int32_t up = vertexUp - 1;
+             up <= vertexUp; ++up)
+        for (int32_t right = vertexRight - 1;
+             right <= vertexRight; ++right)
+        for (int32_t forward = vertexForward - 1;
+             forward <= vertexForward; ++forward)
+        {
+            if (!hull.contains(forward, right, up))
+                continue;
+
+            if (vertexForward == forward
+                && !hull.contains(
+                    forward - 1, right, up))
+            {
+                addFaceCentre(
+                    float(forward),
+                    float(right) + 0.5f,
+                    float(up) + 0.5f);
+            }
+            if (vertexForward == forward + 1
+                && !hull.contains(
+                    forward + 1, right, up))
+            {
+                addFaceCentre(
+                    float(forward) + 1.0f,
+                    float(right) + 0.5f,
+                    float(up) + 0.5f);
+            }
+            if (vertexRight == right
+                && !hull.contains(
+                    forward, right - 1, up))
+            {
+                addFaceCentre(
+                    float(forward) + 0.5f,
+                    float(right),
+                    float(up) + 0.5f);
+            }
+            if (vertexRight == right + 1
+                && !hull.contains(
+                    forward, right + 1, up))
+            {
+                addFaceCentre(
+                    float(forward) + 0.5f,
+                    float(right) + 1.0f,
+                    float(up) + 0.5f);
+            }
+            if (vertexUp == up
+                && !hull.contains(
+                    forward, right, up - 1))
+            {
+                addFaceCentre(
+                    float(forward) + 0.5f,
+                    float(right) + 0.5f,
+                    float(up));
+            }
+            if (vertexUp == up + 1
+                && !hull.contains(
+                    forward, right, up + 1))
+            {
+                addFaceCentre(
+                    float(forward) + 0.5f,
+                    float(right) + 0.5f,
+                    float(up) + 1.0f);
+            }
+        }
+
+        if (count == 0)
+            return original;
+        const float inverse =
+            1.0f / float(count);
+        return {
+            sum.x * inverse,
+            sum.y * inverse,
+            sum.z * inverse,
+        };
+    }
+
+    [[nodiscard]] inline std::vector<FirstPersonVisualHullFace>
+        BuildFirstPersonVisualHullContinuousCandidateFaces(
+            const FirstPersonVisualHull& hull,
+            const std::vector<FirstPersonVisualHullFace>& sourceFaces,
+            float blend)
+    {
+        std::vector<FirstPersonVisualHullFace> result;
+        if (!hull.valid || sourceFaces.empty()
+            || !(hull.step > 0.0f)
+            || blend <= 0.0f || blend > 1.0f)
+            return result;
+
+        const auto latticeCoordinate =
+            [step = hull.step](float value, float base) {
+                return int32_t(std::lround(
+                    (value - base) / step));
+            };
+        const auto subtract =
+            [](FirstPersonVec3 a, FirstPersonVec3 b) {
+                return FirstPersonVec3{
+                    a.x - b.x,
+                    a.y - b.y,
+                    a.z - b.z,
+                };
+            };
+        const auto add =
+            [](FirstPersonVec3 a, FirstPersonVec3 b) {
+                return FirstPersonVec3{
+                    a.x + b.x,
+                    a.y + b.y,
+                    a.z + b.z,
+                };
+            };
+
+        result.reserve(sourceFaces.size());
+        for (const auto& source : sourceFaces)
+        {
+            FirstPersonVisualHullFace face{};
+            face.kind = source.kind;
+            for (size_t i = 0;
+                 i < face.corners.size(); ++i)
+            {
+                const auto& original =
+                    source.corners[i];
+                const int32_t forward =
+                    latticeCoordinate(
+                        original.x,
+                        hull.minForward);
+                const int32_t right =
+                    latticeCoordinate(
+                        original.y,
+                        hull.minRight);
+                const int32_t up =
+                    latticeCoordinate(
+                        original.z,
+                        hull.minUp);
+                if (forward < 0
+                    || forward > hull.sizeForward
+                    || right < 0
+                    || right > hull.sizeRight
+                    || up < 0
+                    || up > hull.sizeUp)
+                    return {};
+
+                const auto target =
+                    FirstPersonVisualHullRelaxedVertexTarget(
+                        hull, forward, right, up);
+                face.corners[i] = {
+                    original.x
+                        + (target.x - original.x)
+                            * blend,
+                    original.y
+                        + (target.y - original.y)
+                            * blend,
+                    original.z
+                        + (target.z - original.z)
+                            * blend,
+                };
+            }
+
+            const auto edge01 =
+                subtract(
+                    face.corners[1],
+                    face.corners[0]);
+            const auto edge02 =
+                subtract(
+                    face.corners[2],
+                    face.corners[0]);
+            const auto edge03 =
+                subtract(
+                    face.corners[3],
+                    face.corners[0]);
+            const auto summedNormal =
+                add(
+                    FpCross(edge01, edge02),
+                    FpCross(edge02, edge03));
+            const float lengthSquared =
+                FpDot(
+                    summedNormal,
+                    summedNormal);
+            if (lengthSquared <= 1.0e-6f)
+                return {};
+            const float inverseLength =
+                1.0f / std::sqrt(lengthSquared);
+            face.normal = {
+                summedNormal.x * inverseLength,
+                summedNormal.y * inverseLength,
+                summedNormal.z * inverseLength,
+            };
+
+            // Topology is preserved, but an aggressive relaxation can still
+            // invert a non-planar quad. Reject the whole candidate rather than
+            // publishing a locally inside-out surface.
+            if (FpDot(
+                    face.normal,
+                    source.normal) <= 0.20f)
+                return {};
+            result.push_back(face);
+        }
+        return result;
+    }
+
+    [[nodiscard]] inline std::vector<FirstPersonVisualHullFace>
+        BuildFirstPersonVisualHullBoundaryFaces(
+            const FirstPersonVisualHull& hull)
+    {
+        if (!hull.refinedFaces.empty())
+            return hull.refinedFaces;
+        return BuildFirstPersonVisualHullVoxelBoundaryFaces(
+            hull);
+    }
+
     struct FirstPersonVisualHullView
     {
         uint8_t imageDirection{};
@@ -409,6 +677,13 @@ namespace OpenRCT2::Paint
         size_t maximumOccupiedCells = 4096;
         size_t maximumGridCells = 65536;
         int32_t maximumAxisCells = 24;
+        // Continuous refinement is opt-in per reconstruction family until its
+        // material path has been verified. Search is bounded by face count and
+        // a small deterministic line search; promotion is decided only by the
+        // native round-trip evidence.
+        bool allowContinuousSurfaceRefinement = false;
+        size_t maximumContinuousSurfaceFaces = 8192;
+        uint8_t continuousSurfaceSearchSteps = 3;
         // Kept at zero by default until asset-wide calibration establishes a
         // justified threshold. The score is still recorded for every accepted
         // silhouette-derived hull.
@@ -605,47 +880,96 @@ namespace OpenRCT2::Paint
             return {};
 
         // The boundary extractor treats valid=true as permission to expose
-        // geometry. Mark this local candidate provisionally so it can be
-        // forward-rendered; any failed certificate below returns a fresh
-        // invalid hull, so provisional validity never escapes this function.
+        // geometry. Mark this local candidate provisionally so both the raw
+        // boundary and evidence-driven alternatives can be forward-rendered.
+        // Any failed admission below returns a fresh invalid hull.
         result.valid = true;
 
-        // Certify the geometry we will actually expose, not a proxy made from
-        // inflated voxel-centre samples. This makes the admission test
-        // independent of the reconstruction method and suitable for future
-        // non-axis-aligned fitted meshes.
-        const auto boundaryFaces =
-            BuildFirstPersonVisualHullBoundaryFaces(result);
-        const auto triangles =
+        const auto voxelFaces =
+            BuildFirstPersonVisualHullVoxelBoundaryFaces(
+                result);
+        const auto voxelTriangles =
             TriangulateFirstPersonReconstructionFaces(
-                boundaryFaces);
-        const auto certificate =
+                voxelFaces);
+        const auto voxelCertificate =
             CertifyFirstPersonReconstruction(
-                triangles, views, projectPoint);
-        if (!certificate.valid
-            || certificate.viewCount < config.minimumViews
-            || certificate.minimumIntersectionOverUnion
-                < config.minimumIntersectionOverUnion
-            || certificate.minimumCandidateCoverage
-                < config.minimumCandidateCoverage
-            || certificate.minimumObservedCoverage
-                < config.minimumObservedCoverage
-            || certificate.maximumEdgeError
-                > config.maximumEdgeError)
+                voxelTriangles, views, projectPoint);
+        const auto passesAdmission =
+            [&](const FirstPersonRoundTripCertificate& certificate) {
+                return certificate.valid
+                    && certificate.viewCount
+                        >= config.minimumViews
+                    && certificate.minimumIntersectionOverUnion
+                        >= config.minimumIntersectionOverUnion
+                    && certificate.minimumCandidateCoverage
+                        >= config.minimumCandidateCoverage
+                    && certificate.minimumObservedCoverage
+                        >= config.minimumObservedCoverage
+                    && certificate.maximumEdgeError
+                        <= config.maximumEdgeError;
+            };
+        if (!passesAdmission(voxelCertificate))
             return {};
 
+        auto selectedCertificate =
+            voxelCertificate;
+        if (config.allowContinuousSurfaceRefinement
+            && !voxelFaces.empty()
+            && voxelFaces.size()
+                <= config.maximumContinuousSurfaceFaces
+            && config.continuousSurfaceSearchSteps != 0)
+        {
+            for (uint8_t stepIndex = 1;
+                 stepIndex
+                    <= config.continuousSurfaceSearchSteps;
+                 ++stepIndex)
+            {
+                const float blend =
+                    float(stepIndex)
+                    / float(
+                        config.continuousSurfaceSearchSteps);
+                const auto candidateFaces =
+                    BuildFirstPersonVisualHullContinuousCandidateFaces(
+                        result, voxelFaces, blend);
+                if (candidateFaces.empty())
+                    continue;
+                const auto candidateCertificate =
+                    CertifyFirstPersonReconstruction(
+                        TriangulateFirstPersonReconstructionFaces(
+                            candidateFaces),
+                        views, projectPoint);
+                if (!passesAdmission(
+                        candidateCertificate)
+                    || !FirstPersonRoundTripStrictlyImproves(
+                        candidateCertificate,
+                        selectedCertificate))
+                    continue;
+
+                result.refinedFaces =
+                    candidateFaces;
+                selectedCertificate =
+                    candidateCertificate;
+            }
+        }
+
+        result.continuousSurfaceRefined =
+            !result.refinedFaces.empty();
+        result.voxelRoundTripSymmetricDifference =
+            voxelCertificate.symmetricDifferencePixels;
+        result.roundTripSymmetricDifference =
+            selectedCertificate.symmetricDifferencePixels;
         result.averageIntersectionOverUnion =
-            certificate.averageIntersectionOverUnion;
+            selectedCertificate.averageIntersectionOverUnion;
         result.minimumIntersectionOverUnion =
-            certificate.minimumIntersectionOverUnion;
+            selectedCertificate.minimumIntersectionOverUnion;
         result.minimumCandidateCoverage =
-            certificate.minimumCandidateCoverage;
+            selectedCertificate.minimumCandidateCoverage;
         result.minimumObservedCoverage =
-            certificate.minimumObservedCoverage;
+            selectedCertificate.minimumObservedCoverage;
         result.maximumEdgeError =
-            certificate.maximumEdgeError;
+            selectedCertificate.maximumEdgeError;
         result.roundTripViewCount =
-            certificate.viewCount;
+            selectedCertificate.viewCount;
         result.valid = true;
         return result;
     }
