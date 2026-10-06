@@ -1070,6 +1070,163 @@ TEST(FirstPersonAssetReconstructionTest, FourMatchingViewsPassReliabilityGate)
     EXPECT_TRUE(IsFirstPersonMultiViewFitReliable(fit));
 }
 
+TEST(FirstPersonRoundTripReconstructionTest, SlopedVisibilityUsesExactNativeDepthGradient)
+{
+    // Rotation zero looks from +X/+Y and from above. This shallow sloped
+    // normal is camera-facing even though neither its Z nor rounded X/Y
+    // component alone would have passed the old thresholded test.
+    const FirstPersonVec3 sloped{ 0.4f, 0.0f, 0.1f };
+    EXPECT_TRUE(
+        FirstPersonSurfaceVisibleFromNativeView(
+            sloped, 0));
+    EXPECT_FALSE(
+        FirstPersonSurfaceVisibleFromNativeView(
+            sloped, 2));
+    EXPECT_TRUE(
+        FirstPersonSurfaceVisibleFromNativeView(
+            { 0.0f, 0.0f, 1.0f }, 3));
+    EXPECT_FALSE(
+        FirstPersonSurfaceVisibleFromNativeView(
+            { 0.0f, 0.0f, -1.0f }, 1));
+}
+
+TEST(FirstPersonRoundTripReconstructionTest, StructuralOwnershipCanResolveSilhouetteTie)
+{
+    struct Face
+    {
+        std::array<FirstPersonVec3, 4> corners{};
+        FirstPersonVec3 normal{};
+    };
+
+    Face reference{};
+    reference.corners = { {
+        { 0.0f, 0.0f, 0.0f },
+        { 4.0f, 0.0f, 0.0f },
+        { 4.0f, 0.0f, 4.0f },
+        { 0.0f, 0.0f, 4.0f },
+    } };
+    reference.normal = { 0.0f, -1.0f, 0.0f };
+    Face candidate = reference;
+    for (auto& corner : candidate.corners)
+        corner.x += 4.0f;
+
+    const std::vector<Face> referenceFaces{ reference };
+    const std::vector<Face> baselineFaces{ reference };
+    const std::vector<Face> candidateFaces{ candidate };
+    const std::array<uint8_t, 2> directions{ 0, 1 };
+
+    FirstPersonStructuralOwnershipConfig config{};
+    config.sampleSpacing = 2.0f;
+    config.maximumSamplesPerAxis = 4;
+    config.minimumPairedSamples = 4;
+    config.minimumViews = 2;
+
+    const auto comparison =
+        CompareFirstPersonStructuralOwnership(
+            referenceFaces,
+            baselineFaces,
+            candidateFaces,
+            directions,
+            [](uint8_t, FirstPersonVec3 point) {
+                return std::array<float, 2>{
+                    point.x, point.z
+                };
+            },
+            [](uint8_t, FirstPersonVec3 point) {
+                return point.y;
+            },
+            [](const Face&, uint8_t) {
+                return true;
+            },
+            [](FirstPersonVec3, FirstPersonVec3)
+                -> std::optional<uint32_t> {
+                return 7u;
+            },
+            [](uint8_t, ScreenCoordsXY point)
+                -> std::optional<uint32_t> {
+                return point.x >= 4
+                    ? std::optional<uint32_t>{ 7u }
+                    : std::optional<uint32_t>{ 9u };
+            },
+            config);
+
+    ASSERT_TRUE(comparison.valid);
+    EXPECT_TRUE(comparison.baselineEvidenceAvailable);
+    EXPECT_TRUE(comparison.candidateEvidenceAvailable);
+    EXPECT_EQ(comparison.viewCount, 2u);
+    EXPECT_GT(comparison.pairedSamples, 0u);
+    EXPECT_EQ(comparison.baselineMatches, 0u);
+    EXPECT_EQ(
+        comparison.baselineMismatches,
+        comparison.pairedSamples);
+    EXPECT_EQ(
+        comparison.candidateMatches,
+        comparison.pairedSamples);
+    EXPECT_EQ(comparison.candidateMismatches, 0u);
+    EXPECT_EQ(
+        comparison.candidateBetter,
+        comparison.pairedSamples);
+    EXPECT_EQ(comparison.candidateWorse, 0u);
+    EXPECT_TRUE(comparison.candidateStrictlyImproves());
+
+    FirstPersonRoundTripCertificate silhouette{};
+    silhouette.valid = true;
+    silhouette.viewCount = 2;
+    silhouette.symmetricDifferencePixels = 12;
+    silhouette.maximumViewSymmetricDifferencePixels = 6;
+    silhouette.maximumEdgeError = 2;
+    EXPECT_TRUE(
+        FirstPersonEvidenceDrivenCandidateImproves(
+            silhouette, silhouette, comparison));
+}
+
+TEST(FirstPersonRoundTripReconstructionTest, StructuralRegressionVetoesSilhouetteGain)
+{
+    FirstPersonRoundTripCertificate baseline{};
+    baseline.valid = true;
+    baseline.viewCount = 4;
+    baseline.symmetricDifferencePixels = 20;
+    baseline.maximumViewSymmetricDifferencePixels = 8;
+    baseline.maximumEdgeError = 3;
+
+    auto candidate = baseline;
+    candidate.symmetricDifferencePixels = 16;
+    candidate.maximumViewSymmetricDifferencePixels = 7;
+
+    FirstPersonStructuralOwnershipComparison structural{};
+    structural.valid = true;
+    structural.pairedSamples = 32;
+    structural.viewCount = 4;
+    structural.baselineMatches = 31;
+    structural.baselineMismatches = 1;
+    structural.candidateMatches = 30;
+    structural.candidateMismatches = 2;
+    structural.candidateWorse = 1;
+
+    EXPECT_TRUE(
+        FirstPersonRoundTripStrictlyImproves(
+            candidate, baseline));
+    EXPECT_FALSE(
+        FirstPersonEvidenceDrivenCandidateImproves(
+            candidate, baseline, structural));
+
+    // When source ownership is too sparse to certify, do not pretend it
+    // disproves the silhouette evidence.
+    structural.valid = false;
+    structural.baselineEvidenceAvailable = false;
+    EXPECT_TRUE(
+        FirstPersonEvidenceDrivenCandidateImproves(
+            candidate, baseline, structural));
+
+    // But once the baseline has a certified ownership signal, a candidate
+    // cannot escape that constraint merely by making the paired evidence
+    // disappear.
+    structural.baselineEvidenceAvailable = true;
+    EXPECT_FALSE(
+        FirstPersonEvidenceDrivenCandidateImproves(
+            candidate, baseline, structural));
+}
+
 TEST(FirstPersonRoundTripReconstructionTest, ExactSurfaceProjectionCertifiesPerfectCanonicalViews)
 {
     FirstPersonVisualHull hull{};

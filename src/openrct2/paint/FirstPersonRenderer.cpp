@@ -523,6 +523,22 @@ namespace OpenRCT2::Paint
                 static_cast<unsigned long long>(
                     surface.reconstructionGroup),
                 unsigned(surface.diagnosticReconstructionKind));
+            if (surface.diagnosticReconstructionKind == 1)
+            {
+                Console::WriteLine(
+                    "  reconstructionEvidence continuous=%d structural=%d "
+                    "structuralSamples=%u structuralMismatch=%u->%u "
+                    "roundTripPixels=%llu->%llu",
+                    surface.diagnosticContinuousSurfaceRefined ? 1 : 0,
+                    surface.diagnosticStructuralEvidenceUsed ? 1 : 0,
+                    surface.diagnosticStructuralPairedSamples,
+                    surface.diagnosticStructuralBaselineMismatches,
+                    surface.diagnosticStructuralSelectedMismatches,
+                    static_cast<unsigned long long>(
+                        surface.diagnosticVoxelRoundTripPixelDisagreement),
+                    static_cast<unsigned long long>(
+                        surface.diagnosticRoundTripPixelDisagreement));
+            }
             Console::WriteLine(
                 "  semanticRole=%u semanticGroup=%llu sourceTile=(%d,%d) "
                 "materialTile=(%d,%d) sourceComponent=%u materialComponent=%u",

@@ -44,16 +44,8 @@
             const auto faceVisible =
                 [](FirstPersonVec3 normal,
                     uint8_t sourceRotation) {
-                    if (normal.z > 0.5f)
-                        return true;
-                    if (normal.z < -0.5f)
-                        return false;
-                    return FirstPersonFaceVisibleFromNativeView(
-                        {
-                            int32_t(std::lround(normal.x)),
-                            int32_t(std::lround(normal.y)),
-                        },
-                        sourceRotation);
+                    return FirstPersonSurfaceVisibleFromNativeView(
+                        normal, sourceRotation);
                 };
 
             // Ownership is computed independently of texture fit. A projective

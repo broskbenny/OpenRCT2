@@ -215,10 +215,20 @@ namespace OpenRCT2::Paint
         // selected from one canonical object/track origin.
         uint64_t reconstructionGroup = 0;
         // Diagnostic-only provenance for grouped reconstruction. Kind uses
-        // 0=none, 1=large scenery, 2=track. The anchor is the canonical
-        // physical group origin used to build the reconstruction key.
+        // 0=none, 1=large scenery, 2=track, 3=grouped diagnostic fallback.
+        // The anchor is the canonical physical group origin used to build the
+        // reconstruction key.
         uint8_t diagnosticReconstructionKind = 0;
         FirstPersonVec3 diagnosticReconstructionAnchor{};
+        // Inverse-reconstruction evidence retained for the click inspector.
+        // These do not affect rendering or cache identity.
+        bool diagnosticContinuousSurfaceRefined = false;
+        bool diagnosticStructuralEvidenceUsed = false;
+        uint32_t diagnosticStructuralPairedSamples = 0;
+        uint32_t diagnosticStructuralBaselineMismatches = 0;
+        uint32_t diagnosticStructuralSelectedMismatches = 0;
+        uint64_t diagnosticVoxelRoundTripPixelDisagreement = 0;
+        uint64_t diagnosticRoundTripPixelDisagreement = 0;
         // Stable native painter order for logical tie breaking. Physical depth
         // remains authoritative; this ordinal is consulted only when surfaces
         // occupy the same physical layer (opaque owners or transparency).

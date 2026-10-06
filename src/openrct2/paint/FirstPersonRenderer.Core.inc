@@ -2828,11 +2828,11 @@
             hullConfig.maximumOccupiedCells = 131072;
             hullConfig.maximumGridCells = 131072;
             hullConfig.maximumAxisCells = 96;
-            // Grouped large scenery already bakes projective native material
-            // onto arbitrary reconstructed quads. Let the round-trip evidence
-            // decide whether the continuous support-field relaxation improves
-            // the actual four canonical observations.
-            hullConfig.allowContinuousSurfaceRefinement = true;
+            // Large scenery performs its continuous search below, where
+            // source-sequence ownership can constrain silhouette-equivalent
+            // candidates. Keep the generic silhouette-only promotion disabled
+            // here so there is a single evidence arbitration point.
+            hullConfig.allowContinuousSurfaceRefinement = false;
             // Multi-view support itself performs the carving. Do not reject a
             // valid carved hull merely because decorative sprite pixels extend
             // beyond collision/occupancy metadata.
@@ -2913,7 +2913,14 @@
                     return false;
                 };
 
-            const FirstPersonVisualHull hull =
+            const auto faceVisible =
+                [](const FirstPersonVisualHullFace& face,
+                   uint8_t rotation) {
+                    return FirstPersonSurfaceVisibleFromNativeView(
+                        face.normal, rotation);
+                };
+
+            FirstPersonVisualHull hull =
                 BuildFirstPersonVisualHull(
                     hullViews,
                     {
@@ -2929,6 +2936,299 @@
                     projectPoint,
                     occupancyPredicate,
                     pointSupported);
+
+            FirstPersonStructuralOwnershipComparison
+                structuralDiagnostics{};
+
+            if (hull.valid)
+            {
+                const auto voxelFaces =
+                    BuildFirstPersonVisualHullVoxelBoundaryFaces(
+                        hull);
+                if (!voxelFaces.empty()
+                    && voxelFaces.size()
+                        <= hullConfig.maximumContinuousSurfaceFaces
+                    && hullConfig.continuousSurfaceSearchSteps != 0)
+                {
+                    const auto voxelCertificate =
+                        CertifyFirstPersonReconstruction(
+                            TriangulateFirstPersonReconstructionFaces(
+                                voxelFaces),
+                            hullViews, projectPoint);
+                    const auto passesAdmission =
+                        [&](const FirstPersonRoundTripCertificate&
+                                certificate) {
+                            return certificate.valid
+                                && certificate.viewCount
+                                    >= hullConfig.minimumViews
+                                && certificate.minimumIntersectionOverUnion
+                                    >= hullConfig.minimumIntersectionOverUnion
+                                && certificate.minimumCandidateCoverage
+                                    >= hullConfig.minimumCandidateCoverage
+                                && certificate.minimumObservedCoverage
+                                    >= hullConfig.minimumObservedCoverage
+                                && certificate.maximumEdgeError
+                                    <= hullConfig.maximumEdgeError;
+                        };
+
+                    const auto depthPoint =
+                        [](uint8_t rotation,
+                           FirstPersonVec3 point) {
+                            return FirstPersonIsoDepth(
+                                rotation,
+                                {
+                                    int32_t(std::lround(
+                                        point.x)),
+                                    int32_t(std::lround(
+                                        point.y)),
+                                    int32_t(std::lround(
+                                        point.z)),
+                                });
+                        };
+
+                    // Reference ownership comes from the authoritative quarter-
+                    // cell decomposition just inside the original voxel
+                    // boundary. If a sample lies on a sequence seam or outside
+                    // a unique physical cell, it is deliberately unknown.
+                    const auto expectedSequence =
+                        [&](FirstPersonVec3 point,
+                            FirstPersonVec3 outwardNormal)
+                            -> std::optional<uint32_t> {
+                            const float inwardDistance =
+                                std::max(
+                                    0.5f,
+                                    std::min(
+                                        4.0f,
+                                        hullStep * 0.25f));
+                            const FirstPersonVec3 inside{
+                                point.x
+                                    - outwardNormal.x
+                                        * inwardDistance,
+                                point.y
+                                    - outwardNormal.y
+                                        * inwardDistance,
+                                point.z
+                                    - outwardNormal.z
+                                        * inwardDistance,
+                            };
+                            std::optional<uint32_t> owner;
+                            constexpr float epsilon = 0.001f;
+                            for (const auto& cell :
+                                 occupancyCells)
+                            {
+                                if (inside.x
+                                        < cell.low.x + epsilon
+                                    || inside.x
+                                        >= cell.high.x - epsilon
+                                    || inside.y
+                                        < cell.low.y + epsilon
+                                    || inside.y
+                                        >= cell.high.y - epsilon
+                                    || inside.z
+                                        < cell.low.z + epsilon
+                                    || inside.z
+                                        >= cell.high.z - epsilon)
+                                    continue;
+                                if (cell.sequence
+                                    > std::numeric_limits<
+                                          uint32_t>::max())
+                                    return std::nullopt;
+                                const uint32_t sequence =
+                                    uint32_t(cell.sequence);
+                                if (owner.has_value()
+                                    && *owner != sequence)
+                                    return std::nullopt;
+                                owner = sequence;
+                            }
+                            return owner;
+                        };
+
+                    // Native sequence ownership is a discrete source label, not
+                    // a colour guess. At a composite pixel, choose the same
+                    // frontmost opaque tile sprite used by the material bake.
+                    // Equal-depth overlaps are ambiguous and supply no evidence.
+                    const auto observedSequence =
+                        [&](uint8_t rotation,
+                            ScreenCoordsXY projected)
+                            -> std::optional<uint32_t> {
+                            const uint8_t nativeDirection =
+                                nativeDirectionForRotation[
+                                    rotation & 3u];
+                            std::optional<uint32_t>
+                                bestSequence;
+                            float bestDepth =
+                                -std::numeric_limits<
+                                    float>::infinity();
+                            bool ambiguous = false;
+                            for (size_t sequence = 0;
+                                 sequence < entry.tiles.size();
+                                 ++sequence)
+                            {
+                                if (sequence
+                                    > std::numeric_limits<
+                                          uint32_t>::max())
+                                    return std::nullopt;
+                                const auto* source =
+                                    decodedView(
+                                        sequence,
+                                        nativeDirection);
+                                if (source == nullptr)
+                                    continue;
+                                const int32_t u =
+                                    projected.x
+                                    - source->spritePos.x
+                                    - source->g1->xOffset;
+                                const int32_t v =
+                                    projected.y
+                                    - source->spritePos.y
+                                    - source->g1->yOffset;
+                                if (u < 0 || v < 0
+                                    || u >= source->g1->width
+                                    || v >= source->g1->height)
+                                    continue;
+                                const uint8_t pixel =
+                                    source->pixels[
+                                        size_t(v)
+                                            * size_t(
+                                                source->g1->width)
+                                        + size_t(u)];
+                                if (pixel == 0)
+                                    continue;
+
+                                if (source->nativeDepth
+                                    > bestDepth + 1.0e-4f)
+                                {
+                                    bestDepth =
+                                        source->nativeDepth;
+                                    bestSequence =
+                                        uint32_t(sequence);
+                                    ambiguous = false;
+                                }
+                                else if (std::abs(
+                                             source->nativeDepth
+                                             - bestDepth)
+                                             <= 1.0e-4f
+                                    && bestSequence.has_value()
+                                    && *bestSequence
+                                        != uint32_t(sequence))
+                                {
+                                    ambiguous = true;
+                                }
+                            }
+                            return ambiguous
+                                ? std::nullopt
+                                : bestSequence;
+                        };
+
+                    const std::array<uint8_t, 4>
+                        evidenceDirections{ 0, 1, 2, 3 };
+                    FirstPersonStructuralOwnershipConfig
+                        structuralConfig{};
+                    structuralConfig.sampleSpacing = 8.0f;
+                    structuralConfig.maximumSamplesPerAxis = 8;
+                    structuralConfig.minimumPairedSamples = 16;
+                    structuralConfig.minimumViews = 2;
+
+                    std::vector<FirstPersonVisualHullFace>
+                        selectedFaces = voxelFaces;
+                    auto selectedCertificate =
+                        voxelCertificate;
+                    bool selectedContinuous = false;
+
+                    if (passesAdmission(voxelCertificate))
+                    {
+                        for (uint8_t stepIndex = 1;
+                             stepIndex
+                                <= hullConfig.continuousSurfaceSearchSteps;
+                             ++stepIndex)
+                        {
+                            const float blend =
+                                float(stepIndex)
+                                / float(
+                                    hullConfig
+                                        .continuousSurfaceSearchSteps);
+                            const auto candidateFaces =
+                                BuildFirstPersonVisualHullContinuousCandidateFaces(
+                                    hull, voxelFaces, blend);
+                            if (candidateFaces.empty())
+                                continue;
+
+                            const auto candidateCertificate =
+                                CertifyFirstPersonReconstruction(
+                                    TriangulateFirstPersonReconstructionFaces(
+                                        candidateFaces),
+                                    hullViews, projectPoint);
+                            if (!passesAdmission(
+                                    candidateCertificate))
+                                continue;
+
+                            const auto structural =
+                                CompareFirstPersonStructuralOwnership(
+                                    voxelFaces,
+                                    selectedFaces,
+                                    candidateFaces,
+                                    evidenceDirections,
+                                    projectPoint,
+                                    depthPoint,
+                                    faceVisible,
+                                    expectedSequence,
+                                    observedSequence,
+                                    structuralConfig);
+                            if (!FirstPersonEvidenceDrivenCandidateImproves(
+                                    candidateCertificate,
+                                    selectedCertificate,
+                                    structural))
+                                continue;
+
+                            selectedFaces =
+                                candidateFaces;
+                            selectedCertificate =
+                                candidateCertificate;
+                            selectedContinuous = true;
+                        }
+                    }
+
+                    if (selectedContinuous)
+                    {
+                        structuralDiagnostics =
+                            CompareFirstPersonStructuralOwnership(
+                                voxelFaces,
+                                voxelFaces,
+                                selectedFaces,
+                                evidenceDirections,
+                                projectPoint,
+                                depthPoint,
+                                faceVisible,
+                                expectedSequence,
+                                observedSequence,
+                                structuralConfig);
+
+                        hull.refinedFaces =
+                            selectedFaces;
+                        hull.continuousSurfaceRefined = true;
+                        hull.roundTripSymmetricDifference =
+                            selectedCertificate
+                                .symmetricDifferencePixels;
+                        hull.averageIntersectionOverUnion =
+                            selectedCertificate
+                                .averageIntersectionOverUnion;
+                        hull.minimumIntersectionOverUnion =
+                            selectedCertificate
+                                .minimumIntersectionOverUnion;
+                        hull.minimumCandidateCoverage =
+                            selectedCertificate
+                                .minimumCandidateCoverage;
+                        hull.minimumObservedCoverage =
+                            selectedCertificate
+                                .minimumObservedCoverage;
+                        hull.maximumEdgeError =
+                            selectedCertificate
+                                .maximumEdgeError;
+                        hull.roundTripViewCount =
+                            selectedCertificate.viewCount;
+                    }
+                }
+            }
 
             std::vector<FirstPersonVisualHullFace> faces;
             if (hull.valid)
@@ -3029,23 +3329,6 @@
                 cacheFailure();
                 return result;
             }
-
-            const auto faceVisible =
-                [](const FirstPersonVisualHullFace& face,
-                   uint8_t rotation) {
-                    if (face.normal.z > 0.5f)
-                        return true;
-                    if (face.normal.z < -0.5f)
-                        return false;
-                    const CoordsXY normal{
-                        int32_t(std::lround(
-                            face.normal.x)),
-                        int32_t(std::lround(
-                            face.normal.y)),
-                    };
-                    return FirstPersonFaceVisibleFromNativeView(
-                        normal, rotation);
-                };
 
             std::array<FirstPersonDepthOwnerMap, 4>
                 depthOwners{};
@@ -3368,6 +3651,29 @@
                 surface.diagnosticReconstructionKind = 1;
                 surface.diagnosticReconstructionAnchor =
                     group.anchor;
+                surface.diagnosticContinuousSurfaceRefined =
+                    hull.continuousSurfaceRefined;
+                surface.diagnosticStructuralEvidenceUsed =
+                    hull.continuousSurfaceRefined
+                    && structuralDiagnostics.valid;
+                surface.diagnosticStructuralPairedSamples =
+                    uint32_t(std::min<size_t>(
+                        structuralDiagnostics.pairedSamples,
+                        std::numeric_limits<uint32_t>::max()));
+                surface.diagnosticStructuralBaselineMismatches =
+                    uint32_t(std::min<size_t>(
+                        structuralDiagnostics.baselineMismatches,
+                        std::numeric_limits<uint32_t>::max()));
+                surface.diagnosticStructuralSelectedMismatches =
+                    uint32_t(std::min<size_t>(
+                        structuralDiagnostics.candidateMismatches,
+                        std::numeric_limits<uint32_t>::max()));
+                surface.diagnosticVoxelRoundTripPixelDisagreement =
+                    uint64_t(
+                        hull.voxelRoundTripSymmetricDifference);
+                surface.diagnosticRoundTripPixelDisagreement =
+                    uint64_t(
+                        hull.roundTripSymmetricDifference);
                 surface.gpuRegion =
                     FirstPersonGpuRegionKey(
                         int32_t(std::floor(
