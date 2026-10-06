@@ -6,6 +6,7 @@
 
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonMath.h"
+#include "FirstPersonRoundTripReconstruction.h"
 
 #include "../drawing/Drawing.Sprite.h"
 
@@ -36,9 +37,15 @@ namespace OpenRCT2::Paint
         uint8_t sizeUp{};
         std::vector<uint8_t> occupied;
         std::vector<FirstPersonVisualHullTextureView> textureViews;
+        // Exact surface-level round-trip evidence. The legacy
+        // coverage fields remain directly readable because several
+        // reconstruction policies use them as conservative admission gates.
+        float averageIntersectionOverUnion{};
+        float minimumIntersectionOverUnion{};
         float minimumCandidateCoverage{};
         float minimumObservedCoverage{};
         int32_t maximumEdgeError{};
+        size_t roundTripViewCount{};
 
         [[nodiscard]] bool contains(
             int32_t forward, int32_t right, int32_t up) const
@@ -402,6 +409,10 @@ namespace OpenRCT2::Paint
         size_t maximumOccupiedCells = 4096;
         size_t maximumGridCells = 65536;
         int32_t maximumAxisCells = 24;
+        // Kept at zero by default until asset-wide calibration establishes a
+        // justified threshold. The score is still recorded for every accepted
+        // silhouette-derived hull.
+        float minimumIntersectionOverUnion = 0.0f;
         float minimumCandidateCoverage = 0.60f;
         float minimumObservedCoverage = 0.32f;
         int32_t maximumEdgeError = 6;
@@ -593,57 +604,48 @@ namespace OpenRCT2::Paint
             || occupiedCount > config.maximumOccupiedCells)
             return {};
 
-        result.minimumCandidateCoverage = 1.0f;
-        result.minimumObservedCoverage = 1.0f;
-        result.maximumEdgeError = 0;
-        const int32_t radius = std::max(
-            1, int32_t(std::ceil(result.step * 0.75f)));
-        for (const auto& view : views)
-        {
-            FirstPersonSilhouette predicted{};
-            for (int32_t up = 0; up < nUp; ++up)
-            for (int32_t right = 0; right < nRight; ++right)
-            for (int32_t forward = 0; forward < nForward; ++forward)
-            {
-                if (!result.contains(forward, right, up))
-                    continue;
-                const auto projected =
-                    projectPoint(
-                        view.imageDirection,
-                        result.centre(forward, right, up));
-                const int32_t x =
-                    int32_t(std::lround(projected[0]));
-                const int32_t y =
-                    int32_t(std::lround(projected[1]));
-                for (int32_t py = y - radius; py <= y + radius; ++py)
-                for (int32_t px = x - radius; px <= x + radius; ++px)
-                    predicted.add(px, py);
-            }
+        // The boundary extractor treats valid=true as permission to expose
+        // geometry. Mark this local candidate provisionally so it can be
+        // forward-rendered; any failed certificate below returns a fresh
+        // invalid hull, so provisional validity never escapes this function.
+        result.valid = true;
 
-            const auto fit =
-                CompareFirstPersonSilhouettes(
-                    view.observed, predicted);
-            if (!fit.valid
-                || fit.candidateCoverage
-                    < config.minimumCandidateCoverage
-                || fit.observedCoverage
-                    < config.minimumObservedCoverage
-                || fit.maxEdgeError > config.maximumEdgeError)
-                return {};
-            result.minimumCandidateCoverage =
-                std::min(
-                    result.minimumCandidateCoverage,
-                    fit.candidateCoverage);
-            result.minimumObservedCoverage =
-                std::min(
-                    result.minimumObservedCoverage,
-                    fit.observedCoverage);
-            result.maximumEdgeError =
-                std::max(
-                    result.maximumEdgeError,
-                    fit.maxEdgeError);
-        }
+        // Certify the geometry we will actually expose, not a proxy made from
+        // inflated voxel-centre samples. This makes the admission test
+        // independent of the reconstruction method and suitable for future
+        // non-axis-aligned fitted meshes.
+        const auto boundaryFaces =
+            BuildFirstPersonVisualHullBoundaryFaces(result);
+        const auto triangles =
+            TriangulateFirstPersonReconstructionFaces(
+                boundaryFaces);
+        const auto certificate =
+            CertifyFirstPersonReconstruction(
+                triangles, views, projectPoint);
+        if (!certificate.valid
+            || certificate.viewCount < config.minimumViews
+            || certificate.minimumIntersectionOverUnion
+                < config.minimumIntersectionOverUnion
+            || certificate.minimumCandidateCoverage
+                < config.minimumCandidateCoverage
+            || certificate.minimumObservedCoverage
+                < config.minimumObservedCoverage
+            || certificate.maximumEdgeError
+                > config.maximumEdgeError)
+            return {};
 
+        result.averageIntersectionOverUnion =
+            certificate.averageIntersectionOverUnion;
+        result.minimumIntersectionOverUnion =
+            certificate.minimumIntersectionOverUnion;
+        result.minimumCandidateCoverage =
+            certificate.minimumCandidateCoverage;
+        result.minimumObservedCoverage =
+            certificate.minimumObservedCoverage;
+        result.maximumEdgeError =
+            certificate.maximumEdgeError;
+        result.roundTripViewCount =
+            certificate.viewCount;
         result.valid = true;
         return result;
     }

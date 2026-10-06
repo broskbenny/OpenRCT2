@@ -14,6 +14,7 @@
 #include <openrct2/paint/FirstPersonSpriteSnapshot.h>
 #include <algorithm>
 #include <openrct2/paint/FirstPersonRenderer.h>
+#include <openrct2/paint/FirstPersonRoundTripReconstruction.h>
 #include <openrct2/paint/FirstPersonAssetReconstruction.h>
 #include <openrct2/paint/FirstPersonPeriodicPassengerMotion.h>
 #include <openrct2/paint/FirstPersonPhysicalProxy.h>
@@ -1069,6 +1070,266 @@ TEST(FirstPersonAssetReconstructionTest, FourMatchingViewsPassReliabilityGate)
     EXPECT_TRUE(IsFirstPersonMultiViewFitReliable(fit));
 }
 
+TEST(FirstPersonRoundTripReconstructionTest, ExactSurfaceProjectionCertifiesPerfectCanonicalViews)
+{
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 4.0f;
+    hull.sizeForward = 2;
+    hull.sizeRight = 1;
+    hull.sizeUp = 2;
+    hull.occupied.assign(4, 1);
+
+    const auto faces =
+        BuildFirstPersonVisualHullBoundaryFaces(hull);
+    const auto triangles =
+        TriangulateFirstPersonReconstructionFaces(faces);
+    ASSERT_FALSE(triangles.empty());
+
+    std::vector<FirstPersonVisualHullView> observations(4);
+    const auto project =
+        [](uint8_t direction, FirstPersonVec3 point) {
+            const CoordsXYZ integerPoint{
+                int32_t(std::lround(point.x)),
+                int32_t(std::lround(point.y)),
+                int32_t(std::lround(point.z)),
+            };
+            const auto screen =
+                Translate3DTo2DWithZ(
+                    direction, integerPoint);
+            return std::array<float, 2>{
+                float(screen.x), float(screen.y)
+            };
+        };
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        observations[direction].imageDirection = direction;
+        observations[direction].observed =
+            RenderFirstPersonReconstructionSilhouette(
+                triangles, direction, project);
+        ASSERT_FALSE(observations[direction].observed.empty());
+    }
+
+    const auto certificate =
+        CertifyFirstPersonReconstruction(
+            triangles, observations, project);
+    ASSERT_TRUE(certificate.valid);
+    EXPECT_EQ(certificate.viewCount, 4u);
+    EXPECT_FLOAT_EQ(
+        certificate.averageIntersectionOverUnion, 1.0f);
+    EXPECT_FLOAT_EQ(
+        certificate.minimumIntersectionOverUnion, 1.0f);
+    EXPECT_FLOAT_EQ(
+        certificate.minimumCandidateCoverage, 1.0f);
+    EXPECT_FLOAT_EQ(
+        certificate.minimumObservedCoverage, 1.0f);
+    EXPECT_EQ(certificate.maximumEdgeError, 0);
+}
+
+TEST(FirstPersonRoundTripReconstructionTest, ContradictoryCanonicalViewCannotHideBehindOtherViews)
+{
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 4.0f;
+    hull.sizeForward = 1;
+    hull.sizeRight = 1;
+    hull.sizeUp = 2;
+    hull.occupied.assign(2, 1);
+
+    const auto triangles =
+        TriangulateFirstPersonReconstructionFaces(
+            BuildFirstPersonVisualHullBoundaryFaces(hull));
+    const auto project =
+        [](uint8_t, FirstPersonVec3 point) {
+            return std::array<float, 2>{
+                point.x, point.z
+            };
+        };
+
+    std::vector<FirstPersonVisualHullView> observations(4);
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        observations[direction].imageDirection = direction;
+        observations[direction].observed =
+            RenderFirstPersonReconstructionSilhouette(
+                triangles, direction, project);
+    }
+    observations[3].observed =
+        MakeSilhouetteRect(12, 0, 16, 8);
+
+    const auto certificate =
+        CertifyFirstPersonReconstruction(
+            triangles, observations, project);
+    ASSERT_TRUE(certificate.valid);
+    EXPECT_EQ(certificate.viewCount, 4u);
+    const auto* fit0 =
+        certificate.fitForDirection(0);
+    const auto* fit3 =
+        certificate.fitForDirection(3);
+    ASSERT_NE(fit0, nullptr);
+    ASSERT_NE(fit3, nullptr);
+    EXPECT_FLOAT_EQ(
+        fit0->intersectionOverUnion, 1.0f);
+    EXPECT_LT(
+        fit3->intersectionOverUnion, 0.01f);
+    EXPECT_FLOAT_EQ(
+        certificate.minimumIntersectionOverUnion, 0.0f);
+}
+
+TEST(FirstPersonRoundTripReconstructionTest, SupportsThirtyTwoNativeYawObservations)
+{
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 4.0f;
+    hull.minForward = -4.0f;
+    hull.minRight = -4.0f;
+    hull.minUp = -4.0f;
+    hull.sizeForward = 2;
+    hull.sizeRight = 2;
+    hull.sizeUp = 2;
+    hull.occupied.assign(8, 1);
+
+    const auto triangles =
+        TriangulateFirstPersonReconstructionFaces(
+            BuildFirstPersonVisualHullBoundaryFaces(hull));
+    const auto project =
+        [](uint8_t direction, FirstPersonVec3 point) {
+            return ProjectFirstPersonVehicleLocalPoint(
+                direction, point);
+        };
+
+    std::vector<FirstPersonVisualHullView> observations(32);
+    for (uint8_t direction = 0; direction < 32; ++direction)
+    {
+        observations[direction].imageDirection = direction;
+        observations[direction].observed =
+            RenderFirstPersonReconstructionSilhouette(
+                triangles, direction, project);
+        ASSERT_FALSE(observations[direction].observed.empty());
+    }
+
+    const auto certificate =
+        CertifyFirstPersonReconstruction(
+            triangles, observations, project);
+    ASSERT_TRUE(certificate.valid);
+    EXPECT_EQ(certificate.viewCount, 32u);
+    EXPECT_FLOAT_EQ(
+        certificate.minimumIntersectionOverUnion, 1.0f);
+    ASSERT_NE(certificate.fitForDirection(31), nullptr);
+}
+
+TEST(FirstPersonRoundTripReconstructionTest, DuplicateDirectionIsNotFourViewEvidence)
+{
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 4.0f;
+    hull.sizeForward = 1;
+    hull.sizeRight = 1;
+    hull.sizeUp = 1;
+    hull.occupied.assign(1, 1);
+    const auto triangles =
+        TriangulateFirstPersonReconstructionFaces(
+            BuildFirstPersonVisualHullBoundaryFaces(hull));
+    const auto project =
+        [](uint8_t, FirstPersonVec3 point) {
+            return std::array<float, 2>{
+                point.x, point.z
+            };
+        };
+
+    std::vector<FirstPersonVisualHullView> observations(2);
+    for (auto& observation : observations)
+    {
+        observation.imageDirection = 0;
+        observation.observed =
+            RenderFirstPersonReconstructionSilhouette(
+                triangles, 0, project);
+    }
+
+    EXPECT_FALSE(
+        CertifyFirstPersonReconstruction(
+            triangles, observations, project).valid);
+}
+
+TEST(FirstPersonRoundTripReconstructionTest, ProjectsBoundaryInsteadOfInflatedVoxelCentres)
+{
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 8.0f;
+    hull.sizeForward = 1;
+    hull.sizeRight = 1;
+    hull.sizeUp = 1;
+    hull.occupied.assign(1, 1);
+
+    const auto triangles =
+        TriangulateFirstPersonReconstructionFaces(
+            BuildFirstPersonVisualHullBoundaryFaces(hull));
+    const auto projected =
+        RenderFirstPersonReconstructionSilhouette(
+            triangles, 0,
+            [](uint8_t, FirstPersonVec3 point) {
+                return std::array<float, 2>{
+                    point.x, point.z
+                };
+            });
+
+    ASSERT_FALSE(projected.empty());
+    EXPECT_EQ(projected.minX, 0);
+    EXPECT_EQ(projected.maxX, 8);
+    EXPECT_EQ(projected.minY, 0);
+    EXPECT_EQ(projected.maxY, 8);
+    EXPECT_EQ(projected.size(), 64u);
+}
+
+TEST(FirstPersonVisualHullTest, ExactSurfaceCertificateRejectsInflatedCentreProxy)
+{
+    // For an 8-unit voxel the old verifier splatted a 13x13 square around
+    // the voxel centre. These observations deliberately match that proxy
+    // exactly. The actual x/z surface projection is only 8x8, so a genuine
+    // round trip must reject the candidate at an 80% coverage requirement.
+    std::vector<FirstPersonVisualHullView> views(4);
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        views[direction].imageDirection = direction;
+        views[direction].observed =
+            MakeSilhouetteRect(-2, -2, 11, 11);
+    }
+
+    FirstPersonVisualHullBounds bounds{};
+    bounds.maxForward = 8.0f;
+    bounds.maxRight = 8.0f;
+    bounds.maxUp = 8.0f;
+    bounds.step = 8.0f;
+
+    FirstPersonVisualHullConfig config{};
+    config.minimumViews = 4;
+    config.minimumOccupiedCells = 1;
+    config.maximumOccupiedCells = 1;
+    config.maximumGridCells = 1;
+    config.maximumAxisCells = 1;
+    config.minimumCandidateCoverage = 0.80f;
+    config.minimumObservedCoverage = 0.80f;
+    config.maximumEdgeError = 20;
+
+    const auto hull =
+        BuildFirstPersonVisualHull(
+            views, bounds, config,
+            [](uint8_t, FirstPersonVec3 point) {
+                return std::array<float, 2>{
+                    point.x, point.z
+                };
+            },
+            [](FirstPersonVec3) {
+                return true;
+            },
+            [](const FirstPersonVisualHullView&,
+               FirstPersonVec3) {
+                return true;
+            });
+
+    EXPECT_FALSE(hull.valid);
+}
+
 TEST(FirstPersonVisualHullTest, EveryAdmittedViewCarvesAuthoritativeOccupancy)
 {
     std::vector<FirstPersonVisualHullView> views(4);
@@ -1115,6 +1376,8 @@ TEST(FirstPersonVisualHullTest, EveryAdmittedViewCarvesAuthoritativeOccupancy)
         });
 
     ASSERT_TRUE(hull.valid);
+    EXPECT_EQ(hull.roundTripViewCount, 4u);
+    EXPECT_GT(hull.minimumIntersectionOverUnion, 0.0f);
     EXPECT_TRUE(hull.contains(0, 0, 0));
     EXPECT_TRUE(hull.contains(0, 0, 1));
     EXPECT_FALSE(hull.contains(1, 0, 0));
