@@ -4000,14 +4000,13 @@
                 const ReconstructionGroupInfo& group,
                 uint64_t signature, uint64_t frame,
                 const FirstPersonSpriteSnapshot& sprites,
+                uint64_t assetGeneration,
                 const std::optional<
                     FirstPersonWalkabilityConstraint>&
                     passage,
                 const FirstPersonInteractionTarget&
                     interactionTarget)
         {
-            (void)sprites;
-
             ParkEntranceGeometryCacheEntry result{};
             result.signature = signature;
             result.lastSeen = frame;
@@ -4045,6 +4044,108 @@
             if (clearanceHeight <= 0)
                 return result;
 
+            // Reconstruct the three sequence sprites as one coherent object.
+            // This is the same inverse path used by grouped large scenery:
+            // four native composite silhouettes carve the candidate envelope,
+            // continuous candidates are forward-certified, and the current
+            // source-sequence ownership evidence constrains promotion.
+            //
+            // The synthetic image namespace exists only inside this captured
+            // snapshot. QueueParkEntranceGeometry aliases the real entrance
+            // sprites to entry.image + 4 + sequence*4 + direction, exactly the
+            // layout consumed by BuildLargeSceneryInstanceGeometry().
+            const CoordsXY leftOffset =
+                CoordsDirectionDelta[3];
+            const CoordsXY rightOffset{
+                -leftOffset.x, -leftOffset.y
+            };
+            std::array<LargeSceneryTile, 3> syntheticTiles{ {
+                {
+                    { 0, 0, 0 },
+                    clearanceHeight,
+                    false, false, 0x0F, 0, 0
+                },
+                {
+                    { leftOffset.x, leftOffset.y, 0 },
+                    clearanceHeight,
+                    false, false, 0x0F, 0, 1
+                },
+                {
+                    { rightOffset.x, rightOffset.y, 0 },
+                    clearanceHeight,
+                    false, false, 0x0F, 0, 2
+                },
+            } };
+
+            LargeSceneryEntry syntheticEntry{};
+            syntheticEntry.image = bodyImages[0];
+            syntheticEntry.tiles =
+                std::span<const LargeSceneryTile>(
+                    syntheticTiles.data(),
+                    syntheticTiles.size());
+            syntheticEntry.text = nullptr;
+
+            LargeSceneryElement syntheticElement{};
+            syntheticElement.setDirection(direction & 3u);
+            const auto syntheticModel =
+                BuildLargeSceneryAssetModel(
+                    syntheticEntry);
+            if (syntheticModel.usable)
+            {
+                auto built =
+                    BuildLargeSceneryInstanceGeometry(
+                        syntheticElement,
+                        syntheticEntry,
+                        syntheticModel,
+                        group,
+                        signature,
+                        frame,
+                        sprites,
+                        assetGeneration);
+
+                // Never let the large-scenery occupancy fallback close the
+                // walk-through gate. Only a genuinely silhouette-carved body
+                // is allowed to replace the native entrance artwork.
+                if (built.visualHullRefined
+                    && !built.surfaces.empty())
+                {
+                    result.hasBounds = built.hasBounds;
+                    result.minTileX = built.minTileX;
+                    result.minTileY = built.minTileY;
+                    result.maxTileX = built.maxTileX;
+                    result.maxTileY = built.maxTileY;
+                    result.surfaces =
+                        std::move(built.surfaces);
+                    for (auto& surface :
+                         result.surfaces)
+                    {
+                        // Persistent baked pixels are self-contained. Restore
+                        // a real entrance image only for palette/remap metadata.
+                        surface.image =
+                            ImageId(bodyImages[0]);
+                        surface.reconstructionGroup =
+                            group.key;
+                        surface.diagnosticReconstructionKind = 3;
+                        surface.diagnosticReconstructionAnchor =
+                            group.anchor;
+                        surface.diagnosticSemanticGroup =
+                            group.key;
+                        surface.diagnosticSemanticRole =
+                            static_cast<uint8_t>(
+                                FirstPersonPaintSemanticRole::
+                                    structureBody);
+                        surface.cameraIndependent = true;
+                        surface.textureFallbackOnly = false;
+                        surface.interactionTarget =
+                            interactionTarget;
+                    }
+                    return result;
+                }
+            }
+
+            // Evidence reconstruction can legitimately fail for unusual object
+            // art. Preserve the conservative corridor-cut shell as a fallback
+            // rather than either blocking movement or resurrecting a billboard.
             // Appearance reconstruction remains deliberately conservative:
             // the park entrance is the collision-sized three-tile envelope
             // with explicit unknown material. Walkability contributes only a
@@ -4872,10 +4973,15 @@
             while (job->nextImage
                 < job->bodyImages.size())
             {
-                const ImageIndex image =
+                const ImageIndex realImage =
                     job->bodyImages[job->nextImage];
+                const ImageIndex syntheticImage =
+                    job->bodyImages[0] + 4
+                    + ImageIndex(job->nextImage);
                 if (!job->sprites.capture(
-                        image, _snapshotBudget))
+                        syntheticImage,
+                        GfxGetG1Element(realImage),
+                        _snapshotBudget))
                     return;
                 ++job->nextImage;
             }
@@ -4888,9 +4994,11 @@
                 return;
             }
 
+            const auto epoch =
+                _reconstructionWorker.epoch();
             job->submitted =
                 _reconstructionWorker.submit(
-                    [job, frame]() {
+                    [job, frame, epoch]() {
                         auto result =
                             BuildParkEntranceInstanceGeometry(
                                 job->bodyImages,
@@ -4900,6 +5008,7 @@
                                 job->signature,
                                 frame,
                                 job->sprites,
+                                epoch,
                                 job->passage,
                                 job->interactionTarget);
                         return [
@@ -5398,8 +5507,12 @@
                     fingerprint, surface.textureFallbackOnly ? 1 : 0);
                 ExtendStableKey(
                     fingerprint, surface.reconstructionGroup);
-                ExtendStableKey(
-                    fingerprint, surface.nativePaintOrdinal);
+                if (!surface.cameraIndependent)
+                {
+                    ExtendStableKey(
+                        fingerprint,
+                        surface.nativePaintOrdinal);
+                }
                 ExtendStableKey(
                     fingerprint, surface.gpuRegion);
                 ExtendStableKey(
@@ -5552,7 +5665,31 @@
             uint64_t key = 14695981039346656037ull;
             ExtendStableKey(key, surface.immutableFingerprint);
             ExtendStableKey(key, surface.solidColour);
-            ExtendStableKey(key, surface.nativePaintOrdinal);
+            ExtendStableKey(key, surface.reconstructionGroup);
+            if (surface.interactionTarget.hasValue())
+            {
+                ExtendStableKey(
+                    key,
+                    static_cast<uint8_t>(
+                        surface.interactionTarget.interactionType));
+                ExtendStableKey(
+                    key,
+                    uint32_t(
+                        surface.interactionTarget.mapPosition.x));
+                ExtendStableKey(
+                    key,
+                    uint32_t(
+                        surface.interactionTarget.mapPosition.y));
+                ExtendStableKey(
+                    key,
+                    surface.interactionTarget.tileElementIndex);
+                ExtendStableKey(
+                    key,
+                    surface.interactionTarget.tileSignature);
+            }
+            // Native paint order is observation provenance, not identity for
+            // reconstructed world geometry. Including it here retained one
+            // identical calibrated surface per captured source rotation.
             ExtendStableKey(key, surface.exteriorOnly ? 1 : 0);
             if (surface.exteriorOnly)
             {

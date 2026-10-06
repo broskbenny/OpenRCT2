@@ -59,6 +59,25 @@ namespace
     }
 }
 
+TEST(FirstPersonRendererPolicyTest, ReconstructedGeometryDoesNotBecomeNativePaintOwner)
+{
+    EXPECT_TRUE(
+        FirstPersonUsesNativeCoplanarOwnership(
+            false, false, true, 17));
+    EXPECT_FALSE(
+        FirstPersonUsesNativeCoplanarOwnership(
+            true, false, true, 17));
+    EXPECT_FALSE(
+        FirstPersonUsesNativeCoplanarOwnership(
+            false, true, true, 17));
+    EXPECT_FALSE(
+        FirstPersonUsesNativeCoplanarOwnership(
+            false, false, false, 17));
+    EXPECT_FALSE(
+        FirstPersonUsesNativeCoplanarOwnership(
+            false, false, true, 0));
+}
+
 TEST(FirstPersonAssetReconstructionTest, PhysicalDepthDeterminesSpriteFaceOwnership)
 {
     FirstPersonDepthOwnerMap owners{};
@@ -904,6 +923,50 @@ TEST(FirstPersonSmallSceneryAppearanceTest, CrossIsCentredInsideAuthoritativeOcc
     EXPECT_FLOAT_EQ(half.maxRight, 16.0f);
     EXPECT_FLOAT_EQ(half.centreForward(), 16.0f);
     EXPECT_FLOAT_EQ(half.centreRight(), 8.0f);
+}
+
+TEST(FirstPersonSmallSceneryAppearanceTest, TreeArtworkGroundsLowestNativePixelAtSharedPlaneBase)
+{
+    std::vector<uint8_t> first(6u * 8u, 0);
+    first[5u * 6u + 2u] = 17;
+    first[5u * 6u + 3u] = 18;
+    const auto firstGrounding =
+        FindFirstPersonTreeArtworkGrounding(
+            first, 6, 8, 1, 2, true);
+    ASSERT_TRUE(firstGrounding.valid);
+    EXPECT_EQ(firstGrounding.contactU, 3);
+    EXPECT_EQ(firstGrounding.contactV, 5);
+    EXPECT_EQ(firstGrounding.shiftU, 2);
+    EXPECT_EQ(firstGrounding.shiftV, 3);
+    EXPECT_EQ(1 + firstGrounding.shiftU, 3);
+    EXPECT_EQ(2 + firstGrounding.shiftV, 5);
+
+    // A differently framed directional sprite can have a different nominal
+    // G1/projected ground row. Its own painted contact still maps to the same
+    // physical z=0 rather than vertically offsetting one arm of the cross.
+    std::vector<uint8_t> second(6u * 8u, 0);
+    second[7u * 6u + 1u] = 31;
+    const auto secondGrounding =
+        FindFirstPersonTreeArtworkGrounding(
+            second, 6, 8, 4, 4, true);
+    ASSERT_TRUE(secondGrounding.valid);
+    EXPECT_EQ(secondGrounding.contactU, 1);
+    EXPECT_EQ(secondGrounding.contactV, 7);
+    EXPECT_EQ(secondGrounding.shiftU, -3);
+    EXPECT_EQ(secondGrounding.shiftV, 3);
+    EXPECT_EQ(4 + secondGrounding.shiftU, 1);
+    EXPECT_EQ(4 + secondGrounding.shiftV, 7);
+}
+
+TEST(FirstPersonSmallSceneryAppearanceTest, TransparentTreeWithoutPaintHasNoInventedGrounding)
+{
+    const std::vector<uint8_t> empty(16u, 0);
+    const auto grounding =
+        FindFirstPersonTreeArtworkGrounding(
+            empty, 4, 4, 2, 2, true);
+    EXPECT_FALSE(grounding.valid);
+    EXPECT_EQ(grounding.shiftU, 0);
+    EXPECT_EQ(grounding.shiftV, 0);
 }
 
 TEST(FirstPersonSmallSceneryAppearanceTest, NonTreeKeepsReconstructedHullPolicy)

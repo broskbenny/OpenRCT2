@@ -686,12 +686,13 @@
                             // physical layer.
                             const auto surfaceImage =
                                 scene.surfaces[i].image;
-                            if (!scene.surfaces[i].viewFacing
-                                && surfaceImage.HasValue()
-                                && !surfaceImage.IsBlended()
-                                && scene.surfaces[i]
-                                       .nativePaintOrdinal
-                                    != 0)
+                            if (FirstPersonUsesNativeCoplanarOwnership(
+                                    scene.surfaces[i].cameraIndependent,
+                                    scene.surfaces[i].viewFacing,
+                                    surfaceImage.HasValue()
+                                        && !surfaceImage.IsBlended(),
+                                    scene.surfaces[i]
+                                        .nativePaintOrdinal))
                             {
                                 scene.surfaces[i]
                                     .coplanarOwner = true;

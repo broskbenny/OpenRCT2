@@ -95,6 +95,22 @@ namespace OpenRCT2::Paint
         return FirstPersonHiddenComponentDisposition::emit;
     }
 
+    [[nodiscard]] constexpr bool
+        FirstPersonUsesNativeCoplanarOwnership(
+            bool cameraIndependent,
+            bool viewFacing,
+            bool hasOpaqueNativeArtwork,
+            uint64_t nativePaintOrdinal)
+    {
+        // Paint order is evidence for unresolved native artwork layering.
+        // Once artwork has been reconstructed as camera-independent world
+        // geometry, physical depth owns visibility instead.
+        return !cameraIndependent
+            && !viewFacing
+            && hasOpaqueNativeArtwork
+            && nativePaintOrdinal != 0;
+    }
+
     struct FirstPersonRenderOptions
     {
         FirstPersonCamera camera{};

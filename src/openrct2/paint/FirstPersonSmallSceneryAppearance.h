@@ -11,7 +11,10 @@
 #include "../world/tile_element/SmallSceneryElement.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace OpenRCT2::Paint
@@ -182,6 +185,70 @@ namespace OpenRCT2::Paint
             { x1, cy, z0 }, { x0, cy, z0 },
             { x0, cy, z1 }, { x1, cy, z1 },
         } }, { 0, 1, 0 }, FirstPersonVisualHullFaceKind::maxRight });
+        return result;
+    }
+
+    struct FirstPersonTreeArtworkGrounding
+    {
+        bool valid = false;
+        int32_t contactU = 0;
+        int32_t contactV = 0;
+        int32_t shiftU = 0;
+        int32_t shiftV = 0;
+    };
+
+    [[nodiscard]] inline FirstPersonTreeArtworkGrounding
+        FindFirstPersonTreeArtworkGrounding(
+            std::span<const uint8_t> pixels,
+            int32_t width, int32_t height,
+            int32_t nominalGroundU,
+            int32_t nominalGroundV,
+            bool hasTransparency)
+    {
+        FirstPersonTreeArtworkGrounding result{};
+        if (width <= 0 || height <= 0
+            || pixels.size()
+                < size_t(width) * size_t(height))
+            return result;
+
+        // The native sprite's lowest painted row is direct evidence of where
+        // that directional artwork meets the ground. Crossed tree planes all
+        // share one physical z=0; calibrating each source view to its own
+        // contact row prevents G1 offsets/directional framing from making the
+        // four sides appear to start at different heights.
+        int32_t lowestOpaqueRow = -1;
+        int64_t contactUSum = 0;
+        int32_t contactUCount = 0;
+        for (int32_t y = height - 1;
+             y >= 0 && lowestOpaqueRow < 0; --y)
+        {
+            for (int32_t x = 0; x < width; ++x)
+            {
+                const uint8_t pixel =
+                    pixels[size_t(y) * size_t(width)
+                        + size_t(x)];
+                if (!hasTransparency || pixel != 0)
+                {
+                    lowestOpaqueRow = y;
+                    contactUSum += x;
+                    ++contactUCount;
+                }
+            }
+        }
+        if (lowestOpaqueRow < 0
+            || contactUCount == 0)
+            return result;
+
+        result.valid = true;
+        result.contactU =
+            int32_t(std::lround(
+                double(contactUSum)
+                / double(contactUCount)));
+        result.contactV = lowestOpaqueRow;
+        result.shiftU =
+            result.contactU - nominalGroundU;
+        result.shiftV =
+            lowestOpaqueRow - nominalGroundV;
         return result;
     }
 

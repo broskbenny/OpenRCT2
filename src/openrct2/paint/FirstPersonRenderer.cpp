@@ -523,7 +523,8 @@ namespace OpenRCT2::Paint
                 static_cast<unsigned long long>(
                     surface.reconstructionGroup),
                 unsigned(surface.diagnosticReconstructionKind));
-            if (surface.diagnosticReconstructionKind == 1)
+            if (surface.diagnosticReconstructionKind == 1
+                || surface.diagnosticReconstructionKind == 3)
             {
                 Console::WriteLine(
                     "  reconstructionEvidence continuous=%d structural=%d "

@@ -3978,6 +3978,22 @@
                         && a.diagnosticSourceTile.y
                             == b.diagnosticSourceTile.y;
                 };
+            const auto resolvedByCoplanarOwnership =
+                [](const FirstPersonSurface& a,
+                   const FirstPersonSurface& b) {
+                    // The GL owner phase explicitly resolves equal-depth
+                    // native artwork by paint ordinal. One owner over an
+                    // ordinary depth surface is also deterministic: the
+                    // ordinary surface establishes opaque depth and the owner
+                    // is admitted only at that same physical layer. Neither
+                    // case is a depth-buffer fight and should consume no
+                    // diagnostic budget.
+                    return (a.coplanarOwner
+                                && a.nativePaintOrdinal != 0)
+                        || (b.coplanarOwner
+                                && b.nativePaintOrdinal != 0);
+                };
+
             const auto visuallyEquivalentPhysicalSolids =
                 [](const FirstPersonSurface& a,
                    const FirstPersonSurface& b) {
@@ -4206,6 +4222,8 @@
                             continue;
 
                         if (mutuallyExclusiveExteriorFaces(
+                                other, surface)
+                            || resolvedByCoplanarOwnership(
                                 other, surface)
                             || intentionalSemanticArtworkLayers(
                                 other, surface)
@@ -4574,6 +4592,8 @@
                                 packet.surfaces[
                                     peer.surfaceIndex];
                             if (mutuallyExclusiveExteriorFaces(
+                                    other, surface)
+                                || resolvedByCoplanarOwnership(
                                     other, surface)
                                 || intentionalSemanticArtworkLayers(
                                     other, surface)

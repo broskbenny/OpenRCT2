@@ -102,6 +102,8 @@
                 ImageId image{};
                 const G1Element* g1 = nullptr;
                 uint8_t rotation = 0;
+                int32_t groundingShiftU = 0;
+                int32_t groundingShiftV = 0;
                 std::vector<uint8_t> pixels;
             };
             const auto textureViews =
@@ -127,10 +129,51 @@
                     DecodeFirstPersonSpritePixels(*g1);
                 if (!decoded.has_value())
                     continue;
+                int32_t groundingShiftU = 0;
+                int32_t groundingShiftV = 0;
+                if (appearance.kind
+                    == FirstPersonSmallSceneryAppearanceKind::crossedTree)
+                {
+                    const auto footprint =
+                        BuildFirstPersonSmallSceneryFootprint(
+                            *entry, *small);
+                    if (footprint.valid)
+                    {
+                        const auto nominalGround =
+                            FirstPersonSmallScenerySpritePixelForPoint(
+                                *entry, *small,
+                                view.imageDirection,
+                                {
+                                    int32_t(std::lround(
+                                        footprint.centreForward())),
+                                    int32_t(std::lround(
+                                        footprint.centreRight())),
+                                    0,
+                                },
+                                *g1);
+                        const auto grounding =
+                            FindFirstPersonTreeArtworkGrounding(
+                                *decoded,
+                                g1->width, g1->height,
+                                nominalGround.x,
+                                nominalGround.y,
+                                g1->flags.has(
+                                    G1Flag::hasTransparency));
+                        if (grounding.valid)
+                        {
+                            groundingShiftU =
+                                grounding.shiftU;
+                            groundingShiftV =
+                                grounding.shiftV;
+                        }
+                    }
+                }
                 decodedViews.push_back({
                     sourceImage,
                     g1,
                     view.imageDirection,
+                    groundingShiftU,
+                    groundingShiftV,
                     std::move(*decoded),
                 });
             }
@@ -247,10 +290,12 @@
                             [&](int32_t x, int32_t y) {
                                 const int32_t u =
                                     x - sourceOrigin.x
-                                    - source.g1->xOffset;
+                                    - source.g1->xOffset
+                                    + source.groundingShiftU;
                                 const int32_t v =
                                     y - sourceOrigin.y
-                                    - source.g1->yOffset;
+                                    - source.g1->yOffset
+                                    + source.groundingShiftV;
                                 if (u < 0 || v < 0
                                     || u >= source.g1->width
                                     || v >= source.g1->height)
@@ -386,10 +431,12 @@
                                     { paintOffset, 0 });
                             const int32_t u =
                                 projected.x - sourceOrigin.x
-                                - sourceView.g1->xOffset;
+                                - sourceView.g1->xOffset
+                                + sourceView.groundingShiftU;
                             const int32_t v =
                                 projected.y - sourceOrigin.y
-                                - sourceView.g1->yOffset;
+                                - sourceView.g1->yOffset
+                                + sourceView.groundingShiftV;
                             if (u < 0 || v < 0
                                 || u >= sourceView.g1->width
                                 || v >= sourceView.g1->height)
