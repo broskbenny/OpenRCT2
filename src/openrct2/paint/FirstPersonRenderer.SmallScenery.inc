@@ -33,7 +33,7 @@
             };
             BakedSmallSceneryEntry baked;
 
-            const auto& faces = appearance.faces;
+            auto faces = appearance.faces;
             if (faces.empty())
             {
                 baked.resolved = true;
@@ -176,6 +176,112 @@
                     groundingShiftV,
                     std::move(*decoded),
                 });
+            }
+
+            if (appearance.kind
+                == FirstPersonSmallSceneryAppearanceKind::crossedTree)
+            {
+                const auto footprint =
+                    BuildFirstPersonSmallSceneryFootprint(
+                        *entry, *small);
+                FirstPersonTreePlaneExtent
+                    xCentredExtent{};
+                FirstPersonTreePlaneExtent
+                    yCentredExtent{};
+                if (footprint.valid)
+                {
+                    constexpr int32_t kBasisStep = 16;
+                    const int32_t cx =
+                        int32_t(std::lround(
+                            footprint.centreForward()));
+                    const int32_t cy =
+                        int32_t(std::lround(
+                            footprint.centreRight()));
+
+                    for (const auto& source :
+                         decodedViews)
+                    {
+                        const auto bounds =
+                            FindFirstPersonTreeArtworkBounds(
+                                source.pixels,
+                                source.g1->width,
+                                source.g1->height,
+                                source.g1->flags.has(
+                                    G1Flag::hasTransparency));
+                        if (!bounds.valid)
+                            continue;
+
+                        const auto effectivePixel =
+                            [&](CoordsXYZ local) {
+                                const auto pixel =
+                                    FirstPersonSmallScenerySpritePixelForPoint(
+                                        *entry, *small,
+                                        source.rotation,
+                                        local, *source.g1);
+                                return std::array<float, 2>{
+                                    float(
+                                        pixel.x
+                                        + source.groundingShiftU),
+                                    float(
+                                        pixel.y
+                                        + source.groundingShiftV),
+                                };
+                            };
+
+                        const auto ground =
+                            effectivePixel(
+                                { cx, cy, 0 });
+                        const auto up =
+                            effectivePixel(
+                                { cx, cy, kBasisStep });
+                        const float upUPerUnit =
+                            (up[0] - ground[0])
+                            / float(kBasisStep);
+                        const float upVPerUnit =
+                            (up[1] - ground[1])
+                            / float(kBasisStep);
+
+                        const auto alongY =
+                            effectivePixel(
+                                {
+                                    cx,
+                                    cy + kBasisStep,
+                                    0,
+                                });
+                        xCentredExtent.include(
+                            ground[0], ground[1],
+                            (alongY[0] - ground[0])
+                                / float(kBasisStep),
+                            (alongY[1] - ground[1])
+                                / float(kBasisStep),
+                            upUPerUnit, upVPerUnit,
+                            bounds);
+
+                        const auto alongX =
+                            effectivePixel(
+                                {
+                                    cx + kBasisStep,
+                                    cy,
+                                    0,
+                                });
+                        yCentredExtent.include(
+                            ground[0], ground[1],
+                            (alongX[0] - ground[0])
+                                / float(kBasisStep),
+                            (alongX[1] - ground[1])
+                                / float(kBasisStep),
+                            upUPerUnit, upVPerUnit,
+                            bounds);
+                    }
+
+                    const auto artworkFaces =
+                        BuildFirstPersonCrossedTreeFaces(
+                            footprint,
+                            &xCentredExtent,
+                            &yCentredExtent);
+                    if (!artworkFaces.empty())
+                        faces = artworkFaces;
+                }
             }
 
             struct SmallSceneryFaceView

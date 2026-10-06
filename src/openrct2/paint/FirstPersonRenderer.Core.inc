@@ -3727,69 +3727,134 @@
                 for (int32_t x = 0;
                      x < width; ++x)
                 {
-                    const auto worldPoint =
-                        facePoint(
-                            face.corners,
-                            (float(x) + 0.5f)
-                                / float(width),
-                            (float(y) + 0.5f)
-                                / float(height));
-                    bool texelKnown = false;
-                    bool texelUnknown = candidates.empty();
-                    uint8_t selectedPixel = 0;
+                    FirstPersonMaterialPatchAccumulator
+                        materialEvidence{};
                     for (const auto& candidate :
                          candidates)
                     {
-                        const auto projected =
-                            Translate3DTo2DWithZ(
-                                candidate.rotation,
-                                {
-                                    int32_t(std::lround(
-                                        worldPoint.x)),
-                                    int32_t(std::lround(
-                                        worldPoint.y)),
-                                    int32_t(std::lround(
-                                        worldPoint.z)),
-                                });
-                        if (!ownedNear(
-                                candidate.rotation,
-                                uint32_t(faceIndex),
-                                projected.x,
-                                projected.y))
-                            continue;
-
-                        const auto sample =
-                            sampleComposite(
-                                candidate.nativeDirection,
-                                projected);
-                        if (sample.kind
-                            == LargeSceneryCompositeSampleKind::unknown)
+                        std::array<
+                            FirstPersonMaterialEvidenceSample,
+                            FirstPersonMaterialPatchSampleCount()>
+                            patchSamples{};
+                        std::array<
+                            uint64_t,
+                            FirstPersonMaterialPatchSampleCount()>
+                            sampledPixels{};
+                        size_t sampledPixelCount = 0;
+                        size_t patchIndex = 0;
+                        for (const auto& offset :
+                             FirstPersonMaterialPatchOffsets())
                         {
-                            texelUnknown = true;
-                            continue;
+                            const auto worldPoint =
+                                facePoint(
+                                    face.corners,
+                                    (float(x) + offset.s)
+                                        / float(width),
+                                    (float(y) + offset.t)
+                                        / float(height));
+                            const auto projected =
+                                Translate3DTo2DWithZ(
+                                    candidate.rotation,
+                                    {
+                                        int32_t(std::lround(
+                                            worldPoint.x)),
+                                        int32_t(std::lround(
+                                            worldPoint.y)),
+                                        int32_t(std::lround(
+                                            worldPoint.z)),
+                                    });
+                            auto& evidence =
+                                patchSamples[patchIndex++];
+                            const uint64_t projectedKey =
+                                FirstPersonSilhouettePixelKey(
+                                    projected.x,
+                                    projected.y);
+                            bool alreadySampled = false;
+                            for (size_t sampled = 0;
+                                 sampled < sampledPixelCount;
+                                 ++sampled)
+                            {
+                                if (sampledPixels[sampled]
+                                    == projectedKey)
+                                {
+                                    alreadySampled = true;
+                                    break;
+                                }
+                            }
+                            if (alreadySampled)
+                                continue;
+                            sampledPixels[
+                                sampledPixelCount++] =
+                                projectedKey;
+
+                            if (!ownedNear(
+                                    candidate.rotation,
+                                    uint32_t(faceIndex),
+                                    projected.x,
+                                    projected.y))
+                            {
+                                evidence.kind =
+                                    FirstPersonMaterialEvidenceKind::
+                                        unknown;
+                                continue;
+                            }
+
+                            const auto sample =
+                                sampleComposite(
+                                    candidate.nativeDirection,
+                                    projected);
+                            switch (sample.kind)
+                            {
+                                case LargeSceneryCompositeSampleKind::
+                                    colour:
+                                    evidence.kind =
+                                        FirstPersonMaterialEvidenceKind::
+                                            colour;
+                                    evidence.pixel =
+                                        sample.pixel;
+                                    break;
+                                case LargeSceneryCompositeSampleKind::
+                                    transparent:
+                                    evidence.kind =
+                                        FirstPersonMaterialEvidenceKind::
+                                            transparent;
+                                    break;
+                                case LargeSceneryCompositeSampleKind::
+                                    unknown:
+                                    evidence.kind =
+                                        FirstPersonMaterialEvidenceKind::
+                                            unknown;
+                                    break;
+                            }
                         }
-                        texelKnown = true;
-                        selectedPixel =
-                            sample.kind
-                                == LargeSceneryCompositeSampleKind::colour
-                            ? sample.pixel : 0;
-                        // Whole-object transparency is trustworthy evidence.
-                        // Do not borrow a colour from another view merely to
-                        // fill a carved physical face.
-                        break;
+                        materialEvidence.addView(
+                            patchSamples);
                     }
 
-                    if (texelKnown)
+                    const auto decision =
+                        materialEvidence.finish();
+                    uint8_t selectedPixel = 0;
+                    if (decision.kind
+                        == FirstPersonMaterialEvidenceKind::
+                            colour)
+                    {
+                        haveKnownMaterial = true;
+                        selectedPixel = decision.pixel;
+                    }
+                    else if (decision.kind
+                        == FirstPersonMaterialEvidenceKind::
+                            transparent)
                     {
                         haveKnownMaterial = true;
                     }
-                    else if (texelUnknown)
+                    else
                     {
                         haveUnknownMaterial = true;
                         selectedPixel =
                             FirstPersonMissingMaterialPixel(
                                 x, y);
                     }
+
                     pixels[
                         size_t(y) * size_t(width)
                         + size_t(x)] =
@@ -5261,7 +5326,7 @@
         }
 
         [[nodiscard]] bool
-            AlignParkEntranceSignToGroupedBody(
+            PreserveParkEntranceSemanticSignPlane(
                 FirstPersonSurface& surface,
                 uint64_t frame)
         {
@@ -5289,137 +5354,43 @@
                 || surface.immutableHeight <= 0)
                 return false;
 
+            // The semantic sign component is itself stronger evidence than the
+            // silhouette hull for this local feature: native paint published
+            // its carrier plane, orientation and exact scrolling-text raster.
+            // Do not search the grouped hull for a merely nearby parallel face
+            // and translate the sign onto it. That can attach the text to an
+            // arch/pillar facet that only approximates the actual sign panel.
             const std::array<FirstPersonVec3, 4>
-                sourceFace{ {
+                signFace{ {
                     surface.triangles[0].world,
                     surface.triangles[1].world,
                     surface.triangles[2].world,
                     surface.triangles[5].world,
                 } };
-            const auto sourceHorizontal =
-                Sub(sourceFace[1], sourceFace[0]);
-            const auto sourceVertical =
-                Sub(sourceFace[3], sourceFace[0]);
-            auto signNormal =
+            auto normal =
                 FpCross(
-                    sourceHorizontal, sourceVertical);
-            const float signNormalLength =
-                std::sqrt(
-                    FpDot(signNormal, signNormal));
-            if (!(signNormalLength > 0.001f))
+                    Sub(signFace[1], signFace[0]),
+                    Sub(signFace[3], signFace[0]));
+            const float normalLength =
+                std::sqrt(FpDot(normal, normal));
+            if (!(normalLength > 0.001f))
                 return false;
-            signNormal =
-                Mul(
-                    signNormal,
-                    1.0f / signNormalLength);
-
-            const FirstPersonVec3 sourceCenter{
-                0.25f * (
-                    sourceFace[0].x
-                    + sourceFace[1].x
-                    + sourceFace[2].x
-                    + sourceFace[3].x),
-                0.25f * (
-                    sourceFace[0].y
-                    + sourceFace[1].y
-                    + sourceFace[2].y
-                    + sourceFace[3].y),
-                0.25f * (
-                    sourceFace[0].z
-                    + sourceFace[1].z
-                    + sourceFace[2].z
-                    + sourceFace[3].z),
-            };
-
-            const FirstPersonSurface* best = nullptr;
-            FirstPersonVec3 bestNormal{};
-            float bestPlaneDelta = 0.0f;
-            float bestDistance =
-                std::numeric_limits<float>::max();
-
-            for (const auto& candidate :
-                 geometry->second.surfaces)
+            normal =
+                Mul(normal, 1.0f / normalLength);
+            if (surface.diagnosticSourceRotation < 4
+                && !FirstPersonSurfaceVisibleFromNativeView(
+                    normal,
+                    surface.diagnosticSourceRotation))
             {
-                if (!candidate.exteriorOnly)
-                    continue;
-                // Scrolling text is part of the centre entrance sequence.
-                // Side structures in the same grouped replacement are never
-                // eligible carriers.
-                if (candidate.diagnosticSourceTile.x
-                        != surface.diagnosticSourceTile.x
-                    || candidate.diagnosticSourceTile.y
-                        != surface.diagnosticSourceTile.y)
-                    continue;
-
-                auto normal =
-                    candidate.outwardNormal;
-                const float normalLength =
-                    std::sqrt(
-                        FpDot(normal, normal));
-                if (!(normalLength > 0.001f))
-                    continue;
-                normal =
-                    Mul(
-                        normal,
-                        1.0f / normalLength);
-
-                // The native sign plane already establishes which physical
-                // side of the entrance owns the text. Preserve that sidedness
-                // rather than choosing a merely parallel opposite face.
-                if (std::abs(normal.z) > 0.25f
-                    || FpDot(normal, signNormal) < 0.90f)
-                    continue;
-
-                const float plane =
-                    FpDot(
-                        normal,
-                        candidate.triangles[0].world);
-                const float planeDelta =
-                    plane
-                    - FpDot(
-                        normal,
-                        sourceCenter);
-                const float distance =
-                    std::abs(planeDelta);
-                if (distance >= bestDistance)
-                    continue;
-
-                best = &candidate;
-                bestNormal = normal;
-                bestPlaneDelta = planeDelta;
-                bestDistance = distance;
+                normal = Mul(normal, -1.0f);
             }
 
-            if (best == nullptr)
-                return false;
-
-            // The semantic sign surface has already inverse-projected the
-            // exact scrolling-text raster rectangle onto the authoritative
-            // centre gate plane. That gives us the correct entrance-local
-            // horizontal and vertical placement. Moving that rectangle to a
-            // different depth and then preserving its old isometric screen
-            // coordinates would necessarily alter X/Z and make the text slide
-            // relative to the architecture. Keep its physical placement and
-            // translate only along the owning face normal.
-            std::array<FirstPersonVec3, 4> mapped{};
-            for (size_t i = 0; i < mapped.size(); ++i)
-            {
-                mapped[i] =
-                    Add(
-                        sourceFace[i],
-                        Mul(
-                            bestNormal,
-                            bestPlaneDelta));
-            }
-
-            surface.triangles[0].world = mapped[0];
-            surface.triangles[1].world = mapped[1];
-            surface.triangles[2].world = mapped[2];
-            surface.triangles[3].world = mapped[0];
-            surface.triangles[4].world = mapped[2];
-            surface.triangles[5].world = mapped[3];
+            // Keep the exact semantic rectangle. The grouped body may be a
+            // silhouette-derived approximation; the dynamic sign is an
+            // explicit landmark and must not inherit that approximation error.
             surface.exteriorOnly = true;
-            surface.outwardNormal = bestNormal;
+            surface.outwardNormal = normal;
+            surface.diagnosticReconstructionKind = 3;
             return true;
         }
 

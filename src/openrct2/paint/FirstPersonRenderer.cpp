@@ -6,6 +6,7 @@
 #include "FirstPersonSpriteSnapshot.h"
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonLargeSceneryReconstruction.h"
+#include "FirstPersonMaterialInference.h"
 #include "FirstPersonPhysicalProxy.h"
 #include "FirstPersonSmallSceneryAppearance.h"
 #include "FirstPersonTrackTrajectory.h"

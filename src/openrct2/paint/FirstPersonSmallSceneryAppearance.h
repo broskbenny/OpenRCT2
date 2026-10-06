@@ -11,6 +11,7 @@
 #include "../world/tile_element/SmallSceneryElement.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -147,9 +148,129 @@ namespace OpenRCT2::Paint
             element.getOccupiedQuadrants(), entry.height);
     }
 
+    struct FirstPersonTreeArtworkBounds
+    {
+        bool valid = false;
+        int32_t minU = 0;
+        int32_t minV = 0;
+        int32_t maxU = 0;
+        int32_t maxV = 0;
+    };
+
+    [[nodiscard]] inline FirstPersonTreeArtworkBounds
+        FindFirstPersonTreeArtworkBounds(
+            std::span<const uint8_t> pixels,
+            int32_t width, int32_t height,
+            bool hasTransparency)
+    {
+        FirstPersonTreeArtworkBounds result{};
+        if (width <= 0 || height <= 0
+            || pixels.size()
+                < size_t(width) * size_t(height))
+            return result;
+
+        result.minU = width;
+        result.minV = height;
+        result.maxU = -1;
+        result.maxV = -1;
+        for (int32_t y = 0; y < height; ++y)
+        for (int32_t x = 0; x < width; ++x)
+        {
+            const uint8_t pixel =
+                pixels[size_t(y) * size_t(width)
+                    + size_t(x)];
+            if (hasTransparency && pixel == 0)
+                continue;
+            result.minU = std::min(result.minU, x);
+            result.minV = std::min(result.minV, y);
+            result.maxU = std::max(result.maxU, x);
+            result.maxV = std::max(result.maxV, y);
+        }
+        result.valid =
+            result.maxU >= result.minU
+            && result.maxV >= result.minV;
+        return result;
+    }
+
+    struct FirstPersonTreePlaneExtent
+    {
+        bool valid = false;
+        float minAlong = 0.0f;
+        float maxAlong = 0.0f;
+        float maxUp = 0.0f;
+
+        void include(
+            float groundU, float groundV,
+            float alongUPerUnit, float alongVPerUnit,
+            float upUPerUnit, float upVPerUnit,
+            const FirstPersonTreeArtworkBounds& bounds)
+        {
+            if (!bounds.valid)
+                return;
+            const float determinant =
+                alongUPerUnit * upVPerUnit
+                - alongVPerUnit * upUPerUnit;
+            if (std::abs(determinant) < 1.0e-5f)
+                return;
+
+            const std::array<std::array<float, 2>, 4>
+                corners{ {
+                    {
+                        float(bounds.minU),
+                        float(bounds.minV),
+                    },
+                    {
+                        float(bounds.maxU + 1),
+                        float(bounds.minV),
+                    },
+                    {
+                        float(bounds.maxU + 1),
+                        float(bounds.maxV + 1),
+                    },
+                    {
+                        float(bounds.minU),
+                        float(bounds.maxV + 1),
+                    },
+                } };
+            for (const auto& corner : corners)
+            {
+                const float du = corner[0] - groundU;
+                const float dv = corner[1] - groundV;
+                const float along =
+                    (du * upVPerUnit
+                        - dv * upUPerUnit)
+                    / determinant;
+                const float up =
+                    (alongUPerUnit * dv
+                        - alongVPerUnit * du)
+                    / determinant;
+                if (!std::isfinite(along)
+                    || !std::isfinite(up))
+                    continue;
+                if (!valid)
+                {
+                    minAlong = maxAlong = along;
+                    maxUp = std::max(0.0f, up);
+                    valid = true;
+                }
+                else
+                {
+                    minAlong =
+                        std::min(minAlong, along);
+                    maxAlong =
+                        std::max(maxAlong, along);
+                    maxUp =
+                        std::max(maxUp, up);
+                }
+            }
+        }
+    };
+
     [[nodiscard]] inline std::vector<FirstPersonVisualHullFace>
         BuildFirstPersonCrossedTreeFaces(
-            const FirstPersonSmallSceneryFootprint& footprint)
+            const FirstPersonSmallSceneryFootprint& footprint,
+            const FirstPersonTreePlaneExtent* xCentredExtent,
+            const FirstPersonTreePlaneExtent* yCentredExtent)
     {
         std::vector<FirstPersonVisualHullFace> result;
         if (!footprint.valid)
@@ -157,35 +278,68 @@ namespace OpenRCT2::Paint
 
         const float cx = footprint.centreForward();
         const float cy = footprint.centreRight();
-        const float x0 = footprint.minForward;
-        const float x1 = footprint.maxForward;
-        const float y0 = footprint.minRight;
-        const float y1 = footprint.maxRight;
+        const float x0 =
+            yCentredExtent != nullptr
+                && yCentredExtent->valid
+            ? cx + yCentredExtent->minAlong
+            : footprint.minForward;
+        const float x1 =
+            yCentredExtent != nullptr
+                && yCentredExtent->valid
+            ? cx + yCentredExtent->maxAlong
+            : footprint.maxForward;
+        const float y0 =
+            xCentredExtent != nullptr
+                && xCentredExtent->valid
+            ? cy + xCentredExtent->minAlong
+            : footprint.minRight;
+        const float y1 =
+            xCentredExtent != nullptr
+                && xCentredExtent->valid
+            ? cy + xCentredExtent->maxAlong
+            : footprint.maxRight;
         const float z0 = footprint.minUp;
-        const float z1 = footprint.maxUp;
+        const float xTop =
+            xCentredExtent != nullptr
+                && xCentredExtent->valid
+            ? z0 + xCentredExtent->maxUp
+            : footprint.maxUp;
+        const float yTop =
+            yCentredExtent != nullptr
+                && yCentredExtent->valid
+            ? z0 + yCentredExtent->maxUp
+            : footprint.maxUp;
+        const float z1 =
+            std::max(
+                footprint.maxUp,
+                std::max(xTop, yTop));
 
         result.reserve(4);
-        // X-centred arm, visible from -X.
         result.push_back({ { {
             { cx, y1, z0 }, { cx, y0, z0 },
             { cx, y0, z1 }, { cx, y1, z1 },
         } }, { -1, 0, 0 }, FirstPersonVisualHullFaceKind::minForward });
-        // Same physical arm, opposite native material, visible from +X.
         result.push_back({ { {
             { cx, y0, z0 }, { cx, y1, z0 },
             { cx, y1, z1 }, { cx, y0, z1 },
         } }, { 1, 0, 0 }, FirstPersonVisualHullFaceKind::maxForward });
-        // Y-centred arm, visible from -Y.
         result.push_back({ { {
             { x0, cy, z0 }, { x1, cy, z0 },
             { x1, cy, z1 }, { x0, cy, z1 },
         } }, { 0, -1, 0 }, FirstPersonVisualHullFaceKind::minRight });
-        // Same physical arm, opposite native material, visible from +Y.
         result.push_back({ { {
             { x1, cy, z0 }, { x0, cy, z0 },
             { x0, cy, z1 }, { x1, cy, z1 },
         } }, { 0, 1, 0 }, FirstPersonVisualHullFaceKind::maxRight });
         return result;
+    }
+
+    [[nodiscard]] inline std::vector<FirstPersonVisualHullFace>
+        BuildFirstPersonCrossedTreeFaces(
+            const FirstPersonSmallSceneryFootprint& footprint)
+    {
+        return BuildFirstPersonCrossedTreeFaces(
+            footprint, nullptr, nullptr);
     }
 
     struct FirstPersonTreeArtworkGrounding

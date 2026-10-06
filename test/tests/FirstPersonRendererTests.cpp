@@ -16,6 +16,7 @@
 #include <openrct2/paint/FirstPersonRenderer.h>
 #include <openrct2/paint/FirstPersonRoundTripReconstruction.h>
 #include <openrct2/paint/FirstPersonAssetReconstruction.h>
+#include <openrct2/paint/FirstPersonMaterialInference.h>
 #include <openrct2/paint/FirstPersonPeriodicPassengerMotion.h>
 #include <openrct2/paint/FirstPersonPhysicalProxy.h>
 #include <openrct2/paint/FirstPersonPathGeometry.h>
@@ -987,6 +988,128 @@ TEST(FirstPersonSmallSceneryAppearanceTest, CrossIsCentredInsideAuthoritativeOcc
     EXPECT_FLOAT_EQ(half.maxRight, 16.0f);
     EXPECT_FLOAT_EQ(half.centreForward(), 16.0f);
     EXPECT_FLOAT_EQ(half.centreRight(), 8.0f);
+}
+
+TEST(FirstPersonMaterialInferenceTest, OpaquePatchEvidenceBeatsIsolatedTransparentRasterMisses)
+{
+    std::array<FirstPersonMaterialEvidenceSample, 9> samples{};
+    for (auto& sample : samples)
+        sample.kind =
+            FirstPersonMaterialEvidenceKind::transparent;
+    samples[4].kind =
+        FirstPersonMaterialEvidenceKind::colour;
+    samples[4].pixel = 42;
+
+    FirstPersonMaterialPatchAccumulator accumulator{};
+    accumulator.addView(samples);
+    const auto decision = accumulator.finish();
+
+    EXPECT_EQ(
+        decision.kind,
+        FirstPersonMaterialEvidenceKind::colour);
+    EXPECT_EQ(decision.pixel, 42);
+    EXPECT_EQ(decision.opaqueViews, 1u);
+    EXPECT_EQ(decision.transparentViews, 0u);
+}
+
+TEST(FirstPersonMaterialInferenceTest, FullProjectedFootprintCanCertifyTransparency)
+{
+    std::array<FirstPersonMaterialEvidenceSample, 9> samples{};
+    for (auto& sample : samples)
+        sample.kind =
+            FirstPersonMaterialEvidenceKind::transparent;
+
+    FirstPersonMaterialPatchAccumulator accumulator{};
+    accumulator.addView(samples);
+    const auto decision = accumulator.finish();
+
+    EXPECT_EQ(
+        decision.kind,
+        FirstPersonMaterialEvidenceKind::transparent);
+    EXPECT_EQ(decision.fullyTransparentViews, 1u);
+}
+
+TEST(FirstPersonMaterialInferenceTest, SparseTransparencyRemainsUnknownUntilCorroborated)
+{
+    std::array<FirstPersonMaterialEvidenceSample, 9> sparse{};
+    sparse[0].kind =
+        FirstPersonMaterialEvidenceKind::transparent;
+    sparse[1].kind =
+        FirstPersonMaterialEvidenceKind::transparent;
+
+    FirstPersonMaterialPatchAccumulator oneView{};
+    oneView.addView(sparse);
+    EXPECT_EQ(
+        oneView.finish().kind,
+        FirstPersonMaterialEvidenceKind::unknown);
+
+    FirstPersonMaterialPatchAccumulator twoViews{};
+    twoViews.addView(sparse);
+    twoViews.addView(sparse);
+    EXPECT_EQ(
+        twoViews.finish().kind,
+        FirstPersonMaterialEvidenceKind::transparent);
+}
+
+TEST(FirstPersonSmallSceneryAppearanceTest, TreeArtworkExtentCanExceedCollisionFootprint)
+{
+    std::vector<uint8_t> pixels(21u * 21u, 0);
+    for (int32_t y = 0; y < 21; ++y)
+    for (int32_t x = 0; x < 21; ++x)
+        pixels[size_t(y) * 21u + size_t(x)] = 1;
+
+    const auto bounds =
+        FindFirstPersonTreeArtworkBounds(
+            pixels, 21, 21, true);
+    ASSERT_TRUE(bounds.valid);
+    EXPECT_EQ(bounds.minU, 0);
+    EXPECT_EQ(bounds.maxU, 20);
+    EXPECT_EQ(bounds.minV, 0);
+    EXPECT_EQ(bounds.maxV, 20);
+
+    FirstPersonTreePlaneExtent extent{};
+    // Screen U follows horizontal distance; screen V falls as world Z rises.
+    // Ground is at source pixel (10,20), so the native artwork spans roughly
+    // ten units either side of the trunk and twenty units above it.
+    extent.include(
+        10.0f, 20.0f,
+        1.0f, 0.0f,
+        0.0f, -1.0f,
+        bounds);
+    ASSERT_TRUE(extent.valid);
+    EXPECT_LE(extent.minAlong, -10.0f);
+    EXPECT_GE(extent.maxAlong, 10.0f);
+    EXPECT_GE(extent.maxUp, 20.0f);
+
+    const auto footprint =
+        BuildFirstPersonSmallSceneryFootprint(
+            1u << 0, 12);
+    ASSERT_TRUE(footprint.valid);
+    const auto faces =
+        BuildFirstPersonCrossedTreeFaces(
+            footprint, &extent, &extent);
+    ASSERT_EQ(faces.size(), 4u);
+
+    float minX = std::numeric_limits<float>::max();
+    float maxX = std::numeric_limits<float>::lowest();
+    float minY = std::numeric_limits<float>::max();
+    float maxY = std::numeric_limits<float>::lowest();
+    float maxZ = 0.0f;
+    for (const auto& face : faces)
+    for (const auto& corner : face.corners)
+    {
+        minX = std::min(minX, corner.x);
+        maxX = std::max(maxX, corner.x);
+        minY = std::min(minY, corner.y);
+        maxY = std::max(maxY, corner.y);
+        maxZ = std::max(maxZ, corner.z);
+    }
+
+    EXPECT_LT(minX, footprint.minForward);
+    EXPECT_GT(maxX, footprint.maxForward);
+    EXPECT_LT(minY, footprint.minRight);
+    EXPECT_GT(maxY, footprint.maxRight);
+    EXPECT_GT(maxZ, footprint.maxUp);
 }
 
 TEST(FirstPersonSmallSceneryAppearanceTest, TreeArtworkGroundsLowestNativePixelAtSharedPlaneBase)
