@@ -2295,7 +2295,8 @@
             const LargeSceneryElement& large, const LargeSceneryEntry& entry,
             const LargeSceneryAssetModel& model, const ReconstructionGroupInfo& group,
             uint64_t signature, uint64_t frame,
-            const FirstPersonSpriteSnapshot& sprites, uint64_t assetGeneration)
+            const FirstPersonSpriteSnapshot& sprites, uint64_t assetGeneration,
+            const FirstPersonWalkabilityConstraint* negativePassage = nullptr)
         {
             LargeSceneryGeometryCacheEntry result{};
             result.signature = signature;
@@ -2860,6 +2861,17 @@
                 };
             const auto occupancyPredicate =
                 [&](FirstPersonVec3 point) {
+                    // Traversal semantics are authoritative negative evidence:
+                    // a silhouette may contain signage, scrolling text or other
+                    // artwork over an opening, but it cannot turn a guaranteed
+                    // through-passage back into solid reconstructed geometry.
+                    if (negativePassage != nullptr
+                        && FirstPersonGuaranteedPassageContainsPoint(
+                            *negativePassage,
+                            point,
+                            float(kPathClearance)))
+                        return false;
+
                     return std::any_of(
                         occupancyCells.begin(),
                         occupancyCells.end(),
@@ -4101,7 +4113,10 @@
                         signature,
                         frame,
                         sprites,
-                        assetGeneration);
+                        assetGeneration,
+                        passage.has_value()
+                            ? &*passage
+                            : nullptr);
 
                 // Never let the large-scenery occupancy fallback close the
                 // walk-through gate. Only a genuinely silhouette-carved body

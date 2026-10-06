@@ -111,6 +111,42 @@ namespace OpenRCT2::Paint
         }
     }
 
+    [[nodiscard]] inline bool
+        FirstPersonGuaranteedPassageContainsPoint(
+            const FirstPersonWalkabilityConstraint& constraint,
+            FirstPersonVec3 point,
+            float clearanceHeight)
+    {
+        if (!constraint.guaranteedThroughPassage
+            || !(clearanceHeight > 0.0f))
+            return false;
+
+        const float baseZ = float(constraint.baseZ);
+        if (point.z < baseZ
+            || point.z >= baseZ + clearanceHeight)
+            return false;
+
+        const float localX =
+            point.x - float(constraint.tile.x);
+        const float localY =
+            point.y - float(constraint.tile.y);
+        const float low = kFirstPersonPathDeckInset;
+        const float high = kFirstPersonPathDeckMax;
+        switch (FirstPersonPassageAxisForConnections(
+            constraint.connectedSides))
+        {
+            case FirstPersonPassageAxis::x:
+                return localY >= low
+                    && localY <= high;
+            case FirstPersonPassageAxis::y:
+                return localX >= low
+                    && localX <= high;
+            case FirstPersonPassageAxis::none:
+                return false;
+        }
+        return false;
+    }
+
     [[nodiscard]] constexpr uint8_t
         FirstPersonPathLandSlope(uint8_t direction)
     {

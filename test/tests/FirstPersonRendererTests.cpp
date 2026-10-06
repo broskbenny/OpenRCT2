@@ -612,6 +612,70 @@ TEST(FirstPersonWalkingSemanticsTest, ConnectionMasksRotateWithWorldOrientation)
         FirstPersonPassageAxis::none);
 }
 
+TEST(FirstPersonWalkingSemanticsTest, GuaranteedPassageIsAuthoritativeNegative3DEvidence)
+{
+    FirstPersonWalkabilityConstraint passage{};
+    passage.kind =
+        FirstPersonWalkabilityKind::parkEntrance;
+    passage.tile = { 320, 640 };
+    passage.baseZ = 96;
+    passage.connectedSides = 0x05;
+    passage.guaranteedThroughPassage = true;
+
+    EXPECT_TRUE(
+        FirstPersonGuaranteedPassageContainsPoint(
+            passage,
+            { 400.0f, 656.0f, 104.0f },
+            32.0f));
+    EXPECT_FALSE(
+        FirstPersonGuaranteedPassageContainsPoint(
+            passage,
+            { 400.0f, 644.0f, 104.0f },
+            32.0f));
+    EXPECT_FALSE(
+        FirstPersonGuaranteedPassageContainsPoint(
+            passage,
+            { 400.0f, 656.0f, 128.0f },
+            32.0f));
+
+    passage.connectedSides = 0x0A;
+    EXPECT_TRUE(
+        FirstPersonGuaranteedPassageContainsPoint(
+            passage,
+            { 336.0f, 720.0f, 104.0f },
+            32.0f));
+    EXPECT_FALSE(
+        FirstPersonGuaranteedPassageContainsPoint(
+            passage,
+            { 324.0f, 720.0f, 104.0f },
+            32.0f));
+
+    passage.guaranteedThroughPassage = false;
+    EXPECT_FALSE(
+        FirstPersonGuaranteedPassageContainsPoint(
+            passage,
+            { 336.0f, 720.0f, 104.0f },
+            32.0f));
+}
+
+TEST(FirstPersonWalkingSemanticsTest, ParkEntranceSyntheticSideAxisMatchesNativeSequenceAxis)
+{
+    // The entrance adapter is expressed as a direction-3 local side offset
+    // and then rotated by the entrance direction, just like large scenery.
+    // Prove that this is exactly the native (direction-1) entrance side for
+    // all four orientations rather than relying on a single tested direction.
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        const auto syntheticSide =
+            CoordsDirectionDelta[3].rotate(direction);
+        const auto nativeSide =
+            CoordsDirectionDelta[
+                (direction - 1u) & 3u];
+        EXPECT_EQ(syntheticSide.x, nativeSide.x);
+        EXPECT_EQ(syntheticSide.y, nativeSide.y);
+    }
+}
+
 TEST(FirstPersonWalkingSemanticsTest, ParkEntranceCentrePublishesRotatedThroughPassage)
 {
     OpenRCT2::EntranceElement entrance{};
