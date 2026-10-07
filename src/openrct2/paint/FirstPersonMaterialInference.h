@@ -9,6 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <deque>
+#include <vector>
 
 namespace OpenRCT2::Paint
 {
@@ -155,4 +157,73 @@ namespace OpenRCT2::Paint
         } };
         return offsets;
     }
+
+    // Reconstructed structural boundary geometry has already decided where
+    // visible matter exists. Once a boundary rectangle survives carving,
+    // transparent raster samples are missing appearance evidence, not a second
+    // independent permission to punch holes through that rectangle. Propagate
+    // the nearest directly observed palette colour across the face. The caller
+    // retains an explicit unknown-material fallback when a face has no colour
+    // evidence at all.
+    [[nodiscard]] inline size_t
+        FillFirstPersonOpaqueStructuralMaterial(
+            std::vector<uint8_t>& pixels,
+            int32_t width, int32_t height)
+    {
+        if (width <= 0 || height <= 0
+            || pixels.size()
+                != size_t(width) * size_t(height))
+            return 0;
+
+        constexpr int32_t kUnvisited =
+            std::numeric_limits<int32_t>::max();
+        std::vector<int32_t> distance(
+            pixels.size(), kUnvisited);
+        std::deque<size_t> queue;
+        for (size_t i = 0; i < pixels.size(); ++i)
+        {
+            if (pixels[i] == 0)
+                continue;
+            distance[i] = 0;
+            queue.push_back(i);
+        }
+        if (queue.empty())
+            return 0;
+
+        constexpr std::array<int32_t, 4> dx{
+            -1, 1, 0, 0
+        };
+        constexpr std::array<int32_t, 4> dy{
+            0, 0, -1, 1
+        };
+        while (!queue.empty())
+        {
+            const size_t current = queue.front();
+            queue.pop_front();
+            const int32_t x =
+                int32_t(current % size_t(width));
+            const int32_t y =
+                int32_t(current / size_t(width));
+            for (size_t direction = 0;
+                 direction < dx.size(); ++direction)
+            {
+                const int32_t nx = x + dx[direction];
+                const int32_t ny = y + dy[direction];
+                if (nx < 0 || ny < 0
+                    || nx >= width || ny >= height)
+                    continue;
+                const size_t next =
+                    size_t(ny) * size_t(width)
+                    + size_t(nx);
+                if (distance[next] != kUnvisited)
+                    continue;
+                distance[next] =
+                    distance[current] + 1;
+                pixels[next] = pixels[current];
+                queue.push_back(next);
+            }
+        }
+        return pixels.size();
+    }
+
 } // namespace OpenRCT2::Paint

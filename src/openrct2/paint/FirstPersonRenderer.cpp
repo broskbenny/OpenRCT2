@@ -7,6 +7,7 @@
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonLargeSceneryReconstruction.h"
 #include "FirstPersonMaterialInference.h"
+#include "FirstPersonParkEntranceReconstruction.h"
 #include "FirstPersonPhysicalProxy.h"
 #include "FirstPersonSmallSceneryAppearance.h"
 #include "FirstPersonTrackTrajectory.h"
@@ -1870,7 +1871,8 @@ namespace OpenRCT2::Paint
             gFirstPersonInteractionPickResult.reset();
             if (const auto selection =
                     SelectFirstPersonInspectorHit(*scene);
-                selection.has_value())
+                selection.has_value()
+                    && !selection->visible.empty())
             {
                 const auto& target =
                     selection->visible[

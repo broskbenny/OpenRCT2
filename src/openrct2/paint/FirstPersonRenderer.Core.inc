@@ -2292,12 +2292,32 @@
             return result;
         }
 
+        struct LargeSceneryWorldCell
+        {
+            FirstPersonVec3 low{};
+            FirstPersonVec3 high{};
+            size_t sequence{};
+        };
+
+        struct LargeSceneryReconstructionOptions
+        {
+            const std::vector<LargeSceneryWorldCell>*
+                supportCells = nullptr;
+            uint64_t cachePolicyKey = 0;
+            float initialHullStep = 4.0f;
+            int32_t silhouetteSupportRadius = 1;
+            bool allowContinuousRefinement = true;
+            bool opaqueBoundaryMaterial = false;
+        };
+
         LargeSceneryGeometryCacheEntry BuildLargeSceneryInstanceGeometry(
             const LargeSceneryElement& large, const LargeSceneryEntry& entry,
             const LargeSceneryAssetModel& model, const ReconstructionGroupInfo& group,
             uint64_t signature, uint64_t frame,
             const FirstPersonSpriteSnapshot& sprites, uint64_t assetGeneration,
-            const FirstPersonWalkabilityConstraint* negativePassage = nullptr)
+            const FirstPersonWalkabilityConstraint* negativePassage = nullptr,
+            const LargeSceneryReconstructionOptions*
+                reconstructionOptions = nullptr)
         {
             LargeSceneryGeometryCacheEntry result{};
             result.signature = signature;
@@ -2348,6 +2368,7 @@
             {
                 uint32_t image{};
                 uint8_t objectDirection{};
+                uint64_t policyKey{};
                 bool operator==(const BakedLargeSceneryKey&) const = default;
             };
             struct BakedLargeSceneryKeyHash
@@ -2355,7 +2376,10 @@
                 size_t operator()(const BakedLargeSceneryKey& key) const
                 {
                     return size_t(key.image)
-                        ^ (size_t(key.objectDirection) << 1);
+                        ^ (size_t(key.objectDirection) << 1)
+                        ^ size_t(
+                            key.policyKey
+                            ^ (key.policyKey >> 32));
                 }
             };
             struct BakedLargeSceneryEntry
@@ -2381,7 +2405,11 @@
                 cacheEpoch = assetGeneration;
             }
             const BakedLargeSceneryKey bakedKey{
-                entry.image, objectDirection
+                entry.image,
+                objectDirection,
+                reconstructionOptions != nullptr
+                    ? reconstructionOptions->cachePolicyKey
+                    : 0,
             };
             const uint64_t bakedGeneration =
                 assetGeneration;
@@ -2591,123 +2619,128 @@
                     return &decoded;
                 };
 
-            struct LargeSceneryWorldCell
-            {
-                FirstPersonVec3 low{};
-                FirstPersonVec3 high{};
-                size_t sequence{};
-            };
             std::vector<LargeSceneryWorldCell>
                 occupancyCells;
-            occupancyCells.reserve(entry.tiles.size() * 4u);
-            static constexpr std::array<CoordsXY, 4>
-                kQuarterCellOffsets{ {
-                    { 1, 1 }, // SW
-                    { 1, 0 }, // NW
-                    { 0, 0 }, // NE
-                    { 0, 1 }, // SE
-                } };
+            occupancyCells.reserve(
+                reconstructionOptions != nullptr
+                        && reconstructionOptions->supportCells != nullptr
+                    ? reconstructionOptions->supportCells->size()
+                    : entry.tiles.size() * 4u);
 
             bool haveEnvelope = false;
             FirstPersonVec3 envelopeLow{}, envelopeHigh{};
-            for (size_t sequence = 0;
-                 sequence < entry.tiles.size(); ++sequence)
-            {
-                const auto& tile = entry.tiles[sequence];
-                for (uint8_t quarter = 0;
-                     quarter < 4; ++quarter)
-                {
-                    if ((tile.corners
-                            & (1u << quarter))
-                        == 0)
-                        continue;
-                    const int32_t assetX0 =
-                        tile.offset.x
-                        + kQuarterCellOffsets[quarter].x * 16;
-                    const int32_t assetY0 =
-                        tile.offset.y
-                        + kQuarterCellOffsets[quarter].y * 16;
-                    const int32_t assetX1 = assetX0 + 16;
-                    const int32_t assetY1 = assetY0 + 16;
-
-                    std::array<CoordsXY, 4> placed{ {
-                        FirstPersonLargeSceneryPlacedPoint(
-                            { tile.offset.x, tile.offset.y },
-                            { assetX0, assetY0 },
-                            objectDirection),
-                        FirstPersonLargeSceneryPlacedPoint(
-                            { tile.offset.x, tile.offset.y },
-                            { assetX1, assetY0 },
-                            objectDirection),
-                        FirstPersonLargeSceneryPlacedPoint(
-                            { tile.offset.x, tile.offset.y },
-                            { assetX1, assetY1 },
-                            objectDirection),
-                        FirstPersonLargeSceneryPlacedPoint(
-                            { tile.offset.x, tile.offset.y },
-                            { assetX0, assetY1 },
-                            objectDirection),
-                    } };
-                    int32_t minX = placed[0].x;
-                    int32_t maxX = placed[0].x;
-                    int32_t minY = placed[0].y;
-                    int32_t maxY = placed[0].y;
-                    for (const auto p : placed)
-                    {
-                        minX = std::min(minX, p.x);
-                        maxX = std::max(maxX, p.x);
-                        minY = std::min(minY, p.y);
-                        maxY = std::max(maxY, p.y);
-                    }
-
-                    LargeSceneryWorldCell cell{
-                        {
-                            group.anchor.x + float(minX),
-                            group.anchor.y + float(minY),
-                            group.anchor.z
-                                + float(tile.offset.z),
-                        },
-                        {
-                            group.anchor.x + float(maxX),
-                            group.anchor.y + float(maxY),
-                            group.anchor.z
-                                + float(
-                                    tile.offset.z
-                                    + tile.zClearance),
-                        },
-                        sequence,
-                    };
+            const auto includeCell =
+                [&](const LargeSceneryWorldCell& cell) {
                     if (cell.high.x <= cell.low.x
                         || cell.high.y <= cell.low.y
                         || cell.high.z <= cell.low.z)
-                        continue;
+                        return;
                     occupancyCells.push_back(cell);
                     if (!haveEnvelope)
                     {
                         envelopeLow = cell.low;
                         envelopeHigh = cell.high;
                         haveEnvelope = true;
+                        return;
                     }
-                    else
+                    envelopeLow.x =
+                        std::min(envelopeLow.x, cell.low.x);
+                    envelopeLow.y =
+                        std::min(envelopeLow.y, cell.low.y);
+                    envelopeLow.z =
+                        std::min(envelopeLow.z, cell.low.z);
+                    envelopeHigh.x =
+                        std::max(envelopeHigh.x, cell.high.x);
+                    envelopeHigh.y =
+                        std::max(envelopeHigh.y, cell.high.y);
+                    envelopeHigh.z =
+                        std::max(envelopeHigh.z, cell.high.z);
+                };
+
+            if (reconstructionOptions != nullptr
+                && reconstructionOptions->supportCells != nullptr)
+            {
+                for (const auto& cell :
+                     *reconstructionOptions->supportCells)
+                    includeCell(cell);
+            }
+            else
+            {
+                static constexpr std::array<CoordsXY, 4>
+                    kQuarterCellOffsets{ {
+                        { 1, 1 }, // SW
+                        { 1, 0 }, // NW
+                        { 0, 0 }, // NE
+                        { 0, 1 }, // SE
+                    } };
+
+                for (size_t sequence = 0;
+                     sequence < entry.tiles.size(); ++sequence)
+                {
+                    const auto& tile = entry.tiles[sequence];
+                    for (uint8_t quarter = 0;
+                         quarter < 4; ++quarter)
                     {
-                        envelopeLow.x =
-                            std::min(
-                                envelopeLow.x, cell.low.x);
-                        envelopeLow.y =
-                            std::min(
-                                envelopeLow.y, cell.low.y);
-                        envelopeLow.z =
-                            std::min(
-                                envelopeLow.z, cell.low.z);
-                        envelopeHigh.x =
-                            std::max(
-                                envelopeHigh.x, cell.high.x);
-                        envelopeHigh.y =
-                            std::max(
-                                envelopeHigh.y, cell.high.y);
-                        envelopeHigh.z =
-                            std::max(
-                                envelopeHigh.z, cell.high.z);
+                        if ((tile.corners
+                                & (1u << quarter))
+                            == 0)
+                            continue;
+                        const int32_t assetX0 =
+                            tile.offset.x
+                            + kQuarterCellOffsets[quarter].x * 16;
+                        const int32_t assetY0 =
+                            tile.offset.y
+                            + kQuarterCellOffsets[quarter].y * 16;
+                        const int32_t assetX1 = assetX0 + 16;
+                        const int32_t assetY1 = assetY0 + 16;
+
+                        std::array<CoordsXY, 4> placed{ {
+                            FirstPersonLargeSceneryPlacedPoint(
+                                { tile.offset.x, tile.offset.y },
+                                { assetX0, assetY0 },
+                                objectDirection),
+                            FirstPersonLargeSceneryPlacedPoint(
+                                { tile.offset.x, tile.offset.y },
+                                { assetX1, assetY0 },
+                                objectDirection),
+                            FirstPersonLargeSceneryPlacedPoint(
+                                { tile.offset.x, tile.offset.y },
+                                { assetX1, assetY1 },
+                                objectDirection),
+                            FirstPersonLargeSceneryPlacedPoint(
+                                { tile.offset.x, tile.offset.y },
+                                { assetX0, assetY1 },
+                                objectDirection),
+                        } };
+                        int32_t minX = placed[0].x;
+                        int32_t maxX = placed[0].x;
+                        int32_t minY = placed[0].y;
+                        int32_t maxY = placed[0].y;
+                        for (const auto p : placed)
+                        {
+                            minX = std::min(minX, p.x);
+                            maxX = std::max(maxX, p.x);
+                            minY = std::min(minY, p.y);
+                            maxY = std::max(maxY, p.y);
+                        }
+
+                        includeCell({
+                            {
+                                group.anchor.x + float(minX),
+                                group.anchor.y + float(minY),
+                                group.anchor.z
+                                    + float(tile.offset.z),
+                            },
+                            {
+                                group.anchor.x + float(maxX),
+                                group.anchor.y + float(maxY),
+                                group.anchor.z
+                                    + float(
+                                        tile.offset.z
+                                        + tile.zClearance),
+                            },
+                            sequence,
+                        });
                     }
                 }
             }
@@ -2794,7 +2827,11 @@
                 hullViews.emplace_back(std::move(view));
             }
 
-            float hullStep = 4.0f;
+            float hullStep =
+                reconstructionOptions != nullptr
+                        && reconstructionOptions->initialHullStep > 0.0f
+                    ? reconstructionOptions->initialHullStep
+                    : 4.0f;
             while (true)
             {
                 const int32_t nx = int32_t(std::ceil(
@@ -2915,8 +2952,17 @@
                     // visually present in this native view. A particular
                     // sequence sprite being transparent does not prove empty
                     // space: another tile sprite may own that visible pixel.
-                    for (int32_t dy = -1; dy <= 1; ++dy)
-                    for (int32_t dx = -1; dx <= 1; ++dx)
+                    const int32_t supportRadius =
+                        reconstructionOptions != nullptr
+                        ? std::max(
+                              0,
+                              reconstructionOptions
+                                  ->silhouetteSupportRadius)
+                        : 1;
+                    for (int32_t dy = -supportRadius;
+                         dy <= supportRadius; ++dy)
+                    for (int32_t dx = -supportRadius;
+                         dx <= supportRadius; ++dx)
                     {
                         if (view.observed.contains(
                                 projected.x + dx,
@@ -2953,7 +2999,10 @@
             FirstPersonStructuralOwnershipComparison
                 structuralDiagnostics{};
 
-            if (hull.valid)
+            if (hull.valid
+                && (reconstructionOptions == nullptr
+                    || reconstructionOptions
+                        ->allowContinuousRefinement))
             {
                 const auto voxelFaces =
                     BuildFirstPersonVisualHullVoxelBoundaryFaces(
@@ -3251,6 +3300,50 @@
                         hull);
                 result.visualHullRefined =
                     !faces.empty();
+            }
+
+            if (faces.empty()
+                && reconstructionOptions != nullptr
+                && reconstructionOptions->supportCells != nullptr)
+            {
+                std::vector<
+                    FirstPersonVisualHullTextureView>
+                    supportViews;
+                supportViews.reserve(hullViews.size());
+                for (const auto& view : hullViews)
+                {
+                    supportViews.push_back({
+                        view.imageDirection,
+                        view.image,
+                    });
+                }
+                auto supportHull =
+                    BuildFirstPersonOccupancyHull(
+                        {
+                            envelopeLow.x,
+                            envelopeHigh.x,
+                            envelopeLow.y,
+                            envelopeHigh.y,
+                            envelopeLow.z,
+                            envelopeHigh.z,
+                            hullStep,
+                        },
+                        hullConfig,
+                        supportViews,
+                        occupancyPredicate);
+                faces =
+                    BuildFirstPersonVisualHullBoundaryFaces(
+                        supportHull);
+            }
+
+            // A caller-supplied support model is already the structural
+            // fallback. Never replace it with the generic quarter-tile shell.
+            if (faces.empty()
+                && reconstructionOptions != nullptr
+                && reconstructionOptions->supportCells != nullptr)
+            {
+                cacheFailure();
+                return result;
             }
 
             if (faces.empty())
@@ -3851,9 +3944,14 @@
                     else
                     {
                         haveUnknownMaterial = true;
-                        selectedPixel =
-                            FirstPersonMissingMaterialPixel(
-                                x, y);
+                        if (reconstructionOptions == nullptr
+                            || !reconstructionOptions
+                                    ->opaqueBoundaryMaterial)
+                        {
+                            selectedPixel =
+                                FirstPersonMissingMaterialPixel(
+                                    x, y);
+                        }
                     }
 
                     pixels[
@@ -3864,6 +3962,36 @@
                         ++visiblePixelCount;
                 }
 
+                if (reconstructionOptions != nullptr
+                    && reconstructionOptions
+                        ->opaqueBoundaryMaterial)
+                {
+                    visiblePixelCount =
+                        FillFirstPersonOpaqueStructuralMaterial(
+                            pixels, width, height);
+                    if (visiblePixelCount == 0
+                        && !pixels.empty())
+                    {
+                        // Geometry survived multi-view carving, but source
+                        // ownership did not yield a trustworthy palette sample.
+                        // Publish explicit unknown material instead of turning
+                        // a structural boundary into silent transparency.
+                        for (int32_t py = 0;
+                             py < height; ++py)
+                        for (int32_t px = 0;
+                             px < width; ++px)
+                        {
+                            pixels[
+                                size_t(py) * size_t(width)
+                                + size_t(px)] =
+                                FirstPersonMissingMaterialPixel(
+                                    px, py);
+                        }
+                        visiblePixelCount = pixels.size();
+                        haveUnknownMaterial = true;
+                    }
+                }
+
                 if (visiblePixelCount == 0
                     && haveKnownMaterial
                     && !haveUnknownMaterial)
@@ -3871,7 +3999,10 @@
                 if (visiblePixelCount == 0)
                     continue;
 
-                materialCoverage.recordFace(faceIndex, pixels.size(), visiblePixelCount);
+                materialCoverage.recordFace(
+                    faceIndex,
+                    pixels.size(),
+                    visiblePixelCount);
 
                 uint64_t fingerprint =
                     14695981039346656037ull;
@@ -4090,15 +4221,17 @@
             result.lastSeen = frame;
             result.direction = direction & 3u;
 
+            const auto centreTile =
+                ParkEntranceSequenceTile(
+                    group, direction,
+                    ParkEntranceSequence::centre);
             result.hasBounds = true;
             result.minTileX =
                 result.maxTileX =
-                    int32_t(std::lround(group.anchor.x))
-                    / kCoordsXYStep;
+                    centreTile.x / kCoordsXYStep;
             result.minTileY =
                 result.maxTileY =
-                    int32_t(std::lround(group.anchor.y))
-                    / kCoordsXYStep;
+                    centreTile.y / kCoordsXYStep;
             for (const auto sequence : {
                      ParkEntranceSequence::left,
                      ParkEntranceSequence::right })
@@ -4119,42 +4252,138 @@
                 result.maxTileY =
                     std::max(result.maxTileY, ty);
             }
-
             if (clearanceHeight <= 0)
                 return result;
 
-            // Reconstruct the three sequence sprites as one coherent object.
-            // This is the same inverse path used by grouped large scenery:
-            // four native composite silhouettes carve the candidate envelope,
-            // continuous candidates are forward-certified, and the current
-            // source-sequence ownership evidence constrains promotion.
-            //
-            // The synthetic image namespace exists only inside this captured
-            // snapshot. QueueParkEntranceGeometry aliases the real entrance
-            // sprites to entry.image + 4 + sequence*4 + direction, exactly the
-            // layout consumed by BuildLargeSceneryInstanceGeometry().
+            std::vector<LargeSceneryWorldCell>
+                supportCells;
+            supportCells.reserve(3);
+            const auto addSupport =
+                [&](ParkEntranceSequence sequence,
+                    size_t sequenceIndex) {
+                    auto profile =
+                        FirstPersonParkEntranceReconstructionSupportProfile(
+                            sequence);
+                    profile.highZ =
+                        std::min(
+                            profile.highZ,
+                            float(clearanceHeight));
+                    if (profile.highZ <= profile.lowZ)
+                        return;
+
+                    const auto tile =
+                        ParkEntranceSequenceTile(
+                            group, direction, sequence);
+                    const auto transform =
+                        MakeGroupedParkEntranceTransform(
+                            tile, direction);
+                    const auto worldPoint =
+                        [&](float x, float y, float z) {
+                            return FirstPersonVec3{
+                                transform.origin.x
+                                    + transform.axisX.x * x
+                                    + transform.axisY.x * y,
+                                transform.origin.y
+                                    + transform.axisX.y * x
+                                    + transform.axisY.y * y,
+                                group.anchor.z + z,
+                            };
+                        };
+
+                    const std::array<
+                        FirstPersonVec3, 8> corners{ {
+                        worldPoint(
+                            -profile.halfPassageDepth,
+                            -profile.halfFacadeWidth,
+                            profile.lowZ),
+                        worldPoint(
+                            profile.halfPassageDepth,
+                            -profile.halfFacadeWidth,
+                            profile.lowZ),
+                        worldPoint(
+                            profile.halfPassageDepth,
+                            profile.halfFacadeWidth,
+                            profile.lowZ),
+                        worldPoint(
+                            -profile.halfPassageDepth,
+                            profile.halfFacadeWidth,
+                            profile.lowZ),
+                        worldPoint(
+                            -profile.halfPassageDepth,
+                            -profile.halfFacadeWidth,
+                            profile.highZ),
+                        worldPoint(
+                            profile.halfPassageDepth,
+                            -profile.halfFacadeWidth,
+                            profile.highZ),
+                        worldPoint(
+                            profile.halfPassageDepth,
+                            profile.halfFacadeWidth,
+                            profile.highZ),
+                        worldPoint(
+                            -profile.halfPassageDepth,
+                            profile.halfFacadeWidth,
+                            profile.highZ),
+                    } };
+                    FirstPersonVec3 low = corners[0];
+                    FirstPersonVec3 high = corners[0];
+                    for (const auto& point : corners)
+                    {
+                        low.x = std::min(low.x, point.x);
+                        low.y = std::min(low.y, point.y);
+                        low.z = std::min(low.z, point.z);
+                        high.x = std::max(high.x, point.x);
+                        high.y = std::max(high.y, point.y);
+                        high.z = std::max(high.z, point.z);
+                    }
+                    supportCells.push_back({
+                        low, high, sequenceIndex
+                    });
+                };
+            addSupport(
+                ParkEntranceSequence::centre, 0);
+            addSupport(
+                ParkEntranceSequence::left, 1);
+            addSupport(
+                ParkEntranceSequence::right, 2);
+            if (supportCells.size() != 3)
+                return result;
+
+            // Keep the mature grouped compositor: all three source sequences
+            // still contribute to each native view, so overlap/ownership at
+            // tile boundaries is handled as one object. Only the structural
+            // support premise changes.
             const CoordsXY leftOffset =
                 CoordsDirectionDelta[3];
             const CoordsXY rightOffset{
                 -leftOffset.x, -leftOffset.y
             };
-            std::array<LargeSceneryTile, 3> syntheticTiles{ {
-                {
-                    { 0, 0, 0 },
-                    clearanceHeight,
-                    false, false, 0x0F, 0, 0
-                },
-                {
-                    { leftOffset.x, leftOffset.y, 0 },
-                    clearanceHeight,
-                    false, false, 0x0F, 0, 1
-                },
-                {
-                    { rightOffset.x, rightOffset.y, 0 },
-                    clearanceHeight,
-                    false, false, 0x0F, 0, 2
-                },
-            } };
+            std::array<LargeSceneryTile, 3>
+                syntheticTiles{ {
+                    {
+                        { 0, 0, 0 },
+                        clearanceHeight,
+                        false, false, 0x0F, 0, 0
+                    },
+                    {
+                        {
+                            leftOffset.x,
+                            leftOffset.y,
+                            0
+                        },
+                        clearanceHeight,
+                        false, false, 0x0F, 0, 1
+                    },
+                    {
+                        {
+                            rightOffset.x,
+                            rightOffset.y,
+                            0
+                        },
+                        clearanceHeight,
+                        false, false, 0x0F, 0, 2
+                    },
+                } };
 
             LargeSceneryEntry syntheticEntry{};
             syntheticEntry.image = bodyImages[0];
@@ -4169,431 +4398,50 @@
             const auto syntheticModel =
                 BuildLargeSceneryAssetModel(
                     syntheticEntry);
-            if (syntheticModel.usable)
-            {
-                auto built =
-                    BuildLargeSceneryInstanceGeometry(
-                        syntheticElement,
-                        syntheticEntry,
-                        syntheticModel,
-                        group,
-                        signature,
-                        frame,
-                        sprites,
-                        assetGeneration,
-                        passage.has_value()
-                            ? &*passage
-                            : nullptr);
+            if (!syntheticModel.usable)
+                return result;
 
-                // Never let the large-scenery occupancy fallback close the
-                // walk-through gate. Only a genuinely silhouette-carved body
-                // is allowed to replace the native entrance artwork.
-                if (built.visualHullRefined
-                    && !built.surfaces.empty())
-                {
-                    result.hasBounds = built.hasBounds;
-                    result.minTileX = built.minTileX;
-                    result.minTileY = built.minTileY;
-                    result.maxTileX = built.maxTileX;
-                    result.maxTileY = built.maxTileY;
-                    result.surfaces =
-                        std::move(built.surfaces);
-                    for (auto& surface :
-                         result.surfaces)
-                    {
-                        // Persistent baked pixels are self-contained. Restore
-                        // a real entrance image only for palette/remap metadata.
-                        surface.image =
-                            ImageId(bodyImages[0]);
-                        surface.reconstructionGroup =
-                            group.key;
-                        surface.diagnosticReconstructionKind = 3;
-                        surface.diagnosticReconstructionAnchor =
-                            group.anchor;
-                        surface.diagnosticSemanticGroup =
-                            group.key;
-                        surface.diagnosticSemanticRole =
-                            static_cast<uint8_t>(
-                                FirstPersonPaintSemanticRole::
-                                    structureBody);
-                        surface.cameraIndependent = true;
-                        surface.textureFallbackOnly = false;
-                        surface.interactionTarget =
-                            interactionTarget;
-                    }
-                    return result;
-                }
+            LargeSceneryReconstructionOptions options{};
+            options.supportCells = &supportCells;
+            options.cachePolicyKey =
+                kFirstPersonParkEntranceReconstructionPolicyKey;
+            options.initialHullStep = 1.0f;
+            options.silhouetteSupportRadius = 2;
+            options.allowContinuousRefinement = false;
+            options.opaqueBoundaryMaterial = true;
+
+            auto built =
+                BuildLargeSceneryInstanceGeometry(
+                    syntheticElement,
+                    syntheticEntry,
+                    syntheticModel,
+                    group,
+                    signature,
+                    frame,
+                    sprites,
+                    assetGeneration,
+                    passage.has_value()
+                        ? &*passage
+                        : nullptr,
+                    &options);
+            if (built.surfaces.empty())
+            {
+                // Do not resurrect the former collision-sized corridor shell.
+                // With no grouped output, the tighter native semantic surfaces
+                // remain eligible as the safe fallback.
+                return result;
             }
 
-            // Evidence reconstruction can legitimately fail for unusual object
-            // art. Preserve the conservative corridor-cut shell as a fallback
-            // rather than either blocking movement or resurrecting a billboard.
-            // Appearance reconstruction remains deliberately conservative:
-            // the park entrance is the collision-sized three-tile envelope
-            // with explicit unknown material. Walkability contributes only a
-            // negative geometric constraint. If the authoritative map says
-            // the centre entrance is traversable in two opposite directions,
-            // that guaranteed corridor is cut through this fallback shell.
-            const int32_t baseZ =
-                int32_t(std::lround(group.anchor.z));
-            const FirstPersonVec3 low{
-                float(result.minTileX * kCoordsXYStep),
-                float(result.minTileY * kCoordsXYStep),
-                float(baseZ),
-            };
-            const FirstPersonVec3 high{
-                float((result.maxTileX + 1)
-                    * kCoordsXYStep),
-                float((result.maxTileY + 1)
-                    * kCoordsXYStep),
-                float(baseZ + clearanceHeight),
-            };
-            const auto centreTile =
-                ParkEntranceSequenceTile(
-                    group, direction,
-                    ParkEntranceSequence::centre);
-            const std::array<CoordsXY, 3>
-                sequenceTiles{ {
-                    centreTile,
-                    ParkEntranceSequenceTile(
-                        group, direction,
-                        ParkEntranceSequence::left),
-                    ParkEntranceSequenceTile(
-                        group, direction,
-                        ParkEntranceSequence::right),
-                } };
-            const auto sourceTileForPoint =
-                [&](FirstPersonVec3 point) {
-                    CoordsXY best = sequenceTiles[0];
-                    float bestDistance =
-                        std::numeric_limits<float>::max();
-                    for (const auto& tile :
-                         sequenceTiles)
-                    {
-                        const float dx =
-                            point.x
-                            - float(
-                                tile.x
-                                + kCoordsXYHalfTile);
-                        const float dy =
-                            point.y
-                            - float(
-                                tile.y
-                                + kCoordsXYHalfTile);
-                        const float distance =
-                            dx * dx + dy * dy;
-                        if (distance < bestDistance)
-                        {
-                            best = tile;
-                            bestDistance = distance;
-                        }
-                    }
-                    return best;
-                };
-            const auto passageAxis =
-                passage.has_value()
-                ? FirstPersonPassageAxisForConnections(
-                    passage->connectedSides)
-                : FirstPersonPassageAxis::none;
-            const float passageTop =
-                std::min(
-                    high.z,
-                    low.z + float(kPathClearance));
-
-            struct EntranceFallbackFace
+            result.hasBounds = built.hasBounds;
+            result.minTileX = built.minTileX;
+            result.minTileY = built.minTileY;
+            result.maxTileX = built.maxTileX;
+            result.maxTileY = built.maxTileY;
+            result.surfaces =
+                std::move(built.surfaces);
+            for (auto& surface : result.surfaces)
             {
-                std::array<FirstPersonVec3, 4> corners{};
-                FirstPersonVec3 normal{};
-            };
-            std::vector<EntranceFallbackFace> faces;
-            faces.reserve(16);
-
-            const auto addFace =
-                [&](FirstPersonVec3 a,
-                    FirstPersonVec3 b,
-                    FirstPersonVec3 c0,
-                    FirstPersonVec3 d,
-                    FirstPersonVec3 normal) {
-                    const auto ab = Sub(b, a);
-                    const auto ad = Sub(d, a);
-                    if (std::sqrt(FpDot(ab, ab)) < 0.01f
-                        || std::sqrt(FpDot(ad, ad)) < 0.01f)
-                        return;
-                    faces.push_back({
-                        { a, b, c0, d }, normal
-                    });
-                };
-
-            if (passageAxis
-                    == FirstPersonPassageAxis::x
-                && passageTop > low.z + 0.01f)
-            {
-                const float corridorLow =
-                    float(centreTile.y)
-                    + kFirstPersonPathDeckInset;
-                const float corridorHigh =
-                    float(centreTile.y)
-                    + kFirstPersonPathDeckMax;
-
-                addFace(
-                    { low.x, low.y, low.z },
-                    { high.x, low.y, low.z },
-                    { high.x, low.y, high.z },
-                    { low.x, low.y, high.z },
-                    { 0.0f, -1.0f, 0.0f });
-                addFace(
-                    { high.x, high.y, low.z },
-                    { low.x, high.y, low.z },
-                    { low.x, high.y, high.z },
-                    { high.x, high.y, high.z },
-                    { 0.0f, 1.0f, 0.0f });
-
-                for (const auto endX :
-                     { low.x, high.x })
-                {
-                    const float nx =
-                        endX == low.x ? -1.0f : 1.0f;
-                    addFace(
-                        { endX, low.y, low.z },
-                        { endX, corridorLow, low.z },
-                        { endX, corridorLow, high.z },
-                        { endX, low.y, high.z },
-                        { nx, 0.0f, 0.0f });
-                    addFace(
-                        { endX, corridorHigh, low.z },
-                        { endX, high.y, low.z },
-                        { endX, high.y, high.z },
-                        { endX, corridorHigh, high.z },
-                        { nx, 0.0f, 0.0f });
-                    if (passageTop < high.z - 0.01f)
-                    {
-                        addFace(
-                            { endX, corridorLow, passageTop },
-                            { endX, corridorHigh, passageTop },
-                            { endX, corridorHigh, high.z },
-                            { endX, corridorLow, high.z },
-                            { nx, 0.0f, 0.0f });
-                    }
-                }
-
-                addFace(
-                    { low.x, corridorLow, low.z },
-                    { high.x, corridorLow, low.z },
-                    { high.x, corridorLow, passageTop },
-                    { low.x, corridorLow, passageTop },
-                    { 0.0f, 1.0f, 0.0f });
-                addFace(
-                    { high.x, corridorHigh, low.z },
-                    { low.x, corridorHigh, low.z },
-                    { low.x, corridorHigh, passageTop },
-                    { high.x, corridorHigh, passageTop },
-                    { 0.0f, -1.0f, 0.0f });
-                if (passageTop < high.z - 0.01f)
-                {
-                    addFace(
-                        { low.x, corridorLow, passageTop },
-                        { high.x, corridorLow, passageTop },
-                        { high.x, corridorHigh, passageTop },
-                        { low.x, corridorHigh, passageTop },
-                        { 0.0f, 0.0f, -1.0f });
-                    addFace(
-                        { low.x, low.y, high.z },
-                        { high.x, low.y, high.z },
-                        { high.x, high.y, high.z },
-                        { low.x, high.y, high.z },
-                        { 0.0f, 0.0f, 1.0f });
-                }
-                else
-                {
-                    addFace(
-                        { low.x, low.y, high.z },
-                        { high.x, low.y, high.z },
-                        { high.x, corridorLow, high.z },
-                        { low.x, corridorLow, high.z },
-                        { 0.0f, 0.0f, 1.0f });
-                    addFace(
-                        { low.x, corridorHigh, high.z },
-                        { high.x, corridorHigh, high.z },
-                        { high.x, high.y, high.z },
-                        { low.x, high.y, high.z },
-                        { 0.0f, 0.0f, 1.0f });
-                }
-                addFace(
-                    { low.x, corridorLow, low.z },
-                    { high.x, corridorLow, low.z },
-                    { high.x, low.y, low.z },
-                    { low.x, low.y, low.z },
-                    { 0.0f, 0.0f, -1.0f });
-                addFace(
-                    { low.x, high.y, low.z },
-                    { high.x, high.y, low.z },
-                    { high.x, corridorHigh, low.z },
-                    { low.x, corridorHigh, low.z },
-                    { 0.0f, 0.0f, -1.0f });
-            }
-            else if (passageAxis
-                    == FirstPersonPassageAxis::y
-                && passageTop > low.z + 0.01f)
-            {
-                const float corridorLow =
-                    float(centreTile.x)
-                    + kFirstPersonPathDeckInset;
-                const float corridorHigh =
-                    float(centreTile.x)
-                    + kFirstPersonPathDeckMax;
-
-                addFace(
-                    { low.x, high.y, low.z },
-                    { low.x, low.y, low.z },
-                    { low.x, low.y, high.z },
-                    { low.x, high.y, high.z },
-                    { -1.0f, 0.0f, 0.0f });
-                addFace(
-                    { high.x, low.y, low.z },
-                    { high.x, high.y, low.z },
-                    { high.x, high.y, high.z },
-                    { high.x, low.y, high.z },
-                    { 1.0f, 0.0f, 0.0f });
-
-                for (const auto endY :
-                     { low.y, high.y })
-                {
-                    const float ny =
-                        endY == low.y ? -1.0f : 1.0f;
-                    addFace(
-                        { low.x, endY, low.z },
-                        { corridorLow, endY, low.z },
-                        { corridorLow, endY, high.z },
-                        { low.x, endY, high.z },
-                        { 0.0f, ny, 0.0f });
-                    addFace(
-                        { corridorHigh, endY, low.z },
-                        { high.x, endY, low.z },
-                        { high.x, endY, high.z },
-                        { corridorHigh, endY, high.z },
-                        { 0.0f, ny, 0.0f });
-                    if (passageTop < high.z - 0.01f)
-                    {
-                        addFace(
-                            { corridorLow, endY, passageTop },
-                            { corridorHigh, endY, passageTop },
-                            { corridorHigh, endY, high.z },
-                            { corridorLow, endY, high.z },
-                            { 0.0f, ny, 0.0f });
-                    }
-                }
-
-                addFace(
-                    { corridorLow, high.y, low.z },
-                    { corridorLow, low.y, low.z },
-                    { corridorLow, low.y, passageTop },
-                    { corridorLow, high.y, passageTop },
-                    { 1.0f, 0.0f, 0.0f });
-                addFace(
-                    { corridorHigh, low.y, low.z },
-                    { corridorHigh, high.y, low.z },
-                    { corridorHigh, high.y, passageTop },
-                    { corridorHigh, low.y, passageTop },
-                    { -1.0f, 0.0f, 0.0f });
-                if (passageTop < high.z - 0.01f)
-                {
-                    addFace(
-                        { corridorLow, low.y, passageTop },
-                        { corridorHigh, low.y, passageTop },
-                        { corridorHigh, high.y, passageTop },
-                        { corridorLow, high.y, passageTop },
-                        { 0.0f, 0.0f, -1.0f });
-                    addFace(
-                        { low.x, low.y, high.z },
-                        { high.x, low.y, high.z },
-                        { high.x, high.y, high.z },
-                        { low.x, high.y, high.z },
-                        { 0.0f, 0.0f, 1.0f });
-                }
-                else
-                {
-                    addFace(
-                        { low.x, low.y, high.z },
-                        { corridorLow, low.y, high.z },
-                        { corridorLow, high.y, high.z },
-                        { low.x, high.y, high.z },
-                        { 0.0f, 0.0f, 1.0f });
-                    addFace(
-                        { corridorHigh, low.y, high.z },
-                        { high.x, low.y, high.z },
-                        { high.x, high.y, high.z },
-                        { corridorHigh, high.y, high.z },
-                        { 0.0f, 0.0f, 1.0f });
-                }
-                addFace(
-                    { low.x, low.y, low.z },
-                    { corridorLow, low.y, low.z },
-                    { corridorLow, high.y, low.z },
-                    { low.x, high.y, low.z },
-                    { 0.0f, 0.0f, -1.0f });
-                addFace(
-                    { corridorHigh, low.y, low.z },
-                    { high.x, low.y, low.z },
-                    { high.x, high.y, low.z },
-                    { corridorHigh, high.y, low.z },
-                    { 0.0f, 0.0f, -1.0f });
-            }
-            else
-            {
-                addFace(
-                    { low.x, low.y, low.z },
-                    { high.x, low.y, low.z },
-                    { high.x, low.y, high.z },
-                    { low.x, low.y, high.z },
-                    { 0.0f, -1.0f, 0.0f });
-                addFace(
-                    { high.x, low.y, low.z },
-                    { high.x, high.y, low.z },
-                    { high.x, high.y, high.z },
-                    { high.x, low.y, high.z },
-                    { 1.0f, 0.0f, 0.0f });
-                addFace(
-                    { high.x, high.y, low.z },
-                    { low.x, high.y, low.z },
-                    { low.x, high.y, high.z },
-                    { high.x, high.y, high.z },
-                    { 0.0f, 1.0f, 0.0f });
-                addFace(
-                    { low.x, high.y, low.z },
-                    { low.x, low.y, low.z },
-                    { low.x, low.y, high.z },
-                    { low.x, high.y, high.z },
-                    { -1.0f, 0.0f, 0.0f });
-                addFace(
-                    { low.x, low.y, high.z },
-                    { high.x, low.y, high.z },
-                    { high.x, high.y, high.z },
-                    { low.x, high.y, high.z },
-                    { 0.0f, 0.0f, 1.0f });
-                addFace(
-                    { low.x, high.y, low.z },
-                    { high.x, high.y, low.z },
-                    { high.x, low.y, low.z },
-                    { low.x, low.y, low.z },
-                    { 0.0f, 0.0f, -1.0f });
-            }
-
-            const auto edgeLength =
-                [](FirstPersonVec3 a,
-                    FirstPersonVec3 b) {
-                    const auto d = Sub(b, a);
-                    return std::sqrt(FpDot(d, d));
-                };
-            const ImageId diagnosticImage{
-                bodyImages[0]
-            };
-
-            for (const auto& face : faces)
-            {
-                FirstPersonSurface surface{};
-                surface.image = diagnosticImage;
-                surface.cameraIndependent = true;
-                surface.textureFallbackOnly = true;
+                surface.image = ImageId(bodyImages[0]);
                 surface.reconstructionGroup = group.key;
                 surface.diagnosticReconstructionKind = 3;
                 surface.diagnosticReconstructionAnchor =
@@ -4603,129 +4451,11 @@
                     static_cast<uint8_t>(
                         FirstPersonPaintSemanticRole::
                             structureBody);
-                surface.exteriorOnly = true;
-                surface.outwardNormal = face.normal;
-
-                const FirstPersonVec3 faceCenter{
-                    0.25f * (
-                        face.corners[0].x
-                        + face.corners[1].x
-                        + face.corners[2].x
-                        + face.corners[3].x),
-                    0.25f * (
-                        face.corners[0].y
-                        + face.corners[1].y
-                        + face.corners[2].y
-                        + face.corners[3].y),
-                    0.25f * (
-                        face.corners[0].z
-                        + face.corners[1].z
-                        + face.corners[2].z
-                        + face.corners[3].z),
-                };
-                surface.diagnosticSourceTile =
-                    sourceTileForPoint(faceCenter);
-                surface.gpuRegion =
-                    FirstPersonGpuRegionKey(
-                        int32_t(std::floor(
-                            faceCenter.x
-                            / float(kCoordsXYStep))),
-                        int32_t(std::floor(
-                            faceCenter.y
-                            / float(kCoordsXYStep))));
-
-                const int32_t width =
-                    std::clamp(
-                        int32_t(std::ceil(std::max(
-                            edgeLength(
-                                face.corners[0],
-                                face.corners[1]),
-                            edgeLength(
-                                face.corners[3],
-                                face.corners[2])))),
-                        1, 256);
-                const int32_t height =
-                    std::clamp(
-                        int32_t(std::ceil(std::max(
-                            edgeLength(
-                                face.corners[0],
-                                face.corners[3]),
-                            edgeLength(
-                                face.corners[1],
-                                face.corners[2])))),
-                        1, 256);
-                std::vector<uint8_t> pixels(
-                    size_t(width) * size_t(height));
-                uint64_t fingerprint =
-                    14695981039346656037ull;
-                ExtendStableKey(fingerprint, width);
-                ExtendStableKey(fingerprint, height);
-                for (int32_t y = 0; y < height; ++y)
-                for (int32_t x = 0; x < width; ++x)
-                {
-                    const uint8_t pixel =
-                        FirstPersonMissingMaterialPixel(
-                            x, y);
-                    pixels[
-                        size_t(y) * size_t(width)
-                        + size_t(x)] = pixel;
-                    fingerprint ^= pixel;
-                    fingerprint *= 1099511628211ull;
-                }
-
-                surface.persistentPixels =
-                    std::make_shared<
-                        std::vector<uint8_t>>(
-                            std::move(pixels));
-                surface.immutableWidth =
-                    int16_t(width);
-                surface.immutableHeight =
-                    int16_t(height);
-                surface.persistentBitmap = true;
-                surface.immutableFingerprint =
-                    fingerprint;
-                EmitQuad(
-                    surface,
-                    { {
-                        { face.corners[0],
-                          0.0f, 0.0f },
-                        { face.corners[1],
-                          float(width), 0.0f },
-                        { face.corners[2],
-                          float(width),
-                          float(height) },
-                        { face.corners[3],
-                          0.0f,
-                          float(height) },
-                    } });
-                result.surfaces.emplace_back(
-                    std::move(surface));
-            }
-
-            const FirstPersonVec3 center{
-                0.5f * (low.x + high.x),
-                0.5f * (low.y + high.y),
-                0.5f * (low.z + high.z),
-            };
-            const float hx =
-                0.5f * (high.x - low.x);
-            const float hy =
-                0.5f * (high.y - low.y);
-            const float hz =
-                0.5f * (high.z - low.z);
-            const float radius =
-                std::sqrt(
-                    hx * hx + hy * hy + hz * hz)
-                + 2.0f;
-            for (auto& surface : result.surfaces)
-            {
-                surface.hasSemanticBounds = true;
-                surface.semanticCenter = center;
-                surface.semanticRadius = radius;
+                surface.cameraIndependent = true;
+                surface.textureFallbackOnly = false;
                 surface.interactionTarget =
                     interactionTarget;
             }
-
             return result;
         }
 
@@ -5307,24 +5037,31 @@
                 const FirstPersonSurface& surface,
                 uint64_t frame)
         {
-            // The grouped hull replaces only the entrance object's semantic
-            // body. The same tile painter can also emit supports, the path
-            // deck and scrolling-sign artwork; those are separate native
-            // structures and must survive the body swap.
+            // Body replacement is conditional on usable grouped geometry.
+            // Scrolling text is intentionally deferred whenever the entrance
+            // reconstruction for this frame is active, even if it falls back
+            // to the tighter semantic body, so sign placement cannot obscure
+            // the structural experiment.
+            const auto role =
+                static_cast<FirstPersonPaintSemanticRole>(
+                    surface.diagnosticSemanticRole);
             if (!_parkEntranceGeometryEnabled
                 || surface.reconstructionGroup == 0
-                || surface.diagnosticSemanticRole
-                    != static_cast<uint8_t>(
-                        FirstPersonPaintSemanticRole::structureBody))
+                || (role
+                        != FirstPersonPaintSemanticRole::structureBody
+                    && role
+                        != FirstPersonPaintSemanticRole::sign))
                 return false;
             const auto found =
                 _parkEntranceGeometryCache.find(
                     surface.reconstructionGroup);
-            return found
-                    != _parkEntranceGeometryCache.end()
-                && !found->second.dirty
-                && found->second.lastSeen == frame
-                && !found->second.surfaces.empty();
+            if (found == _parkEntranceGeometryCache.end()
+                || found->second.dirty
+                || found->second.lastSeen != frame)
+                return false;
+            if (role == FirstPersonPaintSemanticRole::sign)
+                return true;
+            return !found->second.surfaces.empty();
         }
 
         [[nodiscard]] bool

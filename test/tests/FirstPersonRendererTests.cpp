@@ -17,6 +17,7 @@
 #include <openrct2/paint/FirstPersonRoundTripReconstruction.h>
 #include <openrct2/paint/FirstPersonAssetReconstruction.h>
 #include <openrct2/paint/FirstPersonMaterialInference.h>
+#include <openrct2/paint/FirstPersonParkEntranceReconstruction.h>
 #include <openrct2/paint/FirstPersonPeriodicPassengerMotion.h>
 #include <openrct2/paint/FirstPersonPhysicalProxy.h>
 #include <openrct2/paint/FirstPersonPathGeometry.h>
@@ -58,6 +59,76 @@ namespace
             result.add(x, y);
         return result;
     }
+}
+
+TEST(FirstPersonParkEntranceReconstructionTest, PublishedProfilesPreserveAuthoritativeOpeningAndSideBodies)
+{
+    const auto centre =
+        FirstPersonParkEntrancePublishedBodyProfile(
+            OpenRCT2::ParkEntranceSequence::centre);
+    EXPECT_FLOAT_EQ(centre.halfPassageDepth, 14.0f);
+    EXPECT_FLOAT_EQ(centre.halfFacadeWidth, 14.0f);
+    EXPECT_FLOAT_EQ(centre.lowZ, 32.0f);
+    EXPECT_FLOAT_EQ(centre.highZ, 79.0f);
+
+    const auto side =
+        FirstPersonParkEntrancePublishedBodyProfile(
+            OpenRCT2::ParkEntranceSequence::left);
+    EXPECT_FLOAT_EQ(side.halfPassageDepth, 13.0f);
+    EXPECT_FLOAT_EQ(side.halfFacadeWidth, 13.0f);
+    EXPECT_FLOAT_EQ(side.lowZ, 0.0f);
+    EXPECT_FLOAT_EQ(side.highZ, 79.0f);
+}
+
+TEST(FirstPersonParkEntranceReconstructionTest, GroupedSupportClosesOnlyInterSequenceFacadeGap)
+{
+    const auto centre =
+        FirstPersonParkEntranceReconstructionSupportProfile(
+            OpenRCT2::ParkEntranceSequence::centre);
+    const auto side =
+        FirstPersonParkEntranceReconstructionSupportProfile(
+            OpenRCT2::ParkEntranceSequence::right);
+
+    EXPECT_FLOAT_EQ(centre.halfFacadeWidth, 16.0f);
+    EXPECT_FLOAT_EQ(side.halfFacadeWidth, 16.0f);
+    EXPECT_FLOAT_EQ(
+        centre.halfFacadeWidth + side.halfFacadeWidth,
+        32.0f);
+    EXPECT_FLOAT_EQ(centre.halfPassageDepth, 14.0f);
+    EXPECT_FLOAT_EQ(side.halfPassageDepth, 13.0f);
+    EXPECT_FLOAT_EQ(centre.lowZ, 32.0f);
+    EXPECT_FLOAT_EQ(side.lowZ, 0.0f);
+}
+
+TEST(FirstPersonMaterialInferenceTest, StructuralBoundaryInpaintingCannotLeaveAlphaHoles)
+{
+    std::vector<uint8_t> pixels{
+        7, 0, 0, 0, 9,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+    };
+    const auto visible =
+        FillFirstPersonOpaqueStructuralMaterial(
+            pixels, 5, 3);
+    EXPECT_EQ(visible, pixels.size());
+    EXPECT_TRUE(std::all_of(
+        pixels.begin(), pixels.end(),
+        [](uint8_t pixel) {
+            return pixel != 0;
+        }));
+    EXPECT_EQ(pixels.front(), 7);
+    EXPECT_EQ(pixels[4], 9);
+
+    std::vector<uint8_t> unknown(6, 0);
+    EXPECT_EQ(
+        FillFirstPersonOpaqueStructuralMaterial(
+            unknown, 3, 2),
+        0u);
+    EXPECT_TRUE(std::all_of(
+        unknown.begin(), unknown.end(),
+        [](uint8_t pixel) {
+            return pixel == 0;
+        }));
 }
 
 TEST(FirstPersonRendererPolicyTest, ReconstructedGeometryDoesNotBecomeNativePaintOwner)

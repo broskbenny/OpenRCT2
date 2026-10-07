@@ -9,6 +9,7 @@
 
 #include "../Paint.h"
 #include "../FirstPersonWalkingSemantics.h"
+#include "../FirstPersonParkEntranceReconstruction.h"
 
 #include "../../Context.h"
 #include "../../GameState.h"
@@ -373,11 +374,10 @@ static uint32_t PublishFirstPersonParkEntranceCentreBody(
     if (session.FirstPersonSemanticComponentSink == nullptr)
         return 0;
 
-    // Match the native centre PaintStruct bounds exactly:
-    //   origin=(2,2,height+32), size=(28,28,47).
-    // In the entrance-local frame that is a 28x28x47 upper body spanning
-    // z=[base+32, base+79]. The walk-through opening below is therefore
-    // physical empty space instead of transparency on a full-height plane.
+    const auto profile =
+        OpenRCT2::Paint::
+            FirstPersonParkEntrancePublishedBodyProfile(
+                ParkEntranceSequence::centre);
     const float bottom = float(entranceEl.getBaseZ());
     const auto transform =
         MakeFirstPersonParkEntranceTransform(
@@ -385,8 +385,16 @@ static uint32_t PublishFirstPersonParkEntranceCentreBody(
     return PaintSessionAddFirstPersonSemanticOrientedBox(
         session, FirstPersonPaintSemanticRole::structureBody,
         transform,
-        { -14.0f, -14.0f, bottom + 32.0f },
-        { 14.0f, 14.0f, bottom + 79.0f },
+        {
+            -profile.halfPassageDepth,
+            -profile.halfFacadeWidth,
+            bottom + profile.lowZ
+        },
+        {
+            profile.halfPassageDepth,
+            profile.halfFacadeWidth,
+            bottom + profile.highZ
+        },
         image, artworkOffset, artworkGroup,
         0, 0, false, false);
 }
@@ -398,10 +406,10 @@ static uint32_t PublishFirstPersonParkEntranceSideBody(
 {
     if (session.FirstPersonSemanticComponentSink == nullptr)
         return 0;
-    // Match the native side PaintStruct bounds exactly:
-    //   origin=(3,3,height), size=(26,26,79).
-    // These bounds are materially tighter than the tile/clearance envelope
-    // and allow the semantic visual hull to stay at 1-world-unit resolution.
+    const auto profile =
+        OpenRCT2::Paint::
+            FirstPersonParkEntrancePublishedBodyProfile(
+                entranceEl.getSequenceIndex());
     const float bottom = float(entranceEl.getBaseZ());
     const auto transform =
         MakeFirstPersonParkEntranceTransform(
@@ -409,8 +417,16 @@ static uint32_t PublishFirstPersonParkEntranceSideBody(
     return PaintSessionAddFirstPersonSemanticOrientedBox(
         session, FirstPersonPaintSemanticRole::structureBody,
         transform,
-        { -13.0f, -13.0f, bottom },
-        { 13.0f, 13.0f, bottom + 79.0f },
+        {
+            -profile.halfPassageDepth,
+            -profile.halfFacadeWidth,
+            bottom + profile.lowZ
+        },
+        {
+            profile.halfPassageDepth,
+            profile.halfFacadeWidth,
+            bottom + profile.highZ
+        },
         image, artworkOffset, artworkGroup);
 }
 
