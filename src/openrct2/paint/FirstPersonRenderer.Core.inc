@@ -2308,6 +2308,8 @@
             int32_t silhouetteSupportRadius = 1;
             bool allowContinuousRefinement = true;
             bool opaqueBoundaryMaterial = false;
+            bool regularizeStructuralColumns = false;
+            bool facadeAxisIsForward = false;
         };
 
         LargeSceneryGeometryCacheEntry BuildLargeSceneryInstanceGeometry(
@@ -2996,6 +2998,131 @@
                     occupancyPredicate,
                     pointSupported);
 
+            bool structuralColumnsSelected = false;
+            if (hull.valid
+                && reconstructionOptions != nullptr
+                && reconstructionOptions
+                    ->regularizeStructuralColumns)
+            {
+                const auto sourceFaces =
+                    BuildFirstPersonVisualHullVoxelBoundaryFaces(
+                        hull);
+                const auto sourceCertificate =
+                    CertifyFirstPersonReconstruction(
+                        TriangulateFirstPersonReconstructionFaces(
+                            sourceFaces),
+                        hullViews, projectPoint);
+
+                FirstPersonStructuralColumnConfig columnConfig{};
+                columnConfig.directSupportViews =
+                    hullViews.size();
+                columnConfig.intervalSupportViews =
+                    hullViews.size() > 1
+                    ? hullViews.size() - 1 : 1;
+                columnConfig.bridgeSupportViews =
+                    hullViews.size() > 2
+                    ? hullViews.size() - 2 : 1;
+                columnConfig.hardNegativeMaximumViews = 1;
+                columnConfig.hardNegativeRunCells = 3;
+                columnConfig.maximumFacadeNotchCells = 2;
+                columnConfig.facadeAxisIsForward =
+                    reconstructionOptions
+                        ->facadeAxisIsForward;
+
+                const auto supportCount =
+                    [&](FirstPersonVec3 point) {
+                        size_t count = 0;
+                        for (const auto& view : hullViews)
+                        {
+                            if (pointSupported(view, point))
+                                ++count;
+                        }
+                        return count;
+                    };
+                auto regularized =
+                    RegularizeFirstPersonStructuralColumns(
+                        hull, columnConfig,
+                        occupancyPredicate, supportCount);
+                const auto candidateFaces =
+                    BuildFirstPersonVisualHullVoxelBoundaryFaces(
+                        regularized.hull);
+                const auto candidateCertificate =
+                    CertifyFirstPersonReconstruction(
+                        TriangulateFirstPersonReconstructionFaces(
+                            candidateFaces),
+                        hullViews, projectPoint);
+
+                const size_t pixelSlack =
+                    std::max<size_t>(
+                        128,
+                        sourceCertificate
+                                .symmetricDifferencePixels
+                            / 12);
+                const size_t faceSlack =
+                    std::max<size_t>(
+                        16, sourceFaces.size() / 20);
+                const bool simpler =
+                    candidateFaces.size() + faceSlack
+                        <= sourceFaces.size();
+                const bool evidenceClose =
+                    sourceCertificate.valid
+                    && candidateCertificate.valid
+                    && candidateCertificate.viewCount
+                        >= hullConfig.minimumViews
+                    && candidateCertificate
+                            .symmetricDifferencePixels
+                        <= sourceCertificate
+                                .symmetricDifferencePixels
+                            + pixelSlack
+                    && candidateCertificate
+                            .minimumCandidateCoverage
+                            + 0.04f
+                        >= sourceCertificate
+                                .minimumCandidateCoverage
+                    && candidateCertificate
+                            .minimumObservedCoverage
+                            + 0.04f
+                        >= sourceCertificate
+                                .minimumObservedCoverage
+                    && candidateCertificate.maximumEdgeError
+                        <= sourceCertificate.maximumEdgeError
+                            + 4;
+
+                if (simpler && evidenceClose)
+                {
+                    regularized.hull
+                        .voxelRoundTripSymmetricDifference =
+                        sourceCertificate
+                            .symmetricDifferencePixels;
+                    regularized.hull
+                        .roundTripSymmetricDifference =
+                        candidateCertificate
+                            .symmetricDifferencePixels;
+                    regularized.hull
+                        .averageIntersectionOverUnion =
+                        candidateCertificate
+                            .averageIntersectionOverUnion;
+                    regularized.hull
+                        .minimumIntersectionOverUnion =
+                        candidateCertificate
+                            .minimumIntersectionOverUnion;
+                    regularized.hull
+                        .minimumCandidateCoverage =
+                        candidateCertificate
+                            .minimumCandidateCoverage;
+                    regularized.hull
+                        .minimumObservedCoverage =
+                        candidateCertificate
+                            .minimumObservedCoverage;
+                    regularized.hull.maximumEdgeError =
+                        candidateCertificate.maximumEdgeError;
+                    regularized.hull.roundTripViewCount =
+                        candidateCertificate.viewCount;
+                    hull = std::move(regularized.hull);
+                    structuralColumnsSelected = true;
+                }
+            }
+
             FirstPersonStructuralOwnershipComparison
                 structuralDiagnostics{};
 
@@ -3622,7 +3749,10 @@
                  ++faceIndex)
             {
                 const auto& face = faces[faceIndex];
-                if (face.normal.z < -0.5f)
+                if (face.normal.z < -0.5f
+                    && (reconstructionOptions == nullptr
+                        || !reconstructionOptions
+                                ->opaqueBoundaryMaterial))
                     continue;
 
                 FirstPersonVec3 faceCenter{};
@@ -3724,6 +3854,25 @@
                             < b.rotation;
                     });
 
+                const bool structuralAppearanceFallback =
+                    candidates.empty()
+                    && reconstructionOptions != nullptr
+                    && reconstructionOptions
+                        ->opaqueBoundaryMaterial;
+                if (structuralAppearanceFallback)
+                {
+                    for (uint8_t rotation = 0;
+                         rotation < 4; ++rotation)
+                    {
+                        candidates.push_back({
+                            rotation,
+                            nativeDirectionForRotation[
+                                rotation],
+                            0.0f,
+                        });
+                    }
+                }
+
                 ImageId fallbackImage{};
                 for (const auto& candidate : candidates)
                 {
@@ -3760,8 +3909,9 @@
                 surface.diagnosticContinuousSurfaceRefined =
                     hull.continuousSurfaceRefined;
                 surface.diagnosticStructuralEvidenceUsed =
-                    hull.continuousSurfaceRefined
-                    && structuralDiagnostics.valid;
+                    structuralColumnsSelected
+                    || (hull.continuousSurfaceRefined
+                        && structuralDiagnostics.valid);
                 surface.diagnosticStructuralPairedSamples =
                     uint32_t(std::min<size_t>(
                         structuralDiagnostics.pairedSamples,
@@ -3881,7 +4031,8 @@
                                 sampledPixelCount++] =
                                 projectedKey;
 
-                            if (!ownedNear(
+                            if (!structuralAppearanceFallback
+                                && !ownedNear(
                                     candidate.rotation,
                                     uint32_t(faceIndex),
                                     projected.x,
@@ -4409,6 +4560,9 @@
             options.silhouetteSupportRadius = 2;
             options.allowContinuousRefinement = false;
             options.opaqueBoundaryMaterial = true;
+            options.regularizeStructuralColumns = true;
+            options.facadeAxisIsForward =
+                (direction & 1u) != 0;
 
             auto built =
                 BuildLargeSceneryInstanceGeometry(

@@ -10,6 +10,7 @@
 #include "FirstPersonParkEntranceReconstruction.h"
 #include "FirstPersonPhysicalProxy.h"
 #include "FirstPersonSmallSceneryAppearance.h"
+#include "FirstPersonStructuralColumns.h"
 #include "FirstPersonTrackTrajectory.h"
 #include "FirstPersonTunnelGeometry.h"
 #include "FirstPersonVehicleBodyHull.h"

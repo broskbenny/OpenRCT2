@@ -25,6 +25,7 @@
 #include <openrct2/paint/FirstPersonTunnelGeometry.h>
 #include <openrct2/paint/FirstPersonSmallSceneryCollision.h>
 #include <openrct2/paint/FirstPersonSmallSceneryAppearance.h>
+#include <openrct2/paint/FirstPersonStructuralColumns.h>
 #include <openrct2/paint/FirstPersonVehicleBodyHull.h>
 #include <openrct2/paint/FirstPersonVisualHull.h>
 #include <openrct2/paint/FirstPersonWalkingSemantics.h>
@@ -59,6 +60,119 @@ namespace
             result.add(x, y);
         return result;
     }
+}
+
+TEST(FirstPersonStructuralColumnsTest, FillsRasterHolesInsideSupportedVerticalInterval)
+{
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 1.0f;
+    hull.sizeForward = 1;
+    hull.sizeRight = 1;
+    hull.sizeUp = 7;
+    hull.occupied.assign(7, 0);
+    hull.occupied[1] = 1;
+    hull.occupied[2] = 1;
+    hull.occupied[4] = 1;
+    hull.occupied[5] = 1;
+
+    const std::array<size_t, 7> evidence{
+        0, 4, 4, 2, 4, 4, 0
+    };
+    FirstPersonStructuralColumnConfig config{};
+    config.hardNegativeRunCells = 2;
+    const auto result =
+        RegularizeFirstPersonStructuralColumns(
+            hull, config,
+            [](FirstPersonVec3 point) {
+                return point.z >= 1.0f
+                    && point.z < 6.0f;
+            },
+            [&](FirstPersonVec3 point) {
+                const int32_t up =
+                    int32_t(std::floor(point.z));
+                return evidence[size_t(up)];
+            });
+
+    EXPECT_TRUE(result.hull.contains(0, 0, 1));
+    EXPECT_TRUE(result.hull.contains(0, 0, 2));
+    EXPECT_TRUE(result.hull.contains(0, 0, 3));
+    EXPECT_TRUE(result.hull.contains(0, 0, 4));
+    EXPECT_TRUE(result.hull.contains(0, 0, 5));
+}
+
+TEST(FirstPersonStructuralColumnsTest, NeverBridgesAuthoritativeNegativeSpace)
+{
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 1.0f;
+    hull.sizeForward = 1;
+    hull.sizeRight = 1;
+    hull.sizeUp = 8;
+    hull.occupied.assign(8, 0);
+    hull.occupied[1] = 1;
+    hull.occupied[2] = 1;
+    hull.occupied[5] = 1;
+    hull.occupied[6] = 1;
+
+    FirstPersonStructuralColumnConfig config{};
+    const auto result =
+        RegularizeFirstPersonStructuralColumns(
+            hull, config,
+            [](FirstPersonVec3 point) {
+                const int32_t up =
+                    int32_t(std::floor(point.z));
+                return up != 3 && up != 4;
+            },
+            [](FirstPersonVec3) {
+                return size_t{ 4 };
+            });
+
+    EXPECT_TRUE(result.hull.contains(0, 0, 2));
+    EXPECT_FALSE(result.hull.contains(0, 0, 3));
+    EXPECT_FALSE(result.hull.contains(0, 0, 4));
+    EXPECT_TRUE(result.hull.contains(0, 0, 5));
+}
+
+TEST(FirstPersonStructuralColumnsTest, BridgesOneFacadeNotchOnlyWithCorroboration)
+{
+    FirstPersonVisualHull hull{};
+    hull.valid = true;
+    hull.step = 1.0f;
+    hull.sizeForward = 1;
+    hull.sizeRight = 3;
+    hull.sizeUp = 5;
+    hull.occupied.assign(15, 0);
+    const auto index =
+        [](int32_t right, int32_t up) {
+            return (size_t(up) * 3u)
+                + size_t(right);
+        };
+    for (int32_t up = 1; up <= 3; ++up)
+    {
+        hull.occupied[index(0, up)] = 1;
+        hull.occupied[index(2, up)] = 1;
+    }
+
+    FirstPersonStructuralColumnConfig config{};
+    config.facadeAxisIsForward = false;
+    const auto result =
+        RegularizeFirstPersonStructuralColumns(
+            hull, config,
+            [](FirstPersonVec3 point) {
+                return point.z >= 1.0f
+                    && point.z < 4.0f;
+            },
+            [&](FirstPersonVec3 point) {
+                const int32_t right =
+                    int32_t(std::floor(point.y));
+                return right == 1
+                    ? size_t{ 2 } : size_t{ 4 };
+            });
+
+    EXPECT_TRUE(result.hull.contains(0, 1, 1));
+    EXPECT_TRUE(result.hull.contains(0, 1, 2));
+    EXPECT_TRUE(result.hull.contains(0, 1, 3));
 }
 
 TEST(FirstPersonParkEntranceReconstructionTest, PublishedProfilesPreserveAuthoritativeOpeningAndSideBodies)
