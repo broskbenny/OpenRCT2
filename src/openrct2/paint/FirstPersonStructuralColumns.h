@@ -10,6 +10,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
+#include <utility>
 #include <vector>
 
 namespace OpenRCT2::Paint
