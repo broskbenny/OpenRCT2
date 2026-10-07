@@ -1809,6 +1809,7 @@
             uint64_t signature{};
             uint64_t lastSeen{};
             bool dirty = false;
+            uint8_t direction = 0;
             bool hasBounds = false;
             int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
             std::array<
@@ -4087,6 +4088,7 @@
             ParkEntranceGeometryCacheEntry result{};
             result.signature = signature;
             result.lastSeen = frame;
+            result.direction = direction & 3u;
 
             result.hasBounds = true;
             result.minTileX =
@@ -5354,29 +5356,74 @@
                 || surface.immutableHeight <= 0)
                 return false;
 
-            // The semantic sign component is itself stronger evidence than the
-            // silhouette hull for this local feature: native paint published
-            // its carrier plane, orientation and exact scrolling-text raster.
-            // Do not search the grouped hull for a merely nearby parallel face
-            // and translate the sign onto it. That can attach the text to an
-            // arch/pillar facet that only approximates the actual sign panel.
             const std::array<FirstPersonVec3, 4>
-                signFace{ {
+                sourceFace{ {
                     surface.triangles[0].world,
                     surface.triangles[1].world,
                     surface.triangles[2].world,
                     surface.triangles[5].world,
                 } };
-            auto normal =
-                FpCross(
-                    Sub(signFace[1], signFace[0]),
-                    Sub(signFace[3], signFace[0]));
+            const auto sourceHorizontal =
+                Sub(sourceFace[1], sourceFace[0]);
+            const auto sourceVertical =
+                Sub(sourceFace[3], sourceFace[0]);
+            float width = std::hypot(
+                sourceHorizontal.x,
+                sourceHorizontal.y);
+            float height =
+                std::abs(sourceVertical.z);
+            if (!(width > 0.001f))
+                width = std::sqrt(
+                    FpDot(
+                        sourceHorizontal,
+                        sourceHorizontal));
+            if (!(height > 0.001f))
+                height = std::sqrt(
+                    FpDot(
+                        sourceVertical,
+                        sourceVertical));
+            if (!(width > 0.001f)
+                || !(height > 0.001f))
+                return false;
+
+            const FirstPersonVec3 center{
+                0.25f * (
+                    sourceFace[0].x
+                    + sourceFace[1].x
+                    + sourceFace[2].x
+                    + sourceFace[3].x),
+                0.25f * (
+                    sourceFace[0].y
+                    + sourceFace[1].y
+                    + sourceFace[2].y
+                    + sourceFace[3].y),
+                0.25f * (
+                    sourceFace[0].z
+                    + sourceFace[1].z
+                    + sourceFace[2].z
+                    + sourceFace[3].z),
+            };
+
+            // The dynamic scrolling raster is authoritative semantic evidence
+            // for the sign's centre, extent and UVs, but the generic inverse
+            // sprite plane is not authoritative physical orientation. A park
+            // entrance supplies that orientation directly: its direction is
+            // the passage/facade normal, while the three entrance sequences
+            // span the perpendicular facade axis.
+            const auto directionDelta =
+                CoordsDirectionDelta[
+                    geometry->second.direction & 3u];
+            FirstPersonVec3 normal{
+                float(directionDelta.x),
+                float(directionDelta.y),
+                0.0f,
+            };
             const float normalLength =
                 std::sqrt(FpDot(normal, normal));
             if (!(normalLength > 0.001f))
                 return false;
-            normal =
-                Mul(normal, 1.0f / normalLength);
+            normal = Mul(
+                normal, 1.0f / normalLength);
             if (surface.diagnosticSourceRotation < 4
                 && !FirstPersonSurfaceVisibleFromNativeView(
                     normal,
@@ -5385,9 +5432,95 @@
                 normal = Mul(normal, -1.0f);
             }
 
-            // Keep the exact semantic rectangle. The grouped body may be a
-            // silhouette-derived approximation; the dynamic sign is an
-            // explicit landmark and must not inherit that approximation error.
+            FirstPersonVec3 horizontal{
+                -normal.y, normal.x, 0.0f
+            };
+
+            // Preserve the native raster's left-to-right sense. The entrance
+            // direction fixes the plane but not which end is texture U=0.
+            if (surface.diagnosticSourceRotation < 4)
+            {
+                const auto project =
+                    [&](FirstPersonVec3 point) {
+                        return Translate3DTo2DWithZ(
+                            surface.diagnosticSourceRotation,
+                            {
+                                int32_t(std::lround(
+                                    point.x)),
+                                int32_t(std::lround(
+                                    point.y)),
+                                int32_t(std::lround(
+                                    point.z)),
+                            });
+                    };
+                const auto source0 =
+                    project(sourceFace[0]);
+                const auto source1 =
+                    project(sourceFace[1]);
+                const auto trial0 =
+                    project(center);
+                const auto trial1 =
+                    project(Add(
+                        center, horizontal));
+                const int32_t sourceDu =
+                    source1.x - source0.x;
+                const int32_t trialDu =
+                    trial1.x - trial0.x;
+                if (sourceDu != 0
+                    && trialDu != 0
+                    && (sourceDu < 0)
+                        != (trialDu < 0))
+                {
+                    horizontal =
+                        Mul(horizontal, -1.0f);
+                }
+            }
+
+            const FirstPersonVec3 vertical{
+                0.0f,
+                0.0f,
+                sourceVertical.z < 0.0f
+                    ? -1.0f : 1.0f,
+            };
+            const auto p0 =
+                Sub(
+                    Sub(
+                        center,
+                        Mul(horizontal,
+                            width * 0.5f)),
+                    Mul(vertical,
+                        height * 0.5f));
+            const auto p1 =
+                Add(
+                    Sub(
+                        center,
+                        Mul(vertical,
+                            height * 0.5f)),
+                    Mul(horizontal,
+                        width * 0.5f));
+            const auto p2 =
+                Add(
+                    Add(
+                        center,
+                        Mul(horizontal,
+                            width * 0.5f)),
+                    Mul(vertical,
+                        height * 0.5f));
+            const auto p3 =
+                Add(
+                    Sub(
+                        center,
+                        Mul(horizontal,
+                            width * 0.5f)),
+                    Mul(vertical,
+                        height * 0.5f));
+
+            surface.triangles[0].world = p0;
+            surface.triangles[1].world = p1;
+            surface.triangles[2].world = p2;
+            surface.triangles[3].world = p0;
+            surface.triangles[4].world = p2;
+            surface.triangles[5].world = p3;
             surface.exteriorOnly = true;
             surface.outwardNormal = normal;
             surface.diagnosticReconstructionKind = 3;

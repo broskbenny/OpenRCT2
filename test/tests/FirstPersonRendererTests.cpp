@@ -1051,6 +1051,33 @@ TEST(FirstPersonMaterialInferenceTest, SparseTransparencyRemainsUnknownUntilCorr
         FirstPersonMaterialEvidenceKind::transparent);
 }
 
+TEST(FirstPersonSmallSceneryAppearanceTest, TreeArtworkMappingKeepsHorizontalRowsLevel)
+{
+    const auto mapping =
+        BuildFirstPersonTreeArtworkMapping(
+            10.5f, 21.0f,
+            1.0f, -1.0f);
+    ASSERT_TRUE(mapping.valid);
+
+    // Native isometric projection would also move screen V while walking
+    // horizontally across this plane. Crossed tree artwork deliberately does
+    // not inherit that coupling: equal world heights stay on the same source
+    // row, so a rectangular sprite cannot become a sheared rhombus.
+    const auto left =
+        mapping.sourcePixel(-6.0f, 8.0f);
+    const auto right =
+        mapping.sourcePixel(6.0f, 8.0f);
+    EXPECT_FLOAT_EQ(left[1], right[1]);
+    EXPECT_LT(left[0], right[0]);
+
+    const auto low =
+        mapping.sourcePixel(0.0f, 2.0f);
+    const auto high =
+        mapping.sourcePixel(0.0f, 12.0f);
+    EXPECT_FLOAT_EQ(low[0], high[0]);
+    EXPECT_GT(low[1], high[1]);
+}
+
 TEST(FirstPersonSmallSceneryAppearanceTest, TreeArtworkExtentCanExceedCollisionFootprint)
 {
     std::vector<uint8_t> pixels(21u * 21u, 0);
@@ -1067,19 +1094,18 @@ TEST(FirstPersonSmallSceneryAppearanceTest, TreeArtworkExtentCanExceedCollisionF
     EXPECT_EQ(bounds.minV, 0);
     EXPECT_EQ(bounds.maxV, 20);
 
+    const auto mapping =
+        BuildFirstPersonTreeArtworkMapping(
+            10.5f, 21.0f,
+            1.0f, -1.0f);
+    ASSERT_TRUE(mapping.valid);
+
     FirstPersonTreePlaneExtent extent{};
-    // Screen U follows horizontal distance; screen V falls as world Z rises.
-    // Ground is at source pixel (10,20), so the native artwork spans roughly
-    // ten units either side of the trunk and twenty units above it.
-    extent.include(
-        10.0f, 20.0f,
-        1.0f, 0.0f,
-        0.0f, -1.0f,
-        bounds);
+    extent.include(mapping, bounds);
     ASSERT_TRUE(extent.valid);
-    EXPECT_LE(extent.minAlong, -10.0f);
-    EXPECT_GE(extent.maxAlong, 10.0f);
-    EXPECT_GE(extent.maxUp, 20.0f);
+    EXPECT_LE(extent.minAlong, -10.5f);
+    EXPECT_GE(extent.maxAlong, 10.5f);
+    EXPECT_GE(extent.maxUp, 21.0f);
 
     const auto footprint =
         BuildFirstPersonSmallSceneryFootprint(

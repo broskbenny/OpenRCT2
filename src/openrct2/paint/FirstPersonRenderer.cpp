@@ -295,7 +295,8 @@ namespace OpenRCT2::Paint
 
         [[nodiscard]] bool IntersectFirstPersonInspectorSurface(
             const FirstPersonSurface& surface, const FirstPersonVec3& origin,
-            const FirstPersonVec3& direction, FirstPersonInspectorHit& hit)
+            const FirstPersonVec3& direction, FirstPersonInspectorHit& hit,
+            bool enforceExterior = true)
         {
             bool found = false;
             float bestDistance = std::numeric_limits<float>::max();
@@ -329,7 +330,8 @@ namespace OpenRCT2::Paint
                 origin.y + direction.y * bestDistance,
                 origin.z + direction.z * bestDistance,
             };
-            if (surface.exteriorOnly)
+            if (enforceExterior
+                && surface.exteriorOnly)
             {
                 const FirstPersonVec3 towardEye{
                     origin.x - point.x,
@@ -952,6 +954,10 @@ namespace OpenRCT2::Paint
         struct FirstPersonInspectorSelection
         {
             std::vector<FirstPersonInspectorHit> visible;
+            std::vector<FirstPersonInspectorHit>
+                rejectedMaterial;
+            std::vector<FirstPersonInspectorHit>
+                rejectedBackface;
             size_t primaryIndex = 0;
         };
 
@@ -977,7 +983,8 @@ namespace OpenRCT2::Paint
                 FirstPersonInspectorHit hit{};
                 if (!IntersectFirstPersonInspectorSurface(
                         scene.surfaces[i],
-                        camera.position, direction, hit)
+                        camera.position, direction, hit,
+                        false)
                     || hit.distance
                         > scene.resolvedView.farClip)
                     continue;
@@ -998,7 +1005,8 @@ namespace OpenRCT2::Paint
                     FirstPersonInspectorHit hit{};
                     if (!IntersectFirstPersonInspectorSurface(
                             surfaces[i],
-                            camera.position, direction, hit)
+                            camera.position, direction, hit,
+                            false)
                         || hit.distance
                             > scene.resolvedView.farClip)
                         continue;
@@ -1033,20 +1041,44 @@ namespace OpenRCT2::Paint
                         > firstVisibleDistance
                             + kCoplanarBand)
                     break;
+                if (hit.surface->exteriorOnly)
+                {
+                    const FirstPersonVec3 towardEye{
+                        camera.position.x - hit.point.x,
+                        camera.position.y - hit.point.y,
+                        camera.position.z - hit.point.z,
+                    };
+                    if (FpDot(
+                            hit.surface->outwardNormal,
+                            towardEye) <= 0.0f)
+                    {
+                        selection.rejectedBackface.push_back(
+                            hit);
+                        continue;
+                    }
+                }
                 if (!FirstPersonInspectorSurfaceVisibleAtHit(
                         hit))
+                {
+                    selection.rejectedMaterial.push_back(
+                        hit);
                     continue;
+                }
                 if (firstVisibleDistance
                     == std::numeric_limits<float>::max())
                     firstVisibleDistance = hit.distance;
                 selection.visible.push_back(hit);
             }
 
-            if (selection.visible.empty())
+            if (selection.visible.empty()
+                && selection.rejectedMaterial.empty()
+                && selection.rejectedBackface.empty())
                 return std::nullopt;
 
             for (size_t i = 1;
-                 i < selection.visible.size(); ++i)
+                 !selection.visible.empty()
+                     && i < selection.visible.size();
+                 ++i)
             {
                 if (std::abs(
                         selection.visible[i].distance
@@ -1094,7 +1126,7 @@ namespace OpenRCT2::Paint
             if (!selection.has_value())
             {
                 Console::WriteLine(
-                    "no visible first-person surface intersects the centre ray");
+                    "no first-person geometry intersects the centre ray");
                 Console::WriteLine("=============================");
                 return;
             }
@@ -1103,21 +1135,89 @@ namespace OpenRCT2::Paint
             const size_t primaryIndex =
                 selection->primaryIndex;
             constexpr float kCoplanarBand = 0.25f;
-            DumpFirstPersonInspectorSurface(
-                visible[primaryIndex], "PRIMARY", true);
-            Console::WriteLine(
-                "--- FP_PICK NEAR-LAYER count=%zu band=%.3f ---",
-                visible.size(), double(kCoplanarBand));
-            for (size_t i = 0; i < visible.size(); ++i)
+            const FirstPersonInspectorHit*
+                referenceHit = nullptr;
+            if (!visible.empty())
             {
-                if (i == primaryIndex)
-                    continue;
+                referenceHit =
+                    &visible[primaryIndex];
                 DumpFirstPersonInspectorSurface(
-                    visible[i], "COMPETITOR", false);
+                    visible[primaryIndex],
+                    "PRIMARY", true);
+                Console::WriteLine(
+                    "--- FP_PICK NEAR-LAYER count=%zu band=%.3f ---",
+                    visible.size(),
+                    double(kCoplanarBand));
+                for (size_t i = 0;
+                     i < visible.size(); ++i)
+                {
+                    if (i == primaryIndex)
+                        continue;
+                    DumpFirstPersonInspectorSurface(
+                        visible[i],
+                        "COMPETITOR", false);
+                }
+            }
+            else
+            {
+                Console::WriteLine(
+                    "no visible surface survived material/sidedness checks");
             }
 
-            DumpFirstPersonInspectorRelevantTiles(
-                visible[primaryIndex].point);
+            Console::WriteLine(
+                "--- FP_PICK REJECTED-MATERIAL count=%zu ---",
+                selection->rejectedMaterial.size());
+            for (size_t i = 0;
+                 i < selection->rejectedMaterial.size()
+                    && i < 12;
+                 ++i)
+            {
+                const auto& hit =
+                    selection->rejectedMaterial[i];
+                if (referenceHit == nullptr)
+                    referenceHit = &hit;
+                DumpFirstPersonInspectorSurface(
+                    hit,
+                    "REJECTED_MATERIAL", false);
+                uint8_t sampledPixel = 0;
+                const bool sampled =
+                    hit.surface->hasImmutablePixelData()
+                    && SampleFirstPersonInspectorPixels(
+                        hit.surface->immutablePixelData(),
+                        hit.surface->immutableWidth,
+                        hit.surface->immutableHeight,
+                        hit.u, hit.v,
+                        sampledPixel);
+                Console::WriteLine(
+                    "  rejectionSample immutable=%d sampled=%d pixel=%u",
+                    hit.surface->hasImmutablePixelData()
+                        ? 1 : 0,
+                    sampled ? 1 : 0,
+                    unsigned(sampledPixel));
+            }
+
+            Console::WriteLine(
+                "--- FP_PICK REJECTED-BACKFACE count=%zu ---",
+                selection->rejectedBackface.size());
+            for (size_t i = 0;
+                 i < selection->rejectedBackface.size()
+                    && i < 12;
+                 ++i)
+            {
+                const auto& hit =
+                    selection->rejectedBackface[i];
+                if (referenceHit == nullptr)
+                    referenceHit = &hit;
+                DumpFirstPersonInspectorSurface(
+                    hit,
+                    "REJECTED_BACKFACE", false);
+            }
+
+            if (referenceHit != nullptr)
+            {
+                DumpFirstPersonInspectorRelevantTiles(
+                    referenceHit->point);
+            }
             Console::WriteLine("=============================");
         }
     } // namespace

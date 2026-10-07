@@ -192,6 +192,46 @@ namespace OpenRCT2::Paint
         return result;
     }
 
+    struct FirstPersonTreeArtworkMapping
+    {
+        bool valid = false;
+        float groundU = 0.0f;
+        float groundV = 0.0f;
+        float alongUPerUnit = 0.0f;
+        float upVPerUnit = 0.0f;
+
+        [[nodiscard]] std::array<float, 2> sourcePixel(
+            float along, float up) const
+        {
+            return {
+                groundU + along * alongUPerUnit,
+                groundV + up * upVPerUnit,
+            };
+        }
+    };
+
+    [[nodiscard]] inline FirstPersonTreeArtworkMapping
+        BuildFirstPersonTreeArtworkMapping(
+            float groundU, float groundV,
+            float alongUPerUnit, float upVPerUnit)
+    {
+        FirstPersonTreeArtworkMapping result{};
+        if (!std::isfinite(groundU)
+            || !std::isfinite(groundV)
+            || !std::isfinite(alongUPerUnit)
+            || !std::isfinite(upVPerUnit)
+            || std::abs(alongUPerUnit) < 1.0e-5f
+            || std::abs(upVPerUnit) < 1.0e-5f)
+            return result;
+
+        result.valid = true;
+        result.groundU = groundU;
+        result.groundV = groundV;
+        result.alongUPerUnit = alongUPerUnit;
+        result.upVPerUnit = upVPerUnit;
+        return result;
+    }
+
     struct FirstPersonTreePlaneExtent
     {
         bool valid = false;
@@ -200,69 +240,52 @@ namespace OpenRCT2::Paint
         float maxUp = 0.0f;
 
         void include(
-            float groundU, float groundV,
-            float alongUPerUnit, float alongVPerUnit,
-            float upUPerUnit, float upVPerUnit,
+            const FirstPersonTreeArtworkMapping& mapping,
             const FirstPersonTreeArtworkBounds& bounds)
         {
-            if (!bounds.valid)
-                return;
-            const float determinant =
-                alongUPerUnit * upVPerUnit
-                - alongVPerUnit * upUPerUnit;
-            if (std::abs(determinant) < 1.0e-5f)
+            if (!mapping.valid || !bounds.valid)
                 return;
 
-            const std::array<std::array<float, 2>, 4>
-                corners{ {
-                    {
-                        float(bounds.minU),
-                        float(bounds.minV),
-                    },
-                    {
-                        float(bounds.maxU + 1),
-                        float(bounds.minV),
-                    },
-                    {
-                        float(bounds.maxU + 1),
-                        float(bounds.maxV + 1),
-                    },
-                    {
-                        float(bounds.minU),
-                        float(bounds.maxV + 1),
-                    },
-                } };
-            for (const auto& corner : corners)
+            const float along0 =
+                (float(bounds.minU) - mapping.groundU)
+                / mapping.alongUPerUnit;
+            const float along1 =
+                (float(bounds.maxU + 1) - mapping.groundU)
+                / mapping.alongUPerUnit;
+            const float up0 =
+                (float(bounds.minV) - mapping.groundV)
+                / mapping.upVPerUnit;
+            const float up1 =
+                (float(bounds.maxV + 1) - mapping.groundV)
+                / mapping.upVPerUnit;
+            if (!std::isfinite(along0)
+                || !std::isfinite(along1)
+                || !std::isfinite(up0)
+                || !std::isfinite(up1))
+                return;
+
+            const float localMinAlong =
+                std::min(along0, along1);
+            const float localMaxAlong =
+                std::max(along0, along1);
+            const float localMaxUp =
+                std::max(
+                    0.0f,
+                    std::max(up0, up1));
+            if (!valid)
             {
-                const float du = corner[0] - groundU;
-                const float dv = corner[1] - groundV;
-                const float along =
-                    (du * upVPerUnit
-                        - dv * upUPerUnit)
-                    / determinant;
-                const float up =
-                    (alongUPerUnit * dv
-                        - alongVPerUnit * du)
-                    / determinant;
-                if (!std::isfinite(along)
-                    || !std::isfinite(up))
-                    continue;
-                if (!valid)
-                {
-                    minAlong = maxAlong = along;
-                    maxUp = std::max(0.0f, up);
-                    valid = true;
-                }
-                else
-                {
-                    minAlong =
-                        std::min(minAlong, along);
-                    maxAlong =
-                        std::max(maxAlong, along);
-                    maxUp =
-                        std::max(maxUp, up);
-                }
+                minAlong = localMinAlong;
+                maxAlong = localMaxAlong;
+                maxUp = localMaxUp;
+                valid = true;
+                return;
             }
+            minAlong = std::min(
+                minAlong, localMinAlong);
+            maxAlong = std::max(
+                maxAlong, localMaxAlong);
+            maxUp = std::max(
+                maxUp, localMaxUp);
         }
     };
 

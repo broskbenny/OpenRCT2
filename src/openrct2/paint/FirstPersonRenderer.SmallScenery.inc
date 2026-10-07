@@ -34,6 +34,12 @@
             BakedSmallSceneryEntry baked;
 
             auto faces = appearance.faces;
+            const auto treeFootprint =
+                appearance.kind
+                    == FirstPersonSmallSceneryAppearanceKind::crossedTree
+                ? BuildFirstPersonSmallSceneryFootprint(
+                    *entry, *small)
+                : FirstPersonSmallSceneryFootprint{};
             if (faces.empty())
             {
                 baked.resolved = true;
@@ -104,6 +110,10 @@
                 uint8_t rotation = 0;
                 int32_t groundingShiftU = 0;
                 int32_t groundingShiftV = 0;
+                FirstPersonTreeArtworkMapping
+                    xCentredMapping{};
+                FirstPersonTreeArtworkMapping
+                    yCentredMapping{};
                 std::vector<uint8_t> pixels;
             };
             const auto textureViews =
@@ -134,10 +144,7 @@
                 if (appearance.kind
                     == FirstPersonSmallSceneryAppearanceKind::crossedTree)
                 {
-                    const auto footprint =
-                        BuildFirstPersonSmallSceneryFootprint(
-                            *entry, *small);
-                    if (footprint.valid)
+                    if (treeFootprint.valid)
                     {
                         const auto nominalGround =
                             FirstPersonSmallScenerySpritePixelForPoint(
@@ -145,9 +152,9 @@
                                 view.imageDirection,
                                 {
                                     int32_t(std::lround(
-                                        footprint.centreForward())),
+                                        treeFootprint.centreForward())),
                                     int32_t(std::lround(
-                                        footprint.centreRight())),
+                                        treeFootprint.centreRight())),
                                     0,
                                 },
                                 *g1);
@@ -168,12 +175,93 @@
                         }
                     }
                 }
+                FirstPersonTreeArtworkMapping
+                    xCentredMapping{};
+                FirstPersonTreeArtworkMapping
+                    yCentredMapping{};
+                if (appearance.kind
+                        == FirstPersonSmallSceneryAppearanceKind::crossedTree
+                    && treeFootprint.valid)
+                {
+                    constexpr int32_t kBasisStep = 16;
+                    const int32_t cx =
+                        int32_t(std::lround(
+                            treeFootprint.centreForward()));
+                    const int32_t cy =
+                        int32_t(std::lround(
+                            treeFootprint.centreRight()));
+                    const auto effectivePixel =
+                        [&](CoordsXYZ local) {
+                            const auto pixel =
+                                FirstPersonSmallScenerySpritePixelForPoint(
+                                    *entry, *small,
+                                    view.imageDirection,
+                                    local, *g1);
+                            return std::array<float, 2>{
+                                float(
+                                    pixel.x
+                                    + groundingShiftU),
+                                float(
+                                    pixel.y
+                                    + groundingShiftV),
+                            };
+                        };
+                    const auto ground =
+                        effectivePixel(
+                            { cx, cy, 0 });
+                    const auto up =
+                        effectivePixel(
+                            { cx, cy, kBasisStep });
+                    const auto alongY =
+                        effectivePixel(
+                            {
+                                cx,
+                                cy + kBasisStep,
+                                0,
+                            });
+                    const auto alongX =
+                        effectivePixel(
+                            {
+                                cx + kBasisStep,
+                                cy,
+                                0,
+                            });
+
+                    // Tree sprites are authored upright artwork, not literal
+                    // photographs of a vertical world plane. Native isometric
+                    // projection makes horizontal world motion drift in screen
+                    // V; feeding that drift back into the carrier shears a
+                    // rectangular sprite into a rhombus. Keep the two artwork
+                    // axes independent: world-horizontal drives source U and
+                    // world-up drives source V.
+                    const float groundU =
+                        ground[0] + 0.5f;
+                    const float groundV =
+                        ground[1] + 1.0f;
+                    const float upVPerUnit =
+                        (up[1] - ground[1])
+                        / float(kBasisStep);
+                    xCentredMapping =
+                        BuildFirstPersonTreeArtworkMapping(
+                            groundU, groundV,
+                            (alongY[0] - ground[0])
+                                / float(kBasisStep),
+                            upVPerUnit);
+                    yCentredMapping =
+                        BuildFirstPersonTreeArtworkMapping(
+                            groundU, groundV,
+                            (alongX[0] - ground[0])
+                                / float(kBasisStep),
+                            upVPerUnit);
+                }
                 decodedViews.push_back({
                     sourceImage,
                     g1,
                     view.imageDirection,
                     groundingShiftU,
                     groundingShiftV,
+                    xCentredMapping,
+                    yCentredMapping,
                     std::move(*decoded),
                 });
             }
@@ -181,23 +269,12 @@
             if (appearance.kind
                 == FirstPersonSmallSceneryAppearanceKind::crossedTree)
             {
-                const auto footprint =
-                    BuildFirstPersonSmallSceneryFootprint(
-                        *entry, *small);
                 FirstPersonTreePlaneExtent
                     xCentredExtent{};
                 FirstPersonTreePlaneExtent
                     yCentredExtent{};
-                if (footprint.valid)
+                if (treeFootprint.valid)
                 {
-                    constexpr int32_t kBasisStep = 16;
-                    const int32_t cx =
-                        int32_t(std::lround(
-                            footprint.centreForward()));
-                    const int32_t cy =
-                        int32_t(std::lround(
-                            footprint.centreRight()));
-
                     for (const auto& source :
                          decodedViews)
                     {
@@ -210,73 +287,17 @@
                                     G1Flag::hasTransparency));
                         if (!bounds.valid)
                             continue;
-
-                        const auto effectivePixel =
-                            [&](CoordsXYZ local) {
-                                const auto pixel =
-                                    FirstPersonSmallScenerySpritePixelForPoint(
-                                        *entry, *small,
-                                        source.rotation,
-                                        local, *source.g1);
-                                return std::array<float, 2>{
-                                    float(
-                                        pixel.x
-                                        + source.groundingShiftU),
-                                    float(
-                                        pixel.y
-                                        + source.groundingShiftV),
-                                };
-                            };
-
-                        const auto ground =
-                            effectivePixel(
-                                { cx, cy, 0 });
-                        const auto up =
-                            effectivePixel(
-                                { cx, cy, kBasisStep });
-                        const float upUPerUnit =
-                            (up[0] - ground[0])
-                            / float(kBasisStep);
-                        const float upVPerUnit =
-                            (up[1] - ground[1])
-                            / float(kBasisStep);
-
-                        const auto alongY =
-                            effectivePixel(
-                                {
-                                    cx,
-                                    cy + kBasisStep,
-                                    0,
-                                });
                         xCentredExtent.include(
-                            ground[0], ground[1],
-                            (alongY[0] - ground[0])
-                                / float(kBasisStep),
-                            (alongY[1] - ground[1])
-                                / float(kBasisStep),
-                            upUPerUnit, upVPerUnit,
+                            source.xCentredMapping,
                             bounds);
-
-                        const auto alongX =
-                            effectivePixel(
-                                {
-                                    cx + kBasisStep,
-                                    cy,
-                                    0,
-                                });
                         yCentredExtent.include(
-                            ground[0], ground[1],
-                            (alongX[0] - ground[0])
-                                / float(kBasisStep),
-                            (alongX[1] - ground[1])
-                                / float(kBasisStep),
-                            upUPerUnit, upVPerUnit,
+                            source.yCentredMapping,
                             bounds);
                     }
 
                     const auto artworkFaces =
                         BuildFirstPersonCrossedTreeFaces(
-                            footprint,
+                            treeFootprint,
                             &xCentredExtent,
                             &yCentredExtent);
                     if (!artworkFaces.empty())
@@ -509,40 +530,76 @@
                                     sourceView.image))
                                 continue;
 
-                            const auto projected =
-                                Translate3DTo2DWithZ(
-                                    sourceView.rotation,
-                                    {
-                                        int32_t(std::lround(
-                                            point.x)),
-                                        int32_t(std::lround(
-                                            point.y)),
-                                        int32_t(std::lround(
-                                            point.z)),
-                                    });
-                            if (!ownedNear(
-                                    sourceView.rotation,
-                                    uint32_t(faceIndex),
-                                    projected.x,
-                                    projected.y))
-                                continue;
+                            int32_t u = 0;
+                            int32_t v = 0;
+                            if (appearance.kind
+                                == FirstPersonSmallSceneryAppearanceKind::
+                                    crossedTree)
+                            {
+                                const bool xCentred =
+                                    std::abs(face.normal.x) > 0.5f;
+                                const auto& mapping =
+                                    xCentred
+                                    ? sourceView.xCentredMapping
+                                    : sourceView.yCentredMapping;
+                                if (!mapping.valid
+                                    || !treeFootprint.valid)
+                                    continue;
 
-                            const auto paintOffset =
-                                FirstPersonSmallSceneryPaintOffset(
-                                    *entry, *small,
-                                    sourceView.rotation);
-                            const auto sourceOrigin =
-                                Translate3DTo2DWithZ(
-                                    sourceView.rotation,
-                                    { paintOffset, 0 });
-                            const int32_t u =
-                                projected.x - sourceOrigin.x
-                                - sourceView.g1->xOffset
-                                + sourceView.groundingShiftU;
-                            const int32_t v =
-                                projected.y - sourceOrigin.y
-                                - sourceView.g1->yOffset
-                                + sourceView.groundingShiftV;
+                                const float along =
+                                    xCentred
+                                    ? point.y
+                                        - treeFootprint.centreRight()
+                                    : point.x
+                                        - treeFootprint.centreForward();
+                                const float up =
+                                    point.z
+                                    - treeFootprint.minUp;
+                                const auto sourcePixel =
+                                    mapping.sourcePixel(
+                                        along, up);
+                                u = int32_t(std::floor(
+                                    sourcePixel[0]));
+                                v = int32_t(std::floor(
+                                    sourcePixel[1]));
+                            }
+                            else
+                            {
+                                const auto projected =
+                                    Translate3DTo2DWithZ(
+                                        sourceView.rotation,
+                                        {
+                                            int32_t(std::lround(
+                                                point.x)),
+                                            int32_t(std::lround(
+                                                point.y)),
+                                            int32_t(std::lround(
+                                                point.z)),
+                                        });
+                                if (!ownedNear(
+                                        sourceView.rotation,
+                                        uint32_t(faceIndex),
+                                        projected.x,
+                                        projected.y))
+                                    continue;
+
+                                const auto paintOffset =
+                                    FirstPersonSmallSceneryPaintOffset(
+                                        *entry, *small,
+                                        sourceView.rotation);
+                                const auto sourceOrigin =
+                                    Translate3DTo2DWithZ(
+                                        sourceView.rotation,
+                                        { paintOffset, 0 });
+                                u =
+                                    projected.x - sourceOrigin.x
+                                    - sourceView.g1->xOffset
+                                    + sourceView.groundingShiftU;
+                                v =
+                                    projected.y - sourceOrigin.y
+                                    - sourceView.g1->yOffset
+                                    + sourceView.groundingShiftV;
+                            }
                             if (u < 0 || v < 0
                                 || u >= sourceView.g1->width
                                 || v >= sourceView.g1->height)
