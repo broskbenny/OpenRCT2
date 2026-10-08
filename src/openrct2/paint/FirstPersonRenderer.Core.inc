@@ -1856,6 +1856,16 @@
         static std::unordered_map<uint64_t, std::unordered_set<uint64_t>>
             _largeSceneryGroupsByBoundsRegion;
         static std::unordered_set<uint64_t> _activeLargeSceneryRegions;
+        struct PendingLargeSceneryBodyRange
+        {
+            uint32_t first{};
+            uint32_t last{};
+        };
+        // Rebuilt from visible, eligible groups every frame. Presence means
+        // real 3D is still the primary presentation and native body sprites
+        // must not flash in while capture/worker capacity catches up.
+        static std::unordered_map<uint64_t, PendingLargeSceneryBodyRange>
+            _pendingLargeSceneryBodies;
         static bool _largeSceneryGeometryEnabled = false;
 
         struct ParkEntranceGeometryCacheEntry
@@ -1880,6 +1890,11 @@
         static std::unordered_map<
             uint64_t, std::unordered_set<uint64_t>>
             _parkEntranceGroupsByBoundsRegion;
+        // Same presentation contract as grouped large scenery: a valid pending
+        // reconstruction waits invisibly rather than presenting a billboard
+        // that will morph into geometry a few frames later.
+        static std::unordered_set<uint64_t>
+            _pendingParkEntranceBodies;
         static bool _parkEntranceGeometryEnabled = false;
 
         void MarkStaticRegionRelationshipNeighboursDirty(
@@ -4770,6 +4785,7 @@
         void UpdateLargeSceneryReconstructions(FirstPersonScene& scene, uint64_t frame)
         {
             _activeLargeSceneryRegions.clear();
+            _pendingLargeSceneryBodies.clear();
             const bool enabled =
                 LargeSceneryGeometryAllowedForView(scene.options.viewFlags);
             if (_largeSceneryGeometryEnabled != enabled)
@@ -4845,7 +4861,9 @@
                         large != nullptr ? large->getEntry() : nullptr;
                     if (large == nullptr || entry == nullptr
                         || !LargeSceneryAssetEligible(*entry)
-                        || !LargeSceneryInstanceMetadataMatches(*large, *entry))
+                        || !LargeSceneryInstanceMetadataMatches(*large, *entry)
+                        || !LargeSceneryInstanceComplete(
+                            *entry, group, large->getDirection() & 3u))
                     {
                         if (cached != _largeSceneryGeometryCache.end())
                         {
@@ -4857,6 +4875,11 @@
                         continue;
                     }
 
+                    const uint32_t bodyFirst = entry->image + 4;
+                    _pendingLargeSceneryBodies[group.key] = {
+                        bodyFirst,
+                        bodyFirst + uint32_t(entry->tiles.size() * 4),
+                    };
                     QueueLargeSceneryGeometry(*large, *entry, group, frame);
                 }
             }
@@ -5110,6 +5133,7 @@
         void UpdateParkEntranceReconstructions(
             FirstPersonScene& scene, uint64_t frame)
         {
+            _pendingParkEntranceBodies.clear();
             const bool enabled =
                 ParkEntranceGeometryAllowedForView(
                     scene.options.viewFlags);
@@ -5245,6 +5269,8 @@
                         continue;
                     }
 
+                    _pendingParkEntranceBodies.insert(
+                        group.key);
                     QueueParkEntranceGeometry(
                         *centre, *object, group,
                         frame);
@@ -5272,6 +5298,9 @@
                     && role
                         != FirstPersonPaintSemanticRole::sign))
                 return false;
+            if (_pendingParkEntranceBodies.contains(
+                    surface.reconstructionGroup))
+                return true;
             const auto found =
                 _parkEntranceGeometryCache.find(
                     surface.reconstructionGroup);
@@ -5490,14 +5519,30 @@
             if (!_largeSceneryGeometryEnabled || surface.reconstructionGroup == 0
                 || !surface.image.HasValue())
                 return false;
-            const auto found = _largeSceneryGeometryCache.find(surface.reconstructionGroup);
-            if (found == _largeSceneryGeometryCache.end() || found->second.dirty
-                || found->second.lastSeen != frame
-                || found->second.surfaces.empty())
-                return false;
+
             const auto image = surface.image.GetIndex();
-            return image >= found->second.bodyImageFirst
-                && image < found->second.bodyImageLast;
+            const auto found =
+                _largeSceneryGeometryCache.find(
+                    surface.reconstructionGroup);
+            if (found != _largeSceneryGeometryCache.end()
+                && !found->second.dirty
+                && found->second.lastSeen == frame)
+            {
+                // A completed unusable result is an explicit reconstruction
+                // failure. Only then may native artwork become the last-resort
+                // fallback instead of a temporary loading representation.
+                if (found->second.surfaces.empty())
+                    return false;
+                return image >= found->second.bodyImageFirst
+                    && image < found->second.bodyImageLast;
+            }
+
+            const auto pending =
+                _pendingLargeSceneryBodies.find(
+                    surface.reconstructionGroup);
+            return pending != _pendingLargeSceneryBodies.end()
+                && image >= pending->second.first
+                && image < pending->second.last;
         }
 
         [[nodiscard]] bool IsResidentStaticSurface(const FirstPersonSurface& surface)
