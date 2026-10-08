@@ -475,6 +475,10 @@
                             crossedTree;
                 surface.exteriorOnly =
                     appearance.oneSidedArtwork;
+                surface.diagnosticHullEvidenceKind =
+                    hull != nullptr
+                    ? static_cast<uint8_t>(hull->evidenceKind)
+                    : 0;
 
                 if (!candidates.empty())
                 {

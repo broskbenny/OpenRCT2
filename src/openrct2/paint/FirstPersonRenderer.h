@@ -233,6 +233,9 @@ namespace OpenRCT2::Paint
         uint32_t diagnosticHullBoundaryFaces = 0;
         uint32_t diagnosticHullMaterialFaces = 0;
         uint32_t diagnosticHullOpaqueFaces = 0;
+        // FirstPersonVisualHullEvidenceKind, stored without coupling this
+        // renderer-facing surface type to reconstruction headers.
+        uint8_t diagnosticHullEvidenceKind = 0;
         // Zero means tile-local/unconnected artwork. Nonzero identifies a
         // multi-tile reconstruction group whose native source rotation is
         // selected from one canonical object/track origin.

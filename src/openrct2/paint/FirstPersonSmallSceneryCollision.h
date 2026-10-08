@@ -516,8 +516,24 @@ namespace OpenRCT2::Paint
                 pointSupported);
             if (carved.valid)
                 return carved;
+
+            auto upperEnvelope =
+                BuildFirstPersonSupportedUpperEnvelopeHull(
+                    views, bounds, config,
+                    projectPoint, occupancyPredicate,
+                    pointSupported);
+            if (upperEnvelope.valid)
+                return upperEnvelope;
+
+            // We had native silhouette evidence, but neither structural
+            // hypothesis reproduced it reliably. Footprint/height remains
+            // authoritative for collision and support, not for visible matter.
+            return {};
         }
 
+        // Stateful/glass/effect artwork deliberately skips silhouette analysis.
+        // Preserve the existing occupancy presentation only for those families
+        // until they publish stronger appearance semantics.
         return BuildFirstPersonOccupancyHull(
             bounds, config, textureViews, occupancyPredicate);
     }
