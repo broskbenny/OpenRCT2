@@ -4658,6 +4658,29 @@
                         for (const auto& peer :
                              bucket->second)
                         {
+                            const auto& surface =
+                                packet.surfaces[index];
+                            const auto& other =
+                                packet.surfaces[
+                                    peer.surfaceIndex];
+
+                            // Different decorative sprite carriers are not
+                            // structural walls. Their transparent bounding
+                            // rectangles overlap frequently across trees;
+                            // AABB contact does not prove opaque Z-fighting.
+                            // Preserve all mixed or physical cases.
+                            if (other.artworkCarrier
+                                && surface.artworkCarrier
+                                && !other.physicalCoverage
+                                && !surface.physicalCoverage
+                                && other.reconstructionGroup == 0
+                                && surface.reconstructionGroup == 0
+                                && other.sourceInstanceKey != 0
+                                && surface.sourceInstanceKey != 0
+                                && other.sourceInstanceKey
+                                    != surface.sourceInstanceKey)
+                                continue;
+
                             if (peer.projectionAxis
                                 != probe->projectionAxis)
                                 continue;
@@ -4694,29 +4717,6 @@
                                     overlapU, overlapV);
                             if (overlapArea < 16.0f
                                 && overlapLength < 8.0f)
-                                continue;
-
-                            const auto& surface =
-                                packet.surfaces[index];
-                            const auto& other =
-                                packet.surfaces[
-                                    peer.surfaceIndex];
-
-                            // Different decorative sprite carriers are not
-                            // structural walls. Their transparent bounding
-                            // rectangles overlap frequently across trees;
-                            // AABB contact does not prove opaque Z-fighting.
-                            // Preserve all mixed or physical cases.
-                            if (other.artworkCarrier
-                                && surface.artworkCarrier
-                                && !other.physicalCoverage
-                                && !surface.physicalCoverage
-                                && other.reconstructionGroup == 0
-                                && surface.reconstructionGroup == 0
-                                && other.sourceInstanceKey != 0
-                                && surface.sourceInstanceKey != 0
-                                && other.sourceInstanceKey
-                                    != surface.sourceInstanceKey)
                                 continue;
 
                             // Require actual coplanar triangle intersection,
