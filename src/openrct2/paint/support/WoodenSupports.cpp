@@ -636,13 +636,13 @@ static void PublishFirstPersonStraightWoodenSlopeGeometry(
         int32_t advance = 0;
         switch (direction & 3u)
         {
-            case 0: advance = 32 - post.x; break;
+            case 0: advance = kCoordsXYStep - post.x; break;
             case 1: advance = post.y; break;
             case 2: advance = post.x; break;
-            default: advance = 32 - post.y; break;
+            default: advance = kCoordsXYStep - post.y; break;
         }
         return CoordsXYZ{
-            post.x, post.y, height + (advance * rise + 16) / 32
+            post.x, post.y, height + (advance * rise + kCoordsXYStep / 2) / kCoordsXYStep
         };
     };
     const CoordsXYZ high0 = elevatedPost(posts[0]);
@@ -866,6 +866,10 @@ static int32_t FirstPersonStraightTrackRise(
     if (descriptor.sequenceData.numSequences != 1
         || descriptor.coordinates.rotationBegin
             != descriptor.coordinates.rotationEnd
+        || descriptor.definition.pitchStart
+            != TrackMetadata::TrackPitch::up60
+        || descriptor.definition.pitchEnd
+            != TrackMetadata::TrackPitch::up60
         || sequence.extraSupportRotation != 0
         || sequence.woodenSupports.transitionType
             != WoodenSupportTransitionType::up60Deg)
