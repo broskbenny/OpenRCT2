@@ -1879,6 +1879,9 @@
             _parkEntranceGroupsByBoundsRegion;
         static bool _parkEntranceGeometryEnabled = false;
 
+        void MarkStaticRegionRelationshipNeighboursDirty(
+            uint64_t regionKey);
+
         template<typename Visit>
         void VisitFirstPersonGpuRegionsInTileBounds(
             int32_t minTileX, int32_t minTileY,
