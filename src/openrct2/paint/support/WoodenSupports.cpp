@@ -456,6 +456,11 @@ static void PaintSlopeTransitions(
     const SlopedSupportsDescriptor& supportsDesc, ImageIndex imageIndex, PaintSession& session, const ImageId& imageTemplate,
     uint16_t baseHeight)
 {
+    // Own the transition where its native paint struct is created. This also
+    // covers orphaned transition images attached to a track paint chain and
+    // future callers that do not already establish a support semantic scope.
+    FirstPersonPaintSemanticScope firstPersonRole(
+        session, FirstPersonPaintSemanticRole::support);
     auto imageId = imageTemplate.WithIndex(imageIndex);
 
     auto boundBox = supportsDesc.BoundingBox;
@@ -615,12 +620,6 @@ inline bool WoodenABSupportsPaintSetupCommon(
     WoodenSupportTransitionType transitionType, Direction direction)
 {
     assert(subType != WoodenSupportSubType::null);
-
-    // Track and ride support transitions are part of the same stationary
-    // wooden assembly as its posts. This scope includes orphaned transition
-    // sprites attached to track paint, without affecting normal 2D painting.
-    FirstPersonPaintSemanticScope firstPersonRole(
-        session, FirstPersonPaintSemanticRole::support);
 
     uint16_t baseHeight = 0;
     bool hasSupports = false;
