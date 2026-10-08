@@ -326,6 +326,104 @@
                 }
             }
 
+            // The shared semantic visual hull needs four native observations
+            // to carve a volumetric box/local-hull envelope reliably. Camera
+            // selection alone may never request the other three. Acquire them
+            // gradually without spending the reserve for camera-requested
+            // paint, and never repopulate an animated or invalidated source.
+            //
+            // This applies to every static semantic volume, not an object or
+            // image-ID whitelist. Semantic 3D geometry is already independent
+            // of the selected native view; these captures only improve its
+            // artwork and evidence. The reconstruction worker still builds
+            // meshes asynchronously, so turning the camera never waits here.
+            if (nativeCapturesRemaining > 4 && !scene.visibleTiles.empty())
+            {
+                constexpr size_t kEvidenceCapturesPerFrame = 3;
+                constexpr size_t kEvidenceTilesPerFrame = 64;
+                static size_t evidenceCursor = 0;
+                const size_t limit = std::min(
+                    kEvidenceTilesPerFrame, scene.visibleTiles.size());
+                size_t evidenceRemaining = std::min(
+                    kEvidenceCapturesPerFrame,
+                    nativeCapturesRemaining - 4);
+                size_t examined = 0;
+                const size_t start =
+                    evidenceCursor % scene.visibleTiles.size();
+                while (examined < limit && evidenceRemaining != 0)
+                {
+                    const auto tile = scene.visibleTiles[
+                        (start + examined++) % scene.visibleTiles.size()];
+                    const auto key = TerrainKey(
+                        tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+                    const auto found = _staticPaintCache.find(key);
+                    if (found == _staticPaintCache.end())
+                        continue;
+                    auto& cached = found->second;
+                    if (!cached.valid || cached.dirty || cached.animated
+                        || cached.hasCameraDependentFallback)
+                        continue;
+
+                    const auto requested =
+                        requestedTileRotations.find(key);
+                    if (requested == requestedTileRotations.end()
+                        || !cached.rotations[
+                            requested->second].semanticValid)
+                        continue;
+
+                    const bool needsFourViews = std::any_of(
+                        cached.rotations[requested->second]
+                            .semanticComponents.begin(),
+                        cached.rotations[requested->second]
+                            .semanticComponents.end(),
+                        [](const FirstPersonPaintSemanticComponent& component) {
+                            if (component.role
+                                    == FirstPersonPaintSemanticRole::
+                                        movingMachinery
+                                || component.role
+                                    == FirstPersonPaintSemanticRole::seat
+                                || component.artwork.decal
+                                || component.geometry.pointCount < 2
+                                || (component.geometry.kind
+                                        != FirstPersonPaintSemanticPrimitiveKind::box
+                                    && component.geometry.kind
+                                        != FirstPersonPaintSemanticPrimitiveKind::localHull))
+                                return false;
+                            const auto low = component.geometry.points[0];
+                            const auto high = component.geometry.points[1];
+                            return std::abs(high.x - low.x) > 1.5f
+                                && std::abs(high.y - low.y) > 1.5f
+                                && std::abs(high.z - low.z) > 1.5f;
+                        });
+                    if (!needsFourViews)
+                        continue;
+
+                    for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                    {
+                        auto& variant = cached.rotations[rotation];
+                        if (variant.semanticValid
+                            || missesByRotation[rotation].contains(key))
+                            continue;
+                        // Exactly the same invalidation/capture path as a
+                        // camera-requested view. Do not change which source
+                        // view is selected for presentation.
+                        variant.valid = true;
+                        variant.lastPainted = frame;
+                        variant.lastAnimationGeneration = sourceGeneration;
+                        variant.residentSurfaces.clear();
+                        variant.streamedSurfaces.clear();
+                        variant.semanticComponents.clear();
+                        variant.semanticValid = false;
+                        missesByRotation[rotation].insert(key);
+                        cameraIndependentRefreshKeys.insert(key);
+                        --nativeCapturesRemaining;
+                        --evidenceRemaining;
+                        break;
+                    }
+                }
+                evidenceCursor += examined;
+            }
+
             _snapshotBudget = FirstPersonFrameBudget(64, std::chrono::microseconds(1500));
             UpdateLargeSceneryReconstructions(scene, frame);
             UpdateParkEntranceReconstructions(scene, frame);
