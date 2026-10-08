@@ -4391,10 +4391,16 @@
                         hashValue(conflictKey, imageB);
                         hashValue(
                             conflictKey,
-                            other.nativePaintOrdinal);
+                            other.sourceInstanceKey);
                         hashValue(
                             conflictKey,
-                            surface.nativePaintOrdinal);
+                            surface.sourceInstanceKey);
+                        hashValue(
+                            conflictKey,
+                            other.reconstructionGroup);
+                        hashValue(
+                            conflictKey,
+                            surface.reconstructionGroup);
                         hashValue(
                             conflictKey,
                             diagnosticCategory);
@@ -4799,12 +4805,16 @@
                             hashValue(
                                 conflictKey,
                                 surface.reconstructionGroup);
+                            // Native ordinals are paint-session values.
+                            // They can change when the same object is
+                            // repainted, so they cannot identify a distinct
+                            // physical conflict. Instance + geometry can.
                             hashValue(
                                 conflictKey,
-                                other.nativePaintOrdinal);
+                                other.sourceInstanceKey);
                             hashValue(
                                 conflictKey,
-                                surface.nativePaintOrdinal);
+                                surface.sourceInstanceKey);
                             hashValue(
                                 conflictKey,
                                 other.diagnosticSemanticGroup);
