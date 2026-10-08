@@ -3332,18 +3332,37 @@
                         && variant.lastAnimationGeneration
                             != canonicalGeneration))
                     continue;
+                // Paint order is view-dependent. Two overlapping semantic
+                // components can have the same physical fingerprint but
+                // different artwork; assigning cross-view correspondences by
+                // their emission order can silently swap those materials.
+                // Only make a four-view correspondence when the physical
+                // identity is unique in BOTH rotations. Components with
+                // stable explicit repetition indices already have distinct
+                // physical fingerprints and remain eligible.
                 std::unordered_map<uint64_t, uint32_t>
-                    occurrences;
+                    viewOccurrences;
+                for (const auto& component :
+                     variant.semanticComponents)
+                {
+                    ++viewOccurrences[
+                        FirstPersonSemanticPhysicalFingerprint(
+                            component)];
+                }
                 for (const auto& component :
                      variant.semanticComponents)
                 {
                     const uint64_t physical =
                         FirstPersonSemanticPhysicalFingerprint(
                             component);
-                    const uint32_t occurrence =
-                        occurrences[physical]++;
+                    const auto canonicalCount =
+                        canonicalOccurrences.find(physical);
+                    if (canonicalCount == canonicalOccurrences.end()
+                        || canonicalCount->second != 1
+                        || viewOccurrences[physical] != 1)
+                        continue;
                     uint64_t groupKey = physical;
-                    ExtendStableKey(groupKey, occurrence);
+                    ExtendStableKey(groupKey, uint32_t{ 0 });
                     const auto found =
                         groupIndex.find(groupKey);
                     if (found == groupIndex.end())
