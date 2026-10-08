@@ -337,10 +337,17 @@
             // of the selected native view; these captures only improve its
             // artwork and evidence. The reconstruction worker still builds
             // meshes asynchronously, so turning the camera never waits here.
-            if (nativeCapturesRemaining > 4 && !scene.visibleTiles.empty())
+            // Geometry evidence must not become a second foreground
+            // loader. Native capture is synchronous and each selected tile
+            // can trigger expensive semantic cache work. Use a low duty
+            // cycle for *optional* views; foreground camera requests retain
+            // all their existing priority and budget.
+            if (nativeCapturesRemaining > 4
+                && !scene.visibleTiles.empty()
+                && (frame & 3u) == 0)
             {
-                constexpr size_t kEvidenceCapturesPerFrame = 3;
-                constexpr size_t kEvidenceTilesPerFrame = 64;
+                constexpr size_t kEvidenceCapturesPerFrame = 1;
+                constexpr size_t kEvidenceTilesPerFrame = 32;
                 static size_t evidenceCursor = 0;
                 const size_t limit = std::min(
                     kEvidenceTilesPerFrame, scene.visibleTiles.size());
