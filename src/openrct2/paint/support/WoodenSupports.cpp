@@ -614,10 +614,64 @@ static inline bool WoodenSupportsPaintSetupCommon(
     return true;
 }
 
+// Only the constant-grade, one-tile track case supplies enough authoritative
+// information for a sloping timber cap: the track descriptor gives its real
+// vertical rise and the wooden subtype gives the physical post anchors.
+// Do not infer curved or multi-tile support shapes from paint sorting boxes.
+static void PublishFirstPersonStraightWoodenSlopeGeometry(
+    PaintSession& session, WoodenSupportSubType subType,
+    Direction direction, int32_t height, int32_t rise,
+    int32_t artworkZ, ImageId image)
+{
+    if (rise <= 0 || rise > 96
+        || (subType != WoodenSupportSubType::neSw
+            && subType != WoodenSupportSubType::nwSe))
+        return;
+
+    const auto posts = FirstPersonWoodenSupportPosts(subType);
+    // Native map directions: 0 = -X, 1 = +Y, 2 = +X, 3 = -Y.
+    // Project each known post anchor onto the straight track axis, so
+    // rotations change the incline rather than changing its world position.
+    const auto elevatedPost = [&](CoordsXY post) {
+        int32_t advance = 0;
+        switch (direction & 3u)
+        {
+            case 0: advance = 32 - post.x; break;
+            case 1: advance = post.y; break;
+            case 2: advance = post.x; break;
+            default: advance = 32 - post.y; break;
+        }
+        return CoordsXYZ{
+            post.x, post.y, height + (advance * rise + 16) / 32
+        };
+    };
+    const CoordsXYZ high0 = elevatedPost(posts[0]);
+    const CoordsXYZ high1 = elevatedPost(posts[1]);
+    const CoordsXYZ artworkOffset{ 0, 0, artworkZ };
+    // These are presentation braces, not a new blocking volume for the ride.
+    for (size_t i = 0; i < posts.size(); ++i)
+    {
+        const auto post = posts[i];
+        const auto top = i == 0 ? high0 : high1;
+        if (top.z > height)
+        {
+            PaintSessionAddFirstPersonSemanticBox(
+                session, FirstPersonPaintSemanticRole::support,
+                { post.x - 2, post.y - 2, height },
+                { post.x + 2, post.y + 2, top.z },
+                image, artworkOffset, 0, 0, 0, false);
+        }
+    }
+    PaintSessionAddFirstPersonSemanticBeam(
+        session, FirstPersonPaintSemanticRole::support,
+        high0, high1, 1, image, artworkOffset, 0, false);
+}
+
 template<uint8_t zOffset, bool doHeightStepsCheck>
 inline bool WoodenABSupportsPaintSetupCommon(
     PaintSession& session, WoodenSupportType supportType, WoodenSupportSubType subType, int32_t height, ImageId imageTemplate,
-    WoodenSupportTransitionType transitionType, Direction direction)
+    WoodenSupportTransitionType transitionType, Direction direction,
+    int32_t firstPersonStraightRise)
 {
     assert(subType != WoodenSupportSubType::null);
 
@@ -665,6 +719,17 @@ inline bool WoodenABSupportsPaintSetupCommon(
                 { posts[1].x, posts[1].y, height },
                 1, transitionImage, { 0, 0, baseHeight }, 0, false);
         }
+        if (hasTransition
+            && transitionType == WoodenSupportTransitionType::up60Deg)
+        {
+            const auto* imageIds = WoodenCurveSupportImageIds[
+                EnumValue(supportType)][EnumValue(subType)];
+            const auto transitionImage = imageTemplate.WithIndex(
+                imageIds[EnumValue(transitionType)][direction]);
+            PublishFirstPersonStraightWoodenSlopeGeometry(
+                session, subType, direction, height,
+                firstPersonStraightRise, baseHeight, transitionImage);
+        }
         // Do not change native support-paint success semantics.
         hasSupports = hasTransition;
     }
@@ -684,19 +749,20 @@ inline bool WoodenABSupportsPaintSetupCommon(
  */
 bool WoodenASupportsPaintSetup(
     PaintSession& session, WoodenSupportType supportType, WoodenSupportSubType subType, int32_t height, ImageId imageTemplate,
-    WoodenSupportTransitionType transitionType, Direction direction)
+    WoodenSupportTransitionType transitionType, Direction direction, int32_t firstPersonStraightRise)
 {
     return WoodenABSupportsPaintSetupCommon<11, false>(
-        session, supportType, subType, height, imageTemplate, transitionType, direction);
+        session, supportType, subType, height, imageTemplate, transitionType, direction, firstPersonStraightRise);
 }
 
 bool WoodenASupportsPaintSetupRotated(
     PaintSession& session, WoodenSupportType supportType, WoodenSupportSubType subType, Direction direction, int32_t height,
-    ImageId imageTemplate, WoodenSupportTransitionType transitionType)
+    ImageId imageTemplate, WoodenSupportTransitionType transitionType, int32_t firstPersonStraightRise)
 {
     assert(subType != WoodenSupportSubType::null);
     subType = rotatedWoodenSupportSubTypes[EnumValue(subType)][direction];
-    return WoodenASupportsPaintSetup(session, supportType, subType, height, imageTemplate, transitionType, direction);
+    return WoodenASupportsPaintSetup(
+        session, supportType, subType, height, imageTemplate, transitionType, direction, firstPersonStraightRise);
 }
 
 /**
@@ -713,19 +779,20 @@ bool WoodenASupportsPaintSetupRotated(
  */
 bool WoodenBSupportsPaintSetup(
     PaintSession& session, WoodenSupportType supportType, WoodenSupportSubType subType, int32_t height, ImageId imageTemplate,
-    WoodenSupportTransitionType transitionType, Direction direction)
+    WoodenSupportTransitionType transitionType, Direction direction, int32_t firstPersonStraightRise)
 {
     return WoodenABSupportsPaintSetupCommon<3, true>(
-        session, supportType, subType, height, imageTemplate, transitionType, direction);
+        session, supportType, subType, height, imageTemplate, transitionType, direction, firstPersonStraightRise);
 }
 
 bool WoodenBSupportsPaintSetupRotated(
     PaintSession& session, WoodenSupportType supportType, WoodenSupportSubType subType, Direction direction, int32_t height,
-    ImageId imageTemplate, WoodenSupportTransitionType transitionType)
+    ImageId imageTemplate, WoodenSupportTransitionType transitionType, int32_t firstPersonStraightRise)
 {
     assert(subType != WoodenSupportSubType::null);
     subType = rotatedWoodenSupportSubTypes[EnumValue(subType)][direction];
-    return WoodenBSupportsPaintSetup(session, supportType, subType, height, imageTemplate, transitionType, direction);
+    return WoodenBSupportsPaintSetup(
+        session, supportType, subType, height, imageTemplate, transitionType, direction, firstPersonStraightRise);
 }
 
 /**
@@ -790,6 +857,24 @@ bool PathBoxSupportsPaintSetup(
     return hasSupports;
 }
 
+static int32_t FirstPersonStraightTrackRise(
+    const TrackMetadata::TrackElementDescriptor& descriptor,
+    const TrackMetadata::SequenceDescriptor& sequence)
+{
+    // Multi-tile geometry and extra support rotations are not a simple
+    // one-tile slope, even when their native image names mention 60 degrees.
+    if (descriptor.sequenceData.numSequences != 1
+        || descriptor.coordinates.rotationBegin
+            != descriptor.coordinates.rotationEnd
+        || sequence.extraSupportRotation != 0
+        || sequence.woodenSupports.transitionType
+            != WoodenSupportTransitionType::up60Deg)
+        return 0;
+    const int32_t rise =
+        descriptor.coordinates.zEnd - descriptor.coordinates.zBegin;
+    return rise > 0 && rise <= 96 ? rise : 0;
+}
+
 bool DrawSupportForSequenceA(
     PaintSession& session, const WoodenSupportType supportType, const TrackElemType trackType, const uint8_t sequence,
     const Direction direction, const int32_t height, const ImageId imageTemplate)
@@ -804,7 +889,9 @@ bool DrawSupportForSequenceA(
     const Direction supportRotation = (direction + sequenceDesc.extraSupportRotation) & 3;
 
     return WoodenASupportsPaintSetupRotated(
-        session, supportType, desc.subType, supportRotation, height, imageTemplate, desc.transitionType);
+        session, supportType, desc.subType, supportRotation, height,
+        imageTemplate, desc.transitionType,
+        FirstPersonStraightTrackRise(ted, sequenceDesc));
 }
 
 bool DrawSupportForSequenceB(
@@ -821,5 +908,7 @@ bool DrawSupportForSequenceB(
     const Direction supportRotation = (direction + sequenceDesc.extraSupportRotation) & 3;
 
     return WoodenBSupportsPaintSetupRotated(
-        session, supportType, desc.subType, supportRotation, height, imageTemplate, desc.transitionType);
+        session, supportType, desc.subType, supportRotation, height,
+        imageTemplate, desc.transitionType,
+        FirstPersonStraightTrackRise(ted, sequenceDesc));
 }
