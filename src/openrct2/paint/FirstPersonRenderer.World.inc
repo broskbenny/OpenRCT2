@@ -3342,19 +3342,24 @@
                 // physical fingerprints and remain eligible.
                 std::unordered_map<uint64_t, uint32_t>
                     viewOccurrences;
-                for (const auto& component :
-                     variant.semanticComponents)
-                {
-                    ++viewOccurrences[
-                        FirstPersonSemanticPhysicalFingerprint(
-                            component)];
-                }
+                std::vector<uint64_t> viewFingerprints;
+                viewFingerprints.reserve(
+                    variant.semanticComponents.size());
                 for (const auto& component :
                      variant.semanticComponents)
                 {
                     const uint64_t physical =
                         FirstPersonSemanticPhysicalFingerprint(
                             component);
+                    viewFingerprints.push_back(physical);
+                    ++viewOccurrences[physical];
+                }
+                size_t componentIndex = 0;
+                for (const auto& component :
+                     variant.semanticComponents)
+                {
+                    const uint64_t physical =
+                        viewFingerprints[componentIndex++];
                     const auto canonicalCount =
                         canonicalOccurrences.find(physical);
                     if (canonicalCount == canonicalOccurrences.end()
