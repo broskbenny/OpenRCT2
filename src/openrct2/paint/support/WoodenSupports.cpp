@@ -644,8 +644,30 @@ inline bool WoodenABSupportsPaintSetupCommon(
 
     if (transitionType != WoodenSupportTransitionType::none)
     {
-        hasSupports = WoodenABPaintSlopeTransitions(
+        const bool hadStructuralBody = hasSupports;
+        const bool hasTransition = WoodenABPaintSlopeTransitions(
             session, supportType, subType, transitionType, direction, imageTemplate, baseHeight);
+        if (hasTransition && !hadStructuralBody)
+        {
+            // A track can paint its upper wooden transition even when there
+            // is no vertical support length at this tile. The usual post/brace
+            // publisher therefore has nothing to emit. Retain a small,
+            // non-colliding physical tie at the *known* post anchors rather
+            // than silently losing the entire native transition or inventing
+            // its shape from the native sorting bounding box.
+            const auto posts = FirstPersonWoodenSupportPosts(subType);
+            const auto* images = WoodenCurveSupportImageIds[
+                EnumValue(supportType)][EnumValue(subType)];
+            const ImageId transitionImage = imageTemplate.WithIndex(
+                images[EnumValue(transitionType)][direction]);
+            PaintSessionAddFirstPersonSemanticBeam(
+                session, FirstPersonPaintSemanticRole::support,
+                { posts[0].x, posts[0].y, height },
+                { posts[1].x, posts[1].y, height },
+                1, transitionImage, {}, 0, false);
+        }
+        // Preserve the native success/return contract.
+        hasSupports = hasTransition;
     }
 
     return hasSupports;
