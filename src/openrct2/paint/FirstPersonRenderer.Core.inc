@@ -3501,6 +3501,8 @@
             }
 
             std::vector<FirstPersonVisualHullFace> faces;
+            bool fiveVertexRoofSelected = false;
+            size_t fiveVertexRoofRoundTripDisagreement = 0;
             if (hull.valid)
             {
                 faces =
@@ -3619,6 +3621,9 @@
                         {
                             faces = std::move(pyramidFaces);
                             result.visualHullRefined = true;
+                            fiveVertexRoofSelected = true;
+                            fiveVertexRoofRoundTripDisagreement =
+                                certificate.symmetricDifferencePixels;
                         }
                     }
                 }
@@ -4104,7 +4109,7 @@
                 surface.diagnosticContinuousSurfaceRefined =
                     hull.continuousSurfaceRefined;
                 surface.diagnosticStructuralEvidenceUsed =
-                    structuralColumnsSelected
+                    structuralColumnsSelected || fiveVertexRoofSelected
                     || (hull.continuousSurfaceRefined
                         && structuralDiagnostics.valid);
                 surface.diagnosticStructuralPairedSamples =
@@ -4123,8 +4128,9 @@
                     uint64_t(
                         hull.voxelRoundTripSymmetricDifference);
                 surface.diagnosticRoundTripPixelDisagreement =
-                    uint64_t(
-                        hull.roundTripSymmetricDifference);
+                    uint64_t(fiveVertexRoofSelected
+                        ? fiveVertexRoofRoundTripDisagreement
+                        : hull.roundTripSymmetricDifference);
                 surface.gpuRegion =
                     FirstPersonGpuRegionKey(
                         int32_t(std::floor(
