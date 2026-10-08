@@ -644,7 +644,10 @@ inline bool WoodenABSupportsPaintSetupCommon(
 
     if (transitionType != WoodenSupportTransitionType::none)
     {
-        const bool hadStructuralBody = hasSupports;
+        // Native paint may report a zero-height flat base as drawn. That
+        // alone does not produce a non-degenerate semantic post/brace body.
+        const bool hadStructuralBody =
+            hasSupports && height > firstPersonBase;
         const bool hasTransition = WoodenABPaintSlopeTransitions(
             session, supportType, subType, transitionType, direction, imageTemplate, baseHeight);
         if (hasTransition && !hadStructuralBody)
