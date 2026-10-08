@@ -360,8 +360,7 @@
                     if (found == _staticPaintCache.end())
                         continue;
                     auto& cached = found->second;
-                    if (!cached.valid || cached.dirty || cached.animated
-                        || cached.hasCameraDependentFallback)
+                    if (!cached.valid || cached.dirty || cached.animated)
                         continue;
 
                     const auto requested =
