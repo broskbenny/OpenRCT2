@@ -422,10 +422,7 @@ static void PaintRepeatedWoodenSupports(
     const SupportsIdDescriptor supportImages, const ImageId& imageTemplate, int16_t heightSteps, PaintSession& session,
     uint16_t& baseHeight, bool& hasSupports)
 {
-    FirstPersonPaintSemanticScope
-        firstPersonRole(
-            session,
-            FirstPersonPaintSemanticRole::support);
+    // All call sites are inside the shared wooden-support semantic scope.
     while (heightSteps > 0)
     {
         const bool isHalf = baseHeight & 0x10 || heightSteps == 1 || baseHeight + kWaterHeightStep == session.WaterHeight;
@@ -499,6 +496,12 @@ static inline bool WoodenSupportsPaintSetupCommon(
     PaintSession& session, const SupportsIdDescriptor& supportImages, int32_t height, ImageId& imageTemplate, bool& hasSupports,
     uint16_t& baseHeight)
 {
+    // These native images are timber-support artwork, not freestanding objects.
+    // The fixed post/brace geometry is published by the owning support painter.
+    // Give ground bases and slope-adapting pieces the same physical ownership
+    // as the repeated support sprites, rather than allowing view-facing fallback.
+    FirstPersonPaintSemanticScope firstPersonRole(
+        session, FirstPersonPaintSemanticRole::support);
     if (!(session.Flags & PaintSessionFlags::PassedSurface))
     {
         return false;
@@ -613,6 +616,12 @@ inline bool WoodenABSupportsPaintSetupCommon(
 {
     assert(subType != WoodenSupportSubType::null);
 
+    // Track and ride support transitions are part of the same stationary
+    // wooden assembly as its posts. This scope includes orphaned transition
+    // sprites attached to track paint, without affecting normal 2D painting.
+    FirstPersonPaintSemanticScope firstPersonRole(
+        session, FirstPersonPaintSemanticRole::support);
+
     uint16_t baseHeight = 0;
     bool hasSupports = false;
     auto supportIds = GetWoodenSupportIds(supportType, subType);
@@ -630,7 +639,7 @@ inline bool WoodenABSupportsPaintSetupCommon(
         PublishFirstPersonWoodenSupportGeometry(
             session, subType,
             firstPersonBase, height,
-            imageTemplate);
+            imageTemplate.WithIndex(supportIds.Full));
     }
 
     if (transitionType != WoodenSupportTransitionType::none)
@@ -744,7 +753,7 @@ bool PathBoxSupportsPaintSetup(
         PublishFirstPersonWoodenSupportGeometry(
             session, supportType,
             firstPersonBase, height,
-            imageTemplate);
+            imageTemplate.WithIndex(supportIds.Full));
     }
 
     if (isSloped)
