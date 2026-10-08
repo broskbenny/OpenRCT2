@@ -73,16 +73,20 @@ namespace OpenRCT2
 
 bool WoodenASupportsPaintSetup(
     PaintSession& session, WoodenSupportType supportType, WoodenSupportSubType subType, int32_t height, ImageId imageTemplate,
-    WoodenSupportTransitionType transitionType = WoodenSupportTransitionType::none, Direction direction = 0);
+    WoodenSupportTransitionType transitionType = WoodenSupportTransitionType::none, Direction direction = 0,
+    int32_t firstPersonStraightRise = 0);
 bool WoodenASupportsPaintSetupRotated(
     PaintSession& session, WoodenSupportType supportType, WoodenSupportSubType subType, Direction direction, int32_t height,
-    ImageId imageTemplate, WoodenSupportTransitionType transitionType = WoodenSupportTransitionType::none);
+    ImageId imageTemplate, WoodenSupportTransitionType transitionType = WoodenSupportTransitionType::none,
+    int32_t firstPersonStraightRise = 0);
 bool WoodenBSupportsPaintSetup(
     PaintSession& session, WoodenSupportType supportType, WoodenSupportSubType subType, int32_t height, ImageId imageTemplate,
-    WoodenSupportTransitionType transitionType = WoodenSupportTransitionType::none, Direction direction = 0);
+    WoodenSupportTransitionType transitionType = WoodenSupportTransitionType::none, Direction direction = 0,
+    int32_t firstPersonStraightRise = 0);
 bool WoodenBSupportsPaintSetupRotated(
     PaintSession& session, WoodenSupportType supportType, WoodenSupportSubType subType, Direction direction, int32_t height,
-    ImageId imageTemplate, WoodenSupportTransitionType transitionType = WoodenSupportTransitionType::none);
+    ImageId imageTemplate, WoodenSupportTransitionType transitionType = WoodenSupportTransitionType::none,
+    int32_t firstPersonStraightRise = 0);
 bool PathBoxSupportsPaintSetup(
     PaintSession& session, WoodenSupportSubType supportType, bool isSloped, Direction slopeRotation, int32_t height,
     ImageId imageTemplate, const OpenRCT2::PathRailingsDescriptor& pathPaintInfo);
