@@ -3510,6 +3510,120 @@
                     !faces.empty();
             }
 
+            // A silhouette hull is a useful source of material evidence,
+            // but its cell boundary is not necessarily the simplest physical
+            // surface. A broad rectangular footprint with one elevated apex
+            // has a five-vertex alternative: four straight triangular faces.
+            // Treat that as a *candidate*, not as a special case for an
+            // image/object ID. Its authoritative footprint and elevation come
+            // from the native occupancy envelope, and its acceptance comes
+            // exclusively from the four native artwork silhouettes.
+            //
+            // Preserve explicit caller-supplied structural cells; those
+            // already describe a more specific shape than this envelope.
+            if ((reconstructionOptions == nullptr
+                    || reconstructionOptions->supportCells == nullptr)
+                && hullViews.size() == 4)
+            {
+                const float widthX =
+                    envelopeHigh.x - envelopeLow.x;
+                const float widthY =
+                    envelopeHigh.y - envelopeLow.y;
+                const float elevation =
+                    envelopeHigh.z - envelopeLow.z;
+                const float planWidth =
+                    std::max(widthX, widthY);
+                if (widthX >= 12.0f && widthY >= 12.0f
+                    && std::min(widthX, widthY)
+                        >= planWidth * 0.65f
+                    && elevation >= planWidth * 0.18f
+                    && elevation <= planWidth * 1.75f)
+                {
+                    const FirstPersonVec3 apex{
+                        0.5f * (envelopeLow.x + envelopeHigh.x),
+                        0.5f * (envelopeLow.y + envelopeHigh.y),
+                        envelopeHigh.z,
+                    };
+                    const std::array<FirstPersonVec3, 4>
+                        corners{ {
+                        { envelopeLow.x, envelopeLow.y,
+                            envelopeLow.z },
+                        { envelopeHigh.x, envelopeLow.y,
+                            envelopeLow.z },
+                        { envelopeHigh.x, envelopeHigh.y,
+                            envelopeLow.z },
+                        { envelopeLow.x, envelopeHigh.y,
+                            envelopeLow.z },
+                    } };
+                    std::vector<FirstPersonVisualHullFace>
+                        pyramidFaces;
+                    pyramidFaces.reserve(4);
+                    for (size_t edge = 0; edge < 4; ++edge)
+                    {
+                        const auto p0 = corners[edge];
+                        const auto p1 =
+                            corners[(edge + 1) & 3u];
+                        const auto normal = FpCross(
+                            Sub(p1, p0), Sub(apex, p0));
+                        const float normalLength =
+                            std::sqrt(FpDot(normal, normal));
+                        if (normalLength <= 1.0e-5f)
+                            break;
+                        FirstPersonVisualHullFace candidate{};
+                        candidate.kind =
+                            FirstPersonVisualHullFaceKind::top;
+                        candidate.corners = {
+                            p0, p1, apex, apex
+                        };
+                        candidate.normal = {
+                            normal.x / normalLength,
+                            normal.y / normalLength,
+                            normal.z / normalLength,
+                        };
+                        pyramidFaces.push_back(candidate);
+                    }
+                    if (pyramidFaces.size() == 4)
+                    {
+                        const auto certificate =
+                            CertifyFirstPersonReconstruction(
+                                TriangulateFirstPersonReconstructionFaces(
+                                    pyramidFaces),
+                                hullViews, projectPoint);
+                        const bool fourViewFit =
+                            certificate.valid
+                            && certificate.viewCount == 4
+                            && certificate.minimumIntersectionOverUnion
+                                >= 0.58f
+                            && certificate.minimumCandidateCoverage
+                                >= 0.72f
+                            && certificate.minimumObservedCoverage
+                                >= 0.68f
+                            && certificate.maximumEdgeError <= 8;
+                        bool competitive = faces.empty();
+                        if (fourViewFit && !faces.empty())
+                        {
+                            const auto existing =
+                                CertifyFirstPersonReconstruction(
+                                    TriangulateFirstPersonReconstructionFaces(
+                                        faces),
+                                    hullViews, projectPoint);
+                            competitive = !existing.valid
+                                || certificate.symmetricDifferencePixels
+                                    <= existing.symmetricDifferencePixels
+                                        + std::max<size_t>(
+                                            128u,
+                                            existing.symmetricDifferencePixels
+                                                / 5u);
+                        }
+                        if (fourViewFit && competitive)
+                        {
+                            faces = std::move(pyramidFaces);
+                            result.visualHullRefined = true;
+                        }
+                    }
+                }
+            }
+
             if (faces.empty()
                 && reconstructionOptions != nullptr
                 && reconstructionOptions->supportCells != nullptr)
