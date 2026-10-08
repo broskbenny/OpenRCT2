@@ -744,7 +744,14 @@ bool PathBoxSupportsPaintSetup(
     {
         ImageIndex imageIndex = railings.bridgeImage + 55 + slopeRotation;
 
-        PaintSlopeTransitions(kSlopedPathSupportsDescriptor, imageIndex, session, imageTemplate, baseHeight);
+        // This transition belongs to the same fixed support structure as the
+        // posts and braces published above. Keep its native sprite as material
+        // evidence, not as an unclassified first-person billboard.
+        FirstPersonPaintSemanticScope firstPersonRole(
+            session, FirstPersonPaintSemanticRole::support);
+        PaintSlopeTransitions(
+            kSlopedPathSupportsDescriptor, imageIndex,
+            session, imageTemplate, baseHeight);
         hasSupports = true;
     }
 
