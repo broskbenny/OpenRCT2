@@ -35,17 +35,6 @@ namespace OpenRCT2::Paint
         top,
     };
 
-    // Visual geometry retains why it exists. Occupancy is an envelope /
-    // collision prior; the other values are independently testable hypotheses
-    // derived from native artwork.
-    enum class FirstPersonVisualHullEvidenceKind : uint8_t
-    {
-        none,
-        occupancyEnvelope,
-        silhouetteIntersection,
-        supportedUpperEnvelope,
-    };
-
     struct FirstPersonVisualHullFace
     {
         std::array<FirstPersonVec3, 4> corners{};
@@ -56,8 +45,6 @@ namespace OpenRCT2::Paint
     struct FirstPersonVisualHull
     {
         bool valid = false;
-        FirstPersonVisualHullEvidenceKind evidenceKind =
-            FirstPersonVisualHullEvidenceKind::none;
         float step = 4.0f;
         float minForward{};
         float minRight{};
@@ -773,8 +760,6 @@ namespace OpenRCT2::Paint
         result.minimumCandidateCoverage = 0.0f;
         result.minimumObservedCoverage = 0.0f;
         result.maximumEdgeError = 0;
-        result.evidenceKind =
-            FirstPersonVisualHullEvidenceKind::occupancyEnvelope;
         result.valid = true;
         return result;
     }
@@ -900,8 +885,6 @@ namespace OpenRCT2::Paint
         // geometry. Mark this local candidate provisionally so both the raw
         // boundary and evidence-driven alternatives can be forward-rendered.
         // Any failed admission below returns a fresh invalid hull.
-        result.evidenceKind =
-            FirstPersonVisualHullEvidenceKind::silhouetteIntersection;
         result.valid = true;
 
         const auto voxelFaces =
@@ -989,185 +972,6 @@ namespace OpenRCT2::Paint
             selectedCertificate.maximumEdgeError;
         result.roundTripViewCount =
             selectedCertificate.viewCount;
-        result.valid = true;
-        return result;
-    }
-
-    // Alternative for objects naturally described by a coherent upper
-    // envelope (roofs, ramps, pyramids, awnings, etc.). Native views select
-    // the highest corroborated sample in each horizontal column. Filling below
-    // it is only a visual hypothesis: the complete candidate must survive the
-    // same exact multi-view round-trip certificate as the ordinary hull.
-    template<typename ProjectPoint, typename OccupancyPredicate, typename PointSupported>
-    [[nodiscard]] FirstPersonVisualHull BuildFirstPersonSupportedUpperEnvelopeHull(
-        const std::vector<FirstPersonVisualHullView>& views,
-        const FirstPersonVisualHullBounds& bounds,
-        const FirstPersonVisualHullConfig& config,
-        ProjectPoint&& projectPoint,
-        OccupancyPredicate&& occupancyPredicate,
-        PointSupported&& pointSupported)
-    {
-        FirstPersonVisualHull result{};
-        if (views.size() < config.minimumViews
-            || !(bounds.step > 0.0f)
-            || bounds.maxForward <= bounds.minForward
-            || bounds.maxRight <= bounds.minRight
-            || bounds.maxUp <= bounds.minUp)
-            return result;
-
-        const int32_t nForward = int32_t(std::ceil(
-            (bounds.maxForward - bounds.minForward) / bounds.step));
-        const int32_t nRight = int32_t(std::ceil(
-            (bounds.maxRight - bounds.minRight) / bounds.step));
-        const int32_t nUp = int32_t(std::ceil(
-            (bounds.maxUp - bounds.minUp) / bounds.step));
-        if (nForward <= 0 || nRight <= 0 || nUp <= 0
-            || nForward > config.maximumAxisCells
-            || nRight > config.maximumAxisCells
-            || nUp > config.maximumAxisCells
-            || nForward > 255 || nRight > 255 || nUp > 255)
-            return result;
-
-        const size_t gridCells =
-            size_t(nForward) * size_t(nRight) * size_t(nUp);
-        if (gridCells > config.maximumGridCells)
-            return result;
-
-        result.step = bounds.step;
-        result.minForward = bounds.minForward;
-        result.minRight = bounds.minRight;
-        result.minUp = bounds.minUp;
-        result.sizeForward = uint8_t(nForward);
-        result.sizeRight = uint8_t(nRight);
-        result.sizeUp = uint8_t(nUp);
-        result.occupied.assign(gridCells, 0);
-        result.textureViews.reserve(views.size());
-        for (const auto& view : views)
-            result.textureViews.push_back({ view.imageDirection, view.image });
-
-        const auto indexOf =
-            [&](int32_t forward, int32_t right, int32_t up) {
-                return (size_t(up) * size_t(nRight) + size_t(right))
-                    * size_t(nForward) + size_t(forward);
-            };
-        const auto allowed =
-            [&](int32_t forward, int32_t right, int32_t up) {
-                return occupancyPredicate(result.centre(forward, right, up));
-            };
-        const auto supported =
-            [&](FirstPersonVec3 point) {
-                for (const auto& view : views)
-                {
-                    if (!pointSupported(view, point))
-                        return false;
-                }
-                return true;
-            };
-
-        size_t occupiedCount = 0;
-        for (int32_t right = 0; right < nRight; ++right)
-        for (int32_t forward = 0; forward < nForward; ++forward)
-        {
-            int32_t up = 0;
-            while (up < nUp)
-            {
-                while (up < nUp && !allowed(forward, right, up))
-                    ++up;
-                if (up >= nUp)
-                    break;
-
-                const int32_t runStart = up;
-                int32_t highestSupported = -1;
-                while (up < nUp && allowed(forward, right, up))
-                {
-                    if (supported(result.centre(forward, right, up)))
-                        highestSupported = up;
-                    ++up;
-                }
-                if (highestSupported < runStart)
-                    continue;
-
-                for (int32_t fill = runStart; fill <= highestSupported; ++fill)
-                {
-                    result.occupied[indexOf(forward, right, fill)] = 1;
-                    ++occupiedCount;
-                }
-            }
-        }
-        if (occupiedCount < config.minimumOccupiedCells
-            || occupiedCount > config.maximumOccupiedCells)
-            return {};
-
-        result.evidenceKind =
-            FirstPersonVisualHullEvidenceKind::supportedUpperEnvelope;
-        result.valid = true;
-
-        const auto voxelFaces =
-            BuildFirstPersonVisualHullVoxelBoundaryFaces(result);
-        const auto voxelCertificate =
-            CertifyFirstPersonReconstruction(
-                TriangulateFirstPersonReconstructionFaces(voxelFaces),
-                views, projectPoint);
-        const auto passesAdmission =
-            [&](const FirstPersonRoundTripCertificate& certificate) {
-                return certificate.valid
-                    && certificate.viewCount >= config.minimumViews
-                    && certificate.minimumIntersectionOverUnion
-                        >= config.minimumIntersectionOverUnion
-                    && certificate.minimumCandidateCoverage
-                        >= config.minimumCandidateCoverage
-                    && certificate.minimumObservedCoverage
-                        >= config.minimumObservedCoverage
-                    && certificate.maximumEdgeError <= config.maximumEdgeError;
-            };
-        if (!passesAdmission(voxelCertificate))
-            return {};
-
-        auto selectedCertificate = voxelCertificate;
-        if (config.allowContinuousSurfaceRefinement
-            && !voxelFaces.empty()
-            && voxelFaces.size() <= config.maximumContinuousSurfaceFaces
-            && config.continuousSurfaceSearchSteps != 0)
-        {
-            for (uint8_t stepIndex = 1;
-                 stepIndex <= config.continuousSurfaceSearchSteps;
-                 ++stepIndex)
-            {
-                const float blend =
-                    float(stepIndex) / float(config.continuousSurfaceSearchSteps);
-                const auto candidateFaces =
-                    BuildFirstPersonVisualHullContinuousCandidateFaces(
-                        result, voxelFaces, blend);
-                if (candidateFaces.empty())
-                    continue;
-                const auto candidateCertificate =
-                    CertifyFirstPersonReconstruction(
-                        TriangulateFirstPersonReconstructionFaces(candidateFaces),
-                        views, projectPoint);
-                if (!passesAdmission(candidateCertificate)
-                    || !FirstPersonRoundTripStrictlyImproves(
-                        candidateCertificate, selectedCertificate))
-                    continue;
-                result.refinedFaces = candidateFaces;
-                selectedCertificate = candidateCertificate;
-            }
-        }
-
-        result.continuousSurfaceRefined = !result.refinedFaces.empty();
-        result.voxelRoundTripSymmetricDifference =
-            voxelCertificate.symmetricDifferencePixels;
-        result.roundTripSymmetricDifference =
-            selectedCertificate.symmetricDifferencePixels;
-        result.averageIntersectionOverUnion =
-            selectedCertificate.averageIntersectionOverUnion;
-        result.minimumIntersectionOverUnion =
-            selectedCertificate.minimumIntersectionOverUnion;
-        result.minimumCandidateCoverage =
-            selectedCertificate.minimumCandidateCoverage;
-        result.minimumObservedCoverage =
-            selectedCertificate.minimumObservedCoverage;
-        result.maximumEdgeError = selectedCertificate.maximumEdgeError;
-        result.roundTripViewCount = selectedCertificate.viewCount;
         result.valid = true;
         return result;
     }

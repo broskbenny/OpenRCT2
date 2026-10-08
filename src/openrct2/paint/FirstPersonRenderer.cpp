@@ -565,32 +565,12 @@ namespace OpenRCT2::Paint
                 surface.diagnosticMaterialComponent);
             if (surface.diagnosticHullBoundaryFaces != 0)
             {
-                const char* hullEvidence = "none";
-                switch (surface.diagnosticHullEvidenceKind)
-                {
-                    case 1:
-                        hullEvidence = "occupancy-envelope";
-                        break;
-                    case 2:
-                        hullEvidence = "silhouette-intersection";
-                        break;
-                    case 3:
-                        hullEvidence = "supported-upper-envelope";
-                        break;
-                }
                 Console::WriteLine(
-                    "  hullMaterial=%s hullEvidence=%s boundaryFaces=%u materialFaces=%u opaqueFaces=%u "
-                    "continuous=%d roundTripPixels=%llu->%llu",
+                    "  hullMaterial=%s boundaryFaces=%u materialFaces=%u opaqueFaces=%u",
                     surface.exteriorOnly ? "closed-shell" : "open-artwork",
-                    hullEvidence,
                     surface.diagnosticHullBoundaryFaces,
                     surface.diagnosticHullMaterialFaces,
-                    surface.diagnosticHullOpaqueFaces,
-                    surface.diagnosticContinuousSurfaceRefined ? 1 : 0,
-                    static_cast<unsigned long long>(
-                        surface.diagnosticVoxelRoundTripPixelDisagreement),
-                    static_cast<unsigned long long>(
-                        surface.diagnosticRoundTripPixelDisagreement));
+                    surface.diagnosticHullOpaqueFaces);
             }
             Console::WriteLine(
                 "  outwardNormal=(%.3f,%.3f,%.3f) semanticBounds=%d "
