@@ -510,7 +510,8 @@ namespace OpenRCT2::Paint
                 maskLabel.c_str());
             Console::WriteLine(
                 "  gpuRegion=%llu cameraIndependent=%d viewFacing=%d physicalCoverage=%d "
-                "coplanarOwner=%d nativePaintOrdinal=%llu exteriorOnly=%d",
+                "coplanarOwner=%d nativePaintOrdinal=%llu sourceInstance=%llu "
+                "occupancyBoundary=%d artworkCarrier=%d exteriorOnly=%d",
                 static_cast<unsigned long long>(surface.gpuRegion),
                 surface.cameraIndependent ? 1 : 0,
                 surface.viewFacing ? 1 : 0,
@@ -518,6 +519,10 @@ namespace OpenRCT2::Paint
                 surface.coplanarOwner ? 1 : 0,
                 static_cast<unsigned long long>(
                     surface.nativePaintOrdinal),
+                static_cast<unsigned long long>(
+                    surface.sourceInstanceKey),
+                surface.reconstructedOccupancyBoundary ? 1 : 0,
+                surface.artworkCarrier ? 1 : 0,
                 surface.exteriorOnly ? 1 : 0);
             Console::WriteLine(
                 "  solidColour=%u persistentBitmap=%d immutableFingerprint=%llu "
@@ -599,7 +604,8 @@ namespace OpenRCT2::Paint
                 {
                     Console::WriteLine(
                         "  packet dirty=%d generation=%llu sourceRevision=%llu "
-                        "publishedSourceRevision=%llu vertexCount=%zu publishedSurfaces=%zu",
+                        "publishedSourceRevision=%llu vertexCount=%zu publishedSurfaces=%zu "
+                        "internalInterfaces=%zu suppressedFaces=%zu crossPacketInterfaces=%zu",
                         packet->second.dirty ? 1 : 0,
                         static_cast<unsigned long long>(
                             packet->second.generation),
@@ -609,7 +615,10 @@ namespace OpenRCT2::Paint
                             packet->second.publishedSourceRevision),
                         packet->second.vertexCount,
                         packet->second.surfaceStorage != nullptr
-                            ? packet->second.surfaceStorage->size() : 0);
+                            ? packet->second.surfaceStorage->size() : 0,
+                        packet->second.resolvedInternalInterfaces,
+                        packet->second.suppressedInternalFaces,
+                        packet->second.crossPacketInternalInterfaces);
                 }
             }
 

@@ -1776,6 +1776,9 @@
             uint64_t sourceRevision{};
             uint64_t publishedSourceRevision{};
             size_t vertexCount{};
+            size_t resolvedInternalInterfaces{};
+            size_t suppressedInternalFaces{};
+            size_t crossPacketInternalInterfaces{};
             std::shared_ptr<const std::vector<FirstPersonSurface>> surfaceStorage;
             uint64_t lastSeen{};
             bool dirty = true;

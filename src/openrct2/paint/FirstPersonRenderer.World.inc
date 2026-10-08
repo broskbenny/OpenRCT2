@@ -4066,7 +4066,12 @@
                 ResolveFirstPersonInternalOccupancyInterfaces(
                     packet.surfaces,
                     relationshipContext);
-            (void)relationshipResolution;
+            packet.resolvedInternalInterfaces =
+                relationshipResolution.interfaces;
+            packet.suppressedInternalFaces =
+                relationshipResolution.suppressedFaces;
+            packet.crossPacketInternalInterfaces =
+                relationshipResolution.contextMatches;
             packet.vertexCount =
                 packet.surfaces.size() * 6;
 
