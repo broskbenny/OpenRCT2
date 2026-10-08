@@ -4701,9 +4701,73 @@
                             const auto& other =
                                 packet.surfaces[
                                     peer.surfaceIndex];
+
+                            // Different decorative sprite carriers are not
+                            // structural walls. Their transparent bounding
+                            // rectangles overlap frequently across trees;
+                            // AABB contact does not prove opaque Z-fighting.
+                            // Preserve all mixed or physical cases.
+                            if (other.artworkCarrier
+                                && surface.artworkCarrier
+                                && !other.physicalCoverage
+                                && !surface.physicalCoverage
+                                && other.reconstructionGroup == 0
+                                && surface.reconstructionGroup == 0
+                                && other.sourceInstanceKey != 0
+                                && surface.sourceInstanceKey != 0
+                                && other.sourceInstanceKey
+                                    != surface.sourceInstanceKey)
+                                continue;
+
+                            // Require actual coplanar triangle intersection,
+                            // rather than overlapping projected rectangles.
+                            // This catches folds, diagonals and clipped
+                            // quads whose bounds intersect but surfaces do not.
+                            const auto projectedPoint =
+                                [&](FirstPersonVec3 p) {
+                                    if (probe->projectionAxis == 0)
+                                        return FirstPersonVec3{
+                                            p.y, p.z, 0.0f };
+                                    if (probe->projectionAxis == 1)
+                                        return FirstPersonVec3{
+                                            p.x, p.z, 0.0f };
+                                    return FirstPersonVec3{
+                                        p.x, p.y, 0.0f };
+                                };
+                            float triangleOverlap = 0.0f;
+                            for (size_t a = 0; a < 2; ++a)
+                            for (size_t b = 0; b < 2; ++b)
+                            {
+                                const size_t ia = a * 3;
+                                const size_t ib = b * 3;
+                                const std::array<
+                                    FirstPersonVec3, 3> trianglesA{ {
+                                    projectedPoint(
+                                        other.triangles[ia].world),
+                                    projectedPoint(
+                                        other.triangles[ia + 1].world),
+                                    projectedPoint(
+                                        other.triangles[ia + 2].world),
+                                } };
+                                const std::array<
+                                    FirstPersonVec3, 3> trianglesB{ {
+                                    projectedPoint(
+                                        surface.triangles[ib].world),
+                                    projectedPoint(
+                                        surface.triangles[ib + 1].world),
+                                    projectedPoint(
+                                        surface.triangles[ib + 2].world),
+                                } };
+                                triangleOverlap +=
+                                    FirstPersonCoplanarTriangleOverlapAreaXY(
+                                        trianglesA, trianglesB, 0.01f);
+                            }
+                            if (triangleOverlap <= 0.01f)
+                                continue;
+
                             if (explainedSurfaceRelationship(
                                 other, surface))
-                            continue;
+                                continue;
 
                             const uint32_t imageA =
                                 other.image.HasValue()
