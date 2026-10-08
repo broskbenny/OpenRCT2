@@ -2388,10 +2388,29 @@
             config.maximumOccupiedCells = 65536;
             config.maximumGridCells = 65536;
             config.maximumAxisCells = 96;
-            config.minimumCandidateCoverage = 0.0f;
-            config.minimumObservedCoverage = 0.0f;
-            config.maximumEdgeError =
-                std::numeric_limits<int32_t>::max();
+            // A genuinely volumetric semantic envelope must earn its
+            // silhouette refinement against all four independent native
+            // views. The general visual-hull builder already computes a
+            // round-trip certificate and rejects failing candidates. Do not
+            // bypass that certificate for roofs, scenery bodies, station
+            // covers, supports or other semantic box/local-hull families.
+            //
+            // Near-planar envelopes already constrain depth physically; they
+            // retain their existing single-view refinement policy.
+            if (minimumViews == 4)
+            {
+                config.minimumIntersectionOverUnion = 0.52f;
+                config.minimumCandidateCoverage = 0.68f;
+                config.minimumObservedCoverage = 0.65f;
+                config.maximumEdgeError = 8;
+            }
+            else
+            {
+                config.minimumCandidateCoverage = 0.0f;
+                config.minimumObservedCoverage = 0.0f;
+                config.maximumEdgeError =
+                    std::numeric_limits<int32_t>::max();
+            }
 
             const auto hull =
                 BuildFirstPersonVisualHull(
