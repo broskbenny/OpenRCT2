@@ -469,6 +469,10 @@
                 // carry alpha-tested native artwork rather than guessed matter.
                 surface.cameraIndependent = true;
                 surface.outwardNormal = face.normal;
+                surface.artworkCarrier =
+                    appearance.kind
+                        == FirstPersonSmallSceneryAppearanceKind::
+                            crossedTree;
                 surface.exteriorOnly =
                     appearance.oneSidedArtwork;
 

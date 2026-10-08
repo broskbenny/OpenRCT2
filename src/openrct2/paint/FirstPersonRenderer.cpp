@@ -11,6 +11,7 @@
 #include "FirstPersonPhysicalProxy.h"
 #include "FirstPersonSmallSceneryAppearance.h"
 #include "FirstPersonStructuralColumns.h"
+#include "FirstPersonSurfaceRelations.h"
 #include "FirstPersonTrackTrajectory.h"
 #include "FirstPersonTunnelGeometry.h"
 #include "FirstPersonVehicleBodyHull.h"
@@ -1616,6 +1617,8 @@ namespace OpenRCT2::Paint
                     regionX * 32, regionY * 32);
             _staticRegionPackets[regionKey].dirty = true;
             ++_staticRegionPackets[regionKey].sourceRevision;
+            MarkStaticRegionRelationshipNeighboursDirty(
+                regionKey);
 
             if (const auto tracks =
                     _trackTrajectoryGroupsByBoundsRegion.find(

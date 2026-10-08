@@ -198,6 +198,8 @@ namespace OpenRCT2::Paint
             const auto opaqueCount = uint32_t(opaqueFaces());
             for (auto it = begin; it != end; ++it)
             {
+                it->reconstructedOccupancyBoundary =
+                    !_faces.empty();
                 it->exteriorOnly =
                     !_faces.empty()
                     && !reverseSideExposed(

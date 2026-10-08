@@ -1043,6 +1043,44 @@
 
 #include "FirstPersonRenderer.SmallScenery.inc"
 
+        [[nodiscard]] uint64_t
+            FirstPersonPaintSourceInstanceKey(
+                const PaintStruct& ps)
+        {
+            if (ps.Element == nullptr
+                || ps.Source != PaintStructSource::tile)
+                return 0;
+
+            const auto tile = ps.MapPos.toTileStart();
+            auto* element = MapGetFirstElementAt(tile);
+            uint32_t index = 0;
+            while (element != nullptr)
+            {
+                if (element == ps.Element)
+                {
+                    uint64_t key =
+                        14695981039346656037ull;
+                    ExtendStableKey(
+                        key, uint32_t(
+                            tile.x / kCoordsXYStep));
+                    ExtendStableKey(
+                        key, uint32_t(
+                            tile.y / kCoordsXYStep));
+                    ExtendStableKey(key, index);
+                    ExtendStableKey(
+                        key,
+                        static_cast<uint8_t>(
+                            ps.Element->getType()));
+                    return key == 0 ? 1 : key;
+                }
+                if (element->isLastForTile())
+                    break;
+                ++element;
+                ++index;
+            }
+            return 0;
+        }
+
         [[nodiscard]] FirstPersonInteractionTarget
             BuildFirstPersonTileInteractionTarget(
                 ViewportInteractionItem interactionType,
@@ -1128,6 +1166,8 @@
                 scene.surfaces.size();
             const auto interactionTarget =
                 FirstPersonInteractionTargetForPaintStruct(ps);
+            const uint64_t sourceInstanceKey =
+                FirstPersonPaintSourceInstanceKey(ps);
             const auto applyNativeMetadata = [&]() {
                 for (size_t i = nodeSurfaceStart;
                      i < scene.surfaces.size(); ++i)
@@ -1138,6 +1178,17 @@
                     {
                         surface.nativePaintOrdinal =
                             ps.FirstPersonNativePaintOrdinal;
+                    }
+                    if (surface.sourceInstanceKey == 0)
+                        surface.sourceInstanceKey =
+                            sourceInstanceKey;
+                    if (sourceInstanceKey != 0
+                        && surface.diagnosticSemanticGroup == 0)
+                    {
+                        surface.diagnosticSourceTile =
+                            ps.MapPos.toTileStart();
+                        surface.diagnosticMaterialTile =
+                            ps.MapPos.toTileStart();
                     }
                     if (interactionTarget.hasValue()
                         && !surface.interactionTarget.hasValue())
@@ -1875,7 +1926,12 @@
             for (const auto& surface : cached.surfaces)
             {
                 if (surface.gpuRegion != 0)
-                    _staticRegionPackets[surface.gpuRegion].dirty = true;
+                {
+                    _staticRegionPackets[
+                        surface.gpuRegion].dirty = true;
+                    MarkStaticRegionRelationshipNeighboursDirty(
+                        surface.gpuRegion);
+                }
             }
         }
 
@@ -1987,8 +2043,12 @@
             for (const auto& surface : cached.surfaces)
             {
                 if (surface.gpuRegion != 0)
+                {
                     _staticRegionPackets[
                         surface.gpuRegion].dirty = true;
+                    MarkStaticRegionRelationshipNeighboursDirty(
+                        surface.gpuRegion);
+                }
             }
         }
 
@@ -5496,6 +5556,11 @@
                 ExtendStableKey(
                     fingerprint, surface.coplanarOwner ? 1 : 0);
                 ExtendStableKey(
+                    fingerprint, surface.sourceInstanceKey);
+                ExtendStableKey(
+                    fingerprint,
+                    surface.reconstructedOccupancyBoundary ? 1 : 0);
+                ExtendStableKey(
                     fingerprint, surface.physicalCoverage ? 1 : 0);
                 ExtendStableKey(
                     fingerprint, surface.artworkCarrier ? 1 : 0);
@@ -5676,6 +5741,12 @@
             ExtendStableKey(key, surface.immutableFingerprint);
             ExtendStableKey(key, surface.solidColour);
             ExtendStableKey(key, surface.reconstructionGroup);
+            ExtendStableKey(key, surface.sourceInstanceKey);
+            ExtendStableKey(
+                key,
+                surface.reconstructedOccupancyBoundary ? 1 : 0);
+            ExtendStableKey(
+                key, surface.artworkCarrier ? 1 : 0);
             if (surface.interactionTarget.hasValue())
             {
                 ExtendStableKey(
@@ -5750,9 +5821,58 @@
             return key;
         }
 
+        void MarkStaticRegionRelationshipNeighboursDirty(
+            uint64_t regionKey)
+        {
+            const int32_t regionX =
+                int32_t(uint32_t(regionKey >> 32)) - 1;
+            const int32_t regionY =
+                int32_t(uint32_t(regionKey)) - 1;
+            constexpr std::array<std::array<int32_t, 2>, 4>
+                offsets{ {
+                    { -1, 0 }, { 1, 0 },
+                    { 0, -1 }, { 0, 1 },
+                } };
+            for (const auto& offset : offsets)
+            {
+                const int32_t x = regionX + offset[0];
+                const int32_t y = regionY + offset[1];
+                if (x < 0 || y < 0)
+                    continue;
+                _staticRegionPackets[
+                    FirstPersonGpuRegionKey(
+                        x * 32, y * 32)].dirty = true;
+            }
+        }
+
         void MarkStaticRegionDirtyForTile(int32_t tileX, int32_t tileY)
         {
-            _staticRegionPackets[FirstPersonGpuRegionKey(tileX, tileY)].dirty = true;
+            const uint64_t regionKey =
+                FirstPersonGpuRegionKey(tileX, tileY);
+            _staticRegionPackets[regionKey].dirty = true;
+
+            const int32_t localX =
+                ((tileX % 32) + 32) % 32;
+            const int32_t localY =
+                ((tileY % 32) + 32) % 32;
+            const int32_t regionX = tileX / 32;
+            const int32_t regionY = tileY / 32;
+            const auto dirty =
+                [&](int32_t x, int32_t y) {
+                    if (x < 0 || y < 0)
+                        return;
+                    _staticRegionPackets[
+                        FirstPersonGpuRegionKey(
+                            x * 32, y * 32)].dirty = true;
+                };
+            if (localX == 0)
+                dirty(regionX - 1, regionY);
+            if (localX == 31)
+                dirty(regionX + 1, regionY);
+            if (localY == 0)
+                dirty(regionX, regionY - 1);
+            if (localY == 31)
+                dirty(regionX, regionY + 1);
         }
 
         void MarkTrackTrajectoryRegionsDirty(

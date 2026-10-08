@@ -3942,6 +3942,134 @@
                 }
             }
 
+            std::vector<FirstPersonSurface>
+                relationshipContext;
+            const auto addRelationshipContext =
+                [&](const FirstPersonSurface& surface) {
+                    if (!IsResidentStaticSurface(surface)
+                        || surface.gpuRegion == regionKey
+                        || !surface.reconstructedOccupancyBoundary)
+                        return;
+                    relationshipContext.push_back(surface);
+                };
+
+            for (int32_t ty = y0 - 1;
+                 ty <= y1; ++ty)
+            for (int32_t tx = x0 - 1;
+                 tx <= x1; ++tx)
+            {
+                if (tx < 0 || ty < 0)
+                    continue;
+                if (tx >= x0 && tx < x1
+                    && ty >= y0 && ty < y1)
+                    continue;
+                if ((tx < x0 || tx >= x1)
+                    && (ty < y0 || ty >= y1))
+                    continue;
+
+                const auto cache =
+                    _staticPaintCache.find(
+                        TerrainKey(tx, ty));
+                if (cache == _staticPaintCache.end()
+                    || !cache->second.valid
+                    || cache->second.dirty
+                    || cache->second.animated)
+                    continue;
+                for (const auto& surface :
+                     cache->second
+                         .cameraIndependentResidentSurfaces)
+                    addRelationshipContext(surface);
+            }
+
+            const auto appendGroupedContext =
+                [&](uint64_t neighbourRegion) {
+                    if (_largeSceneryGeometryEnabled)
+                    {
+                        const auto groups =
+                            _largeSceneryGroupsByRegion.find(
+                                neighbourRegion);
+                        if (groups
+                            != _largeSceneryGroupsByRegion.end())
+                        {
+                            for (const auto groupKey :
+                                 groups->second)
+                            {
+                                const auto geometry =
+                                    _largeSceneryGeometryCache.find(
+                                        groupKey);
+                                if (geometry
+                                        == _largeSceneryGeometryCache.end()
+                                    || geometry->second.dirty)
+                                    continue;
+                                for (const auto& surface :
+                                     geometry->second.surfaces)
+                                {
+                                    if (surface.gpuRegion
+                                            == neighbourRegion)
+                                        addRelationshipContext(
+                                            surface);
+                                }
+                            }
+                        }
+                    }
+                    if (_parkEntranceGeometryEnabled)
+                    {
+                        const auto groups =
+                            _parkEntranceGroupsByRegion.find(
+                                neighbourRegion);
+                        if (groups
+                            != _parkEntranceGroupsByRegion.end())
+                        {
+                            for (const auto groupKey :
+                                 groups->second)
+                            {
+                                const auto geometry =
+                                    _parkEntranceGeometryCache.find(
+                                        groupKey);
+                                if (geometry
+                                        == _parkEntranceGeometryCache.end()
+                                    || geometry->second.dirty)
+                                    continue;
+                                for (const auto& surface :
+                                     geometry->second.surfaces)
+                                {
+                                    if (surface.gpuRegion
+                                            == neighbourRegion)
+                                        addRelationshipContext(
+                                            surface);
+                                }
+                            }
+                        }
+                    }
+                };
+            constexpr std::array<std::array<int32_t, 2>, 4>
+                relationshipRegionOffsets{ {
+                    { -1, 0 }, { 1, 0 },
+                    { 0, -1 }, { 0, 1 },
+                } };
+            for (const auto& offset :
+                 relationshipRegionOffsets)
+            {
+                const int32_t neighbourX =
+                    regionX + offset[0];
+                const int32_t neighbourY =
+                    regionY + offset[1];
+                if (neighbourX < 0 || neighbourY < 0)
+                    continue;
+                appendGroupedContext(
+                    FirstPersonGpuRegionKey(
+                        neighbourX * 32,
+                        neighbourY * 32));
+            }
+
+            const auto relationshipResolution =
+                ResolveFirstPersonInternalOccupancyInterfaces(
+                    packet.surfaces,
+                    relationshipContext);
+            (void)relationshipResolution;
+            packet.vertexCount =
+                packet.surfaces.size() * 6;
+
             const auto reconstructionKindName =
                 [](const FirstPersonSurface& surface)
                     -> const char* {
@@ -3957,71 +4085,11 @@
                             return "none";
                     }
                 };
-            const auto intentionalSemanticArtworkLayers =
+            const auto explainedSurfaceRelationship =
                 [](const FirstPersonSurface& a,
                    const FirstPersonSurface& b) {
-                    // Components in the same explicit semantic artwork group
-                    // are reconstructed as one native composite. Coincident
-                    // faces in that group deliberately bypass physical
-                    // occlusion and are resolved by native paint order.
-                    return a.coplanarOwner
-                        && b.coplanarOwner
-                        && a.nativePaintOrdinal != 0
-                        && b.nativePaintOrdinal != 0
-                        && a.diagnosticSemanticGroup != 0
-                        && b.diagnosticSemanticGroup != 0
-                        && a.diagnosticSourceArtworkGroup != 0
-                        && a.diagnosticSourceArtworkGroup
-                            == b.diagnosticSourceArtworkGroup
-                        && a.diagnosticSourceTile.x
-                            == b.diagnosticSourceTile.x
-                        && a.diagnosticSourceTile.y
-                            == b.diagnosticSourceTile.y;
-                };
-            const auto resolvedByCoplanarOwnership =
-                [](const FirstPersonSurface& a,
-                   const FirstPersonSurface& b) {
-                    // The GL owner phase explicitly resolves equal-depth
-                    // native artwork by paint ordinal. One owner over an
-                    // ordinary depth surface is also deterministic: the
-                    // ordinary surface establishes opaque depth and the owner
-                    // is admitted only at that same physical layer. Neither
-                    // case is a depth-buffer fight and should consume no
-                    // diagnostic budget.
-                    return (a.coplanarOwner
-                                && a.nativePaintOrdinal != 0)
-                        || (b.coplanarOwner
-                                && b.nativePaintOrdinal != 0);
-                };
-
-            const auto visuallyEquivalentPhysicalSolids =
-                [](const FirstPersonSurface& a,
-                   const FirstPersonSurface& b) {
-                    // Exact coplanar overlap between two physical solid-colour
-                    // faces with the same palette value cannot produce a
-                    // visible material conflict. This commonly occurs where
-                    // adjacent rail proxy prisms overlap slightly at joins.
-                    return a.physicalCoverage
-                        && b.physicalCoverage
-                        && a.solidColour != 0
-                        && a.solidColour == b.solidColour;
-                };
-            const auto mutuallyExclusiveExteriorFaces =
-                [](const FirstPersonSurface& a,
-                   const FirstPersonSurface& b) {
-                    // Closed reconstructed hull boundary faces are visible
-                    // only from their outward half-space. Two coplanar
-                    // exterior faces with opposite physical normals can
-                    // never contribute from the same camera position, so
-                    // reporting them as a visual conflict is diagnostic
-                    // noise rather than evidence of fighting geometry.
-                    constexpr float kOpposedNormal = -0.999f;
-                    return a.exteriorOnly
-                        && b.exteriorOnly
-                        && FpDot(
-                               a.outwardNormal,
-                               b.outwardNormal)
-                            <= kOpposedNormal;
+                    return FirstPersonSurfaceRelationshipExplainsCoplanarity(
+                        a, b);
                 };
 
             // Diagnostic only: this runs when a dirty static region is rebuilt,
@@ -4221,13 +4289,7 @@
                             <= kActualOverlapAreaEpsilon)
                             continue;
 
-                        if (mutuallyExclusiveExteriorFaces(
-                                other, surface)
-                            || resolvedByCoplanarOwnership(
-                                other, surface)
-                            || intentionalSemanticArtworkLayers(
-                                other, surface)
-                            || visuallyEquivalentPhysicalSolids(
+                        if (explainedSurfaceRelationship(
                                 other, surface))
                             continue;
 
@@ -4591,15 +4653,9 @@
                             const auto& other =
                                 packet.surfaces[
                                     peer.surfaceIndex];
-                            if (mutuallyExclusiveExteriorFaces(
-                                    other, surface)
-                                || resolvedByCoplanarOwnership(
-                                    other, surface)
-                                || intentionalSemanticArtworkLayers(
-                                    other, surface)
-                                || visuallyEquivalentPhysicalSolids(
-                                    other, surface))
-                                continue;
+                            if (explainedSurfaceRelationship(
+                                other, surface))
+                            continue;
 
                             const uint32_t imageA =
                                 other.image.HasValue()
@@ -4684,11 +4740,11 @@
                                 "FP_PLANE region=(%d,%d) normal=(%.3f,%.3f,%.3f) "
                                 "distance=%.2f overlap=(%.1f,%.1f) "
                                 "A[type=%s image=%s reconGroup=%llu reconKind=%s reconAnchor=(%.0f,%.0f,%.0f) semanticGroup=%llu gpuRegion=%llu "
-                                "owner=%d order=%llu exterior=%d normal=(%.1f,%.1f,%.1f) role=%u "
+                                "owner=%d order=%llu instance=%llu occupancy=%d carrier=%d exterior=%d normal=(%.1f,%.1f,%.1f) role=%u "
                                 "source=(tile=%d,%d comp=%u rot=%u artGroup=%u) "
                                 "material=(tile=%d,%d comp=%u rot=%u artGroup=%u order=%llu)] "
                                 "B[type=%s image=%s reconGroup=%llu reconKind=%s reconAnchor=(%.0f,%.0f,%.0f) semanticGroup=%llu gpuRegion=%llu "
-                                "owner=%d order=%llu exterior=%d normal=(%.1f,%.1f,%.1f) role=%u "
+                                "owner=%d order=%llu instance=%llu occupancy=%d carrier=%d exterior=%d normal=(%.1f,%.1f,%.1f) role=%u "
                                 "source=(tile=%d,%d comp=%u rot=%u artGroup=%u) "
                                 "material=(tile=%d,%d comp=%u rot=%u artGroup=%u order=%llu)] "
                                 "differentGroup=%d differentRegion=%d",
@@ -4724,6 +4780,12 @@
                                 static_cast<
                                     unsigned long long>(
                                         other.nativePaintOrdinal),
+                                static_cast<
+                                    unsigned long long>(
+                                        other.sourceInstanceKey),
+                                other.reconstructedOccupancyBoundary
+                                    ? 1 : 0,
+                                other.artworkCarrier ? 1 : 0,
                                 other.exteriorOnly ? 1 : 0,
                                 double(other.outwardNormal.x),
                                 double(other.outwardNormal.y),
@@ -4774,6 +4836,12 @@
                                 static_cast<
                                     unsigned long long>(
                                         surface.nativePaintOrdinal),
+                                static_cast<
+                                    unsigned long long>(
+                                        surface.sourceInstanceKey),
+                                surface.reconstructedOccupancyBoundary
+                                    ? 1 : 0,
+                                surface.artworkCarrier ? 1 : 0,
                                 surface.exteriorOnly ? 1 : 0,
                                 double(surface.outwardNormal.x),
                                 double(surface.outwardNormal.y),

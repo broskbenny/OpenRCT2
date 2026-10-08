@@ -26,6 +26,7 @@
 #include <openrct2/paint/FirstPersonSmallSceneryCollision.h>
 #include <openrct2/paint/FirstPersonSmallSceneryAppearance.h>
 #include <openrct2/paint/FirstPersonStructuralColumns.h>
+#include <openrct2/paint/FirstPersonSurfaceRelations.h>
 #include <openrct2/paint/FirstPersonVehicleBodyHull.h>
 #include <openrct2/paint/FirstPersonVisualHull.h>
 #include <openrct2/paint/FirstPersonWalkingSemantics.h>
@@ -670,10 +671,154 @@ TEST(FirstPersonHullMaterialTest, ObjectRangePreservesAuthoredWallAndDirectional
     EXPECT_TRUE(cached[1].exteriorOnly);
     for (const auto& surface : cached)
     {
+        EXPECT_TRUE(
+            surface.reconstructedOccupancyBoundary);
         EXPECT_EQ(surface.diagnosticHullBoundaryFaces, 6u);
         EXPECT_EQ(surface.diagnosticHullMaterialFaces, 6u);
         EXPECT_EQ(surface.diagnosticHullOpaqueFaces, 5u);
     }
+}
+
+namespace
+{
+    FirstPersonSurface MakeRelationshipTestQuad(
+        float x0, float x1, float highZ,
+        FirstPersonVec3 normal, uint64_t owner,
+        bool occupancy = true)
+    {
+        FirstPersonSurface surface{};
+        surface.cameraIndependent = true;
+        surface.reconstructedOccupancyBoundary =
+            occupancy;
+        surface.sourceInstanceKey = owner;
+        surface.outwardNormal = normal;
+        const std::array<FirstPersonVec3, 4> p{ {
+            { x0, 0.0f, 0.0f },
+            { x1, 0.0f, 0.0f },
+            { x1, 0.0f, highZ },
+            { x0, 0.0f, highZ },
+        } };
+        surface.triangles[0].world = p[0];
+        surface.triangles[1].world = p[1];
+        surface.triangles[2].world = p[2];
+        surface.triangles[3].world = p[0];
+        surface.triangles[4].world = p[2];
+        surface.triangles[5].world = p[3];
+        return surface;
+    }
+}
+
+TEST(FirstPersonSurfaceRelationshipTest, ExactBackToBackOccupancyBecomesInternalInterface)
+{
+    auto a = MakeRelationshipTestQuad(
+        0.0f, 32.0f, 8.0f,
+        { 0, 1, 0 }, 1001);
+    auto b = MakeRelationshipTestQuad(
+        0.0f, 32.0f, 8.0f,
+        { 0, -1, 0 }, 1002);
+    EXPECT_EQ(
+        ClassifyFirstPersonSurfaceRelationship(a, b),
+        FirstPersonSurfaceRelationshipKind::
+            internalOccupancyInterface);
+
+    std::vector<FirstPersonSurface> surfaces{ a, b };
+    const auto resolved =
+        ResolveFirstPersonInternalOccupancyInterfaces(
+            surfaces);
+    EXPECT_EQ(resolved.interfaces, 1u);
+    EXPECT_EQ(resolved.suppressedFaces, 2u);
+    EXPECT_TRUE(surfaces.empty());
+}
+
+TEST(FirstPersonSurfaceRelationshipTest, AuthoredWallIsNotConsumedByOccupancyUnion)
+{
+    auto hull = MakeRelationshipTestQuad(
+        0.0f, 32.0f, 16.0f,
+        { 0, 1, 0 }, 1, true);
+    auto wall = MakeRelationshipTestQuad(
+        0.0f, 32.0f, 16.0f,
+        { 0, -1, 0 }, 2, false);
+    EXPECT_EQ(
+        ClassifyFirstPersonSurfaceRelationship(
+            hull, wall),
+        FirstPersonSurfaceRelationshipKind::unresolved);
+
+    std::vector<FirstPersonSurface> surfaces{
+        hull, wall
+    };
+    const auto resolved =
+        ResolveFirstPersonInternalOccupancyInterfaces(
+            surfaces);
+    EXPECT_EQ(resolved.suppressedFaces, 0u);
+    EXPECT_EQ(surfaces.size(), 2u);
+}
+
+TEST(FirstPersonSurfaceRelationshipTest, PartialContactRemainsDiscoverable)
+{
+    auto a = MakeRelationshipTestQuad(
+        0.0f, 32.0f, 8.0f,
+        { 0, 1, 0 }, 1);
+    auto b = MakeRelationshipTestQuad(
+        0.0f, 32.0f, 16.0f,
+        { 0, -1, 0 }, 2);
+    EXPECT_EQ(
+        ClassifyFirstPersonSurfaceRelationship(a, b),
+        FirstPersonSurfaceRelationshipKind::unresolved);
+
+    std::vector<FirstPersonSurface> surfaces{ a, b };
+    const auto resolved =
+        ResolveFirstPersonInternalOccupancyInterfaces(
+            surfaces);
+    EXPECT_EQ(resolved.suppressedFaces, 0u);
+    EXPECT_EQ(surfaces.size(), 2u);
+}
+
+TEST(FirstPersonSurfaceRelationshipTest, SameOwnerBoundaryIsNotSilentlyDeleted)
+{
+    auto a = MakeRelationshipTestQuad(
+        0.0f, 32.0f, 8.0f,
+        { 0, 1, 0 }, 77);
+    auto b = a;
+    b.outwardNormal = { 0, -1, 0 };
+    EXPECT_EQ(
+        ClassifyFirstPersonSurfaceRelationship(a, b),
+        FirstPersonSurfaceRelationshipKind::unresolved);
+}
+
+TEST(FirstPersonSurfaceRelationshipTest, NeighbourPacketContextSuppressesOnlyLocalFace)
+{
+    auto local = MakeRelationshipTestQuad(
+        0.0f, 32.0f, 8.0f,
+        { 0, 1, 0 }, 1);
+    auto neighbour = MakeRelationshipTestQuad(
+        0.0f, 32.0f, 8.0f,
+        { 0, -1, 0 }, 2);
+
+    std::vector<FirstPersonSurface> surfaces{
+        local
+    };
+    const std::array<FirstPersonSurface, 1>
+        context{ neighbour };
+    const auto resolved =
+        ResolveFirstPersonInternalOccupancyInterfaces(
+            surfaces, context);
+    EXPECT_EQ(resolved.interfaces, 1u);
+    EXPECT_EQ(resolved.contextMatches, 1u);
+    EXPECT_EQ(resolved.suppressedFaces, 1u);
+    EXPECT_TRUE(surfaces.empty());
+}
+
+TEST(FirstPersonSurfaceRelationshipTest, SameOwnerArtworkCarrierIsAppearanceNotMatter)
+{
+    auto a = MakeRelationshipTestQuad(
+        0.0f, 32.0f, 32.0f,
+        { 0, 1, 0 }, 123, false);
+    a.artworkCarrier = true;
+    auto b = a;
+    EXPECT_EQ(
+        ClassifyFirstPersonSurfaceRelationship(a, b),
+        FirstPersonSurfaceRelationshipKind::
+            sameOwnerArtworkCarrier);
 }
 
 TEST(FirstPersonAssetReconstructionTest, VerticalCoverageCanSplitOneWallIntoSeveralStrips)

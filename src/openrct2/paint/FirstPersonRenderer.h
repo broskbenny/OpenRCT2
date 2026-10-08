@@ -158,6 +158,13 @@ namespace OpenRCT2::Paint
         // paint order against the frozen physical-depth result, so coincident
         // surfaces resolve deterministically without role-specific biases.
         bool coplanarOwner = false;
+        // Stable world-instance provenance for relationship reasoning. This is
+        // not native paint order or a render/deduplication priority.
+        uint64_t sourceInstanceKey = 0;
+        // Emitted boundary of reconstructed occupied matter. The world-level
+        // surface union may remove it when another occupied instance continues
+        // immediately across the complete opposing face.
+        bool reconstructedOccupancyBoundary = false;
         // Diagnostic provenance for semantic material reconstruction. These
         // fields do not affect rendering or cache identity; they only explain
         // where a final plane/material came from when FP_PLANE is enabled.
