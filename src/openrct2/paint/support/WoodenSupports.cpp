@@ -375,7 +375,7 @@ static std::array<CoordsXY, 2>
 
 static void PublishFirstPersonWoodenSupportGeometry(
     PaintSession& session, WoodenSupportSubType subType,
-    int32_t lowZ, int32_t highZ, ImageId image, int32_t artworkZ)
+    int32_t lowZ, int32_t highZ, ImageId image)
 {
     if (highZ <= lowZ
         || subType == WoodenSupportSubType::null)
@@ -388,7 +388,7 @@ static void PublishFirstPersonWoodenSupportGeometry(
             session, FirstPersonPaintSemanticRole::support,
             { point.x - 2, point.y - 2, lowZ },
             { point.x + 2, point.y + 2, highZ },
-            image, { 0, 0, artworkZ });
+            image);
     }
 
     for (int32_t sectionLow = lowZ;
@@ -401,17 +401,17 @@ static void PublishFirstPersonWoodenSupportGeometry(
             session, FirstPersonPaintSemanticRole::support,
             { posts[0].x, posts[0].y, sectionHigh },
             { posts[1].x, posts[1].y, sectionHigh },
-            1, image, { 0, 0, artworkZ });
+            1, image);
         PaintSessionAddFirstPersonSemanticBeam(
             session, FirstPersonPaintSemanticRole::support,
             { posts[0].x, posts[0].y, sectionLow },
             { posts[1].x, posts[1].y, sectionHigh },
-            1, image, { 0, 0, artworkZ });
+            1, image);
         PaintSessionAddFirstPersonSemanticBeam(
             session, FirstPersonPaintSemanticRole::support,
             { posts[1].x, posts[1].y, sectionLow },
             { posts[0].x, posts[0].y, sectionHigh },
-            1, image, { 0, 0, artworkZ });
+            1, image);
     }
 }
 
@@ -420,10 +420,12 @@ static void PublishFirstPersonWoodenSupportGeometry(
  */
 static void PaintRepeatedWoodenSupports(
     const SupportsIdDescriptor supportImages, const ImageId& imageTemplate, int16_t heightSteps, PaintSession& session,
-    uint16_t& baseHeight, bool& hasSupports, ImageId& structuralArtwork,
-    int32_t& structuralArtworkZ)
+    uint16_t& baseHeight, bool& hasSupports)
 {
-    // All call sites are inside the shared wooden-support semantic scope.
+    FirstPersonPaintSemanticScope
+        firstPersonRole(
+            session,
+            FirstPersonPaintSemanticRole::support);
     while (heightSteps > 0)
     {
         const bool isHalf = baseHeight & 0x10 || heightSteps == 1 || baseHeight + kWaterHeightStep == session.WaterHeight;
@@ -431,11 +433,6 @@ static void PaintRepeatedWoodenSupports(
         {
             // Half support
             auto imageId = imageTemplate.WithIndex(supportImages.Half);
-            if (!structuralArtwork.HasValue())
-            {
-                structuralArtwork = imageId;
-                structuralArtworkZ = baseHeight;
-            }
             uint8_t boundBoxHeight = (heightSteps == 1) ? 7 : 12;
             PaintAddImageAsParent(session, imageId, { 0, 0, baseHeight }, { 32, 32, boundBoxHeight });
             baseHeight += 16;
@@ -445,11 +442,6 @@ static void PaintRepeatedWoodenSupports(
         {
             // Full support
             auto imageId = imageTemplate.WithIndex(supportImages.Full);
-            if (!structuralArtwork.HasValue())
-            {
-                structuralArtwork = imageId;
-                structuralArtworkZ = baseHeight;
-            }
             uint8_t boundBoxHeight = (heightSteps == 2) ? 23 : 28;
             PaintAddImageAsParent(session, imageId, { 0, 0, baseHeight }, { 32, 32, boundBoxHeight });
             baseHeight += 32;
@@ -467,9 +459,8 @@ static void PaintSlopeTransitions(
     const SlopedSupportsDescriptor& supportsDesc, ImageIndex imageIndex, PaintSession& session, const ImageId& imageTemplate,
     uint16_t baseHeight)
 {
-    // Own the transition where its native paint struct is created. This also
-    // covers orphaned transition images attached to a track paint chain and
-    // future callers that do not already establish a support semantic scope.
+    // Own transition artwork at emission, including orphaned pieces attached
+    // to ride/track paint chains and any later callers of this helper.
     FirstPersonPaintSemanticScope firstPersonRole(
         session, FirstPersonPaintSemanticRole::support);
     auto imageId = imageTemplate.WithIndex(imageIndex);
@@ -510,13 +501,10 @@ static bool WoodenABPaintSlopeTransitions(
 template<uint8_t zOffset, bool doHeightStepsCheck>
 static inline bool WoodenSupportsPaintSetupCommon(
     PaintSession& session, const SupportsIdDescriptor& supportImages, int32_t height, ImageId& imageTemplate, bool& hasSupports,
-    uint16_t& baseHeight, ImageId& structuralArtwork,
-    int32_t& structuralArtworkZ)
+    uint16_t& baseHeight)
 {
-    // These native images are timber-support artwork, not freestanding objects.
-    // The fixed post/brace geometry is published by the owning support painter.
-    // Give ground bases and slope-adapting pieces the same physical ownership
-    // as the repeated support sprites, rather than allowing view-facing fallback.
+    // The native terrain base and slope pieces are the same fixed support
+    // assembly as the timber sections. They may not become view-facing art.
     FirstPersonPaintSemanticScope firstPersonRole(
         session, FirstPersonPaintSemanticRole::support);
     if (!(session.Flags & PaintSessionFlags::PassedSurface))
@@ -545,8 +533,6 @@ static inline bool WoodenSupportsPaintSetupCommon(
 
     hasSupports = false;
     bool drawFlatPiece = false;
-    ImageId baseArtwork{};
-    int32_t baseArtworkZ = 0;
 
     // Draw base support (usually shaped to the slope)
     auto slope = session.Support.slope;
@@ -572,8 +558,6 @@ static inline bool WoodenSupportsPaintSetupCommon(
         else
         {
             auto imageId = imageTemplate.WithIndex(imageIndex + word_97B3C4[slope & kTileSlopeMask]);
-            baseArtwork = imageId;
-            baseArtworkZ = baseHeight;
 
             PaintAddImageAsParent(session, imageId, { 0, 0, baseHeight }, { { 0, 0, baseHeight + 2 }, { 32, 32, 11 } });
             PaintAddImageAsParent(
@@ -602,8 +586,6 @@ static inline bool WoodenSupportsPaintSetupCommon(
         else
         {
             auto imageId = imageTemplate.WithIndex(imageIndex + word_97B3C4[slope & kTileSlopeMask]);
-            baseArtwork = imageId;
-            baseArtworkZ = baseHeight;
             PaintAddImageAsParent(session, imageId, { 0, 0, baseHeight }, { { 0, 0, baseHeight + 2 }, { 32, 32, zOffset } });
             hasSupports = true;
         }
@@ -623,23 +605,12 @@ static inline bool WoodenSupportsPaintSetupCommon(
         if (shouldDraw)
         {
             auto imageId = imageTemplate.WithIndex(supportImages.Flat);
-            baseArtwork = imageId;
-            baseArtworkZ = baseHeight - 2;
             PaintAddImageAsParent(session, imageId, { 0, 0, baseHeight - 2 }, { 32, 32, 0 });
             hasSupports = true;
         }
     }
 
-    // Prefer a timber section actually painted for this height; only use
-    // the terrain base when no repeated half/full section was emitted.
-    PaintRepeatedWoodenSupports(
-        supportImages, imageTemplate, heightSteps, session,
-        baseHeight, hasSupports, structuralArtwork, structuralArtworkZ);
-    if (!structuralArtwork.HasValue())
-    {
-        structuralArtwork = baseArtwork;
-        structuralArtworkZ = baseArtworkZ;
-    }
+    PaintRepeatedWoodenSupports(supportImages, imageTemplate, heightSteps, session, baseHeight, hasSupports);
     return true;
 }
 
@@ -652,15 +623,12 @@ inline bool WoodenABSupportsPaintSetupCommon(
 
     uint16_t baseHeight = 0;
     bool hasSupports = false;
-    ImageId supportArtwork{};
-    int32_t supportArtworkZ = 0;
     auto supportIds = GetWoodenSupportIds(supportType, subType);
     const int32_t firstPersonBase =
         ceil2(session.Support.height, 16);
 
     if (!WoodenSupportsPaintSetupCommon<zOffset, doHeightStepsCheck>(
-            session, supportIds, height, imageTemplate, hasSupports,
-            baseHeight, supportArtwork, supportArtworkZ))
+            session, supportIds, height, imageTemplate, hasSupports, baseHeight))
     {
         return false;
     }
@@ -670,25 +638,22 @@ inline bool WoodenABSupportsPaintSetupCommon(
         PublishFirstPersonWoodenSupportGeometry(
             session, subType,
             firstPersonBase, height,
-            supportArtwork, supportArtworkZ);
+            imageTemplate);
     }
 
     if (transitionType != WoodenSupportTransitionType::none)
     {
-        // Native paint may report a zero-height flat base as drawn. That
-        // alone does not produce a non-degenerate semantic post/brace body.
-        const bool hadStructuralBody =
+        // A painted flat base is not evidence for a nonzero 3D support body.
+        const bool hasStructuralBody =
             hasSupports && height > firstPersonBase;
         const bool hasTransition = WoodenABPaintSlopeTransitions(
-            session, supportType, subType, transitionType, direction, imageTemplate, baseHeight);
-        if (hasTransition && !hadStructuralBody)
+            session, supportType, subType, transitionType,
+            direction, imageTemplate, baseHeight);
+        if (hasTransition && !hasStructuralBody)
         {
-            // A track can paint its upper wooden transition even when there
-            // is no vertical support length at this tile. The usual post/brace
-            // publisher therefore has nothing to emit. Retain a small,
-            // non-colliding physical tie at the *known* post anchors rather
-            // than silently losing the entire native transition or inventing
-            // its shape from the native sorting bounding box.
+            // Native transitions can exist without a vertical timber section.
+            // Give that case a real, non-colliding tie between the authoritative
+            // post anchors. Never use the native paint sorting box as geometry.
             const auto posts = FirstPersonWoodenSupportPosts(subType);
             const auto* images = WoodenCurveSupportImageIds[
                 EnumValue(supportType)][EnumValue(subType)];
@@ -700,7 +665,7 @@ inline bool WoodenABSupportsPaintSetupCommon(
                 { posts[1].x, posts[1].y, height },
                 1, transitionImage, { 0, 0, baseHeight }, 0, false);
         }
-        // Preserve the native success/return contract.
+        // Do not change native support-paint success semantics.
         hasSupports = hasTransition;
     }
 
@@ -790,8 +755,6 @@ bool PathBoxSupportsPaintSetup(
 
     uint16_t baseHeight = 0;
     bool hasSupports = false;
-    ImageId supportArtwork{};
-    int32_t supportArtworkZ = 0;
     const int32_t firstPersonBase =
         ceil2(session.Support.height, 16);
     SupportsIdDescriptor supportIds = {
@@ -801,9 +764,7 @@ bool PathBoxSupportsPaintSetup(
         .Slope = railings.bridgeImage + supportOrientationOffset,
     };
 
-    if (!WoodenSupportsPaintSetupCommon<11, false>(
-            session, supportIds, height, imageTemplate, hasSupports,
-            baseHeight, supportArtwork, supportArtworkZ))
+    if (!WoodenSupportsPaintSetupCommon<11, false>(session, supportIds, height, imageTemplate, hasSupports, baseHeight))
     {
         return false;
     }
@@ -813,7 +774,7 @@ bool PathBoxSupportsPaintSetup(
         PublishFirstPersonWoodenSupportGeometry(
             session, supportType,
             firstPersonBase, height,
-            supportArtwork, supportArtworkZ);
+            imageTemplate);
     }
 
     if (isSloped)
