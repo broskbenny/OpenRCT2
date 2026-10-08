@@ -420,7 +420,7 @@ static void PublishFirstPersonWoodenSupportGeometry(
  */
 static void PaintRepeatedWoodenSupports(
     const SupportsIdDescriptor supportImages, const ImageId& imageTemplate, int16_t heightSteps, PaintSession& session,
-    uint16_t& baseHeight, bool& hasSupports)
+    uint16_t& baseHeight, bool& hasSupports, ImageId& structuralArtwork)
 {
     // All call sites are inside the shared wooden-support semantic scope.
     while (heightSteps > 0)
@@ -430,6 +430,8 @@ static void PaintRepeatedWoodenSupports(
         {
             // Half support
             auto imageId = imageTemplate.WithIndex(supportImages.Half);
+            if (!structuralArtwork.HasValue())
+                structuralArtwork = imageId;
             uint8_t boundBoxHeight = (heightSteps == 1) ? 7 : 12;
             PaintAddImageAsParent(session, imageId, { 0, 0, baseHeight }, { 32, 32, boundBoxHeight });
             baseHeight += 16;
@@ -439,6 +441,8 @@ static void PaintRepeatedWoodenSupports(
         {
             // Full support
             auto imageId = imageTemplate.WithIndex(supportImages.Full);
+            if (!structuralArtwork.HasValue())
+                structuralArtwork = imageId;
             uint8_t boundBoxHeight = (heightSteps == 2) ? 23 : 28;
             PaintAddImageAsParent(session, imageId, { 0, 0, baseHeight }, { 32, 32, boundBoxHeight });
             baseHeight += 32;
@@ -499,7 +503,7 @@ static bool WoodenABPaintSlopeTransitions(
 template<uint8_t zOffset, bool doHeightStepsCheck>
 static inline bool WoodenSupportsPaintSetupCommon(
     PaintSession& session, const SupportsIdDescriptor& supportImages, int32_t height, ImageId& imageTemplate, bool& hasSupports,
-    uint16_t& baseHeight)
+    uint16_t& baseHeight, ImageId& structuralArtwork)
 {
     // These native images are timber-support artwork, not freestanding objects.
     // The fixed post/brace geometry is published by the owning support painter.
@@ -533,6 +537,7 @@ static inline bool WoodenSupportsPaintSetupCommon(
 
     hasSupports = false;
     bool drawFlatPiece = false;
+    ImageId baseArtwork{};
 
     // Draw base support (usually shaped to the slope)
     auto slope = session.Support.slope;
@@ -558,6 +563,7 @@ static inline bool WoodenSupportsPaintSetupCommon(
         else
         {
             auto imageId = imageTemplate.WithIndex(imageIndex + word_97B3C4[slope & kTileSlopeMask]);
+            baseArtwork = imageId;
 
             PaintAddImageAsParent(session, imageId, { 0, 0, baseHeight }, { { 0, 0, baseHeight + 2 }, { 32, 32, 11 } });
             PaintAddImageAsParent(
@@ -586,6 +592,7 @@ static inline bool WoodenSupportsPaintSetupCommon(
         else
         {
             auto imageId = imageTemplate.WithIndex(imageIndex + word_97B3C4[slope & kTileSlopeMask]);
+            baseArtwork = imageId;
             PaintAddImageAsParent(session, imageId, { 0, 0, baseHeight }, { { 0, 0, baseHeight + 2 }, { 32, 32, zOffset } });
             hasSupports = true;
         }
@@ -605,12 +612,19 @@ static inline bool WoodenSupportsPaintSetupCommon(
         if (shouldDraw)
         {
             auto imageId = imageTemplate.WithIndex(supportImages.Flat);
+            baseArtwork = imageId;
             PaintAddImageAsParent(session, imageId, { 0, 0, baseHeight - 2 }, { 32, 32, 0 });
             hasSupports = true;
         }
     }
 
-    PaintRepeatedWoodenSupports(supportImages, imageTemplate, heightSteps, session, baseHeight, hasSupports);
+    // Prefer a timber section actually painted for this height; only use
+    // the terrain base when no repeated half/full section was emitted.
+    PaintRepeatedWoodenSupports(
+        supportImages, imageTemplate, heightSteps, session,
+        baseHeight, hasSupports, structuralArtwork);
+    if (!structuralArtwork.HasValue())
+        structuralArtwork = baseArtwork;
     return true;
 }
 
@@ -623,12 +637,14 @@ inline bool WoodenABSupportsPaintSetupCommon(
 
     uint16_t baseHeight = 0;
     bool hasSupports = false;
+    ImageId supportArtwork{};
     auto supportIds = GetWoodenSupportIds(supportType, subType);
     const int32_t firstPersonBase =
         ceil2(session.Support.height, 16);
 
     if (!WoodenSupportsPaintSetupCommon<zOffset, doHeightStepsCheck>(
-            session, supportIds, height, imageTemplate, hasSupports, baseHeight))
+            session, supportIds, height, imageTemplate, hasSupports,
+            baseHeight, supportArtwork))
     {
         return false;
     }
@@ -638,7 +654,7 @@ inline bool WoodenABSupportsPaintSetupCommon(
         PublishFirstPersonWoodenSupportGeometry(
             session, subType,
             firstPersonBase, height,
-            imageTemplate.WithIndex(supportIds.Full));
+            supportArtwork);
     }
 
     if (transitionType != WoodenSupportTransitionType::none)
@@ -758,6 +774,7 @@ bool PathBoxSupportsPaintSetup(
 
     uint16_t baseHeight = 0;
     bool hasSupports = false;
+    ImageId supportArtwork{};
     const int32_t firstPersonBase =
         ceil2(session.Support.height, 16);
     SupportsIdDescriptor supportIds = {
@@ -767,7 +784,9 @@ bool PathBoxSupportsPaintSetup(
         .Slope = railings.bridgeImage + supportOrientationOffset,
     };
 
-    if (!WoodenSupportsPaintSetupCommon<11, false>(session, supportIds, height, imageTemplate, hasSupports, baseHeight))
+    if (!WoodenSupportsPaintSetupCommon<11, false>(
+            session, supportIds, height, imageTemplate, hasSupports,
+            baseHeight, supportArtwork))
     {
         return false;
     }
@@ -777,7 +796,7 @@ bool PathBoxSupportsPaintSetup(
         PublishFirstPersonWoodenSupportGeometry(
             session, supportType,
             firstPersonBase, height,
-            imageTemplate.WithIndex(supportIds.Full));
+            supportArtwork);
     }
 
     if (isSloped)
