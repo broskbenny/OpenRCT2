@@ -714,6 +714,13 @@ bool PathBoxSupportsPaintSetup(
     PaintSession& session, WoodenSupportSubType supportType, bool isSloped, Direction slopeRotation, int32_t height,
     ImageId imageTemplate, const PathRailingsDescriptor& railings)
 {
+    // Every native sprite emitted by this path-specific support painter is
+    // presentation for fixed support structure that first person publishes
+    // semantically below. Keep all of it out of the generic billboard path,
+    // including terrain bases and slope transitions.
+    FirstPersonPaintSemanticScope firstPersonRole(
+        session, FirstPersonPaintSemanticRole::support);
+
     auto supportOrientationOffset = (supportType == WoodenSupportSubType::nwSe) ? 24 : 0;
 
     uint16_t baseHeight = 0;
@@ -744,11 +751,6 @@ bool PathBoxSupportsPaintSetup(
     {
         ImageIndex imageIndex = railings.bridgeImage + 55 + slopeRotation;
 
-        // This transition belongs to the same fixed support structure as the
-        // posts and braces published above. Keep its native sprite as material
-        // evidence, not as an unclassified first-person billboard.
-        FirstPersonPaintSemanticScope firstPersonRole(
-            session, FirstPersonPaintSemanticRole::support);
         PaintSlopeTransitions(
             kSlopedPathSupportsDescriptor, imageIndex,
             session, imageTemplate, baseHeight);
