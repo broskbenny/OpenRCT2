@@ -342,7 +342,7 @@
             // can trigger expensive semantic cache work. Use a low duty
             // cycle for *optional* views; foreground camera requests retain
             // all their existing priority and budget.
-            if (nativeCapturesRemaining > 4
+            if (nativeCapturesRemaining == 16
                 && !scene.visibleTiles.empty()
                 && (frame & 3u) == 0)
             {
