@@ -249,6 +249,21 @@ static PaintStruct* PaintPathDeckImageAsParent(
         session, image, offset, boundBox);
 }
 
+static PaintStruct* PaintPathSupportArtworkAsParent(
+    PaintSession& session, ImageId image,
+    const CoordsXYZ& offset, const BoundBoxXYZ& boundBox)
+{
+    // Elevated-path bridge-base sprites are native presentation for support
+    // structure that first person already publishes semantically. Give the
+    // paint layer that ownership so it cannot fall through to the generic
+    // camera-facing billboard path. The native paint bounding box remains
+    // sorting metadata, not reconstructed geometry.
+    FirstPersonPaintSemanticScope scope(
+        session, FirstPersonPaintSemanticRole::support);
+    return PaintAddImageAsParent(
+        session, image, offset, boundBox);
+}
+
 static PaintStruct* PaintPathDeckImageAsChild(
     PaintSession& session, ImageId image,
     const CoordsXYZ& offset, const BoundBoxXYZ& boundBox,
@@ -1193,7 +1208,9 @@ static void PathPaintBoxSupport(
             bridgeBaseImageIndex = EnumValue(PathSupportOrientation[edges]) + pathPaintInfo.railings.bridgeImage + 49;
         }
 
-        PaintAddImageAsParent(session, imageTemplate.WithIndex(bridgeBaseImageIndex), { 0, 0, height }, boundbox);
+        PaintPathSupportArtworkAsParent(
+            session, imageTemplate.WithIndex(bridgeBaseImageIndex),
+            { 0, 0, height }, boundbox);
 
         if (pathElement.isQueue() || (pathPaintInfo.railings.flags & RAILING_ENTRY_FLAG_DRAW_PATH_OVER_SUPPORTS))
         {
@@ -1264,7 +1281,9 @@ static void PathPaintPoleSupport(
             bridgeBaseImageIndex = edges + pathPaintInfo.railings.bridgeImage;
         }
 
-        PaintAddImageAsParent(session, imageTemplate.WithIndex(bridgeBaseImageIndex), { 0, 0, height }, boundbox);
+        PaintPathSupportArtworkAsParent(
+            session, imageTemplate.WithIndex(bridgeBaseImageIndex),
+            { 0, 0, height }, boundbox);
 
         if (pathElement.isQueue() || (pathPaintInfo.railings.flags & RAILING_ENTRY_FLAG_DRAW_PATH_OVER_SUPPORTS))
         {
