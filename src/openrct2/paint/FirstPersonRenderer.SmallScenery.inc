@@ -479,6 +479,15 @@
                     hull != nullptr
                     ? static_cast<uint8_t>(hull->evidenceKind)
                     : 0;
+                if (hull != nullptr)
+                {
+                    surface.diagnosticContinuousSurfaceRefined =
+                        hull->continuousSurfaceRefined;
+                    surface.diagnosticVoxelRoundTripPixelDisagreement =
+                        hull->voxelRoundTripSymmetricDifference;
+                    surface.diagnosticRoundTripPixelDisagreement =
+                        hull->roundTripSymmetricDifference;
+                }
 
                 if (!candidates.empty())
                 {

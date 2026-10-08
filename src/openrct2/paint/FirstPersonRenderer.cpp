@@ -579,12 +579,18 @@ namespace OpenRCT2::Paint
                         break;
                 }
                 Console::WriteLine(
-                    "  hullMaterial=%s hullEvidence=%s boundaryFaces=%u materialFaces=%u opaqueFaces=%u",
+                    "  hullMaterial=%s hullEvidence=%s boundaryFaces=%u materialFaces=%u opaqueFaces=%u "
+                    "continuous=%d roundTripPixels=%llu->%llu",
                     surface.exteriorOnly ? "closed-shell" : "open-artwork",
                     hullEvidence,
                     surface.diagnosticHullBoundaryFaces,
                     surface.diagnosticHullMaterialFaces,
-                    surface.diagnosticHullOpaqueFaces);
+                    surface.diagnosticHullOpaqueFaces,
+                    surface.diagnosticContinuousSurfaceRefined ? 1 : 0,
+                    static_cast<unsigned long long>(
+                        surface.diagnosticVoxelRoundTripPixelDisagreement),
+                    static_cast<unsigned long long>(
+                        surface.diagnosticRoundTripPixelDisagreement));
             }
             Console::WriteLine(
                 "  outwardNormal=(%.3f,%.3f,%.3f) semanticBounds=%d "
