@@ -2044,6 +2044,125 @@ TEST(FirstPersonRoundTripReconstructionTest, ProjectsBoundaryInsteadOfInflatedVo
     EXPECT_EQ(projected.size(), 64u);
 }
 
+TEST(FirstPersonVisualHullTest, TextureSamplingMatchesTheActualGpuTriangleSplit)
+{
+    FirstPersonVisualHullFace face{};
+    face.corners = { {
+        { 0.0f, 0.0f, 0.0f },
+        { 4.0f, 0.0f, 1.0f },
+        { 5.0f, 5.0f, 4.0f },
+        { 0.0f, 5.0f, 2.0f },
+    } };
+    FirstPersonVec3 point{};
+    ASSERT_TRUE(FirstPersonVisualHullSampleFace(
+        face, 0.75f, 0.25f, point));
+    EXPECT_NEAR(point.x, 3.25f, 0.0001f);
+    EXPECT_NEAR(point.y, 1.25f, 0.0001f);
+    EXPECT_NEAR(point.z, 1.50f, 0.0001f);
+
+    ASSERT_TRUE(FirstPersonVisualHullSampleFace(
+        face, 0.25f, 0.75f, point));
+    EXPECT_NEAR(point.x, 1.25f, 0.0001f);
+    EXPECT_NEAR(point.y, 3.75f, 0.0001f);
+    EXPECT_NEAR(point.z, 1.75f, 0.0001f);
+
+    // A triangle is stored in a four-corner carrier with the fourth
+    // vertex repeated. No texel outside the actual triangle has matter.
+    face.corners[3] = face.corners[2];
+    EXPECT_FALSE(FirstPersonVisualHullSampleFace(
+        face, 0.25f, 0.75f, point));
+    EXPECT_TRUE(FirstPersonVisualHullSampleFace(
+        face, 0.75f, 0.25f, point));
+}
+
+TEST(FirstPersonVisualHullTest, FailedRawAdmissionStillAllowsCertifiedRefinement)
+{
+    FirstPersonVisualHull source{};
+    source.valid = true;
+    source.step = 4.0f;
+    source.sizeForward = 2;
+    source.sizeRight = 1;
+    source.sizeUp = 2;
+    source.occupied = { 1, 1, 1, 0 };
+
+    const auto faces =
+        BuildFirstPersonVisualHullVoxelBoundaryFaces(source);
+    const auto refined =
+        BuildFirstPersonVisualHullContinuousCandidateFaces(
+            source, faces, 2.0f / 3.0f);
+    ASSERT_FALSE(refined.empty());
+
+    const auto project = [](uint8_t, FirstPersonVec3 point) {
+        return std::array<float, 2>{ point.x, point.z };
+    };
+    std::vector<FirstPersonVisualHullView> observations(4);
+    const auto expected =
+        TriangulateFirstPersonReconstructionFaces(refined);
+    for (uint8_t i = 0; i < 4; ++i)
+    {
+        observations[i].imageDirection = i;
+        observations[i].observed =
+            RenderFirstPersonReconstructionSilhouette(
+                expected, i, project);
+        ASSERT_FALSE(observations[i].observed.empty());
+    }
+
+    const auto unrefinedCertificate =
+        CertifyFirstPersonReconstruction(
+            TriangulateFirstPersonReconstructionFaces(faces),
+            observations, project);
+    ASSERT_TRUE(unrefinedCertificate.valid);
+    ASSERT_LT(
+        unrefinedCertificate.minimumIntersectionOverUnion,
+        0.999f);
+
+    FirstPersonVisualHullBounds bounds{};
+    bounds.maxForward = 8.0f;
+    bounds.maxRight = 4.0f;
+    bounds.maxUp = 8.0f;
+    bounds.step = 4.0f;
+    FirstPersonVisualHullConfig config{};
+    config.minimumViews = 4;
+    config.minimumOccupiedCells = 3;
+    config.maximumOccupiedCells = 4;
+    config.maximumGridCells = 4;
+    config.maximumAxisCells = 2;
+    config.allowContinuousSurfaceRefinement = true;
+    config.minimumIntersectionOverUnion = 0.999f;
+    config.minimumCandidateCoverage = 0.0f;
+    config.minimumObservedCoverage = 0.0f;
+    config.maximumEdgeError = 64;
+
+    FirstPersonVisualHullAttempt attempt{};
+    const auto output = BuildFirstPersonVisualHull(
+        observations, bounds, config, project,
+        [](FirstPersonVec3 p) {
+            return p.x < 4.0f || p.z < 4.0f;
+        },
+        [](const FirstPersonVisualHullView&, FirstPersonVec3) {
+            return true;
+        }, &attempt);
+    ASSERT_TRUE(output.valid);
+    EXPECT_TRUE(output.continuousSurfaceRefined);
+    EXPECT_EQ(attempt.stage, 6);
+    EXPECT_EQ(attempt.nativeViews, 4);
+    EXPECT_EQ(attempt.certificateViews, 4u);
+    EXPECT_EQ(output.roundTripSymmetricDifference, 0u);
+
+    // Rejection before carving is not confused with four-view geometry.
+    observations.pop_back();
+    FirstPersonVisualHullAttempt unavailable{};
+    const auto rejected = BuildFirstPersonVisualHull(
+        observations, bounds, config, project,
+        [](FirstPersonVec3) { return true; },
+        [](const FirstPersonVisualHullView&, FirstPersonVec3) {
+            return true;
+        }, &unavailable);
+    EXPECT_FALSE(rejected.valid);
+    EXPECT_EQ(unavailable.stage, 1);
+    EXPECT_EQ(unavailable.nativeViews, 3);
+}
+
 TEST(FirstPersonVisualHullTest, ContinuousSupportFieldWinsOnlyWhenNativeRoundTripImproves)
 {
     FirstPersonVisualHull source{};
