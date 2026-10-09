@@ -475,6 +475,26 @@ namespace OpenRCT2::Paint
         return anyShift;
     }
 
+    // A strict, testable gate for spending more reconstruction work. Near-
+    // perfect observed coverage with excess projected matter indicates
+    // voxel quantisation of narrow structural openings, not a missing view,
+    // origin shift, or permission to lower the silhouette quality bar.
+    [[nodiscard]] inline bool
+        FirstPersonSmallSceneryNeedsFinerSilhouetteGrid(
+            const FirstPersonVisualHullAttempt& coarse,
+            const FirstPersonVisualHullConfig& config,
+            int32_t objectHeight)
+    {
+        return coarse.stage == 5
+            && coarse.nativeViews == 4
+            && coarse.observedCoverage >= 0.90f
+            && coarse.candidateCoverage >= 0.40f
+            && coarse.candidateCoverage
+                < config.minimumCandidateCoverage
+            && coarse.maximumEdgeError <= 3
+            && objectHeight > 0 && objectHeight <= 64;
+    }
+
     template<typename SpriteLookup>
     [[nodiscard]] inline FirstPersonVisualHull
         BuildFirstPersonSmallSceneryVisualHullFromSnapshot(
@@ -641,14 +661,8 @@ namespace OpenRCT2::Paint
             //
             // Keep ALL original admission tests. A finer grid supplies more
             // evidence, never permission to accept the same poor geometry.
-            if (carveAttempt.stage == 5
-                && carveAttempt.nativeViews == 4
-                && carveAttempt.observedCoverage >= 0.90f
-                && carveAttempt.candidateCoverage >= 0.40f
-                && carveAttempt.candidateCoverage
-                    < config.minimumCandidateCoverage
-                && carveAttempt.maximumEdgeError <= 3
-                && entry.height <= 64)
+            if (FirstPersonSmallSceneryNeedsFinerSilhouetteGrid(
+                    carveAttempt, config, entry.height))
             {
                 auto fineBounds = bounds;
                 fineBounds.step = 1.0f;
@@ -666,7 +680,13 @@ namespace OpenRCT2::Paint
                 fineAttempt.fineGridRetried = true;
                 fineAttempt.coarseCandidateCoverage =
                     carveAttempt.candidateCoverage;
-                if (fineHull.valid)
+                // A successful fit may still have an impractically dense
+                // one-unit mesh. Guard the resident GPU face count as well
+                // as the asynchronous grid work; never push an unbounded
+                // reconstruction into the frame.
+                if (fineHull.valid
+                    && fineAttempt.voxelFaces
+                        <= fineConfig.maximumContinuousSurfaceFaces)
                 {
                     fineHull.attempt = fineAttempt;
                     return fineHull;
