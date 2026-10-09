@@ -1527,6 +1527,14 @@ TEST(FirstPersonSmallSceneryAppearanceTest, NonTreeKeepsReconstructedHullPolicy)
     hull.sizeUp = 1;
     hull.occupied.assign(1, 1);
 
+    // The occupancy envelope is still a physical collision proxy. It is
+    // not automatically a visible six-sided reconstruction.
+    const auto unverified =
+        BuildFirstPersonSmallSceneryAppearancePlan(
+            entry, element, &hull);
+    EXPECT_FALSE(unverified.valid());
+    hull.roundTripViewCount = 4;
+
     const auto plan =
         BuildFirstPersonSmallSceneryAppearancePlan(
             entry, element, &hull);
