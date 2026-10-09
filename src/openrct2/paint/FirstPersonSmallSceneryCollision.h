@@ -463,6 +463,8 @@ namespace OpenRCT2::Paint
                     FirstPersonSmallSceneryQuarterForPoint(x, y);
                 return (occupied & (1u << quarter)) != 0;
             };
+        FirstPersonVisualHullAttempt carveAttempt{};
+        carveAttempt.nativeViews = uint8_t(std::min<size_t>(views.size(), 4));
         if (allowSilhouetteRefinement)
         {
             const auto projectPoint =
@@ -513,13 +515,19 @@ namespace OpenRCT2::Paint
             auto carved = BuildFirstPersonVisualHull(
                 views, bounds, config,
                 projectPoint, occupancyPredicate,
-                pointSupported);
+                pointSupported, &carveAttempt);
             if (carved.valid)
                 return carved;
         }
 
-        return BuildFirstPersonOccupancyHull(
+        // Collision/footprint data remains physically authoritative, but
+        // this is NOT a certified visible reconstruction. Carry the exact
+        // four-view rejection evidence into the visual inspector instead of
+        // reporting only zero accepted native views.
+        auto physicalEnvelope = BuildFirstPersonOccupancyHull(
             bounds, config, textureViews, occupancyPredicate);
+        physicalEnvelope.attempt = carveAttempt;
+        return physicalEnvelope;
     }
 
     [[nodiscard]] inline FirstPersonVisualHull BuildFirstPersonSmallSceneryVisualHull(
