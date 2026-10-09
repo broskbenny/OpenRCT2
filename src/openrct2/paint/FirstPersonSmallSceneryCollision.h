@@ -242,7 +242,10 @@ namespace OpenRCT2::Paint
         const auto projected =
             Translate3DTo2DWithZ(
                 viewportRotation, localPoint);
-        if (!entry.flags.has(SmallSceneryFlag::occupiesFullTile))
+        // The tree-to-crossed-planes renderer has its own calibrated
+        // artwork basis and must not inherit this volumetric-hull change.
+        if (!entry.flags.has(SmallSceneryFlag::occupiesFullTile)
+            || entry.flags.has(SmallSceneryFlag::isTree))
             return projected;
 
         const CoordsXYZ centre{
