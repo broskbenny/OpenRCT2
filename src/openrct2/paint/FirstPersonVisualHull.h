@@ -43,6 +43,44 @@ namespace OpenRCT2::Paint
         FirstPersonVisualHullFaceKind kind{};
     };
 
+    // Physical triangles and the native material bake must evaluate the
+    // SAME surface. A continuous hull may emit a triangle as a degenerate
+    // quad {a,b,c,c}. GPU rasterisation uses the (a,b,c) triangle with UV
+    // coordinates (0,0),(1,0),(1,1). Bilinear interpolation would wrongly
+    // sample a different curved/warped mapping over that triangle.
+    [[nodiscard]] inline bool FirstPersonVisualHullSampleFace(
+        const FirstPersonVisualHullFace& face,
+        float s, float t, FirstPersonVec3& point)
+    {
+        const auto& a = face.corners[0];
+        const auto& b = face.corners[1];
+        const auto& c = face.corners[2];
+        const auto& d = face.corners[3];
+        const auto difference = FirstPersonVec3{
+            d.x - c.x, d.y - c.y, d.z - c.z
+        };
+        if (FpDot(difference, difference) <= 1.0e-8f)
+        {
+            if (t > s)
+                return false;
+            point = {
+                a.x + (b.x - a.x) * s + (c.x - b.x) * t,
+                a.y + (b.y - a.y) * s + (c.y - b.y) * t,
+                a.z + (b.z - a.z) * s + (c.z - b.z) * t,
+            };
+            return true;
+        }
+        const auto lerp = [](float x, float y, float u) {
+            return x + (y - x) * u;
+        };
+        point = {
+            lerp(lerp(a.x, b.x, s), lerp(d.x, c.x, s), t),
+            lerp(lerp(a.y, b.y, s), lerp(d.y, c.y, s), t),
+            lerp(lerp(a.z, b.z, s), lerp(d.z, c.z, s), t),
+        };
+        return true;
+    }
+
     struct FirstPersonVisualHull
     {
         bool valid = false;
