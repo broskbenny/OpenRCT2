@@ -321,22 +321,6 @@
                     return std::sqrt(
                         dx * dx + dy * dy + dz * dz);
                 };
-            const auto facePoint =
-                [](const std::array<FirstPersonVec3, 4>& face,
-                   float s, float t) {
-                    const auto lerp =
-                        [](FirstPersonVec3 a, FirstPersonVec3 b,
-                           float alpha) {
-                            return FirstPersonVec3{
-                                a.x + (b.x - a.x) * alpha,
-                                a.y + (b.y - a.y) * alpha,
-                                a.z + (b.z - a.z) * alpha,
-                            };
-                        };
-                    return lerp(
-                        lerp(face[0], face[1], s),
-                        lerp(face[3], face[2], s), t);
-                };
             const auto ownedNear =
                 [&](uint8_t sourceRotation,
                     uint32_t owner, int32_t x, int32_t y) {
@@ -507,13 +491,13 @@
                     for (int32_t y = 0; y < height; ++y)
                     for (int32_t x = 0; x < width; ++x)
                     {
-                        const auto point =
-                            facePoint(
-                                face.corners,
-                                (float(x) + 0.5f)
-                                    / float(width),
-                                (float(y) + 0.5f)
-                                    / float(height));
+                        FirstPersonVec3 point{};
+                        if (!FirstPersonVisualHullSampleFace(
+                                face,
+                                (float(x) + 0.5f) / float(width),
+                                (float(y) + 0.5f) / float(height),
+                                point))
+                            continue;
 
                         uint8_t selectedPixel = 0;
                         const size_t materialViewCount =
@@ -719,6 +703,25 @@
                 materialCoverage.applyTo(
                     scene.surfaces.begin() + surfaceStart,
                     scene.surfaces.end());
+            }
+            if (hull != nullptr)
+            {
+                // Keep the source and selected geometry evidence attached to
+                // the actual picked surface. A silhouette-rejected object
+                // that fell back to the declared occupancy envelope has no
+                // round-trip views; a carved one carries its certificate.
+                for (size_t i = surfaceStart;
+                     i < scene.surfaces.size(); ++i)
+                {
+                    auto& surface = scene.surfaces[i];
+                    surface.diagnosticReconstructionKind = 4;
+                    surface.diagnosticContinuousSurfaceRefined =
+                        hull->continuousSurfaceRefined;
+                    surface.diagnosticVoxelRoundTripPixelDisagreement =
+                        uint64_t(hull->voxelRoundTripSymmetricDifference);
+                    surface.diagnosticRoundTripPixelDisagreement =
+                        uint64_t(hull->roundTripSymmetricDifference);
+                }
             }
             baked.localSurfaces.clear();
             if (emittedFaces != 0)
