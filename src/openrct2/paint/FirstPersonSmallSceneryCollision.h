@@ -668,6 +668,8 @@ namespace OpenRCT2::Paint
                 fineBounds.step = 1.0f;
                 auto fineConfig = config;
                 fineConfig.maximumOccupiedCells = 65536;
+                fineConfig.maximumVoxelBoundaryFaces =
+                    fineConfig.maximumContinuousSurfaceFaces;
                 // A high-resolution mesh can be costly to relax and
                 // re-certify three times. Prefer the direct one-unit
                 // boundary on this strictly limited second trial.
