@@ -750,6 +750,10 @@
                         attempt.maximumEdgeError;
                     surface.diagnosticHullAttemptDisagreement =
                         attempt.disagreementPixels;
+                    surface.diagnosticHullRegistrationAttempted =
+                        attempt.registrationAttempted;
+                    surface.diagnosticHullRegistrationPixels =
+                        attempt.registrationPixels;
                 }
             }
             baked.localSurfaces.clear();
