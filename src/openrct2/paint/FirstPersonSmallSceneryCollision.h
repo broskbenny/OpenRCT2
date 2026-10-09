@@ -475,6 +475,27 @@ namespace OpenRCT2::Paint
         return anyShift;
     }
 
+    // Grid resolution and image-space tolerance are distinct. A two-unit
+    // voxel can use a one-pixel native-artwork uncertainty margin, but on a
+    // one-unit grid that margin would erase narrow genuine openings.
+    [[nodiscard]] inline bool
+        FirstPersonSmallSceneryNativePixelSupportsPoint(
+            const FirstPersonVisualHullView& view,
+            float x, float y, int32_t tolerance)
+    {
+        if (tolerance < 0 || tolerance > 1)
+            return false;
+        const int32_t px = int32_t(std::lround(x));
+        const int32_t py = int32_t(std::lround(y));
+        for (int32_t dy = -tolerance; dy <= tolerance; ++dy)
+        for (int32_t dx = -tolerance; dx <= tolerance; ++dx)
+        {
+            if (view.observed.contains(px + dx, py + dy))
+                return true;
+        }
+        return false;
+    }
+
     // A strict, testable gate for spending more reconstruction work. Near-
     // perfect observed coverage with excess projected matter indicates
     // voxel quantisation of narrow structural openings, not a missing view,
@@ -628,22 +649,9 @@ namespace OpenRCT2::Paint
                     const auto projected =
                         projectPoint(
                             view.imageDirection, point);
-                    const int32_t px =
-                        int32_t(std::lround(
-                            projected[0]));
-                    const int32_t py =
-                        int32_t(std::lround(
-                            projected[1]));
-                    for (int32_t dy = -1;
-                         dy <= 1; ++dy)
-                    for (int32_t dx = -1;
-                         dx <= 1; ++dx)
-                    {
-                        if (view.observed.contains(
-                                px + dx, py + dy))
-                            return true;
-                    }
-                    return false;
+                    return
+                        FirstPersonSmallSceneryNativePixelSupportsPoint(
+                            view, projected[0], projected[1], 1);
                 };
             auto carved = BuildFirstPersonVisualHull(
                 views, bounds, config,
@@ -684,9 +692,9 @@ namespace OpenRCT2::Paint
                         FirstPersonVec3 point) {
                         const auto projected =
                             projectPoint(view.imageDirection, point);
-                        return view.observed.contains(
-                            int32_t(std::lround(projected[0])),
-                            int32_t(std::lround(projected[1])));
+                        return
+                            FirstPersonSmallSceneryNativePixelSupportsPoint(
+                                view, projected[0], projected[1], 0);
                     };
                 FirstPersonVisualHullAttempt fineAttempt{};
                 auto fineHull = BuildFirstPersonVisualHull(
