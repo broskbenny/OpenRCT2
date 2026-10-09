@@ -1077,7 +1077,10 @@
                                     job->entry.image,
                                     job->surfaces.empty()
                                         ? "native-fallback"
-                                        : "partial-3d",
+                                        : buildEvidence.materialFaces
+                                                == buildEvidence.hullFaces
+                                            ? "completed-3d"
+                                            : "partial-3d",
                                     unsigned(attempt.stage),
                                     unsigned(attempt.nativeViews),
                                     attempt.occupiedCells,
