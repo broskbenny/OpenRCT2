@@ -452,6 +452,19 @@ namespace OpenRCT2::Paint
         if (reconstructedHull == nullptr
             || !reconstructedHull->valid)
             return result;
+
+        // The native object's occupied footprint and height are physical
+        // evidence for collision, NOT evidence that all six sides of that
+        // envelope are visible matter. Do not bake an unverified collision
+        // envelope as the object's rendered shape. Stable small scenery is
+        // eligible for silhouette carving; if its four-view certificate
+        // fails, let the existing renderer use native artwork as a last
+        // resort, after the asynchronous reconstruction attempt completes.
+        // Stateful/animated/glass objects retain their separate policy.
+        if (FirstPersonSmallSceneryCanUseSilhouetteRefinement(entry)
+            && reconstructedHull->roundTripViewCount < 4)
+            return result;
+
         result.faces =
             BuildFirstPersonVisualHullBoundaryFaces(
                 *reconstructedHull);
