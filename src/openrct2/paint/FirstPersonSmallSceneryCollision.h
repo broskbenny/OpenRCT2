@@ -223,6 +223,41 @@ namespace OpenRCT2::Paint
         return offset.rotate(DirectionFlipXAxis(viewportRotation));
     }
 
+    // The native sprite frame for a full-tile scenery item is centred
+    // on the tile, not on its unrotated (0,0) corner. Rotating a local
+    // occupied volume around (0,0) moves its centre by a whole 32-pixel
+    // isometric tile width at odd rotations. All four native roof sprites
+    // instead keep their shared centre at the same artwork coordinate.
+    //
+    // This is a source-coordinate correction, not roof geometry: transform
+    // the physical point normally, then subtract the rotated tile-centre
+    // image displacement. Preserve the native painter's sprite offset
+    // separately (it may be 1, 3, 15 or quadrant-dependent).
+    [[nodiscard]] inline ScreenCoordsXY
+        FirstPersonSmallSceneryArtworkPoint(
+            const SmallSceneryEntry& entry,
+            uint8_t viewportRotation,
+            const CoordsXYZ& localPoint)
+    {
+        const auto projected =
+            Translate3DTo2DWithZ(
+                viewportRotation, localPoint);
+        if (!entry.flags.has(SmallSceneryFlag::occupiesFullTile))
+            return projected;
+
+        const CoordsXYZ centre{
+            kCoordsXYHalfTile, kCoordsXYHalfTile, 0 };
+        const auto rotatedCentre =
+            Translate3DTo2DWithZ(
+                viewportRotation, centre);
+        const auto referenceCentre =
+            Translate3DTo2DWithZ(0, centre);
+        return {
+            projected.x - rotatedCentre.x + referenceCentre.x,
+            projected.y - rotatedCentre.y + referenceCentre.y,
+        };
+    }
+
     [[nodiscard]] inline ScreenCoordsXY
         FirstPersonSmallScenerySpritePixelForPoint(
             const SmallSceneryEntry& entry,
@@ -237,7 +272,8 @@ namespace OpenRCT2::Paint
         const auto spriteOrigin = Translate3DTo2DWithZ(
             viewportRotation, { offset, 0 });
         const auto point =
-            Translate3DTo2DWithZ(viewportRotation, localPoint);
+            FirstPersonSmallSceneryArtworkPoint(
+                entry, viewportRotation, localPoint);
         return {
             point.x - spriteOrigin.x - g1.xOffset,
             point.y - spriteOrigin.y - g1.yOffset,
@@ -547,8 +583,8 @@ namespace OpenRCT2::Paint
                         Translate3DTo2DWithZ(
                             rotation, { offset, 0 });
                     const auto projected =
-                        Translate3DTo2DWithZ(
-                            rotation,
+                        FirstPersonSmallSceneryArtworkPoint(
+                            entry, rotation,
                             {
                                 int32_t(std::lround(point.x)),
                                 int32_t(std::lround(point.y)),
