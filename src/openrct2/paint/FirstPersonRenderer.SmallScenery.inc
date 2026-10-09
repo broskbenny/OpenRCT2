@@ -761,6 +761,116 @@
                 continue;
             }
 
+            if (appearance.certifiesHullMaterial
+                && emittedFaces != 0)
+            {
+                // The hull was independently certified by all four source
+                // silhouettes. An isolated facet with no front-facing source
+                // pixel is still part of that occupied boundary. Borrow
+                // material from the closest already-painted facet, favouring
+                // similarly oriented neighbours. Never create geometry that
+                // the certified occupancy boundary did not contain.
+                //
+                // The alternative (silently omitting the facet) creates a
+                // genuinely porous mesh. This is a bounded material-only
+                // extrapolation, not proof of that facet's original colours.
+                const auto faceCentre =
+                    [](const FirstPersonVisualHullFace& f) {
+                        FirstPersonVec3 centre{};
+                        for (const auto& p : f.corners)
+                        {
+                            centre.x += p.x * 0.25f;
+                            centre.y += p.y * 0.25f;
+                            centre.z += p.z * 0.25f;
+                        }
+                        return centre;
+                    };
+                for (const size_t missingIndex : missingMaterialFaces)
+                {
+                    const auto& missingFace = faces[missingIndex];
+                    const auto position = faceCentre(missingFace);
+                    size_t nearest = faces.size();
+                    float bestCost =
+                        std::numeric_limits<float>::max();
+                    for (size_t donorIndex = 0;
+                         donorIndex < faces.size(); ++donorIndex)
+                    {
+                        if (materializedFaceSurface[donorIndex] < 0)
+                            continue;
+                        const auto donorPosition =
+                            faceCentre(faces[donorIndex]);
+                        const float dx =
+                            position.x - donorPosition.x;
+                        const float dy =
+                            position.y - donorPosition.y;
+                        const float dz =
+                            position.z - donorPosition.z;
+                        const float dot =
+                            FpDot(missingFace.normal,
+                                faces[donorIndex].normal);
+                        const float normalPenalty =
+                            (1.0f - std::clamp(
+                                dot, -1.0f, 1.0f))
+                            * hull->step * hull->step * 8.0f;
+                        const float cost =
+                            dx * dx + dy * dy + dz * dz
+                            + normalPenalty;
+                        if (cost < bestCost)
+                        {
+                            bestCost = cost;
+                            nearest = donorIndex;
+                        }
+                    }
+                    if (nearest == faces.size())
+                        continue;
+                    const auto& donor = scene.surfaces[
+                        size_t(materializedFaceSurface[nearest])];
+                    if (!donor.persistentBitmap
+                        || donor.persistentPixels == nullptr)
+                        continue;
+
+                    FirstPersonSurface repaired{};
+                    repaired.cameraIndependent = true;
+                    repaired.outwardNormal = missingFace.normal;
+                    repaired.image = donor.image;
+                    repaired.persistentBitmap = true;
+                    repaired.persistentPixels = donor.persistentPixels;
+                    repaired.immutableWidth = donor.immutableWidth;
+                    repaired.immutableHeight = donor.immutableHeight;
+                    repaired.immutableFingerprint =
+                        donor.immutableFingerprint;
+                    const float width =
+                        float(donor.immutableWidth);
+                    const float height =
+                        float(donor.immutableHeight);
+                    const std::array<FirstPersonVertex, 4> vertices{ {
+                        {
+                            missingFace.corners[0],
+                            0.0f, 0.0f,
+                        },
+                        {
+                            missingFace.corners[1],
+                            width, 0.0f,
+                        },
+                        {
+                            missingFace.corners[2],
+                            width, height,
+                        },
+                        {
+                            missingFace.corners[3],
+                            0.0f, height,
+                        },
+                    } };
+                    EmitQuad(repaired, vertices);
+                    materialCoverage.recordFace(
+                        missingIndex, 1, 1);
+                    scene.surfaces.emplace_back(
+                        std::move(repaired));
+                    ++emittedFaces;
+                    if (buildEvidence != nullptr)
+                        ++buildEvidence->repairedFacets;
+                }
+            }
             if (appearance.certifiesHullMaterial)
             {
                 materialCoverage.applyTo(
