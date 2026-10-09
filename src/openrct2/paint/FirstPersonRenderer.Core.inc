@@ -3698,30 +3698,6 @@
                     return std::sqrt(
                         dx * dx + dy * dy + dz * dz);
                 };
-            const auto facePoint =
-                [](const auto& face,
-                   float s, float t) {
-                    const auto lerp =
-                        [](FirstPersonVec3 a,
-                           FirstPersonVec3 b,
-                           float alpha) {
-                            return FirstPersonVec3{
-                                a.x
-                                    + (b.x - a.x)
-                                        * alpha,
-                                a.y
-                                    + (b.y - a.y)
-                                        * alpha,
-                                a.z
-                                    + (b.z - a.z)
-                                        * alpha,
-                            };
-                        };
-                    return lerp(
-                        lerp(face[0], face[1], s),
-                        lerp(face[3], face[2], s),
-                        t);
-                };
             const auto ownedNear =
                 [&](uint8_t rotation,
                     uint32_t owner,
@@ -4070,13 +4046,22 @@
                         for (const auto& offset :
                              FirstPersonMaterialPatchOffsets())
                         {
-                            const auto worldPoint =
-                                facePoint(
-                                    face.corners,
+                            auto& evidence =
+                                patchSamples[patchIndex++];
+                            FirstPersonVec3 worldPoint{};
+                            if (!FirstPersonVisualHullSampleFace(
+                                    face,
                                     (float(x) + offset.s)
                                         / float(width),
                                     (float(y) + offset.t)
-                                        / float(height));
+                                        / float(height),
+                                    worldPoint))
+                            {
+                                evidence.kind =
+                                    FirstPersonMaterialEvidenceKind::
+                                        transparent;
+                                continue;
+                            }
                             const auto projected =
                                 Translate3DTo2DWithZ(
                                     candidate.rotation,
@@ -4088,8 +4073,6 @@
                                         int32_t(std::lround(
                                             worldPoint.z)),
                                     });
-                            auto& evidence =
-                                patchSamples[patchIndex++];
                             const uint64_t projectedKey =
                                 FirstPersonSilhouettePixelKey(
                                     projected.x,
