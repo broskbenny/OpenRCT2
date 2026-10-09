@@ -87,8 +87,8 @@
                                 face.corners[i].z)),
                         };
                         screen[i] =
-                            Translate3DTo2DWithZ(
-                                sourceRotation, point);
+                            FirstPersonSmallSceneryArtworkPoint(
+                                *entry, sourceRotation, point);
                         depth[i] =
                             FirstPersonIsoDepth(
                                 sourceRotation, point);
@@ -371,8 +371,8 @@
                          i < face.corners.size(); ++i)
                     {
                         projected[i] =
-                            Translate3DTo2DWithZ(
-                                source.rotation,
+                            FirstPersonSmallSceneryArtworkPoint(
+                                *entry, source.rotation,
                                 {
                                     int32_t(std::lround(
                                         face.corners[i].x)),
@@ -566,8 +566,8 @@
                             else
                             {
                                 const auto projected =
-                                    Translate3DTo2DWithZ(
-                                        sourceView.rotation,
+                                    FirstPersonSmallSceneryArtworkPoint(
+                                        *entry, sourceView.rotation,
                                         {
                                             int32_t(std::lround(
                                                 point.x)),
