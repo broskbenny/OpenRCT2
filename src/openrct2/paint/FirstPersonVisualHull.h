@@ -98,6 +98,10 @@ namespace OpenRCT2::Paint
         float observedCoverage = 0.0f;
         int32_t maximumEdgeError = 0;
         size_t disagreementPixels = 0;
+        // An optional, bounded finer voxel pass is allowed only when the
+        // coarse silhouette nearly qualifies. Keep the attempt visible.
+        bool fineGridRetried = false;
+        float coarseCandidateCoverage = 0.0f;
         // Diagnostic image-registration trial. An accepted reconstruction
         // also retains the correction for material sampling, not geometry.
         bool registrationAttempted = false;
