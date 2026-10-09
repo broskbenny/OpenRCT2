@@ -923,6 +923,11 @@ namespace OpenRCT2::Paint
         size_t minimumOccupiedCells = 4;
         size_t maximumOccupiedCells = 4096;
         size_t maximumGridCells = 65536;
+        // Limit before triangulation and silhouette certification, not just
+        // after expensive processing. Defaults do not constrain existing
+        // reconstruction families; targeted fine-grid retries opt in.
+        size_t maximumVoxelBoundaryFaces =
+            std::numeric_limits<size_t>::max();
         int32_t maximumAxisCells = 24;
         // Continuous refinement is opt-in per reconstruction family until its
         // material path has been verified. Search is bounded by face count and
@@ -1152,6 +1157,8 @@ namespace OpenRCT2::Paint
                 result);
         if (attempt != nullptr)
             attempt->voxelFaces = uint32_t(voxelFaces.size());
+        if (voxelFaces.size() > config.maximumVoxelBoundaryFaces)
+            return {};
         const auto voxelTriangles =
             TriangulateFirstPersonReconstructionFaces(
                 voxelFaces);
