@@ -726,6 +726,23 @@
                     surface.diagnosticRoundTripViewCount =
                         uint8_t(std::min<size_t>(
                             hull->roundTripViewCount, 4));
+                    const auto& attempt = hull->attempt;
+                    surface.diagnosticHullAttemptStage = attempt.stage;
+                    surface.diagnosticHullAttemptViews = attempt.nativeViews;
+                    surface.diagnosticHullAttemptCells = attempt.occupiedCells;
+                    surface.diagnosticHullAttemptFaces = attempt.voxelFaces;
+                    surface.diagnosticHullAttemptCertifiedViews =
+                        attempt.certificateViews;
+                    surface.diagnosticHullAttemptIoU =
+                        attempt.minimumIoU;
+                    surface.diagnosticHullAttemptCandidateCoverage =
+                        attempt.candidateCoverage;
+                    surface.diagnosticHullAttemptObservedCoverage =
+                        attempt.observedCoverage;
+                    surface.diagnosticHullAttemptEdgeError =
+                        attempt.maximumEdgeError;
+                    surface.diagnosticHullAttemptDisagreement =
+                        attempt.disagreementPixels;
                 }
             }
             baked.localSurfaces.clear();
