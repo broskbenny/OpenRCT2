@@ -824,6 +824,10 @@
             bool ready = false;
         };
         static std::unordered_map<uint64_t, std::shared_ptr<SmallSceneryJob>> _smallSceneryJobs;
+        // A reconstruction outcome belongs to the asset, not every tile
+        // instance or camera rotation. Report it at most once per native
+        // image base and failure phase.
+        static std::unordered_set<uint64_t> _smallSceneryReportedOutcomes;
 
         bool AppendCalibratedSmallSceneryGeometry(
             FirstPersonScene& scene, const PaintStruct& ps, ImageId image,
@@ -889,46 +893,66 @@
                 job->submitted = _reconstructionWorker.submit([job] {
                     FirstPersonScene result;
                     FirstPersonVisualHullAttempt attempt{};
+                    SmallSceneryBuildEvidence buildEvidence{};
                     BuildSmallSceneryGeometry(result, job->element, job->entry,
-                        ImageId(job->entry.image), job->sprites, &attempt);
+                        ImageId(job->entry.image), job->sprites,
+                        &attempt, &buildEvidence);
                     return [job, surfaces = std::move(result.surfaces),
-                            attempt]() mutable {
+                            attempt, buildEvidence]() mutable {
                         job->surfaces = std::move(surfaces);
                         job->ready = true;
-                        // Once per unique asset/state, report a genuinely
-                        // severe native-view contradiction. This is not a
-                        // per-frame/per-tile warning, and is emitted from the
-                        // worker's main-thread completion.
+                        const bool hasUnobservedMaterial =
+                            buildEvidence.withoutSourceMaterial != 0
+                            || buildEvidence.withoutOpaqueSamples != 0;
+                        // The old failure log reported only stage 5 and
+                        // observed coverage below 20%, hiding all other
+                        // failure modes, including the complete loss of a
+                        // certified 3D mesh during texture assignment.
+                        // Emit once per asset/reconstruction phase, not once
+                        // per instance or camera repaint.
                         if (job->surfaces.empty()
-                            && attempt.nativeViews == 4
-                            && attempt.stage == 5
-                            && attempt.observedCoverage < 0.20f)
+                            || (hasUnobservedMaterial
+                                && buildEvidence.withoutSourceMaterial
+                                    > buildEvidence.materialFaces / 2))
                         {
-                            Console::WriteLine(
-                                "FP_VISUAL_HULL_REJECTED image=%u stage=%u"
-                                " nativeViews=%u voxels=%u faces=%u"
-                                " minIoU=%.3f observedCoverage=%.3f"
-                                " candidateCoverage=%.3f edge=%d"
-                                " alignmentTried=%d"
-                                " shifts=[(%d,%d),(%d,%d),(%d,%d),(%d,%d)]",
-                                job->entry.image,
-                                unsigned(attempt.stage),
-                                unsigned(attempt.nativeViews),
-                                attempt.occupiedCells,
-                                attempt.voxelFaces,
-                                double(attempt.minimumIoU),
-                                double(attempt.observedCoverage),
-                                double(attempt.candidateCoverage),
-                                attempt.maximumEdgeError,
-                                attempt.registrationAttempted ? 1 : 0,
-                                attempt.registrationPixels[0].x,
-                                attempt.registrationPixels[0].y,
-                                attempt.registrationPixels[1].x,
-                                attempt.registrationPixels[1].y,
-                                attempt.registrationPixels[2].x,
-                                attempt.registrationPixels[2].y,
-                                attempt.registrationPixels[3].x,
-                                attempt.registrationPixels[3].y);
+                            uint64_t reportKey = job->entry.image;
+                            ExtendStableKey(
+                                reportKey, uint64_t(attempt.stage));
+                            ExtendStableKey(
+                                reportKey, job->surfaces.empty() ? 0u : 1u);
+                            if (_smallSceneryReportedOutcomes.insert(
+                                    reportKey).second)
+                            {
+                                Console::WriteLine(
+                                    "FP_SMALL_SCENERY_EVIDENCE image=%u"
+                                    " output=%s stage=%u inputViews=%u"
+                                    " supportedCells=%u voxelFaces=%u"
+                                    " hullFaces=%u materialFaces=%u"
+                                    " missingSourceFaces=%u emptyTextureFaces=%u"
+                                    " unobservedBottomFaces=%u"
+                                    " silhouetteIoU=%.3f"
+                                    " observedCoverage=%.3f"
+                                    " candidateCoverage=%.3f edge=%d"
+                                    " registrationTried=%d",
+                                    job->entry.image,
+                                    job->surfaces.empty()
+                                        ? "native-fallback"
+                                        : "partial-3d",
+                                    unsigned(attempt.stage),
+                                    unsigned(attempt.nativeViews),
+                                    attempt.occupiedCells,
+                                    attempt.voxelFaces,
+                                    buildEvidence.hullFaces,
+                                    buildEvidence.materialFaces,
+                                    buildEvidence.withoutSourceMaterial,
+                                    buildEvidence.withoutOpaqueSamples,
+                                    buildEvidence.unobservedUndersides,
+                                    double(attempt.minimumIoU),
+                                    double(attempt.observedCoverage),
+                                    double(attempt.candidateCoverage),
+                                    attempt.maximumEdgeError,
+                                    attempt.registrationAttempted ? 1 : 0);
+                            }
                         }
                         for (const auto tile : job->waitingTiles)
                             InvalidateFirstPersonSceneTile({int32_t(tile >> 32), int32_t(tile)});
