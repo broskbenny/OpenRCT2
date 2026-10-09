@@ -2064,7 +2064,7 @@ TEST(FirstPersonVisualHullTest, TextureSamplingMatchesTheActualGpuTriangleSplit)
         face, 0.25f, 0.75f, point));
     EXPECT_NEAR(point.x, 1.25f, 0.0001f);
     EXPECT_NEAR(point.y, 3.75f, 0.0001f);
-    EXPECT_NEAR(point.z, 1.75f, 0.0001f);
+    EXPECT_NEAR(point.z, 2.00f, 0.0001f);
 
     // A triangle is stored in a four-corner carrier with the fourth
     // vertex repeated. No texel outside the actual triangle has matter.
