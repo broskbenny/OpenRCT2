@@ -488,6 +488,7 @@
                     std::vector<uint8_t> pixels(
                         size_t(width) * size_t(height), 0);
                     size_t visiblePixelCount = 0;
+                    size_t drawablePixelCount = 0;
                     for (int32_t y = 0; y < height; ++y)
                     for (int32_t x = 0; x < width; ++x)
                     {
@@ -498,6 +499,7 @@
                                 (float(y) + 0.5f) / float(height),
                                 point))
                             continue;
+                        ++drawablePixelCount;
 
                         uint8_t selectedPixel = 0;
                         const size_t materialViewCount =
@@ -622,7 +624,7 @@
 
                     if (appearance.certifiesHullMaterial)
                         materialCoverage.recordFace(
-                            faceIndex, pixels.size(),
+                            faceIndex, drawablePixelCount,
                             visiblePixelCount);
 
                     uint64_t fingerprint =
