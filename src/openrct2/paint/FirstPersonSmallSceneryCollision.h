@@ -17,6 +17,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 
@@ -367,6 +369,73 @@ namespace OpenRCT2::Paint
         return result;
     }
 
+    // A native sprite's drawing offset describes where the image is painted,
+    // not necessarily an exact common coordinate frame for all four authored
+    // silhouettes. Independently estimate only their 2D registration against
+    // the *declared* occupied envelope. No geometric primitive is assumed.
+    //
+    // Registration cannot grant geometry admission on its own: the shifted
+    // four-view hull must still pass the original projection certificate.
+    // This remains one bounded second attempt on a background asset job.
+    template<typename ProjectPoint>
+    [[nodiscard]] inline bool
+        EstimateFirstPersonSmallSceneryNativeRegistration(
+            const std::vector<FirstPersonVisualHullView>& views,
+            const FirstPersonVisualHullBounds& bounds,
+            ProjectPoint&& projectPoint,
+            std::array<CoordsXY, 4>& offsets)
+    {
+        offsets = {};
+        if (views.size() != 4)
+            return false;
+        bool anyShift = false;
+        std::array<bool, 4> seen{};
+        for (const auto& view : views)
+        {
+            const auto direction = view.imageDirection;
+            if (direction >= 4 || seen[direction]
+                || view.observed.empty())
+                return false;
+            seen[direction] = true;
+            int32_t minX = std::numeric_limits<int32_t>::max();
+            int32_t minY = std::numeric_limits<int32_t>::max();
+            int32_t maxX = std::numeric_limits<int32_t>::min();
+            int32_t maxY = std::numeric_limits<int32_t>::min();
+            for (float z : { bounds.minUp, bounds.maxUp })
+            for (float y : { bounds.minRight, bounds.maxRight })
+            for (float x : { bounds.minForward, bounds.maxForward })
+            {
+                const auto p = projectPoint(
+                    direction, FirstPersonVec3{ x, y, z });
+                minX = std::min(
+                    minX, int32_t(std::lround(p[0])));
+                minY = std::min(
+                    minY, int32_t(std::lround(p[1])));
+                maxX = std::max(
+                    maxX, int32_t(std::lround(p[0])) + 1);
+                maxY = std::max(
+                    maxY, int32_t(std::lround(p[1])) + 1);
+            }
+            // Equalise image-space envelope centres, without changing
+            // observed scale, projection, physical footprint or height.
+            const int32_t deltaX = int32_t(std::lround(
+                0.5 * double(
+                    view.observed.minX + view.observed.maxX
+                    - minX - maxX)));
+            const int32_t deltaY = int32_t(std::lround(
+                0.5 * double(
+                    view.observed.minY + view.observed.maxY
+                    - minY - maxY)));
+            constexpr int32_t kMaximumNativeRegistration = 24;
+            if (std::abs(deltaX) > kMaximumNativeRegistration
+                || std::abs(deltaY) > kMaximumNativeRegistration)
+                return false;
+            offsets[direction] = { deltaX, deltaY };
+            anyShift |= deltaX != 0 || deltaY != 0;
+        }
+        return anyShift;
+    }
+
     template<typename SpriteLookup>
     [[nodiscard]] inline FirstPersonVisualHull
         BuildFirstPersonSmallSceneryVisualHullFromSnapshot(
@@ -465,6 +534,7 @@ namespace OpenRCT2::Paint
             };
         FirstPersonVisualHullAttempt carveAttempt{};
         carveAttempt.nativeViews = uint8_t(std::min<size_t>(views.size(), 4));
+        std::array<CoordsXY, 4> registrationPixels{};
         if (allowSilhouetteRefinement)
         {
             const auto projectPoint =
@@ -484,9 +554,13 @@ namespace OpenRCT2::Paint
                                 int32_t(std::lround(point.y)),
                                 int32_t(std::lround(point.z)),
                             });
+                    const auto correction =
+                        registrationPixels[rotation & 3u];
                     return std::array<float, 2>{
-                        float(projected.x - spriteOrigin.x),
-                        float(projected.y - spriteOrigin.y),
+                        float(projected.x - spriteOrigin.x
+                            + correction.x),
+                        float(projected.y - spriteOrigin.y
+                            + correction.y),
                     };
                 };
             const auto pointSupported =
@@ -518,6 +592,41 @@ namespace OpenRCT2::Paint
                 pointSupported, &carveAttempt);
             if (carved.valid)
                 return carved;
+
+            // The origin hypothesis may itself be inconsistent with the
+            // authored sprite margins. Retry once with envelope-derived
+            // image-space registration, only after a complete four-view
+            // reconstruction has failed. A failed second attempt cannot
+            // promote any geometry or discard the original evidence.
+            if (carveAttempt.stage == 5
+                && EstimateFirstPersonSmallSceneryNativeRegistration(
+                    views, bounds, projectPoint, registrationPixels))
+            {
+                FirstPersonVisualHullAttempt alignedAttempt{};
+                auto aligned = BuildFirstPersonVisualHull(
+                    views, bounds, config,
+                    projectPoint, occupancyPredicate,
+                    pointSupported, &alignedAttempt);
+                alignedAttempt.registrationAttempted = true;
+                alignedAttempt.registrationPixels = registrationPixels;
+                carveAttempt.registrationAttempted = true;
+                carveAttempt.registrationPixels = registrationPixels;
+                if (aligned.valid)
+                {
+                    aligned.viewPixelOffsets = registrationPixels;
+                    aligned.attempt = alignedAttempt;
+                    return aligned;
+                }
+                // For failed hypotheses, keep whichever measured certificate
+                // covers more of the source in its weakest view, while
+                // retaining the fact that no geometry was admitted.
+                if (alignedAttempt.stage == 5
+                    && alignedAttempt.observedCoverage
+                        > carveAttempt.observedCoverage)
+                {
+                    carveAttempt = alignedAttempt;
+                }
+            }
         }
 
         // Collision/footprint data remains physically authoritative, but
