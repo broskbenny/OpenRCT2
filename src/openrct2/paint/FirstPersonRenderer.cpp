@@ -551,6 +551,21 @@ namespace OpenRCT2::Paint
                     static_cast<unsigned long long>(
                         surface.diagnosticRoundTripPixelDisagreement));
             }
+            if (surface.diagnosticReconstructionKind == 4)
+            {
+                Console::WriteLine(
+                    "  smallSceneryHull source=%s nativeViews=%u "
+                    "continuous=%d roundTripPixels=%llu->%llu",
+                    surface.diagnosticRoundTripViewCount == 4
+                        ? "four-view-silhouette"
+                        : "declared-occupancy-envelope",
+                    unsigned(surface.diagnosticRoundTripViewCount),
+                    surface.diagnosticContinuousSurfaceRefined ? 1 : 0,
+                    static_cast<unsigned long long>(
+                        surface.diagnosticVoxelRoundTripPixelDisagreement),
+                    static_cast<unsigned long long>(
+                        surface.diagnosticRoundTripPixelDisagreement));
+            }
             Console::WriteLine(
                 "  semanticRole=%u semanticGroup=%llu sourceTile=(%d,%d) "
                 "materialTile=(%d,%d) sourceComponent=%u materialComponent=%u",
