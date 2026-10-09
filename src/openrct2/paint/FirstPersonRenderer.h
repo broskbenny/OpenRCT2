@@ -254,6 +254,18 @@ namespace OpenRCT2::Paint
         uint64_t diagnosticVoxelRoundTripPixelDisagreement = 0;
         uint64_t diagnosticRoundTripPixelDisagreement = 0;
         uint8_t diagnosticRoundTripViewCount = 0;
+        // Why four-view carving was rejected before any physical occupancy
+        // envelope was used. Diagnostic-only, not a render decision.
+        uint8_t diagnosticHullAttemptStage = 0;
+        uint8_t diagnosticHullAttemptViews = 0;
+        uint32_t diagnosticHullAttemptCells = 0;
+        uint32_t diagnosticHullAttemptFaces = 0;
+        uint32_t diagnosticHullAttemptCertifiedViews = 0;
+        float diagnosticHullAttemptIoU = 0.0f;
+        float diagnosticHullAttemptCandidateCoverage = 0.0f;
+        float diagnosticHullAttemptObservedCoverage = 0.0f;
+        int32_t diagnosticHullAttemptEdgeError = 0;
+        uint64_t diagnosticHullAttemptDisagreement = 0;
         // Stable native painter order for logical tie breaking. Physical depth
         // remains authoritative; this ordinal is consulted only when surfaces
         // occupy the same physical layer (opaque owners or transparency).
