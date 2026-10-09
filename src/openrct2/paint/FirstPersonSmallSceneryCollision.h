@@ -632,6 +632,56 @@ namespace OpenRCT2::Paint
             if (carved.valid)
                 return carved;
 
+            // A coarse occupancy grid cannot resolve fine struts and
+            // openings whose native silhouettes are only a few pixels
+            // wide. The worst view can then cover almost all source matter
+            // while its bulky projected surface overfills the open areas.
+            // This specific, measured near miss warrants one bounded
+            // higher-resolution reconstruction. Other failures do not.
+            //
+            // Keep ALL original admission tests. A finer grid supplies more
+            // evidence, never permission to accept the same poor geometry.
+            if (carveAttempt.stage == 5
+                && carveAttempt.nativeViews == 4
+                && carveAttempt.observedCoverage >= 0.90f
+                && carveAttempt.candidateCoverage >= 0.40f
+                && carveAttempt.candidateCoverage
+                    < config.minimumCandidateCoverage
+                && carveAttempt.maximumEdgeError <= 3
+                && entry.height <= 64)
+            {
+                auto fineBounds = bounds;
+                fineBounds.step = 1.0f;
+                auto fineConfig = config;
+                fineConfig.maximumOccupiedCells = 65536;
+                // A high-resolution mesh can be costly to relax and
+                // re-certify three times. Prefer the direct one-unit
+                // boundary on this strictly limited second trial.
+                fineConfig.allowContinuousSurfaceRefinement = false;
+                FirstPersonVisualHullAttempt fineAttempt{};
+                auto fineHull = BuildFirstPersonVisualHull(
+                    views, fineBounds, fineConfig,
+                    projectPoint, occupancyPredicate,
+                    pointSupported, &fineAttempt);
+                fineAttempt.fineGridRetried = true;
+                fineAttempt.coarseCandidateCoverage =
+                    carveAttempt.candidateCoverage;
+                if (fineHull.valid)
+                {
+                    fineHull.attempt = fineAttempt;
+                    return fineHull;
+                }
+                carveAttempt.fineGridRetried = true;
+                carveAttempt.coarseCandidateCoverage =
+                    carveAttempt.candidateCoverage;
+                if (fineAttempt.stage == 5
+                    && fineAttempt.candidateCoverage
+                        > carveAttempt.candidateCoverage)
+                {
+                    carveAttempt = fineAttempt;
+                }
+            }
+
             // The origin hypothesis may itself be inconsistent with the
             // authored sprite margins. Retry once with envelope-derived
             // image-space registration, only after a complete four-view
