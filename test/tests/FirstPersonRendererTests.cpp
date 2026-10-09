@@ -2052,6 +2052,59 @@ TEST(FirstPersonRoundTripReconstructionTest, ProjectsBoundaryInsteadOfInflatedVo
     EXPECT_EQ(projected.size(), 64u);
 }
 
+TEST(FirstPersonSmallSceneryReconstructionTest, FullTileArtKeepsSameCentreInAllFourNativeViews)
+{
+    SmallSceneryEntry fullTile{};
+    fullTile.flags.set(SmallSceneryFlag::occupiesFullTile);
+
+    const CoordsXYZ tileCentre{
+        kCoordsXYHalfTile, kCoordsXYHalfTile, 0
+    };
+    const CoordsXYZ centralApex{
+        kCoordsXYHalfTile, kCoordsXYHalfTile, 32
+    };
+    const auto referenceCentre =
+        FirstPersonSmallSceneryArtworkPoint(
+            fullTile, 0, tileCentre);
+    const auto referenceApex =
+        FirstPersonSmallSceneryArtworkPoint(
+            fullTile, 0, centralApex);
+    EXPECT_EQ(referenceCentre.x, 0);
+    EXPECT_EQ(referenceCentre.y, 16);
+    EXPECT_EQ(referenceApex.x, 0);
+    EXPECT_EQ(referenceApex.y, -16);
+
+    // A native full-tile image is tied to the tile centre, not its (0,0)
+    // corner. No view may shift the same physical apex by 32 screen pixels.
+    for (uint8_t rotation = 0; rotation < 4; ++rotation)
+    {
+        const auto centre =
+            FirstPersonSmallSceneryArtworkPoint(
+                fullTile, rotation, tileCentre);
+        const auto apex =
+            FirstPersonSmallSceneryArtworkPoint(
+                fullTile, rotation, centralApex);
+        EXPECT_EQ(centre.x, referenceCentre.x);
+        EXPECT_EQ(centre.y, referenceCentre.y);
+        EXPECT_EQ(apex.x, referenceApex.x);
+        EXPECT_EQ(apex.y, referenceApex.y);
+    }
+    // Quarter-tile paintings have their own direction-dependent native
+    // sprite anchoring. Do not silently change that uncalibrated contract.
+    SmallSceneryEntry quarterTile{};
+    const auto source = CoordsXYZ{ 3, 7, 11 };
+    for (uint8_t rotation = 0; rotation < 4; ++rotation)
+    {
+        const auto point =
+            FirstPersonSmallSceneryArtworkPoint(
+                quarterTile, rotation, source);
+        const auto original =
+            Translate3DTo2DWithZ(rotation, source);
+        EXPECT_EQ(point.x, original.x);
+        EXPECT_EQ(point.y, original.y);
+    }
+}
+
 TEST(FirstPersonSmallSceneryReconstructionTest, EnvelopeRegistrationCorrectsNativeFrameOriginsOnly)
 {
     FirstPersonVisualHullBounds bounds{};
