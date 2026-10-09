@@ -3419,7 +3419,8 @@
                                         .continuousSurfaceSearchSteps);
                             const auto candidateFaces =
                                 BuildFirstPersonVisualHullContinuousCandidateFaces(
-                                    hull, voxelFaces, blend);
+                                    hull, voxelFaces, blend,
+                                    hullConfig.maximumContinuousSurfaceFaces);
                             if (candidateFaces.empty())
                                 continue;
 
