@@ -168,6 +168,35 @@ namespace OpenRCT2::Paint
         return filled;
     }
 
+    // A boundary facet with no directly visible native pixels can borrow
+    // only a material colour from an adjacent observed facet. Copying the
+    // donor's entire bitmap onto a differently sized/angled triangle would
+    // distort architectural details across a texture that was never seen.
+    // Use its dominant non-transparent palette index as a deliberately
+    // conservative, constant-colour seam repair. Zero means no evidence.
+    [[nodiscard]] inline uint8_t
+        FirstPersonSolidHullRepresentativePixel(
+            const std::vector<uint8_t>& pixels)
+    {
+        std::array<size_t, 256> counts{};
+        for (const uint8_t pixel : pixels)
+        {
+            if (pixel != 0)
+                ++counts[pixel];
+        }
+        uint8_t selected = 0;
+        size_t highest = 0;
+        for (size_t pixel = 1; pixel < counts.size(); ++pixel)
+        {
+            if (counts[pixel] > highest)
+            {
+                highest = counts[pixel];
+                selected = uint8_t(pixel);
+            }
+        }
+        return selected;
+    }
+
     struct FirstPersonVisualHull
     {
         bool valid = false;
