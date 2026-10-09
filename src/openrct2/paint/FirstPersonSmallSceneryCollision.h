@@ -672,11 +672,25 @@ namespace OpenRCT2::Paint
                 // re-certify three times. Prefer the direct one-unit
                 // boundary on this strictly limited second trial.
                 fineConfig.allowContinuousSurfaceRefinement = false;
+                // The coarse 3x3 lookup dilates opaque artwork by one
+                // pixel on all sides. For thin pillars/lattice openings that
+                // erases exactly the negative space we need to preserve.
+                // A one-unit grid can test the actual projected pixel
+                // without that coarse-grid uncertainty margin.
+                const auto finelySupported =
+                    [&](const FirstPersonVisualHullView& view,
+                        FirstPersonVec3 point) {
+                        const auto projected =
+                            projectPoint(view.imageDirection, point);
+                        return view.observed.contains(
+                            int32_t(std::lround(projected[0])),
+                            int32_t(std::lround(projected[1])));
+                    };
                 FirstPersonVisualHullAttempt fineAttempt{};
                 auto fineHull = BuildFirstPersonVisualHull(
                     views, fineBounds, fineConfig,
                     projectPoint, occupancyPredicate,
-                    pointSupported, &fineAttempt);
+                    finelySupported, &fineAttempt);
                 fineAttempt.fineGridRetried = true;
                 fineAttempt.coarseCandidateCoverage =
                     carveAttempt.candidateCoverage;
