@@ -2052,6 +2052,51 @@ TEST(FirstPersonRoundTripReconstructionTest, ProjectsBoundaryInsteadOfInflatedVo
     EXPECT_EQ(projected.size(), 64u);
 }
 
+TEST(FirstPersonSmallSceneryReconstructionTest, FiveVertexGroundTruthCalibratesProjectionOnly)
+{
+    // A known four-base-corner / one-apex surface is a calibration FIXTURE,
+    // never a shape choice in the renderer. Its four quarter-turn
+    // silhouettes must share one image-space frame regardless of yaw.
+    SmallSceneryEntry entry{};
+    entry.flags.set(SmallSceneryFlag::occupiesFullTile);
+    constexpr std::array<CoordsXYZ, 5> kGroundTruth{ {
+        { 0, 0, 0 }, { 32, 0, 0 },
+        { 32, 32, 0 }, { 0, 32, 0 },
+        { 16, 16, 32 },
+    } };
+    std::array<ScreenCoordsXY, 5> expected{};
+    for (size_t i = 0; i < kGroundTruth.size(); ++i)
+        expected[i] =
+            FirstPersonSmallSceneryArtworkPoint(
+                entry, 0, kGroundTruth[i]);
+
+    // The apex should be stable, while the four corners are permuted by
+    // rotations. Compare sorted screen-coordinate sets rather than forcing
+    // geometric corner IDs to be stable across sprites.
+    const auto sortPoints = [](std::array<ScreenCoordsXY, 5> pts) {
+        std::sort(pts.begin(), pts.end(),
+            [](const auto& a, const auto& b) {
+                return a.x != b.x ? a.x < b.x : a.y < b.y;
+            });
+        return pts;
+    };
+    expected = sortPoints(expected);
+    for (uint8_t rotation = 0; rotation < 4; ++rotation)
+    {
+        std::array<ScreenCoordsXY, 5> actual{};
+        for (size_t i = 0; i < kGroundTruth.size(); ++i)
+            actual[i] =
+                FirstPersonSmallSceneryArtworkPoint(
+                    entry, rotation, kGroundTruth[i]);
+        actual = sortPoints(actual);
+        for (size_t i = 0; i < actual.size(); ++i)
+        {
+            EXPECT_EQ(actual[i].x, expected[i].x);
+            EXPECT_EQ(actual[i].y, expected[i].y);
+        }
+    }
+}
+
 TEST(FirstPersonSmallSceneryReconstructionTest, FullTileArtKeepsSameCentreInAllFourNativeViews)
 {
     SmallSceneryEntry fullTile{};
