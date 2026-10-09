@@ -599,6 +599,12 @@ namespace OpenRCT2::Paint
             // reconstruction has failed. A failed second attempt cannot
             // promote any geometry or discard the original evidence.
             if (carveAttempt.stage == 5
+                // Registration is only an explanation for a mostly
+                // silhouette-contained reconstruction that leaves large
+                // observed areas unexplained. Other failure modes should
+                // not pay for another full voxel pass.
+                && carveAttempt.candidateCoverage >= 0.50f
+                && carveAttempt.observedCoverage < 0.25f
                 && EstimateFirstPersonSmallSceneryNativeRegistration(
                     views, bounds, projectPoint, registrationPixels))
             {
