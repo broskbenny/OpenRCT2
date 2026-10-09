@@ -2344,6 +2344,58 @@ TEST(FirstPersonVisualHullTest, SolidMaterialCompletionNeverLeavesSparseAlphaHol
         0u);
 }
 
+TEST(FirstPersonSmallSceneryReconstructionTest, FineVoxelSupportPreservesOnePixelNegativeSpace)
+{
+    FirstPersonVisualHullView view{};
+    view.observed.add(0, 0);
+    view.observed.add(2, 0);
+    // A 3x3 coarse uncertainty lookup sees a solid bridge. The one-unit
+    // grid must see that pixel as transparent, not infer material from it.
+    EXPECT_TRUE(FirstPersonSmallSceneryNativePixelSupportsPoint(
+        view, 1.0f, 0.0f, 1));
+    EXPECT_FALSE(FirstPersonSmallSceneryNativePixelSupportsPoint(
+        view, 1.0f, 0.0f, 0));
+    EXPECT_TRUE(FirstPersonSmallSceneryNativePixelSupportsPoint(
+        view, 2.0f, 0.0f, 0));
+}
+
+TEST(FirstPersonVisualHullTest, GridBoundaryFaceBudgetStopsBeforeRoundTrip)
+{
+    FirstPersonVisualHullBounds bounds{};
+    bounds.maxForward = 4.0f;
+    bounds.maxRight = 4.0f;
+    bounds.maxUp = 4.0f;
+    bounds.step = 2.0f;
+    FirstPersonVisualHullConfig config{};
+    config.minimumOccupiedCells = 1;
+    config.maximumOccupiedCells = 8;
+    config.maximumAxisCells = 2;
+    config.maximumGridCells = 8;
+    config.maximumVoxelBoundaryFaces = 1;
+
+    std::vector<FirstPersonVisualHullView> views(4);
+    for (uint8_t r = 0; r < 4; ++r)
+    {
+        views[r].imageDirection = r;
+        views[r].observed = MakeSilhouetteRect(
+            -32, -32, 32, 32);
+    }
+    const auto project = [](uint8_t, FirstPersonVec3 point) {
+        return std::array<float, 2>{ point.x, point.z };
+    };
+    FirstPersonVisualHullAttempt attempt{};
+    const auto rejected = BuildFirstPersonVisualHull(
+        views, bounds, config, project,
+        [](FirstPersonVec3) { return true; },
+        [](const FirstPersonVisualHullView&, FirstPersonVec3) {
+            return true;
+        },
+        &attempt);
+    EXPECT_FALSE(rejected.valid);
+    EXPECT_EQ(attempt.stage, 4);
+    EXPECT_GT(attempt.voxelFaces, 1u);
+}
+
 TEST(FirstPersonSmallSceneryReconstructionTest, FineGridOnlyForPreciseFourViewExcessCoverageNearMiss)
 {
     FirstPersonVisualHullConfig config{};
