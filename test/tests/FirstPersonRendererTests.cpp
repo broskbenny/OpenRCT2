@@ -2344,6 +2344,33 @@ TEST(FirstPersonVisualHullTest, SolidMaterialCompletionNeverLeavesSparseAlphaHol
         0u);
 }
 
+TEST(FirstPersonVisualHullTest, SeamRepairsUseOnlyObservedPaletteAndNeverCopyStretchedArtwork)
+{
+    // The donor is real observed material. Its representative palette
+    // colour is the only admissible material for an unobserved tiny facet;
+    // its bitmap orientation and details cannot be copied onto a different
+    // 3D face and passed off as a source projection.
+    std::vector<uint8_t> donor{
+        0, 29, 29, 29, 7, 29, 7, 29, 7, 11
+    };
+    EXPECT_EQ(FirstPersonSolidHullRepresentativePixel(donor), 29);
+    donor = { 0, 0, 0 };
+    EXPECT_EQ(FirstPersonSolidHullRepresentativePixel(donor), 0);
+    donor = { 7, 7, 15, 15 };
+    EXPECT_EQ(FirstPersonSolidHullRepresentativePixel(donor), 7);
+
+    // A one-pixel observed seed is a genuinely opaque constant material,
+    // not a stretched or alpha-punched atlas from another surface.
+    std::vector<uint8_t> seam{
+        FirstPersonSolidHullRepresentativePixel(
+            std::vector<uint8_t>{ 0, 9, 9, 0 })
+    };
+    ASSERT_EQ(seam.size(), 1u);
+    EXPECT_EQ(seam[0], 9);
+    EXPECT_EQ(CompleteFirstPersonSolidHullMaterialPatch(
+        seam, 1, 1), 0u);
+}
+
 TEST(FirstPersonSmallSceneryReconstructionTest, FineVoxelSupportPreservesOnePixelNegativeSpace)
 {
     FirstPersonVisualHullView view{};
