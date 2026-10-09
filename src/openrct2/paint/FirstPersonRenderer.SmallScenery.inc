@@ -139,8 +139,15 @@
                     DecodeFirstPersonSpritePixels(*g1);
                 if (!decoded.has_value())
                     continue;
-                int32_t groundingShiftU = 0;
-                int32_t groundingShiftV = 0;
+                // Native artwork registration is a presentation-space
+                // correction, not a change to the inferred physical mesh.
+                // Use the exact shift certified during four-view carving.
+                int32_t groundingShiftU = hull != nullptr
+                    ? hull->viewPixelOffsets[view.imageDirection & 3u].x
+                    : 0;
+                int32_t groundingShiftV = hull != nullptr
+                    ? hull->viewPixelOffsets[view.imageDirection & 3u].y
+                    : 0;
                 if (appearance.kind
                     == FirstPersonSmallSceneryAppearanceKind::crossedTree)
                 {
