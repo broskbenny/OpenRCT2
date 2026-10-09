@@ -2148,6 +2148,20 @@ TEST(FirstPersonSmallSceneryReconstructionTest, FullTileArtKeepsSameCentreInAllF
         EXPECT_EQ(point.x, original.x);
         EXPECT_EQ(point.y, original.y);
     }
+    // The independently calibrated crossed-tree artwork basis must not
+    // inherit the volumetric full-tile-centre convention.
+    SmallSceneryEntry tree{};
+    tree.flags.set(SmallSceneryFlag::occupiesFullTile);
+    tree.flags.set(SmallSceneryFlag::isTree);
+    for (uint8_t rotation = 0; rotation < 4; ++rotation)
+    {
+        const auto actual = FirstPersonSmallSceneryArtworkPoint(
+            tree, rotation, centralApex);
+        const auto original = Translate3DTo2DWithZ(
+            rotation, centralApex);
+        EXPECT_EQ(actual.x, original.x);
+        EXPECT_EQ(actual.y, original.y);
+    }
 }
 
 TEST(FirstPersonSmallSceneryReconstructionTest, EnvelopeRegistrationCorrectsNativeFrameOriginsOnly)
