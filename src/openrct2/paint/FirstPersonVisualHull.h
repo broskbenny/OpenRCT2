@@ -43,11 +43,13 @@ namespace OpenRCT2::Paint
         FirstPersonVisualHullFaceKind kind{};
     };
 
-    // Physical triangles and the native material bake must evaluate the
-    // SAME surface. A continuous hull may emit a triangle as a degenerate
-    // quad {a,b,c,c}. GPU rasterisation uses the (a,b,c) triangle with UV
-    // coordinates (0,0),(1,0),(1,1). Bilinear interpolation would wrongly
-    // sample a different curved/warped mapping over that triangle.
+    // The native material bake must sample the exact surface rasterised by
+    // EmitQuad: triangles (0,1,2) and (0,2,3), split on the s == t UV
+    // diagonal. Bilinear interpolation is a DIFFERENT surface when a quad is
+    // warped or not a parallelogram, and gives visibly folded textures.
+    //
+    // A triangle is represented by a degenerate quad {a,b,c,c}; its second
+    // GPU triangle is empty. Never paint outside its actual UV triangle.
     [[nodiscard]] inline bool FirstPersonVisualHullSampleFace(
         const FirstPersonVisualHullFace& face,
         float s, float t, FirstPersonVec3& point)
@@ -56,13 +58,13 @@ namespace OpenRCT2::Paint
         const auto& b = face.corners[1];
         const auto& c = face.corners[2];
         const auto& d = face.corners[3];
-        const auto difference = FirstPersonVec3{
+        const auto delta = FirstPersonVec3{
             d.x - c.x, d.y - c.y, d.z - c.z
         };
-        if (FpDot(difference, difference) <= 1.0e-8f)
+        const bool triangle =
+            FpDot(delta, delta) <= 1.0e-8f;
+        if (s >= t)
         {
-            if (t > s)
-                return false;
             point = {
                 a.x + (b.x - a.x) * s + (c.x - b.x) * t,
                 a.y + (b.y - a.y) * s + (c.y - b.y) * t,
@@ -70,13 +72,13 @@ namespace OpenRCT2::Paint
             };
             return true;
         }
-        const auto lerp = [](float x, float y, float u) {
-            return x + (y - x) * u;
-        };
+        if (triangle)
+            return false;
+
         point = {
-            lerp(lerp(a.x, b.x, s), lerp(d.x, c.x, s), t),
-            lerp(lerp(a.y, b.y, s), lerp(d.y, c.y, s), t),
-            lerp(lerp(a.z, b.z, s), lerp(d.z, c.z, s), t),
+            a.x + (c.x - d.x) * s + (d.x - a.x) * t,
+            a.y + (c.y - d.y) * s + (d.y - a.y) * t,
+            a.z + (c.z - d.z) * s + (d.z - a.z) * t,
         };
         return true;
     }
