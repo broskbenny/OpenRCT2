@@ -829,20 +829,36 @@
                         || donor.persistentPixels == nullptr)
                         continue;
 
+                    const uint8_t seedPixel =
+                        FirstPersonSolidHullRepresentativePixel(
+                            *donor.persistentPixels);
+                    if (seedPixel == 0)
+                        continue;
+
                     FirstPersonSurface repaired{};
                     repaired.cameraIndependent = true;
                     repaired.outwardNormal = missingFace.normal;
                     repaired.image = donor.image;
                     repaired.persistentBitmap = true;
-                    repaired.persistentPixels = donor.persistentPixels;
-                    repaired.immutableWidth = donor.immutableWidth;
-                    repaired.immutableHeight = donor.immutableHeight;
-                    repaired.immutableFingerprint =
-                        donor.immutableFingerprint;
-                    const float width =
-                        float(donor.immutableWidth);
-                    const float height =
-                        float(donor.immutableHeight);
+                    // Missing facets are usually small seams. Projected
+                    // source artwork never observed them directly, so do
+                    // not stretch another face's complete image across
+                    // their independent UV coordinates. Only continue a
+                    // colour that really occurs on the nearby donor.
+                    repaired.persistentPixels =
+                        std::make_shared<std::vector<uint8_t>>(
+                            1, seedPixel);
+                    repaired.immutableWidth = 1;
+                    repaired.immutableHeight = 1;
+                    uint64_t fingerprint =
+                        14695981039346656037ull;
+                    ExtendStableKey(fingerprint, uint32_t(1));
+                    ExtendStableKey(fingerprint, uint32_t(1));
+                    fingerprint ^= seedPixel;
+                    fingerprint *= 1099511628211ull;
+                    repaired.immutableFingerprint = fingerprint;
+                    constexpr float width = 1.0f;
+                    constexpr float height = 1.0f;
                     const std::array<FirstPersonVertex, 4> vertices{ {
                         {
                             missingFace.corners[0],
