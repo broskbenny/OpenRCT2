@@ -104,6 +104,65 @@ namespace OpenRCT2::Paint
         std::array<CoordsXY, 4> registrationPixels{};
     };
 
+    // A verified solid hull is a geometric boundary, independent of
+    // whether each native view happened to contribute colour at every
+    // texel. Interpolated/reprojected sprites can leave tiny transparent
+    // holes across a face that physically exists. Continue the closest
+    // observed texel across those gaps in UV space. This only colours
+    // existing geometry: it never adds voxels or new surface area.
+    //
+    // The caller must restrict this to a certified solid hull. Authored
+    // open planes (crossed trees, signs) retain original source alpha.
+    [[nodiscard]] inline size_t
+        CompleteFirstPersonSolidHullMaterialPatch(
+            std::vector<uint8_t>& pixels,
+            int32_t width, int32_t height)
+    {
+        if (width <= 0 || height <= 0
+            || pixels.size() != size_t(width) * size_t(height))
+            return 0;
+
+        // Multi-source Manhattan-distance propagation. The UV atlas may
+        // contain a degenerate half for a triangular face. Filling that
+        // unused half is harmless; EmitQuad does not rasterise it, and the
+        // extra texels prevent filtering across a transparent diagonal.
+        std::vector<int32_t> queue;
+        queue.reserve(pixels.size());
+        std::vector<uint8_t> reached(pixels.size(), 0);
+        for (size_t i = 0; i < pixels.size(); ++i)
+        {
+            if (pixels[i] == 0)
+                continue;
+            reached[i] = 1;
+            queue.push_back(int32_t(i));
+        }
+        size_t filled = 0;
+        for (size_t head = 0; head < queue.size(); ++head)
+        {
+            const int32_t index = queue[head];
+            const int32_t x = index % width;
+            const int32_t y = index / width;
+            const auto visit = [&](int32_t nx, int32_t ny) {
+                if (nx < 0 || ny < 0
+                    || nx >= width || ny >= height)
+                    return;
+                const size_t next = size_t(ny) * size_t(width)
+                    + size_t(nx);
+                if (reached[next])
+                    return;
+                reached[next] = 1;
+                pixels[next] = pixels[size_t(index)];
+                ++filled;
+                queue.push_back(int32_t(next));
+            };
+            visit(x - 1, y);
+            visit(x + 1, y);
+            visit(x, y - 1);
+            visit(x, y + 1);
+        }
+        return filled;
+    }
+
     struct FirstPersonVisualHull
     {
         bool valid = false;
