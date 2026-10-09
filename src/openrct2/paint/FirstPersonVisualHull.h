@@ -98,12 +98,19 @@ namespace OpenRCT2::Paint
         float observedCoverage = 0.0f;
         int32_t maximumEdgeError = 0;
         size_t disagreementPixels = 0;
+        // Diagnostic image-registration trial. An accepted reconstruction
+        // also retains the correction for material sampling, not geometry.
+        bool registrationAttempted = false;
+        std::array<CoordsXY, 4> registrationPixels{};
     };
 
     struct FirstPersonVisualHull
     {
         bool valid = false;
         FirstPersonVisualHullAttempt attempt{};
+        // Native sprite frame corrections are independent of the physical
+        // occupancy and must be reused by the material-projection stage.
+        std::array<CoordsXY, 4> viewPixelOffsets{};
         float step = 4.0f;
         float minForward{};
         float minRight{};
