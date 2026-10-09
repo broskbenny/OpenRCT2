@@ -2161,6 +2161,27 @@ TEST(FirstPersonVisualHullTest, FailedRawAdmissionStillAllowsCertifiedRefinement
     EXPECT_FALSE(rejected.valid);
     EXPECT_EQ(unavailable.stage, 1);
     EXPECT_EQ(unavailable.nativeViews, 3);
+
+    // Four observations can be present and still contradict the same
+    // geometry. Record the actual silhouette-fit failure; never report
+    // this as "missing native artwork".
+    observations.push_back({});
+    observations.back().imageDirection = 3;
+    observations.back().observed =
+        MakeSilhouetteRect(100, 100, 104, 104);
+    FirstPersonVisualHullAttempt contradictory{};
+    const auto refused = BuildFirstPersonVisualHull(
+        observations, bounds, config, project,
+        [](FirstPersonVec3 p) {
+            return p.x < 4.0f || p.z < 4.0f;
+        },
+        [](const FirstPersonVisualHullView&, FirstPersonVec3) {
+            return true;
+        }, &contradictory);
+    EXPECT_FALSE(refused.valid);
+    EXPECT_EQ(contradictory.stage, 5);
+    EXPECT_EQ(contradictory.nativeViews, 4);
+    EXPECT_EQ(contradictory.certificateViews, 4u);
 }
 
 TEST(FirstPersonVisualHullTest, ContinuousSupportFieldWinsOnlyWhenNativeRoundTripImproves)
