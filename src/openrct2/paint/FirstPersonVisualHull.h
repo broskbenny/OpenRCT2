@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace OpenRCT2::Paint
@@ -1043,7 +1044,8 @@ namespace OpenRCT2::Paint
                         config.continuousSurfaceSearchSteps);
                 const auto candidateFaces =
                     BuildFirstPersonVisualHullContinuousCandidateFaces(
-                        result, voxelFaces, blend);
+                        result, voxelFaces, blend,
+                    config.maximumContinuousSurfaceFaces);
                 if (candidateFaces.empty())
                     continue;
                 const auto candidateCertificate =
