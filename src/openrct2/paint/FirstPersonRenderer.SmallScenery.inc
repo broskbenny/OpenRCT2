@@ -1,6 +1,7 @@
         bool BuildSmallSceneryGeometry(FirstPersonScene& scene,
             const SmallSceneryElement& element, const SmallSceneryEntry& metadata,
-            ImageId image, const FirstPersonSpriteSnapshot& sprites)
+            ImageId image, const FirstPersonSpriteSnapshot& sprites,
+            FirstPersonVisualHullAttempt* reconstructionAttempt = nullptr)
         {
             const auto* small = &element;
             const auto* entry = &metadata;
@@ -11,6 +12,8 @@
                 ownedHull = BuildFirstPersonSmallSceneryVisualHullFromSnapshot(
                     metadata, element,
                     [&](ImageIndex id) { return sprites.get(id); });
+                if (reconstructionAttempt != nullptr)
+                    *reconstructionAttempt = ownedHull.attempt;
                 if (!ownedHull.valid)
                     return false;
                 hull = &ownedHull;
@@ -858,11 +861,48 @@
                     }
                 job->submitted = _reconstructionWorker.submit([job] {
                     FirstPersonScene result;
+                    FirstPersonVisualHullAttempt attempt{};
                     BuildSmallSceneryGeometry(result, job->element, job->entry,
-                        ImageId(job->entry.image), job->sprites);
-                    return [job, surfaces = std::move(result.surfaces)]() mutable {
+                        ImageId(job->entry.image), job->sprites, &attempt);
+                    return [job, surfaces = std::move(result.surfaces),
+                            attempt]() mutable {
                         job->surfaces = std::move(surfaces);
                         job->ready = true;
+                        // Once per unique asset/state, report a genuinely
+                        // severe native-view contradiction. This is not a
+                        // per-frame/per-tile warning, and is emitted from the
+                        // worker's main-thread completion.
+                        if (job->surfaces.empty()
+                            && attempt.nativeViews == 4
+                            && attempt.stage == 5
+                            && attempt.observedCoverage < 0.20f)
+                        {
+                            Console::WriteLine(
+                                "FP_VISUAL_HULL_REJECTED image=%u stage=%u"
+                                " nativeViews=%u voxels=%u faces=%u"
+                                " minIoU=%.3f observedCoverage=%.3f"
+                                " candidateCoverage=%.3f edge=%d"
+                                " alignmentTried=%d"
+                                " shifts=[(%d,%d),(%d,%d),(%d,%d),(%d,%d)]",
+                                job->entry.image,
+                                unsigned(attempt.stage),
+                                unsigned(attempt.nativeViews),
+                                attempt.occupiedCells,
+                                attempt.voxelFaces,
+                                double(attempt.minimumIoU),
+                                double(attempt.observedCoverage),
+                                double(attempt.candidateCoverage),
+                                attempt.maximumEdgeError,
+                                attempt.registrationAttempted ? 1 : 0,
+                                attempt.registrationPixels[0].x,
+                                attempt.registrationPixels[0].y,
+                                attempt.registrationPixels[1].x,
+                                attempt.registrationPixels[1].y,
+                                attempt.registrationPixels[2].x,
+                                attempt.registrationPixels[2].y,
+                                attempt.registrationPixels[3].x,
+                                attempt.registrationPixels[3].y);
+                        }
                         for (const auto tile : job->waitingTiles)
                             InvalidateFirstPersonSceneTile({int32_t(tile >> 32), int32_t(tile)});
                         job->waitingTiles.clear();
