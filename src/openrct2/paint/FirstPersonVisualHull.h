@@ -1067,7 +1067,11 @@ namespace OpenRCT2::Paint
                     && certificate.maximumEdgeError
                         <= config.maximumEdgeError;
             };
-        if (!passesAdmission(voxelCertificate))
+        // Admission belongs to the FINAL reconstructed surface, not the
+        // unrefined voxel baseline. Rejecting the baseline here prevented a
+        // smoother candidate from ever rescuing a visually correct object.
+        // A valid baseline certificate is still required for comparison.
+        if (!voxelCertificate.valid)
             return {};
 
         auto selectedCertificate =
@@ -1098,11 +1102,17 @@ namespace OpenRCT2::Paint
                         TriangulateFirstPersonReconstructionFaces(
                             candidateFaces),
                         views, projectPoint);
-                if (!passesAdmission(
-                        candidateCertificate)
-                    || !FirstPersonRoundTripStrictlyImproves(
-                        candidateCertificate,
-                        selectedCertificate))
+                if (!passesAdmission(candidateCertificate))
+                    continue;
+                // When the baseline does not meet admission, a candidate
+                // that independently passes and is no worse than the
+                // baseline is meaningful progress even when total mismatch
+                // happens to tie. Once admitted, require strict improvement.
+                if (passesAdmission(selectedCertificate)
+                    ? !FirstPersonRoundTripStrictlyImproves(
+                        candidateCertificate, selectedCertificate)
+                    : !FirstPersonRoundTripNonWorse(
+                        candidateCertificate, selectedCertificate))
                     continue;
 
                 result.refinedFaces =
@@ -1111,6 +1121,9 @@ namespace OpenRCT2::Paint
                     candidateCertificate;
             }
         }
+
+        if (!passesAdmission(selectedCertificate))
+            return {};
 
         result.continuousSurfaceRefined =
             !result.refinedFaces.empty();
