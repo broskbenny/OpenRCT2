@@ -266,6 +266,8 @@ namespace OpenRCT2::Paint
         float diagnosticHullAttemptObservedCoverage = 0.0f;
         int32_t diagnosticHullAttemptEdgeError = 0;
         uint64_t diagnosticHullAttemptDisagreement = 0;
+        bool diagnosticHullRegistrationAttempted = false;
+        std::array<CoordsXY, 4> diagnosticHullRegistrationPixels{};
         // Stable native painter order for logical tie breaking. Physical depth
         // remains authoritative; this ordinal is consulted only when surfaces
         // occupy the same physical layer (opaque owners or transparency).
