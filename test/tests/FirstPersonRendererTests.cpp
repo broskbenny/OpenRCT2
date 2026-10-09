@@ -2052,6 +2052,98 @@ TEST(FirstPersonRoundTripReconstructionTest, ProjectsBoundaryInsteadOfInflatedVo
     EXPECT_EQ(projected.size(), 64u);
 }
 
+TEST(FirstPersonSmallSceneryReconstructionTest, FullTileFourViewCarvingAcceptsKnownPhysicalSurface)
+{
+    // Calibrate the entire shared pipeline: known matter -> four native
+    // projections -> intersected occupancy -> independent round-trip.
+    // No renderer ever receives the known five-point surface as a shape
+    // option. It supplies synthetic reference pixels only.
+    SmallSceneryEntry entry{};
+    entry.flags.set(SmallSceneryFlag::occupiesFullTile);
+    const FirstPersonVec3 apex{ 16.0f, 16.0f, 32.0f };
+    const std::array<FirstPersonVec3, 4> corners{ {
+        { 0.0f, 0.0f, 0.0f },
+        { 32.0f, 0.0f, 0.0f },
+        { 32.0f, 32.0f, 0.0f },
+        { 0.0f, 32.0f, 0.0f },
+    } };
+    std::vector<FirstPersonReconstructionTriangle> reference;
+    for (size_t i = 0; i < corners.size(); ++i)
+        reference.push_back({ {
+            corners[i], corners[(i + 1) & 3u], apex
+        } });
+
+    const auto project =
+        [&](uint8_t direction, FirstPersonVec3 world) {
+            const auto p =
+                FirstPersonSmallSceneryArtworkPoint(
+                    entry, direction,
+                    {
+                        int32_t(std::lround(world.x)),
+                        int32_t(std::lround(world.y)),
+                        int32_t(std::lround(world.z)),
+                    });
+            return std::array<float, 2>{
+                float(p.x), float(p.y)
+            };
+        };
+    std::vector<FirstPersonVisualHullView> views;
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        FirstPersonVisualHullView view{};
+        view.imageDirection = direction;
+        view.observed = RenderFirstPersonReconstructionSilhouette(
+            reference, direction, project);
+        ASSERT_FALSE(view.observed.empty());
+        views.push_back(std::move(view));
+    }
+
+    FirstPersonVisualHullBounds bounds{};
+    bounds.maxForward = 32.0f;
+    bounds.maxRight = 32.0f;
+    bounds.maxUp = 32.0f;
+    bounds.step = 2.0f;
+
+    FirstPersonVisualHullConfig config{};
+    config.minimumViews = 4;
+    config.minimumOccupiedCells = 4;
+    config.maximumOccupiedCells = 32768;
+    config.maximumGridCells = 131072;
+    config.maximumAxisCells = 128;
+    config.minimumCandidateCoverage = 0.55f;
+    config.minimumObservedCoverage = 0.30f;
+    config.maximumEdgeError = 8;
+    // First ensure even the initial voxel boundary qualifies; continuous
+    // refinement is a separate stage with its own quality certificate.
+    config.allowContinuousSurfaceRefinement = false;
+
+    FirstPersonVisualHullAttempt attempt{};
+    const auto hull = BuildFirstPersonVisualHull(
+        views, bounds, config, project,
+        [](FirstPersonVec3) { return true; },
+        [&](const FirstPersonVisualHullView& view,
+            FirstPersonVec3 point) {
+            const auto p = project(view.imageDirection, point);
+            for (int32_t dy = -1; dy <= 1; ++dy)
+            for (int32_t dx = -1; dx <= 1; ++dx)
+            {
+                if (view.observed.contains(
+                    int32_t(std::lround(p[0])) + dx,
+                    int32_t(std::lround(p[1])) + dy))
+                    return true;
+            }
+            return false;
+        },
+        &attempt);
+    EXPECT_TRUE(hull.valid);
+    EXPECT_EQ(attempt.stage, 6);
+    EXPECT_EQ(attempt.nativeViews, 4);
+    EXPECT_EQ(attempt.certificateViews, 4u);
+    EXPECT_GT(attempt.occupiedCells, 500u);
+    EXPECT_GE(attempt.observedCoverage, 0.30f);
+    EXPECT_GE(attempt.candidateCoverage, 0.55f);
+}
+
 TEST(FirstPersonSmallSceneryReconstructionTest, FiveVertexGroundTruthCalibratesProjectionOnly)
 {
     // A known four-base-corner / one-apex surface is a calibration FIXTURE,
