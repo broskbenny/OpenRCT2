@@ -2300,6 +2300,87 @@ TEST(FirstPersonSmallSceneryReconstructionTest, EnvelopeRegistrationCorrectsNati
         views, bounds, project, shifts));
 }
 
+TEST(FirstPersonVisualHullTest, SolidMaterialCompletionNeverLeavesSparseAlphaHoles)
+{
+    // Only a completely unobserved patch remains unresolved. Once actual
+    // native colour exists anywhere on a certified solid facet, missing
+    // pixels cannot punch screen-space holes in that same physical face.
+    std::vector<uint8_t> material{
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 42, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+    };
+    EXPECT_EQ(
+        CompleteFirstPersonSolidHullMaterialPatch(
+            material, 5, 5),
+        24u);
+    for (const auto pixel : material)
+        EXPECT_EQ(pixel, 42);
+
+    // Multiple observed material colours are preserved as seeds; only
+    // previously unknown texels are completed.
+    material = { 7, 0, 0, 0, 9 };
+    EXPECT_EQ(
+        CompleteFirstPersonSolidHullMaterialPatch(
+            material, 5, 1),
+        3u);
+    EXPECT_EQ(material.front(), 7);
+    EXPECT_EQ(material.back(), 9);
+    EXPECT_TRUE(std::all_of(
+        material.begin(), material.end(),
+        [](uint8_t pixel) { return pixel != 0; }));
+
+    material = { 0, 0, 0, 0 };
+    EXPECT_EQ(
+        CompleteFirstPersonSolidHullMaterialPatch(
+            material, 2, 2),
+        0u);
+    EXPECT_EQ(material, (std::vector<uint8_t>{ 0, 0, 0, 0 }));
+    EXPECT_EQ(
+        CompleteFirstPersonSolidHullMaterialPatch(
+            material, 2, 3),
+        0u);
+}
+
+TEST(FirstPersonSmallSceneryReconstructionTest, FineGridOnlyForPreciseFourViewExcessCoverageNearMiss)
+{
+    FirstPersonVisualHullConfig config{};
+    config.minimumCandidateCoverage = 0.55f;
+    FirstPersonVisualHullAttempt coarse{};
+    coarse.stage = 5;
+    coarse.nativeViews = 4;
+    coarse.observedCoverage = 0.994f;
+    coarse.candidateCoverage = 0.506f;
+    coarse.maximumEdgeError = 1;
+
+    EXPECT_TRUE(FirstPersonSmallSceneryNeedsFinerSilhouetteGrid(
+        coarse, config, 48));
+    coarse.candidateCoverage = 0.56f;
+    EXPECT_FALSE(FirstPersonSmallSceneryNeedsFinerSilhouetteGrid(
+        coarse, config, 48));
+    coarse.candidateCoverage = 0.506f;
+    coarse.observedCoverage = 0.80f;
+    EXPECT_FALSE(FirstPersonSmallSceneryNeedsFinerSilhouetteGrid(
+        coarse, config, 48));
+    coarse.observedCoverage = 0.994f;
+    coarse.maximumEdgeError = 4;
+    EXPECT_FALSE(FirstPersonSmallSceneryNeedsFinerSilhouetteGrid(
+        coarse, config, 48));
+    coarse.maximumEdgeError = 1;
+    coarse.nativeViews = 3;
+    EXPECT_FALSE(FirstPersonSmallSceneryNeedsFinerSilhouetteGrid(
+        coarse, config, 48));
+    coarse.nativeViews = 4;
+    coarse.stage = 6;
+    EXPECT_FALSE(FirstPersonSmallSceneryNeedsFinerSilhouetteGrid(
+        coarse, config, 48));
+    coarse.stage = 5;
+    EXPECT_FALSE(FirstPersonSmallSceneryNeedsFinerSilhouetteGrid(
+        coarse, config, 65));
+}
+
 TEST(FirstPersonVisualHullTest, TextureSamplingMatchesTheActualGpuTriangleSplit)
 {
     FirstPersonVisualHullFace face{};
