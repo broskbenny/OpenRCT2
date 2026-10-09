@@ -583,6 +583,19 @@ namespace OpenRCT2::Paint
                     surface.diagnosticHullAttemptEdgeError,
                     static_cast<unsigned long long>(
                         surface.diagnosticHullAttemptDisagreement));
+                if (surface.diagnosticHullRegistrationAttempted)
+                {
+                    const auto& shifts =
+                        surface.diagnosticHullRegistrationPixels;
+                    Console::WriteLine(
+                        "  hullRegistration tested=1"
+                        " view0=(%d,%d) view1=(%d,%d)"
+                        " view2=(%d,%d) view3=(%d,%d)",
+                        shifts[0].x, shifts[0].y,
+                        shifts[1].x, shifts[1].y,
+                        shifts[2].x, shifts[2].y,
+                        shifts[3].x, shifts[3].y);
+                }
             }
             Console::WriteLine(
                 "  semanticRole=%u semanticGroup=%llu sourceTile=(%d,%d) "
