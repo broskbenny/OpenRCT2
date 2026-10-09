@@ -1,8 +1,20 @@
+        struct SmallSceneryBuildEvidence
+        {
+            uint32_t hullFaces = 0;
+            uint32_t materialFaces = 0;
+            uint32_t withoutSourceMaterial = 0;
+            uint32_t withoutOpaqueSamples = 0;
+            uint32_t unobservedUndersides = 0;
+        };
+
         bool BuildSmallSceneryGeometry(FirstPersonScene& scene,
             const SmallSceneryElement& element, const SmallSceneryEntry& metadata,
             ImageId image, const FirstPersonSpriteSnapshot& sprites,
-            FirstPersonVisualHullAttempt* reconstructionAttempt = nullptr)
+            FirstPersonVisualHullAttempt* reconstructionAttempt = nullptr,
+            SmallSceneryBuildEvidence* buildEvidence = nullptr)
         {
+            if (buildEvidence != nullptr)
+                *buildEvidence = {};
             const auto* small = &element;
             const auto* entry = &metadata;
             FirstPersonVisualHull ownedHull{};
@@ -37,6 +49,8 @@
             BakedSmallSceneryEntry baked;
 
             auto faces = appearance.faces;
+            if (buildEvidence != nullptr)
+                buildEvidence->hullFaces = uint32_t(faces.size());
             const auto treeFootprint =
                 appearance.kind
                     == FirstPersonSmallSceneryAppearanceKind::crossedTree
@@ -630,7 +644,11 @@
                     }
 
                     if (visiblePixelCount == 0)
+                    {
+                        if (buildEvidence != nullptr)
+                            ++buildEvidence->withoutOpaqueSamples;
                         continue;
+                    }
 
                     if (appearance.certifiesHullMaterial)
                         materialCoverage.recordFace(
@@ -697,17 +715,24 @@
                 // but inventing a flat material for it is not visual evidence.
                 if (face.kind
                     == FirstPersonVisualHullFaceKind::bottom)
+                {
+                    if (buildEvidence != nullptr)
+                        ++buildEvidence->unobservedUndersides;
                     continue;
+                }
 
-                // A normally visible face with no native-view material means
-                // reconstruction is incomplete. Roll back this object's partial
-                // mesh and preserve the ordinary native sprite fallback rather
-                // than showing guessed solid-colour geometry.
-                scene.surfaces.resize(surfaceStart);
-                baked.localSurfaces.clear();
-                baked.resolved = true;
-                baked.usable = false;
-                return false;
+                // A face with no trustworthy native source material has no
+                // presentable texels. It must not be invented, but it must
+                // not also invalidate OTHER faces with independent material
+                // evidence. Voxel hulls routinely contain tiny boundary
+                // facets hidden in every native view. The previous rollback
+                // silently discarded even fully certified visible patches,
+                // leaving an unrelated camera-facing sprite as the only
+                // presentation. Omit this unsupported face and preserve
+                // evidence-backed reconstructed surfaces.
+                if (buildEvidence != nullptr)
+                    ++buildEvidence->withoutSourceMaterial;
+                continue;
             }
 
             if (appearance.certifiesHullMaterial)
@@ -783,6 +808,8 @@
             }
             baked.resolved = true;
             baked.usable = emittedFaces != 0;
+            if (buildEvidence != nullptr)
+                buildEvidence->materialFaces = uint32_t(emittedFaces);
             return baked.usable;
         }
 
