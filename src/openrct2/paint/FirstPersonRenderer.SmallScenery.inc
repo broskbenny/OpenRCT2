@@ -721,6 +721,9 @@
                         uint64_t(hull->voxelRoundTripSymmetricDifference);
                     surface.diagnosticRoundTripPixelDisagreement =
                         uint64_t(hull->roundTripSymmetricDifference);
+                    surface.diagnosticRoundTripViewCount =
+                        uint8_t(std::min<size_t>(
+                            hull->roundTripViewCount, 4));
                 }
             }
             baked.localSurfaces.clear();
