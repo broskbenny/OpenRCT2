@@ -959,6 +959,20 @@
                         job->waitingTiles.clear();
                     };
                 }, [job] {
+                    // FirstPersonWorkQueue invokes this continuation only
+                    // when its worker body throws. Never label an exception
+                    // as a normal four-view geometric rejection: retain one
+                    // clear asset-level diagnostic instead of a silent sprite.
+                    uint64_t reportKey = job->entry.image;
+                    ExtendStableKey(reportKey, 255u);
+                    if (_smallSceneryReportedOutcomes.insert(
+                            reportKey).second)
+                    {
+                        Console::WriteLine(
+                            "FP_SMALL_SCENERY_EVIDENCE image=%u"
+                            " output=native-fallback stage=worker-exception",
+                            job->entry.image);
+                    }
                     job->ready = true;
                     for (const auto tile : job->waitingTiles)
                         InvalidateFirstPersonSceneTile({int32_t(tile >> 32), int32_t(tile)});
