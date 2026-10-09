@@ -5,6 +5,8 @@
             uint32_t withoutSourceMaterial = 0;
             uint32_t withoutOpaqueSamples = 0;
             uint32_t unobservedUndersides = 0;
+            uint32_t completedTexels = 0;
+            uint32_t repairedFacets = 0;
         };
 
         bool BuildSmallSceneryGeometry(FirstPersonScene& scene,
@@ -368,6 +370,9 @@
             const size_t surfaceStart = scene.surfaces.size();
             size_t emittedFaces = 0;
             FirstPersonHullMaterialCoverage materialCoverage(faces);
+            std::vector<int32_t> materializedFaceSurface(
+                faces.size(), -1);
+            std::vector<size_t> missingMaterialFaces;
             for (size_t faceIndex = 0;
                  faceIndex < faces.size(); ++faceIndex)
             {
@@ -647,13 +652,28 @@
                     {
                         if (buildEvidence != nullptr)
                             ++buildEvidence->withoutOpaqueSamples;
+                        if (appearance.certifiesHullMaterial)
+                            missingMaterialFaces.push_back(faceIndex);
                         continue;
                     }
 
+                    // The admitted solid boundary is not an alpha cutout.
+                    // Complete source-UV gaps from observed neighbouring
+                    // texels; unpainted sprite pixels must not punch holes
+                    // through certified physical geometry. Crossed trees
+                    // intentionally preserve their authored transparency.
                     if (appearance.certifiesHullMaterial)
+                    {
+                        const size_t filled =
+                            CompleteFirstPersonSolidHullMaterialPatch(
+                                pixels, width, height);
+                        if (buildEvidence != nullptr)
+                            buildEvidence->completedTexels +=
+                                uint32_t(filled);
                         materialCoverage.recordFace(
                             faceIndex, drawablePixelCount,
-                            visiblePixelCount);
+                            drawablePixelCount);
+                    }
 
                     uint64_t fingerprint =
                         14695981039346656037ull;
@@ -704,6 +724,8 @@
                         },
                     } };
                     EmitQuad(surface, vertices);
+                    materializedFaceSurface[faceIndex] =
+                        int32_t(scene.surfaces.size());
                     scene.surfaces.emplace_back(
                         std::move(surface));
                     ++emittedFaces;
@@ -718,6 +740,8 @@
                 {
                     if (buildEvidence != nullptr)
                         ++buildEvidence->unobservedUndersides;
+                    if (appearance.certifiesHullMaterial)
+                        missingMaterialFaces.push_back(faceIndex);
                     continue;
                 }
 
@@ -732,6 +756,8 @@
                 // evidence-backed reconstructed surfaces.
                 if (buildEvidence != nullptr)
                     ++buildEvidence->withoutSourceMaterial;
+                if (appearance.certifiesHullMaterial)
+                    missingMaterialFaces.push_back(faceIndex);
                 continue;
             }
 
