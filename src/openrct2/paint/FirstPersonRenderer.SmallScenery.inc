@@ -901,9 +901,9 @@
                             attempt, buildEvidence]() mutable {
                         job->surfaces = std::move(surfaces);
                         job->ready = true;
-                        const bool hasUnobservedMaterial =
-                            buildEvidence.withoutSourceMaterial != 0
-                            || buildEvidence.withoutOpaqueSamples != 0;
+                        const uint32_t unsupportedFaces =
+                            buildEvidence.withoutSourceMaterial
+                            + buildEvidence.withoutOpaqueSamples;
                         // The old failure log reported only stage 5 and
                         // observed coverage below 20%, hiding all other
                         // failure modes, including the complete loss of a
@@ -911,8 +911,8 @@
                         // Emit once per asset/reconstruction phase, not once
                         // per instance or camera repaint.
                         if (job->surfaces.empty()
-                            || (hasUnobservedMaterial
-                                && buildEvidence.withoutSourceMaterial
+                            || (unsupportedFaces > 8
+                                && unsupportedFaces
                                     > buildEvidence.materialFaces / 2))
                         {
                             uint64_t reportKey = job->entry.image;
