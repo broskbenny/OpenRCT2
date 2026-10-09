@@ -4,6 +4,7 @@
  *****************************************************************************/
 #pragma once
 
+#include "FirstPersonSmallSceneryCollision.h"
 #include "FirstPersonVisualHull.h"
 
 #include "../object/SmallSceneryEntry.h"
