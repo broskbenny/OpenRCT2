@@ -676,9 +676,7 @@ namespace OpenRCT2::Paint
                 || uCount > hull.sizeForward + hull.sizeRight
                     + hull.sizeUp
                 || vCount > hull.sizeForward + hull.sizeRight
-                    + hull.sizeUp
-                || size_t(uCount) * size_t(vCount)
-                    > maximumFaces - result.size())
+                    + hull.sizeUp)
                 return {};
 
             const size_t stride = size_t(uCount) + 1;
@@ -739,6 +737,13 @@ namespace OpenRCT2::Paint
                 if (result.size() != before)
                     return {};
             }
+
+            // Large, unchanged planar patches may remain one greedy face,
+            // even if their grid footprint exceeds the tessellation budget.
+            // Apply the bound only once subdivision is actually necessary.
+            if (size_t(uCount) * size_t(vCount)
+                    > maximumFaces - result.size())
+                return {};
 
             // Conforming refinement: all unit faces use the same displaced
             // occupancy-lattice vertices, including along former T-junctions.
