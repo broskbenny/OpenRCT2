@@ -521,124 +521,235 @@ namespace OpenRCT2::Paint
         };
     }
 
+    // A silhouette round trip alone cannot certify physical topology: two
+    // disconnected sheets can project exactly like a connected shell. Greedy
+    // voxel meshing creates long edges, with neighbouring faces meeting those
+    // edges at intermediate lattice vertices. Moving only the four corners
+    // of each greedy face makes these junctions tear and produces warped,
+    // folded quads even when the 2D projection score improves.
+    //
+    // Refine a shared lattice displacement field instead. Preserve a greedy
+    // face when every intermediate lattice vertex agrees with its planar
+    // interpolation; otherwise tessellate that face at the native occupancy
+    // resolution. All adjoining patches then interpolate precisely the same
+    // displaced vertex positions. Nonplanar unit quads are triangulated with
+    // their real normals rather than pretending they are a single plane.
     [[nodiscard]] inline std::vector<FirstPersonVisualHullFace>
         BuildFirstPersonVisualHullContinuousCandidateFaces(
             const FirstPersonVisualHull& hull,
             const std::vector<FirstPersonVisualHullFace>& sourceFaces,
-            float blend)
+            float blend, size_t maximumFaces = 8192)
     {
         std::vector<FirstPersonVisualHullFace> result;
         if (!hull.valid || sourceFaces.empty()
             || !(hull.step > 0.0f)
-            || blend <= 0.0f || blend > 1.0f)
+            || blend <= 0.0f || blend > 1.0f
+            || maximumFaces == 0)
             return result;
 
-        const auto latticeCoordinate =
-            [step = hull.step](float value, float base) {
-                return int32_t(std::lround(
-                    (value - base) / step));
-            };
         const auto subtract =
             [](FirstPersonVec3 a, FirstPersonVec3 b) {
                 return FirstPersonVec3{
-                    a.x - b.x,
-                    a.y - b.y,
-                    a.z - b.z,
+                    a.x - b.x, a.y - b.y, a.z - b.z
                 };
             };
-        const auto add =
-            [](FirstPersonVec3 a, FirstPersonVec3 b) {
+        const auto crossNormal =
+            [&](FirstPersonVec3 a, FirstPersonVec3 b,
+                FirstPersonVec3 c)
+                -> std::optional<FirstPersonVec3> {
+                const auto n = FpCross(
+                    subtract(b, a), subtract(c, a));
+                const float lengthSquared = FpDot(n, n);
+                if (lengthSquared <= 1.0e-8f)
+                    return std::nullopt;
+                const float scale = 1.0f / std::sqrt(lengthSquared);
                 return FirstPersonVec3{
-                    a.x + b.x,
-                    a.y + b.y,
-                    a.z + b.z,
+                    n.x * scale, n.y * scale, n.z * scale
                 };
             };
-
-        result.reserve(sourceFaces.size());
-        for (const auto& source : sourceFaces)
-        {
-            FirstPersonVisualHullFace face{};
-            face.kind = source.kind;
-            for (size_t i = 0;
-                 i < face.corners.size(); ++i)
-            {
-                const auto& original =
-                    source.corners[i];
-                const int32_t forward =
-                    latticeCoordinate(
-                        original.x,
-                        hull.minForward);
-                const int32_t right =
-                    latticeCoordinate(
-                        original.y,
-                        hull.minRight);
-                const int32_t up =
-                    latticeCoordinate(
-                        original.z,
-                        hull.minUp);
-                if (forward < 0
-                    || forward > hull.sizeForward
-                    || right < 0
-                    || right > hull.sizeRight
-                    || up < 0
-                    || up > hull.sizeUp)
-                    return {};
-
+        const auto lerp =
+            [](FirstPersonVec3 a, FirstPersonVec3 b, float t) {
+                return FirstPersonVec3{
+                    a.x + (b.x - a.x) * t,
+                    a.y + (b.y - a.y) * t,
+                    a.z + (b.z - a.z) * t,
+                };
+            };
+        const auto distanceSquared =
+            [&](FirstPersonVec3 a, FirstPersonVec3 b) {
+                const auto d = subtract(a, b);
+                return FpDot(d, d);
+            };
+        const auto latticeCoordinate =
+            [step = hull.step](float coordinate, float base) {
+                return int32_t(std::lround(
+                    (coordinate - base) / step));
+            };
+        const auto makeVertex =
+            [&](FirstPersonVec3 original)
+                -> std::optional<FirstPersonVec3> {
+                const int32_t forward = latticeCoordinate(
+                    original.x, hull.minForward);
+                const int32_t right = latticeCoordinate(
+                    original.y, hull.minRight);
+                const int32_t up = latticeCoordinate(
+                    original.z, hull.minUp);
+                if (forward < 0 || forward > hull.sizeForward
+                    || right < 0 || right > hull.sizeRight
+                    || up < 0 || up > hull.sizeUp)
+                    return std::nullopt;
                 const auto target =
                     FirstPersonVisualHullRelaxedVertexTarget(
                         hull, forward, right, up);
-                face.corners[i] = {
-                    original.x
-                        + (target.x - original.x)
-                            * blend,
-                    original.y
-                        + (target.y - original.y)
-                            * blend,
-                    original.z
-                        + (target.z - original.z)
-                            * blend,
+                return lerp(original, target, blend);
+            };
+        const auto addTriangle =
+            [&](const FirstPersonVisualHullFace& source,
+                FirstPersonVec3 a, FirstPersonVec3 b,
+                FirstPersonVec3 c) {
+                const auto n = crossNormal(a, b, c);
+                if (!n.has_value()
+                    || FpDot(*n, source.normal) <= 0.20f
+                    || result.size() >= maximumFaces)
+                    return false;
+                FirstPersonVisualHullFace triangle{};
+                triangle.kind = source.kind;
+                triangle.normal = *n;
+                triangle.corners = { a, b, c, c };
+                result.push_back(triangle);
+                return true;
+            };
+        const auto addQuad =
+            [&](const FirstPersonVisualHullFace& source,
+                FirstPersonVec3 a, FirstPersonVec3 b,
+                FirstPersonVec3 c, FirstPersonVec3 d,
+                bool canSplit) {
+                const auto n0 = crossNormal(a, b, c);
+                const auto n1 = crossNormal(a, c, d);
+                if (!n0.has_value() || !n1.has_value()
+                    || FpDot(*n0, source.normal) <= 0.20f
+                    || FpDot(*n1, source.normal) <= 0.20f)
+                    return false;
+                // The real GPU geometry contains two triangles. A warped
+                // quad cannot be described by one normal and one material
+                // plane; give each triangle its own true normal instead.
+                if (FpDot(*n0, *n1) < 0.995f)
+                {
+                    return canSplit
+                        && addTriangle(source, a, b, c)
+                        && addTriangle(source, a, c, d);
+                }
+                if (result.size() >= maximumFaces)
+                    return false;
+                FirstPersonVisualHullFace face{};
+                face.kind = source.kind;
+                face.corners = { a, b, c, d };
+                const FirstPersonVec3 sum{
+                    n0->x + n1->x,
+                    n0->y + n1->y,
+                    n0->z + n1->z,
                 };
-            }
-
-            const auto edge01 =
-                subtract(
-                    face.corners[1],
-                    face.corners[0]);
-            const auto edge02 =
-                subtract(
-                    face.corners[2],
-                    face.corners[0]);
-            const auto edge03 =
-                subtract(
-                    face.corners[3],
-                    face.corners[0]);
-            const auto summedNormal =
-                add(
-                    FpCross(edge01, edge02),
-                    FpCross(edge02, edge03));
-            const float lengthSquared =
-                FpDot(
-                    summedNormal,
-                    summedNormal);
-            if (lengthSquared <= 1.0e-6f)
-                return {};
-            const float inverseLength =
-                1.0f / std::sqrt(lengthSquared);
-            face.normal = {
-                summedNormal.x * inverseLength,
-                summedNormal.y * inverseLength,
-                summedNormal.z * inverseLength,
+                const float scale =
+                    1.0f / std::sqrt(FpDot(sum, sum));
+                face.normal = {
+                    sum.x * scale,
+                    sum.y * scale,
+                    sum.z * scale
+                };
+                result.push_back(face);
+                return true;
             };
 
-            // Topology is preserved, but an aggressive relaxation can still
-            // invert a non-planar quad. Reject the whole candidate rather than
-            // publishing a locally inside-out surface.
-            if (FpDot(
-                    face.normal,
-                    source.normal) <= 0.20f)
+        result.reserve(std::min(sourceFaces.size(), maximumFaces));
+        for (const auto& source : sourceFaces)
+        {
+            const auto alongU = subtract(
+                source.corners[1], source.corners[0]);
+            const auto alongV = subtract(
+                source.corners[3], source.corners[0]);
+            const int32_t uCount = int32_t(std::lround(
+                std::sqrt(FpDot(alongU, alongU)) / hull.step));
+            const int32_t vCount = int32_t(std::lround(
+                std::sqrt(FpDot(alongV, alongV)) / hull.step));
+            if (uCount < 1 || vCount < 1
+                || uCount > hull.sizeForward + hull.sizeRight
+                    + hull.sizeUp
+                || vCount > hull.sizeForward + hull.sizeRight
+                    + hull.sizeUp
+                || size_t(uCount) * size_t(vCount)
+                    > maximumFaces - result.size())
                 return {};
-            result.push_back(face);
+
+            const size_t stride = size_t(uCount) + 1;
+            std::vector<FirstPersonVec3> grid(
+                stride * (size_t(vCount) + 1));
+            const auto at = [&](int32_t u, int32_t v)
+                -> FirstPersonVec3& {
+                return grid[size_t(v) * stride + size_t(u)];
+            };
+            for (int32_t v = 0; v <= vCount; ++v)
+            for (int32_t u = 0; u <= uCount; ++u)
+            {
+                const float x = float(u) / float(uCount);
+                const float y = float(v) / float(vCount);
+                const auto original = lerp(
+                    lerp(source.corners[0], source.corners[1], x),
+                    lerp(source.corners[3], source.corners[2], x),
+                    y);
+                const auto refined = makeVertex(original);
+                if (!refined.has_value())
+                    return {};
+                at(u, v) = *refined;
+            }
+
+            const auto p0 = at(0, 0);
+            const auto p1 = at(uCount, 0);
+            const auto p2 = at(uCount, vCount);
+            const auto p3 = at(0, vCount);
+            // A retained long edge may have other faces meeting it at
+            // intermediate grid vertices. Only keep it if those vertices
+            // still lie on the same straight boundary after relaxation.
+            const float toleranceSquared =
+                (hull.step * 0.002f) * (hull.step * 0.002f);
+            bool affine = true;
+            for (int32_t v = 0; v <= vCount && affine; ++v)
+            for (int32_t u = 0; u <= uCount; ++u)
+            {
+                const float x = float(u) / float(uCount);
+                const float y = float(v) / float(vCount);
+                const auto expected = lerp(
+                    lerp(p0, p1, x), lerp(p3, p2, x), y);
+                if (distanceSquared(at(u, v), expected)
+                    > toleranceSquared)
+                {
+                    affine = false;
+                    break;
+                }
+            }
+
+            if (affine)
+            {
+                // If the whole surface is planar and its shared lattice
+                // vertices interpolate exactly, preserve the greedy face.
+                const size_t before = result.size();
+                if (addQuad(
+                        source, p0, p1, p2, p3, false))
+                    continue;
+                if (result.size() != before)
+                    return {};
+            }
+
+            // Conforming refinement: all unit faces use the same displaced
+            // occupancy-lattice vertices, including along former T-junctions.
+            for (int32_t v = 0; v < vCount; ++v)
+            for (int32_t u = 0; u < uCount; ++u)
+            {
+                if (!addQuad(
+                        source, at(u, v), at(u + 1, v),
+                        at(u + 1, v + 1), at(u, v + 1),
+                        true))
+                    return {};
+            }
         }
         return result;
     }
