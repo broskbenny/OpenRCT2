@@ -2044,6 +2044,50 @@ TEST(FirstPersonRoundTripReconstructionTest, ProjectsBoundaryInsteadOfInflatedVo
     EXPECT_EQ(projected.size(), 64u);
 }
 
+TEST(FirstPersonSmallSceneryReconstructionTest, EnvelopeRegistrationCorrectsNativeFrameOriginsOnly)
+{
+    FirstPersonVisualHullBounds bounds{};
+    bounds.maxForward = 8.0f;
+    bounds.maxRight = 8.0f;
+    bounds.maxUp = 8.0f;
+    bounds.step = 2.0f;
+
+    // Every supplied view has an observed image origin displaced relative
+    // to the native occupancy envelope; no primitive shape is reconstructed
+    // by this test. The only inferred quantity is image-space translation.
+    std::vector<FirstPersonVisualHullView> views(4);
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        views[direction].imageDirection = direction;
+        views[direction].observed =
+            MakeSilhouetteRect(5, -3, 22, 6);
+    }
+    const auto project =
+        [](uint8_t, FirstPersonVec3 p) {
+            return std::array<float, 2>{
+                p.x + p.y, p.z
+            };
+        };
+    std::array<CoordsXY, 4> shifts{};
+    ASSERT_TRUE(EstimateFirstPersonSmallSceneryNativeRegistration(
+        views, bounds, project, shifts));
+    for (const auto& shift : shifts)
+    {
+        EXPECT_EQ(shift.x, 5);
+        EXPECT_EQ(shift.y, -3);
+    }
+
+    // No registered geometry may be inferred from absent, duplicate or
+    // unreasonably displaced native views.
+    views[3].imageDirection = 2;
+    EXPECT_FALSE(EstimateFirstPersonSmallSceneryNativeRegistration(
+        views, bounds, project, shifts));
+    views[3].imageDirection = 3;
+    views[3].observed = MakeSilhouetteRect(35, -3, 52, 6);
+    EXPECT_FALSE(EstimateFirstPersonSmallSceneryNativeRegistration(
+        views, bounds, project, shifts));
+}
+
 TEST(FirstPersonVisualHullTest, TextureSamplingMatchesTheActualGpuTriangleSplit)
 {
     FirstPersonVisualHullFace face{};
