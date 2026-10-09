@@ -4022,12 +4022,22 @@
                 bool haveKnownMaterial = false;
                 bool haveUnknownMaterial = false;
                 size_t visiblePixelCount = 0;
+                size_t drawablePixelCount = 0;
 
                 for (int32_t y = 0;
                      y < height; ++y)
                 for (int32_t x = 0;
                      x < width; ++x)
                 {
+                    FirstPersonVec3 centrePoint{};
+                    if (!FirstPersonVisualHullSampleFace(
+                            face,
+                            (float(x) + 0.5f) / float(width),
+                            (float(y) + 0.5f) / float(height),
+                            centrePoint))
+                        continue;
+                    ++drawablePixelCount;
+
                     FirstPersonMaterialPatchAccumulator
                         materialEvidence{};
                     for (const auto& candidate :
@@ -4203,6 +4213,7 @@
                                     px, py);
                         }
                         visiblePixelCount = pixels.size();
+                        drawablePixelCount = pixels.size();
                         haveUnknownMaterial = true;
                     }
                 }
@@ -4216,7 +4227,7 @@
 
                 materialCoverage.recordFace(
                     faceIndex,
-                    pixels.size(),
+                    drawablePixelCount,
                     visiblePixelCount);
 
                 uint64_t fingerprint =
