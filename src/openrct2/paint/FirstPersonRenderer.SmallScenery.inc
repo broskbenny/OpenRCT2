@@ -1049,7 +1049,8 @@
                         if (job->surfaces.empty()
                             || (unsupportedFaces > 8
                                 && unsupportedFaces
-                                    > buildEvidence.materialFaces / 2))
+                                    > buildEvidence.materialFaces / 2)
+                            || buildEvidence.repairedFacets > 8)
                         {
                             uint64_t reportKey = job->entry.image;
                             ExtendStableKey(
@@ -1066,9 +1067,12 @@
                                     " hullFaces=%u materialFaces=%u"
                                     " missingSourceFaces=%u emptyTextureFaces=%u"
                                     " unobservedBottomFaces=%u"
+                                    " filledTexels=%u repairedFacets=%u"
                                     " silhouetteIoU=%.3f"
                                     " observedCoverage=%.3f"
                                     " candidateCoverage=%.3f edge=%d"
+                                    " fineGridRetried=%d"
+                                    " coarseCandidateCoverage=%.3f"
                                     " registrationTried=%d",
                                     job->entry.image,
                                     job->surfaces.empty()
@@ -1083,10 +1087,14 @@
                                     buildEvidence.withoutSourceMaterial,
                                     buildEvidence.withoutOpaqueSamples,
                                     buildEvidence.unobservedUndersides,
+                                    buildEvidence.completedTexels,
+                                    buildEvidence.repairedFacets,
                                     double(attempt.minimumIoU),
                                     double(attempt.observedCoverage),
                                     double(attempt.candidateCoverage),
                                     attempt.maximumEdgeError,
+                                    attempt.fineGridRetried ? 1 : 0,
+                                    double(attempt.coarseCandidateCoverage),
                                     attempt.registrationAttempted ? 1 : 0);
                             }
                         }
