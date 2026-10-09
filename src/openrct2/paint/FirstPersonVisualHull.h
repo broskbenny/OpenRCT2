@@ -83,9 +83,27 @@ namespace OpenRCT2::Paint
         return true;
     }
 
+    struct FirstPersonVisualHullAttempt
+    {
+        // 1=views/bounds, 2=grid, 3=carving, 4=round-trip,
+        // 5=admission, 6=accepted. A value below 6 identifies the
+        // stage whose output was rejected (rather than an object type).
+        uint8_t stage = 0;
+        uint8_t nativeViews = 0;
+        uint32_t occupiedCells = 0;
+        uint32_t voxelFaces = 0;
+        uint32_t certificateViews = 0;
+        float minimumIoU = 0.0f;
+        float candidateCoverage = 0.0f;
+        float observedCoverage = 0.0f;
+        int32_t maximumEdgeError = 0;
+        size_t disagreementPixels = 0;
+    };
+
     struct FirstPersonVisualHull
     {
         bool valid = false;
+        FirstPersonVisualHullAttempt attempt{};
         float step = 4.0f;
         float minForward{};
         float minRight{};
@@ -965,15 +983,24 @@ namespace OpenRCT2::Paint
         const FirstPersonVisualHullConfig& config,
         ProjectPoint&& projectPoint,
         OccupancyPredicate&& occupancyPredicate,
-        PointSupported&& pointSupported)
+        PointSupported&& pointSupported,
+        FirstPersonVisualHullAttempt* attempt = nullptr)
     {
         FirstPersonVisualHull result{};
+        if (attempt != nullptr)
+        {
+            *attempt = {};
+            attempt->stage = 1;
+            attempt->nativeViews = uint8_t(std::min<size_t>(views.size(), 255));
+        }
         if (views.size() < config.minimumViews
             || !(bounds.step > 0.0f)
             || bounds.maxForward <= bounds.minForward
             || bounds.maxRight <= bounds.minRight
             || bounds.maxUp <= bounds.minUp)
             return result;
+        if (attempt != nullptr)
+            attempt->stage = 2;
 
         const int32_t nForward = int32_t(std::ceil(
             (bounds.maxForward - bounds.minForward) / bounds.step));
@@ -992,6 +1019,8 @@ namespace OpenRCT2::Paint
             size_t(nForward) * size_t(nRight) * size_t(nUp);
         if (gridCells > config.maximumGridCells)
             return result;
+        if (attempt != nullptr)
+            attempt->stage = 3;
 
         result.step = bounds.step;
         result.minForward = bounds.minForward;
@@ -1034,9 +1063,13 @@ namespace OpenRCT2::Paint
             result.occupied[index] = 1;
             ++occupiedCount;
         }
+        if (attempt != nullptr)
+            attempt->occupiedCells = uint32_t(occupiedCount);
         if (occupiedCount < config.minimumOccupiedCells
             || occupiedCount > config.maximumOccupiedCells)
             return {};
+        if (attempt != nullptr)
+            attempt->stage = 4;
 
         // The boundary extractor treats valid=true as permission to expose
         // geometry. Mark this local candidate provisionally so both the raw
@@ -1047,6 +1080,8 @@ namespace OpenRCT2::Paint
         const auto voxelFaces =
             BuildFirstPersonVisualHullVoxelBoundaryFaces(
                 result);
+        if (attempt != nullptr)
+            attempt->voxelFaces = uint32_t(voxelFaces.size());
         const auto voxelTriangles =
             TriangulateFirstPersonReconstructionFaces(
                 voxelFaces);
@@ -1073,6 +1108,8 @@ namespace OpenRCT2::Paint
         // A valid baseline certificate is still required for comparison.
         if (!voxelCertificate.valid)
             return {};
+        if (attempt != nullptr)
+            attempt->stage = 5;
 
         auto selectedCertificate =
             voxelCertificate;
@@ -1122,8 +1159,19 @@ namespace OpenRCT2::Paint
             }
         }
 
+        if (attempt != nullptr)
+        {
+            attempt->certificateViews = uint32_t(selectedCertificate.viewCount);
+            attempt->minimumIoU = selectedCertificate.minimumIntersectionOverUnion;
+            attempt->candidateCoverage = selectedCertificate.minimumCandidateCoverage;
+            attempt->observedCoverage = selectedCertificate.minimumObservedCoverage;
+            attempt->maximumEdgeError = selectedCertificate.maximumEdgeError;
+            attempt->disagreementPixels = selectedCertificate.symmetricDifferencePixels;
+        }
         if (!passesAdmission(selectedCertificate))
             return {};
+        if (attempt != nullptr)
+            attempt->stage = 6;
 
         result.continuousSurfaceRefined =
             !result.refinedFaces.empty();
@@ -1144,6 +1192,8 @@ namespace OpenRCT2::Paint
         result.roundTripViewCount =
             selectedCertificate.viewCount;
         result.valid = true;
+        if (attempt != nullptr)
+            result.attempt = *attempt;
         return result;
     }
 
