@@ -565,6 +565,24 @@ namespace OpenRCT2::Paint
                         surface.diagnosticVoxelRoundTripPixelDisagreement),
                     static_cast<unsigned long long>(
                         surface.diagnosticRoundTripPixelDisagreement));
+                Console::WriteLine(
+                    "  hullAdmission stage=%u [1=views,2=grid,3=voxels,"
+                    "4=certificate,5=fit,6=accepted] inputViews=%u"
+                    " supportedCells=%u boundaryFaces=%u certifiedViews=%u",
+                    unsigned(surface.diagnosticHullAttemptStage),
+                    unsigned(surface.diagnosticHullAttemptViews),
+                    surface.diagnosticHullAttemptCells,
+                    surface.diagnosticHullAttemptFaces,
+                    surface.diagnosticHullAttemptCertifiedViews);
+                Console::WriteLine(
+                    "  hullFit minIoU=%.3f candidateCoverage=%.3f"
+                    " observedCoverage=%.3f maxEdgeError=%d mismatchPixels=%llu",
+                    double(surface.diagnosticHullAttemptIoU),
+                    double(surface.diagnosticHullAttemptCandidateCoverage),
+                    double(surface.diagnosticHullAttemptObservedCoverage),
+                    surface.diagnosticHullAttemptEdgeError,
+                    static_cast<unsigned long long>(
+                        surface.diagnosticHullAttemptDisagreement));
             }
             Console::WriteLine(
                 "  semanticRole=%u semanticGroup=%llu sourceTile=(%d,%d) "
