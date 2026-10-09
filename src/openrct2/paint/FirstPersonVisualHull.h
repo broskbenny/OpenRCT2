@@ -15,7 +15,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <optional>
 #include <vector>
 
@@ -99,103 +98,11 @@ namespace OpenRCT2::Paint
         float observedCoverage = 0.0f;
         int32_t maximumEdgeError = 0;
         size_t disagreementPixels = 0;
-        // An optional, bounded finer voxel pass is allowed only when the
-        // coarse silhouette nearly qualifies. Keep the attempt visible.
-        bool fineGridRetried = false;
-        float coarseCandidateCoverage = 0.0f;
         // Diagnostic image-registration trial. An accepted reconstruction
         // also retains the correction for material sampling, not geometry.
         bool registrationAttempted = false;
         std::array<CoordsXY, 4> registrationPixels{};
     };
-
-    // A verified solid hull is a geometric boundary, independent of
-    // whether each native view happened to contribute colour at every
-    // texel. Interpolated/reprojected sprites can leave tiny transparent
-    // holes across a face that physically exists. Continue the closest
-    // observed texel across those gaps in UV space. This only colours
-    // existing geometry: it never adds voxels or new surface area.
-    //
-    // The caller must restrict this to a certified solid hull. Authored
-    // open planes (crossed trees, signs) retain original source alpha.
-    [[nodiscard]] inline size_t
-        CompleteFirstPersonSolidHullMaterialPatch(
-            std::vector<uint8_t>& pixels,
-            int32_t width, int32_t height)
-    {
-        if (width <= 0 || height <= 0
-            || pixels.size() != size_t(width) * size_t(height))
-            return 0;
-
-        // Multi-source Manhattan-distance propagation. The UV atlas may
-        // contain a degenerate half for a triangular face. Filling that
-        // unused half is harmless; EmitQuad does not rasterise it, and the
-        // extra texels prevent filtering across a transparent diagonal.
-        std::vector<int32_t> queue;
-        queue.reserve(pixels.size());
-        std::vector<uint8_t> reached(pixels.size(), 0);
-        for (size_t i = 0; i < pixels.size(); ++i)
-        {
-            if (pixels[i] == 0)
-                continue;
-            reached[i] = 1;
-            queue.push_back(int32_t(i));
-        }
-        size_t filled = 0;
-        for (size_t head = 0; head < queue.size(); ++head)
-        {
-            const int32_t index = queue[head];
-            const int32_t x = index % width;
-            const int32_t y = index / width;
-            const auto visit = [&](int32_t nx, int32_t ny) {
-                if (nx < 0 || ny < 0
-                    || nx >= width || ny >= height)
-                    return;
-                const size_t next = size_t(ny) * size_t(width)
-                    + size_t(nx);
-                if (reached[next])
-                    return;
-                reached[next] = 1;
-                pixels[next] = pixels[size_t(index)];
-                ++filled;
-                queue.push_back(int32_t(next));
-            };
-            visit(x - 1, y);
-            visit(x + 1, y);
-            visit(x, y - 1);
-            visit(x, y + 1);
-        }
-        return filled;
-    }
-
-    // A boundary facet with no directly visible native pixels can borrow
-    // only a material colour from an adjacent observed facet. Copying the
-    // donor's entire bitmap onto a differently sized/angled triangle would
-    // distort architectural details across a texture that was never seen.
-    // Use its dominant non-transparent palette index as a deliberately
-    // conservative, constant-colour seam repair. Zero means no evidence.
-    [[nodiscard]] inline uint8_t
-        FirstPersonSolidHullRepresentativePixel(
-            const std::vector<uint8_t>& pixels)
-    {
-        std::array<size_t, 256> counts{};
-        for (const uint8_t pixel : pixels)
-        {
-            if (pixel != 0)
-                ++counts[pixel];
-        }
-        uint8_t selected = 0;
-        size_t highest = 0;
-        for (size_t pixel = 1; pixel < counts.size(); ++pixel)
-        {
-            if (counts[pixel] > highest)
-            {
-                highest = counts[pixel];
-                selected = uint8_t(pixel);
-            }
-        }
-        return selected;
-    }
 
     struct FirstPersonVisualHull
     {
@@ -953,11 +860,6 @@ namespace OpenRCT2::Paint
         size_t minimumOccupiedCells = 4;
         size_t maximumOccupiedCells = 4096;
         size_t maximumGridCells = 65536;
-        // Limit before triangulation and silhouette certification, not just
-        // after expensive processing. Defaults do not constrain existing
-        // reconstruction families; targeted fine-grid retries opt in.
-        size_t maximumVoxelBoundaryFaces =
-            std::numeric_limits<size_t>::max();
         int32_t maximumAxisCells = 24;
         // Continuous refinement is opt-in per reconstruction family until its
         // material path has been verified. Search is bounded by face count and
@@ -1187,8 +1089,6 @@ namespace OpenRCT2::Paint
                 result);
         if (attempt != nullptr)
             attempt->voxelFaces = uint32_t(voxelFaces.size());
-        if (voxelFaces.size() > config.maximumVoxelBoundaryFaces)
-            return {};
         const auto voxelTriangles =
             TriangulateFirstPersonReconstructionFaces(
                 voxelFaces);

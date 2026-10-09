@@ -475,47 +475,6 @@ namespace OpenRCT2::Paint
         return anyShift;
     }
 
-    // Grid resolution and image-space tolerance are distinct. A two-unit
-    // voxel can use a one-pixel native-artwork uncertainty margin, but on a
-    // one-unit grid that margin would erase narrow genuine openings.
-    [[nodiscard]] inline bool
-        FirstPersonSmallSceneryNativePixelSupportsPoint(
-            const FirstPersonVisualHullView& view,
-            float x, float y, int32_t tolerance)
-    {
-        if (tolerance < 0 || tolerance > 1)
-            return false;
-        const int32_t px = int32_t(std::lround(x));
-        const int32_t py = int32_t(std::lround(y));
-        for (int32_t dy = -tolerance; dy <= tolerance; ++dy)
-        for (int32_t dx = -tolerance; dx <= tolerance; ++dx)
-        {
-            if (view.observed.contains(px + dx, py + dy))
-                return true;
-        }
-        return false;
-    }
-
-    // A strict, testable gate for spending more reconstruction work. Near-
-    // perfect observed coverage with excess projected matter indicates
-    // voxel quantisation of narrow structural openings, not a missing view,
-    // origin shift, or permission to lower the silhouette quality bar.
-    [[nodiscard]] inline bool
-        FirstPersonSmallSceneryNeedsFinerSilhouetteGrid(
-            const FirstPersonVisualHullAttempt& coarse,
-            const FirstPersonVisualHullConfig& config,
-            int32_t objectHeight)
-    {
-        return coarse.stage == 5
-            && coarse.nativeViews == 4
-            && coarse.observedCoverage >= 0.90f
-            && coarse.candidateCoverage >= 0.40f
-            && coarse.candidateCoverage
-                < config.minimumCandidateCoverage
-            && coarse.maximumEdgeError <= 3
-            && objectHeight > 0 && objectHeight <= 64;
-    }
-
     template<typename SpriteLookup>
     [[nodiscard]] inline FirstPersonVisualHull
         BuildFirstPersonSmallSceneryVisualHullFromSnapshot(
@@ -649,9 +608,22 @@ namespace OpenRCT2::Paint
                     const auto projected =
                         projectPoint(
                             view.imageDirection, point);
-                    return
-                        FirstPersonSmallSceneryNativePixelSupportsPoint(
-                            view, projected[0], projected[1], 1);
+                    const int32_t px =
+                        int32_t(std::lround(
+                            projected[0]));
+                    const int32_t py =
+                        int32_t(std::lround(
+                            projected[1]));
+                    for (int32_t dy = -1;
+                         dy <= 1; ++dy)
+                    for (int32_t dx = -1;
+                         dx <= 1; ++dx)
+                    {
+                        if (view.observed.contains(
+                                px + dx, py + dy))
+                            return true;
+                    }
+                    return false;
                 };
             auto carved = BuildFirstPersonVisualHull(
                 views, bounds, config,
@@ -659,72 +631,6 @@ namespace OpenRCT2::Paint
                 pointSupported, &carveAttempt);
             if (carved.valid)
                 return carved;
-
-            // A coarse occupancy grid cannot resolve fine struts and
-            // openings whose native silhouettes are only a few pixels
-            // wide. The worst view can then cover almost all source matter
-            // while its bulky projected surface overfills the open areas.
-            // This specific, measured near miss warrants one bounded
-            // higher-resolution reconstruction. Other failures do not.
-            //
-            // Keep ALL original admission tests. A finer grid supplies more
-            // evidence, never permission to accept the same poor geometry.
-            if (FirstPersonSmallSceneryNeedsFinerSilhouetteGrid(
-                    carveAttempt, config, entry.height))
-            {
-                auto fineBounds = bounds;
-                fineBounds.step = 1.0f;
-                auto fineConfig = config;
-                fineConfig.maximumOccupiedCells = 65536;
-                fineConfig.maximumVoxelBoundaryFaces =
-                    fineConfig.maximumContinuousSurfaceFaces;
-                // A high-resolution mesh can be costly to relax and
-                // re-certify three times. Prefer the direct one-unit
-                // boundary on this strictly limited second trial.
-                fineConfig.allowContinuousSurfaceRefinement = false;
-                // The coarse 3x3 lookup dilates opaque artwork by one
-                // pixel on all sides. For thin pillars/lattice openings that
-                // erases exactly the negative space we need to preserve.
-                // A one-unit grid can test the actual projected pixel
-                // without that coarse-grid uncertainty margin.
-                const auto finelySupported =
-                    [&](const FirstPersonVisualHullView& view,
-                        FirstPersonVec3 point) {
-                        const auto projected =
-                            projectPoint(view.imageDirection, point);
-                        return
-                            FirstPersonSmallSceneryNativePixelSupportsPoint(
-                                view, projected[0], projected[1], 0);
-                    };
-                FirstPersonVisualHullAttempt fineAttempt{};
-                auto fineHull = BuildFirstPersonVisualHull(
-                    views, fineBounds, fineConfig,
-                    projectPoint, occupancyPredicate,
-                    finelySupported, &fineAttempt);
-                fineAttempt.fineGridRetried = true;
-                fineAttempt.coarseCandidateCoverage =
-                    carveAttempt.candidateCoverage;
-                // A successful fit may still have an impractically dense
-                // one-unit mesh. Guard the resident GPU face count as well
-                // as the asynchronous grid work; never push an unbounded
-                // reconstruction into the frame.
-                if (fineHull.valid
-                    && fineAttempt.voxelFaces
-                        <= fineConfig.maximumContinuousSurfaceFaces)
-                {
-                    fineHull.attempt = fineAttempt;
-                    return fineHull;
-                }
-                carveAttempt.fineGridRetried = true;
-                carveAttempt.coarseCandidateCoverage =
-                    carveAttempt.candidateCoverage;
-                if (fineAttempt.stage == 5
-                    && fineAttempt.candidateCoverage
-                        > carveAttempt.candidateCoverage)
-                {
-                    carveAttempt = fineAttempt;
-                }
-            }
 
             // The origin hypothesis may itself be inconsistent with the
             // authored sprite margins. Retry once with envelope-derived

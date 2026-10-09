@@ -5,8 +5,6 @@
             uint32_t withoutSourceMaterial = 0;
             uint32_t withoutOpaqueSamples = 0;
             uint32_t unobservedUndersides = 0;
-            uint32_t completedTexels = 0;
-            uint32_t repairedFacets = 0;
         };
 
         bool BuildSmallSceneryGeometry(FirstPersonScene& scene,
@@ -370,9 +368,6 @@
             const size_t surfaceStart = scene.surfaces.size();
             size_t emittedFaces = 0;
             FirstPersonHullMaterialCoverage materialCoverage(faces);
-            std::vector<int32_t> materializedFaceSurface(
-                faces.size(), -1);
-            std::vector<size_t> missingMaterialFaces;
             for (size_t faceIndex = 0;
                  faceIndex < faces.size(); ++faceIndex)
             {
@@ -652,28 +647,13 @@
                     {
                         if (buildEvidence != nullptr)
                             ++buildEvidence->withoutOpaqueSamples;
-                        if (appearance.certifiesHullMaterial)
-                            missingMaterialFaces.push_back(faceIndex);
                         continue;
                     }
 
-                    // The admitted solid boundary is not an alpha cutout.
-                    // Complete source-UV gaps from observed neighbouring
-                    // texels; unpainted sprite pixels must not punch holes
-                    // through certified physical geometry. Crossed trees
-                    // intentionally preserve their authored transparency.
                     if (appearance.certifiesHullMaterial)
-                    {
-                        const size_t filled =
-                            CompleteFirstPersonSolidHullMaterialPatch(
-                                pixels, width, height);
-                        if (buildEvidence != nullptr)
-                            buildEvidence->completedTexels +=
-                                uint32_t(filled);
                         materialCoverage.recordFace(
                             faceIndex, drawablePixelCount,
-                            drawablePixelCount);
-                    }
+                            visiblePixelCount);
 
                     uint64_t fingerprint =
                         14695981039346656037ull;
@@ -724,8 +704,6 @@
                         },
                     } };
                     EmitQuad(surface, vertices);
-                    materializedFaceSurface[faceIndex] =
-                        int32_t(scene.surfaces.size());
                     scene.surfaces.emplace_back(
                         std::move(surface));
                     ++emittedFaces;
@@ -740,8 +718,6 @@
                 {
                     if (buildEvidence != nullptr)
                         ++buildEvidence->unobservedUndersides;
-                    if (appearance.certifiesHullMaterial)
-                        missingMaterialFaces.push_back(faceIndex);
                     continue;
                 }
 
@@ -756,137 +732,9 @@
                 // evidence-backed reconstructed surfaces.
                 if (buildEvidence != nullptr)
                     ++buildEvidence->withoutSourceMaterial;
-                if (appearance.certifiesHullMaterial)
-                    missingMaterialFaces.push_back(faceIndex);
                 continue;
             }
 
-            if (appearance.certifiesHullMaterial
-                && emittedFaces != 0)
-            {
-                // The hull was independently certified by all four source
-                // silhouettes. An isolated facet with no front-facing source
-                // pixel is still part of that occupied boundary. Borrow
-                // material from the closest already-painted facet, favouring
-                // similarly oriented neighbours. Never create geometry that
-                // the certified occupancy boundary did not contain.
-                //
-                // The alternative (silently omitting the facet) creates a
-                // genuinely porous mesh. This is a bounded material-only
-                // extrapolation, not proof of that facet's original colours.
-                const auto faceCentre =
-                    [](const FirstPersonVisualHullFace& f) {
-                        FirstPersonVec3 centre{};
-                        for (const auto& p : f.corners)
-                        {
-                            centre.x += p.x * 0.25f;
-                            centre.y += p.y * 0.25f;
-                            centre.z += p.z * 0.25f;
-                        }
-                        return centre;
-                    };
-                for (const size_t missingIndex : missingMaterialFaces)
-                {
-                    const auto& missingFace = faces[missingIndex];
-                    const auto position = faceCentre(missingFace);
-                    size_t nearest = faces.size();
-                    float bestCost =
-                        std::numeric_limits<float>::max();
-                    for (size_t donorIndex = 0;
-                         donorIndex < faces.size(); ++donorIndex)
-                    {
-                        if (materializedFaceSurface[donorIndex] < 0)
-                            continue;
-                        const auto donorPosition =
-                            faceCentre(faces[donorIndex]);
-                        const float dx =
-                            position.x - donorPosition.x;
-                        const float dy =
-                            position.y - donorPosition.y;
-                        const float dz =
-                            position.z - donorPosition.z;
-                        const float dot =
-                            FpDot(missingFace.normal,
-                                faces[donorIndex].normal);
-                        const float normalPenalty =
-                            (1.0f - std::clamp(
-                                dot, -1.0f, 1.0f))
-                            * hull->step * hull->step * 8.0f;
-                        const float cost =
-                            dx * dx + dy * dy + dz * dz
-                            + normalPenalty;
-                        if (cost < bestCost)
-                        {
-                            bestCost = cost;
-                            nearest = donorIndex;
-                        }
-                    }
-                    if (nearest == faces.size())
-                        continue;
-                    const auto& donor = scene.surfaces[
-                        size_t(materializedFaceSurface[nearest])];
-                    if (!donor.persistentBitmap
-                        || donor.persistentPixels == nullptr)
-                        continue;
-
-                    const uint8_t seedPixel =
-                        FirstPersonSolidHullRepresentativePixel(
-                            *donor.persistentPixels);
-                    if (seedPixel == 0)
-                        continue;
-
-                    FirstPersonSurface repaired{};
-                    repaired.cameraIndependent = true;
-                    repaired.outwardNormal = missingFace.normal;
-                    repaired.image = donor.image;
-                    repaired.persistentBitmap = true;
-                    // Missing facets are usually small seams. Projected
-                    // source artwork never observed them directly, so do
-                    // not stretch another face's complete image across
-                    // their independent UV coordinates. Only continue a
-                    // colour that really occurs on the nearby donor.
-                    repaired.persistentPixels =
-                        std::make_shared<std::vector<uint8_t>>(
-                            1, seedPixel);
-                    repaired.immutableWidth = 1;
-                    repaired.immutableHeight = 1;
-                    uint64_t fingerprint =
-                        14695981039346656037ull;
-                    ExtendStableKey(fingerprint, uint32_t(1));
-                    ExtendStableKey(fingerprint, uint32_t(1));
-                    fingerprint ^= seedPixel;
-                    fingerprint *= 1099511628211ull;
-                    repaired.immutableFingerprint = fingerprint;
-                    constexpr float width = 1.0f;
-                    constexpr float height = 1.0f;
-                    const std::array<FirstPersonVertex, 4> vertices{ {
-                        {
-                            missingFace.corners[0],
-                            0.0f, 0.0f,
-                        },
-                        {
-                            missingFace.corners[1],
-                            width, 0.0f,
-                        },
-                        {
-                            missingFace.corners[2],
-                            width, height,
-                        },
-                        {
-                            missingFace.corners[3],
-                            0.0f, height,
-                        },
-                    } };
-                    EmitQuad(repaired, vertices);
-                    materialCoverage.recordFace(
-                        missingIndex, 1, 1);
-                    scene.surfaces.emplace_back(
-                        std::move(repaired));
-                    ++emittedFaces;
-                    if (buildEvidence != nullptr)
-                        ++buildEvidence->repairedFacets;
-                }
-            }
             if (appearance.certifiesHullMaterial)
             {
                 materialCoverage.applyTo(
@@ -1065,8 +913,7 @@
                         if (job->surfaces.empty()
                             || (unsupportedFaces > 8
                                 && unsupportedFaces
-                                    > buildEvidence.materialFaces / 2)
-                            || buildEvidence.repairedFacets > 8)
+                                    > buildEvidence.materialFaces / 2))
                         {
                             uint64_t reportKey = job->entry.image;
                             ExtendStableKey(
@@ -1083,20 +930,14 @@
                                     " hullFaces=%u materialFaces=%u"
                                     " missingSourceFaces=%u emptyTextureFaces=%u"
                                     " unobservedBottomFaces=%u"
-                                    " filledTexels=%u repairedFacets=%u"
                                     " silhouetteIoU=%.3f"
                                     " observedCoverage=%.3f"
                                     " candidateCoverage=%.3f edge=%d"
-                                    " fineGridRetried=%d"
-                                    " coarseCandidateCoverage=%.3f"
                                     " registrationTried=%d",
                                     job->entry.image,
                                     job->surfaces.empty()
                                         ? "native-fallback"
-                                        : buildEvidence.materialFaces
-                                                == buildEvidence.hullFaces
-                                            ? "completed-3d"
-                                            : "partial-3d",
+                                        : "partial-3d",
                                     unsigned(attempt.stage),
                                     unsigned(attempt.nativeViews),
                                     attempt.occupiedCells,
@@ -1106,14 +947,10 @@
                                     buildEvidence.withoutSourceMaterial,
                                     buildEvidence.withoutOpaqueSamples,
                                     buildEvidence.unobservedUndersides,
-                                    buildEvidence.completedTexels,
-                                    buildEvidence.repairedFacets,
                                     double(attempt.minimumIoU),
                                     double(attempt.observedCoverage),
                                     double(attempt.candidateCoverage),
                                     attempt.maximumEdgeError,
-                                    attempt.fineGridRetried ? 1 : 0,
-                                    double(attempt.coarseCandidateCoverage),
                                     attempt.registrationAttempted ? 1 : 0);
                             }
                         }
