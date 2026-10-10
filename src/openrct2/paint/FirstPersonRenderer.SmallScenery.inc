@@ -40,14 +40,6 @@
             // operation. Identical scenery instances can share the expensive
             // local-space bake and apply only their world translation and
             // recolour material at submission time.
-            struct BakedSmallSceneryEntry
-            {
-                bool resolved = false;
-                bool usable = false;
-                std::vector<FirstPersonSurface> localSurfaces;
-            };
-            BakedSmallSceneryEntry baked;
-
             auto faces = appearance.faces;
             if (buildEvidence != nullptr)
                 buildEvidence->hullFaces = uint32_t(faces.size());
@@ -59,8 +51,6 @@
                 : FirstPersonSmallSceneryFootprint{};
             if (faces.empty())
             {
-                baked.resolved = true;
-                baked.usable = false;
                 return false;
             }
 
@@ -71,7 +61,7 @@
                         normal, sourceRotation);
                 };
 
-            // Ownership is computed independently of texture fit. A projective
+            // Visibility is computed independently of texture fit. A projective
             // source is trustworthy only when this physical face is actually
             // frontmost in that native isometric view.
             std::array<FirstPersonDepthOwnerMap, 4>
@@ -332,9 +322,10 @@
             struct SmallSceneryFaceView
             {
                 const SmallSceneryDecodedView* source = nullptr;
-                float ownership = 0.0f;
+                float visibility = 0.0f;
                 float sourceCoverage = 0.0f;
                 float score = 0.0f;
+                FirstPersonSilhouette visible;
             };
 
             const auto edgeLength =
@@ -345,21 +336,15 @@
                     return std::sqrt(
                         dx * dx + dy * dy + dz * dz);
                 };
-            const auto ownedNear =
-                [&](uint8_t sourceRotation,
-                    uint32_t owner, int32_t x, int32_t y) {
+            const auto visibleNear =
+                [&](const FirstPersonSilhouette& visible,
+                    int32_t x, int32_t y) {
                     if (!appearance.usesDepthOwnership)
                         return true;
                     for (int32_t dy = -1; dy <= 1; ++dy)
                     for (int32_t dx = -1; dx <= 1; ++dx)
                     {
-                        const auto found =
-                            depthOwners[sourceRotation].find(
-                                FirstPersonSilhouettePixelKey(
-                                    x + dx, y + dy));
-                        if (found
-                                != depthOwners[sourceRotation].end()
-                            && found->second.owner == owner)
+                        if (visible.contains(x + dx, y + dy))
                             return true;
                     }
                     return false;
@@ -381,35 +366,35 @@
                         continue;
 
                     std::array<ScreenCoordsXY, 4> projected{};
+                    std::array<float, 4> depth{};
                     for (size_t i = 0;
                          i < face.corners.size(); ++i)
                     {
+                        const CoordsXYZ point{
+                            int32_t(std::lround(face.corners[i].x)),
+                            int32_t(std::lround(face.corners[i].y)),
+                            int32_t(std::lround(face.corners[i].z)),
+                        };
                         projected[i] =
                             FirstPersonSmallSceneryArtworkPoint(
-                                *entry, source.rotation,
-                                {
-                                    int32_t(std::lround(
-                                        face.corners[i].x)),
-                                    int32_t(std::lround(
-                                        face.corners[i].y)),
-                                    int32_t(std::lround(
-                                        face.corners[i].z)),
-                                });
+                                *entry, source.rotation, point);
+                        depth[i] = FirstPersonIsoDepth(source.rotation, point);
                     }
                     FirstPersonSilhouette silhouette{};
-                    AddFirstPersonSilhouetteQuad(
-                        silhouette, projected);
-                    float ownership = 1.0f;
+                    FirstPersonSilhouette visible{};
+                    float visibilityCoverage = 1.0f;
                     if (appearance.usesDepthOwnership)
                     {
-                        ownership =
-                            FirstPersonDepthOwnerCoverage(
-                                depthOwners[source.rotation],
-                                uint32_t(faceIndex),
-                                silhouette);
-                        if (ownership < 0.20f)
+                        auto visibility = BuildFirstPersonDepthVisibility(
+                            depthOwners[source.rotation], projected, depth);
+                        visibilityCoverage = visibility.coverage();
+                        if (visibilityCoverage < 0.20f)
                             continue;
+                        silhouette = std::move(visibility.projected);
+                        visible = std::move(visibility.visible);
                     }
+                    else
+                        AddFirstPersonSilhouetteQuad(silhouette, projected);
 
                     const auto paintOffset =
                         FirstPersonSmallSceneryPaintOffset(
@@ -449,15 +434,16 @@
 
                     const bool reliable =
                         FirstPersonTextureReprojectionIsReliable(
-                            ownership, sourceCoverage);
+                            visibilityCoverage, sourceCoverage);
                     candidates.push_back({
                         &source,
-                        ownership,
+                        visibilityCoverage,
                         sourceCoverage,
                         (reliable ? 1000.0f : 0.0f)
-                            + ownership * 4.0f
+                            + visibilityCoverage * 4.0f
                             + sourceCoverage
                             + float(silhouette.size()) * 0.001f,
+                        std::move(visible),
                     });
                 }
 
@@ -590,9 +576,8 @@
                                             int32_t(std::lround(
                                                 point.z)),
                                         });
-                                if (!ownedNear(
-                                        sourceView.rotation,
-                                        uint32_t(faceIndex),
+                                if (!visibleNear(
+                                        candidate.visible,
                                         projected.x,
                                         projected.y))
                                     continue;
@@ -784,33 +769,9 @@
                         attempt.registrationPixels;
                 }
             }
-            baked.localSurfaces.clear();
-            if (emittedFaces != 0)
-            {
-                baked.localSurfaces.reserve(
-                    scene.surfaces.size()
-                    - surfaceStart);
-                for (size_t i = surfaceStart;
-                     i < scene.surfaces.size(); ++i)
-                {
-                    auto local =
-                        scene.surfaces[i];
-                    for (auto& vertex :
-                         local.triangles)
-                    {
-                        vertex.world.x -= tileX;
-                        vertex.world.y -= tileY;
-                        vertex.world.z -= baseZ;
-                    }
-                    baked.localSurfaces.emplace_back(
-                        std::move(local));
-                }
-            }
-            baked.resolved = true;
-            baked.usable = emittedFaces != 0;
             if (buildEvidence != nullptr)
                 buildEvidence->materialFaces = uint32_t(emittedFaces);
-            return baked.usable;
+            return emittedFaces != 0;
         }
 
         struct SmallSceneryJob
@@ -897,6 +858,9 @@
                     BuildSmallSceneryGeometry(result, job->element, job->entry,
                         ImageId(job->entry.image), job->sprites,
                         &attempt, &buildEvidence);
+                    // Only baked surfaces are needed after this worker finishes.
+                    // Release copied source sprites here, off the game thread.
+                    job->sprites = {};
                     return [job, surfaces = std::move(result.surfaces),
                             attempt, buildEvidence]() mutable {
                         job->surfaces = std::move(surfaces);
@@ -963,6 +927,7 @@
                     // when its worker body throws. Never label an exception
                     // as a normal four-view geometric rejection: retain one
                     // clear asset-level diagnostic instead of a silent sprite.
+                    job->sprites = {};
                     uint64_t reportKey = job->entry.image;
                     ExtendStableKey(reportKey, 255u);
                     if (_smallSceneryReportedOutcomes.insert(

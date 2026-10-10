@@ -416,10 +416,10 @@ namespace OpenRCT2::Paint
     using FirstPersonDepthOwnerMap =
         std::unordered_map<uint64_t, FirstPersonDepthOwnerPixel>;
 
-    inline void AddFirstPersonDepthTriangle(
-        FirstPersonDepthOwnerMap& map, uint32_t owner,
+    template<typename VisitPixel>
+    inline void RasteriseFirstPersonDepthTriangle(
         const std::array<ScreenCoordsXY, 3>& screen,
-        const std::array<float, 3>& depth)
+        const std::array<float, 3>& depth, VisitPixel&& visitPixel)
     {
         const int32_t minX = std::min({ screen[0].x, screen[1].x, screen[2].x });
         const int32_t minY = std::min({ screen[0].y, screen[1].y, screen[2].y });
@@ -428,7 +428,9 @@ namespace OpenRCT2::Paint
         const int64_t spanX = int64_t(maxX) - int64_t(minX);
         const int64_t spanY = int64_t(maxY) - int64_t(minY);
         constexpr int64_t kMaxRasterPixels = 262144;
-        if (spanX <= 0 || spanY <= 0 || spanX * spanY > kMaxRasterPixels)
+        if (spanX <= 0 || spanY <= 0
+            || spanX > kMaxRasterPixels || spanY > kMaxRasterPixels
+            || spanX * spanY > kMaxRasterPixels)
             return;
 
         const auto edge = [](const ScreenCoordsXY& a, const ScreenCoordsXY& b, float x, float y) {
@@ -452,6 +454,16 @@ namespace OpenRCT2::Paint
                 continue;
 
             const float z = w0 * depth[0] + w1 * depth[1] + w2 * depth[2];
+            visitPixel(x, y, z);
+        }
+    }
+
+    inline void AddFirstPersonDepthTriangle(
+        FirstPersonDepthOwnerMap& map, uint32_t owner,
+        const std::array<ScreenCoordsXY, 3>& screen,
+        const std::array<float, 3>& depth)
+    {
+        RasteriseFirstPersonDepthTriangle(screen, depth, [&](int32_t x, int32_t y, float z) {
             auto& pixel = map[FirstPersonSilhouettePixelKey(x, y)];
             if (z > pixel.depth + 1e-4f)
             {
@@ -462,7 +474,41 @@ namespace OpenRCT2::Paint
             {
                 pixel.owner = std::numeric_limits<uint32_t>::max();
             }
+        });
+    }
+
+    struct FirstPersonDepthVisibility
+    {
+        FirstPersonSilhouette projected;
+        FirstPersonSilhouette visible;
+
+        [[nodiscard]] float coverage() const
+        {
+            return projected.empty() ? 0.0f : float(visible.size()) / float(projected.size());
         }
+    };
+
+    // Unique ownership is useful for structural correspondence, but it is not
+    // visibility: adjoining triangles can share a frontmost pixel. Test depth
+    // at the SAME raster sample as the complete mesh, including ambiguous
+    // ties, without granting material to an occluded face or inventing texels.
+    [[nodiscard]] inline FirstPersonDepthVisibility BuildFirstPersonDepthVisibility(
+        const FirstPersonDepthOwnerMap& map,
+        const std::array<ScreenCoordsXY, 4>& screen,
+        const std::array<float, 4>& depth)
+    {
+        FirstPersonDepthVisibility result;
+        const auto sample = [&](int32_t x, int32_t y, float z) {
+            result.projected.add(x, y);
+            const auto found = map.find(FirstPersonSilhouettePixelKey(x, y));
+            if (found != map.end() && std::abs(z - found->second.depth) <= 1e-4f)
+                result.visible.add(x, y);
+        };
+        RasteriseFirstPersonDepthTriangle(
+            { screen[0], screen[1], screen[2] }, { depth[0], depth[1], depth[2] }, sample);
+        RasteriseFirstPersonDepthTriangle(
+            { screen[0], screen[2], screen[3] }, { depth[0], depth[2], depth[3] }, sample);
+        return result;
     }
 
     [[nodiscard]] inline float FirstPersonDepthOwnerCoverage(

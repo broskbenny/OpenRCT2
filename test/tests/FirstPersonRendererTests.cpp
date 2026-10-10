@@ -2815,6 +2815,98 @@ TEST(FirstPersonAssetReconstructionTest, DepthOwnerRejectsOccludedTextureSource)
 }
 
 
+TEST(FirstPersonAssetReconstructionTest, SharedDepthIsVisibleWithoutUniqueOwnership)
+{
+    // Both triangles cover the same pixel centre on their shared diagonal.
+    // Neither has a unique owner, but both are part of the visible surface.
+    const std::array<ScreenCoordsXY, 4> a{ { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 1, 1 } } };
+    const std::array<ScreenCoordsXY, 4> b{ { { 0, 0 }, { 1, 1 }, { 0, 1 }, { 0, 1 } } };
+    for (const bool reverseOrder : { false, true })
+    {
+        FirstPersonDepthOwnerMap owners;
+        const auto append = [&](uint32_t owner, const auto& face) {
+            AddFirstPersonDepthTriangle(owners, owner, { face[0], face[1], face[2] }, { 3, 3, 3 });
+        };
+        if (reverseOrder)
+        {
+            append(1, b);
+            append(0, a);
+        }
+        else
+        {
+            append(0, a);
+            append(1, b);
+        }
+        const auto va = BuildFirstPersonDepthVisibility(owners, a, { 3, 3, 3, 3 });
+        const auto vb = BuildFirstPersonDepthVisibility(owners, b, { 3, 3, 3, 3 });
+        EXPECT_FLOAT_EQ(FirstPersonDepthOwnerCoverage(owners, 0, va.projected), 0.0f);
+        EXPECT_FLOAT_EQ(FirstPersonDepthOwnerCoverage(owners, 1, vb.projected), 0.0f);
+        EXPECT_FLOAT_EQ(va.coverage(), 1.0f);
+        EXPECT_FLOAT_EQ(vb.coverage(), 1.0f);
+        EXPECT_TRUE(va.visible.contains(0, 0));
+        EXPECT_TRUE(vb.visible.contains(0, 0));
+    }
+}
+
+TEST(FirstPersonAssetReconstructionTest, SharedDepthDoesNotMakeOccludedMaterialVisible)
+{
+    const std::array<ScreenCoordsXY, 4> face{ { { 0, 0 }, { 8, 0 }, { 0, 8 }, { 0, 8 } } };
+    FirstPersonDepthOwnerMap owners;
+    for (uint32_t owner = 0; owner < 2; ++owner)
+        AddFirstPersonDepthTriangle(owners, owner, { face[0], face[1], face[2] }, { 4, 4, 4 });
+    const auto hidden = BuildFirstPersonDepthVisibility(owners, face, { 3, 3, 3, 3 });
+    const auto front = BuildFirstPersonDepthVisibility(owners, face, { 4, 4, 4, 4 });
+    EXPECT_FLOAT_EQ(hidden.coverage(), 0.0f);
+    EXPECT_TRUE(hidden.visible.empty());
+    EXPECT_FLOAT_EQ(front.coverage(), 1.0f);
+}
+
+TEST(FirstPersonAssetReconstructionTest, DepthVisibilityUsesInterpolatedDepthAndBothWindings)
+{
+    const std::array<ScreenCoordsXY, 4> face{ { { 0, 0 }, { 8, 0 }, { 8, 8 }, { 0, 8 } } };
+    FirstPersonDepthOwnerMap owners;
+    AddFirstPersonDepthTriangle(owners, 0, { face[0], face[1], face[2] }, { 0, 8, 8 });
+    AddFirstPersonDepthTriangle(owners, 1, { face[0], face[2], face[3] }, { 0, 8, 0 });
+    const auto front = BuildFirstPersonDepthVisibility(owners, face, { 0, 8, 8, 0 });
+    EXPECT_FLOAT_EQ(front.coverage(), 1.0f);
+    const auto reversed = BuildFirstPersonDepthVisibility(
+        owners, { face[0], face[3], face[2], face[1] }, { 0, 0, 8, 8 });
+    EXPECT_FLOAT_EQ(reversed.coverage(), 1.0f);
+    EXPECT_EQ(reversed.visible.pixels, front.visible.pixels);
+    const auto behind = BuildFirstPersonDepthVisibility(owners, face, { -1, 7, 7, -1 });
+    EXPECT_FLOAT_EQ(behind.coverage(), 0.0f);
+}
+
+TEST(FirstPersonAssetReconstructionTest, DepthVisibilityKeepsPartiallyOccludedPixelsHidden)
+{
+    const std::array<ScreenCoordsXY, 4> face{ { { 0, 0 }, { 8, 0 }, { 8, 8 }, { 0, 8 } } };
+    FirstPersonDepthOwnerMap owners;
+    AddFirstPersonDepthTriangle(owners, 0, { face[0], face[1], face[2] }, { 1, 1, 1 });
+    AddFirstPersonDepthTriangle(owners, 0, { face[0], face[2], face[3] }, { 1, 1, 1 });
+    AddFirstPersonDepthTriangle(owners, 1, { face[0], face[1], face[2] }, { 2, 2, 2 });
+    const auto visibility = BuildFirstPersonDepthVisibility(owners, face, { 1, 1, 1, 1 });
+    EXPECT_FALSE(visibility.visible.contains(7, 0));
+    EXPECT_TRUE(visibility.visible.contains(0, 7));
+    EXPECT_GT(visibility.coverage(), 0.0f);
+    EXPECT_LT(visibility.coverage(), 1.0f);
+}
+
+TEST(FirstPersonAssetReconstructionTest, DepthVisibilityRequiresBoundedRasterEvidence)
+{
+    FirstPersonDepthOwnerMap owners;
+    const std::array<ScreenCoordsXY, 4> face{ { { 0, 0 }, { 8, 0 }, { 8, 8 }, { 0, 8 } } };
+    EXPECT_TRUE(BuildFirstPersonDepthVisibility(owners, face, { 1, 1, 1, 1 }).visible.empty());
+    const int32_t lo = std::numeric_limits<int32_t>::min();
+    const int32_t hi = std::numeric_limits<int32_t>::max();
+    const auto oversized = BuildFirstPersonDepthVisibility(
+        owners, { ScreenCoordsXY{ lo, lo }, { hi, lo }, { hi, hi }, { lo, hi } }, { 1, 1, 1, 1 });
+    EXPECT_TRUE(oversized.projected.empty());
+    EXPECT_FLOAT_EQ(oversized.coverage(), 0.0f);
+    const auto degenerate = BuildFirstPersonDepthVisibility(
+        owners, { ScreenCoordsXY{ 0, 0 }, { 1, 1 }, { 2, 2 }, { 2, 2 } }, { 1, 1, 1, 1 });
+    EXPECT_TRUE(degenerate.projected.empty());
+}
+
 TEST(FirstPersonAssetReconstructionTest, NativeFacingAndDepthOwnershipAgreeForAsymmetricBox)
 {
     struct Face
