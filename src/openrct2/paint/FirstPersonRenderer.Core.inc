@@ -1,4 +1,5 @@
         static FirstPersonWorkQueue _reconstructionWorker;
+        static FirstPersonTileRepaintQueue _reconstructionRepaints;
         static FirstPersonFrameBudget _snapshotBudget{0, std::chrono::microseconds(0)};
         static uint64_t _nextReconstructionRequest = 0;
         static FirstPersonFrameBudget _discoveryBudget{0, std::chrono::microseconds(0)};

@@ -4,7 +4,7 @@
  *****************************************************************************/
 #pragma once
 
-#include "FirstPersonVisualHull.h"
+#include "FirstPersonConvexReconstruction.h"
 
 #include "../drawing/Drawing.Sprite.h"
 #include "../interface/Viewport.h"
@@ -49,6 +49,36 @@ namespace OpenRCT2::Paint
     {
         static uint64_t generation = 1;
         return generation;
+    }
+
+    [[nodiscard]] inline bool FirstPersonSmallSceneryCanShareRotatedAsset(
+        const SmallSceneryEntry& entry, const SmallSceneryElement& element)
+    {
+        return FirstPersonSmallSceneryCanUseSilhouetteRefinement(entry)
+            && entry.flags.has(SmallSceneryFlag::occupiesFullTile)
+            && !entry.flags.hasAny(SmallSceneryFlag::occupiesHalfTile, SmallSceneryFlag::isTree)
+            && (element.getOccupiedQuadrants() & 0x0Fu) == 0x0Fu;
+    }
+
+    [[nodiscard]] inline FirstPersonVec3 FirstPersonRotateSceneryVector(FirstPersonVec3 point, uint8_t direction)
+    {
+        switch (direction & 3u)
+        {
+            case 1: return { point.y, -point.x, point.z };
+            case 2: return { -point.x, -point.y, point.z };
+            case 3: return { -point.y, point.x, point.z };
+            default: return point;
+        }
+    }
+
+    [[nodiscard]] inline FirstPersonVec3 FirstPersonRotateSceneryPoint(FirstPersonVec3 point, uint8_t direction)
+    {
+        point.x -= kCoordsXYHalfTile;
+        point.y -= kCoordsXYHalfTile;
+        point = FirstPersonRotateSceneryVector(point, direction);
+        point.x += kCoordsXYHalfTile;
+        point.y += kCoordsXYHalfTile;
+        return point;
     }
 
     inline void ClearFirstPersonSmallSceneryReconstructionCache()
@@ -296,10 +326,11 @@ namespace OpenRCT2::Paint
         return 0;
     }
 
+    template<typename SpriteLookup>
     [[nodiscard]] inline FirstPersonSmallSceneryWalkingMask
-        BuildFirstPersonSmallSceneryWalkingMask(
+        BuildFirstPersonSmallSceneryWalkingMaskFromSnapshot(
             const SmallSceneryEntry& entry,
-            const SmallSceneryElement& element)
+            const SmallSceneryElement& element, SpriteLookup&& spriteLookup)
     {
         FirstPersonSmallSceneryWalkingMask result{};
         if (entry.height < 4
@@ -337,7 +368,7 @@ namespace OpenRCT2::Paint
                 element.getDirectionWithOffset(rotation) & 3u;
             const uint32_t image =
                 entry.image + direction + uint32_t(witherStage) * 4u;
-            sprites[rotation] = GfxGetG1Element(image);
+            sprites[rotation] = spriteLookup(image);
             const auto* g1 = sprites[rotation];
             constexpr size_t kMaxSourcePixels = 65536;
             if (g1 == nullptr || g1->width <= 0 || g1->height <= 0
@@ -406,6 +437,13 @@ namespace OpenRCT2::Paint
         }
 
         return result;
+    }
+
+    [[nodiscard]] inline FirstPersonSmallSceneryWalkingMask BuildFirstPersonSmallSceneryWalkingMask(
+        const SmallSceneryEntry& entry, const SmallSceneryElement& element)
+    {
+        return BuildFirstPersonSmallSceneryWalkingMaskFromSnapshot(entry, element,
+            [](ImageIndex image) { return GfxGetG1Element(image); });
     }
 
     // A native sprite's drawing offset describes where the image is painted,
@@ -625,6 +663,12 @@ namespace OpenRCT2::Paint
                     }
                     return false;
                 };
+            if (FirstPersonSmallSceneryCanShareRotatedAsset(entry, element))
+            {
+                auto direct = BuildFirstPersonConvexVisualHull(views, bounds, config, projectPoint);
+                if (direct.valid)
+                    return direct;
+            }
             auto carved = BuildFirstPersonVisualHull(
                 views, bounds, config,
                 projectPoint, occupancyPredicate,
@@ -823,79 +867,131 @@ namespace OpenRCT2::Paint
         return result;
     }
 
-    [[nodiscard]] inline const FirstPersonSmallSceneryWalkingMask*
-        GetFirstPersonSmallSceneryWalkingMask(
-            const SmallSceneryEntry& entry,
-            const SmallSceneryElement& element)
+    // Collision queries must never launch visual reconstruction. While native
+    // evidence is pending, use only the authoritative occupied quadrants. The
+    // worker publishes a detailed mask independently of visual material success.
+    [[nodiscard]] inline FirstPersonSmallSceneryWalkingMask BuildFirstPersonSmallSceneryOccupancyMask(
+        const SmallSceneryEntry& entry, const SmallSceneryElement& element)
     {
-        struct CacheKey
+        FirstPersonSmallSceneryWalkingMask result;
+        const int32_t top = std::min<int32_t>(entry.height, kFirstPersonSmallSceneryCollisionMaxHeight);
+        if (top <= 0) return result;
+        result.layerCount = uint8_t((top + 3) / 4);
+        for (size_t layer = 0; layer < result.layerCount; ++layer)
         {
-            const SmallSceneryEntry* entry{};
-            uint8_t direction{};
-            uint8_t quadrant{};
-            uint8_t occupied{};
-            uint8_t witherStage{};
-
-            bool operator==(const CacheKey&) const = default;
-        };
-        struct CacheKeyHash
-        {
-            size_t operator()(const CacheKey& key) const
-            {
-                size_t value =
-                    reinterpret_cast<uintptr_t>(key.entry) >> 4;
-                value ^= size_t(key.direction) << 1;
-                value ^= size_t(key.quadrant) << 4;
-                value ^= size_t(key.occupied) << 7;
-                value ^= size_t(key.witherStage) << 12;
-                return value;
-            }
-        };
-        struct CacheEntry
-        {
-            const uint8_t* sourceIdentity{};
-            uint64_t generation{};
-            FirstPersonSmallSceneryWalkingMask mask{};
-        };
-        static std::unordered_map<CacheKey, CacheEntry, CacheKeyHash> cache;
-
-        const CacheKey key{
-            &entry,
-            uint8_t(element.getDirection() & 3u),
-            element.getSceneryQuadrant(),
-            uint8_t(element.getOccupiedQuadrants() & 0x0Fu),
-            FirstPersonSmallSceneryWitherStage(entry, element),
-        };
-        const auto* first =
-            GfxGetG1Element(entry.image + key.direction
-                + uint32_t(key.witherStage) * 4u);
-        if (first == nullptr || first->offset == nullptr)
-            return nullptr;
-
-        auto& cached = cache[key];
-        const auto generation =
-            FirstPersonSmallSceneryReconstructionGeneration();
-        if (cached.sourceIdentity != first->offset
-            || cached.generation != generation)
-        {
-            cached.sourceIdentity = first->offset;
-            cached.generation = generation;
-            if (const auto* hull =
-                    GetFirstPersonSmallSceneryVisualHull(
-                        entry, element);
-                hull != nullptr)
-            {
-                cached.mask =
-                    BuildFirstPersonSmallSceneryWalkingMaskFromHull(
-                        *hull, entry.height);
-            }
-            else
-            {
-                cached.mask =
-                    BuildFirstPersonSmallSceneryWalkingMask(
-                        entry, element);
-            }
+            result.layerLowZ[layer] = int16_t(layer * 4);
+            result.layerHighZ[layer] = int16_t(std::min<int32_t>(top, int32_t(layer + 1) * 4));
         }
-        return cached.mask.valid ? &cached.mask : nullptr;
+        constexpr int32_t size = FirstPersonSmallSceneryWalkingMask::kCellsPerAxis;
+        constexpr int32_t step = FirstPersonSmallSceneryWalkingMask::kCellSize;
+        for (int32_t y = 0; y < size; ++y)
+        for (int32_t x = 0; x < size; ++x)
+        {
+            const auto quarter = FirstPersonSmallSceneryQuarterForPoint(x * step + step / 2, y * step + step / 2);
+            if ((element.getOccupiedQuadrants() & (1u << quarter)) != 0) result.add(0, x, y);
+        }
+        for (size_t layer = 1; layer < result.layerCount; ++layer) result.layers[layer] = result.layers[0];
+        return result;
+    }
+
+    [[nodiscard]] inline FirstPersonSmallSceneryWalkingMask RotateFirstPersonSmallSceneryWalkingMask(
+        const FirstPersonSmallSceneryWalkingMask& source, uint8_t direction)
+    {
+        auto result = source;
+        result.layers = {};
+        constexpr int32_t size = FirstPersonSmallSceneryWalkingMask::kCellsPerAxis;
+        for (size_t layer = 0; layer < source.layerCount; ++layer)
+        for (int32_t y = 0; y < size; ++y)
+        for (int32_t x = 0; x < size; ++x)
+        {
+            if (!source.contains(layer, x, y)) continue;
+            int32_t rotatedX = x, rotatedY = y;
+            for (uint8_t turn = 0; turn < (direction & 3u); ++turn)
+            {
+                const auto previousX = rotatedX;
+                rotatedX = rotatedY;
+                rotatedY = size - 1 - previousX;
+            }
+            result.add(layer, rotatedX, rotatedY);
+        }
+        return result;
+    }
+
+    class FirstPersonSmallSceneryWalkingCache
+    {
+        struct Entry { const void* identity; FirstPersonSmallSceneryWalkingMask mask; };
+        std::unordered_map<uint64_t, Entry> _entries;
+        uint64_t _generation = 0;
+    public:
+        void reset(uint64_t generation)
+        {
+            if (_generation == generation) return;
+            _entries.clear();
+            _generation = generation;
+        }
+        template<typename Fallback>
+        const FirstPersonSmallSceneryWalkingMask* get(uint64_t key, const void* identity, Fallback&& fallback)
+        {
+            auto it = _entries.find(key);
+            if (it == _entries.end() || it->second.identity != identity)
+                it = _entries.insert_or_assign(key, Entry{ identity, fallback() }).first;
+            return &it->second.mask;
+        }
+        void publish(uint64_t key, const void* identity, const FirstPersonSmallSceneryWalkingMask& mask)
+        {
+            _entries.insert_or_assign(key, Entry{ identity, mask });
+        }
+    };
+
+    inline FirstPersonSmallSceneryWalkingCache& FirstPersonSmallSceneryWalkingMasks()
+    {
+        // Accessed only by walking queries and worker-result publication, both
+        // on the game thread. Workers own masks but never touch this cache.
+        static FirstPersonSmallSceneryWalkingCache cache;
+        cache.reset(FirstPersonSmallSceneryReconstructionGeneration());
+        return cache;
+    }
+
+    [[nodiscard]] inline uint64_t FirstPersonSmallSceneryWalkingKey(
+        const SmallSceneryEntry& entry, const SmallSceneryElement& element)
+    {
+        const auto quadrant = FirstPersonSmallSceneryCanShareRotatedAsset(entry, element)
+            ? 0u : element.getSceneryQuadrant();
+        return (uint64_t(entry.image) << 16) | uint64_t(element.getDirection() & 3u)
+            | (uint64_t(quadrant) << 2) | (uint64_t(element.getOccupiedQuadrants() & 15u) << 4)
+            | (uint64_t(FirstPersonSmallSceneryWitherStage(entry, element)) << 8);
+    }
+
+    [[nodiscard]] inline const void* FirstPersonSmallSceneryWalkingSource(
+        const SmallSceneryEntry& entry, const SmallSceneryElement& element)
+    {
+        const auto* source = GfxGetG1Element(entry.image + (element.getDirection() & 3u)
+            + uint32_t(FirstPersonSmallSceneryWitherStage(entry, element)) * 4u);
+        return source == nullptr ? nullptr : source->offset;
+    }
+
+    inline void PublishFirstPersonSmallSceneryWalkingMask(
+        const SmallSceneryEntry& entry, const SmallSceneryElement& element,
+        const FirstPersonSmallSceneryWalkingMask& mask)
+    {
+        auto& cache = FirstPersonSmallSceneryWalkingMasks();
+        const bool shared = FirstPersonSmallSceneryCanShareRotatedAsset(entry, element);
+        for (uint8_t turn = 0; turn < (shared ? 4 : 1); ++turn)
+        {
+            auto rotated = element;
+            rotated.setDirection((element.getDirection() + turn) & 3u);
+            cache.publish(FirstPersonSmallSceneryWalkingKey(entry, rotated),
+                FirstPersonSmallSceneryWalkingSource(entry, rotated),
+                turn == 0 ? mask : RotateFirstPersonSmallSceneryWalkingMask(mask, turn));
+        }
+    }
+
+    [[nodiscard]] inline const FirstPersonSmallSceneryWalkingMask* GetFirstPersonSmallSceneryWalkingMask(
+        const SmallSceneryEntry& entry, const SmallSceneryElement& element)
+    {
+        const auto* mask = FirstPersonSmallSceneryWalkingMasks().get(
+            FirstPersonSmallSceneryWalkingKey(entry, element), FirstPersonSmallSceneryWalkingSource(entry, element),
+            [&] { return BuildFirstPersonSmallSceneryOccupancyMask(entry, element); });
+        return mask->valid ? mask : nullptr;
     }
 } // namespace OpenRCT2::Paint

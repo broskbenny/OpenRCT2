@@ -1513,6 +1513,10 @@ namespace OpenRCT2::Paint
     {
         FirstPersonFrameBudget publicationBudget(2, std::chrono::microseconds(750));
         _reconstructionWorker.publish(publicationBudget);
+        FirstPersonFrameBudget repaintBudget(32, std::chrono::microseconds(750));
+        _reconstructionRepaints.drain(repaintBudget, [](uint64_t tile) {
+            InvalidateFirstPersonSceneTile({ int32_t(tile >> 32), int32_t(tile) });
+        });
         _discoveryBudget = FirstPersonFrameBudget(2048, std::chrono::microseconds(2000));
         // Reuse the prepared scene's backing allocations between presentation
         // frames. Every semantic value is rebuilt below; only vector capacity is
@@ -1555,6 +1559,7 @@ namespace OpenRCT2::Paint
         gFirstPersonInteractionPickRequested = false;
         gFirstPersonInteractionPickResult.reset();
         _reconstructionWorker.cancel();
+        _reconstructionRepaints.clear();
         _largeSceneryJobs.clear();
         _parkEntranceJobs.clear();
         _smallSceneryJobs.clear();
@@ -1956,4 +1961,3 @@ namespace OpenRCT2::Paint
 
     }
 } // namespace OpenRCT2::Paint
-

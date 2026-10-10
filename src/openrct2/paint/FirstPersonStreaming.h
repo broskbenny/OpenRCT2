@@ -10,9 +10,103 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <optional>
+#include <unordered_map>
+#include <vector>
 
 namespace OpenRCT2::Paint
 {
+    // Broad phase for coplanar diagnostics. A plane can span a whole park;
+    // sharing its normal and distance does not make two surfaces neighbours.
+    // Large bounds use a separate list so one unusual object cannot allocate
+    // an unbounded number of cells. Every inspected entry consumes the caller's
+    // diagnostic budget, including rejected large-bound candidates.
+    template<typename Probe>
+    class FirstPersonPlaneSpatialIndex
+    {
+        struct Range { int32_t x0, y0, x1, y1; };
+        static constexpr float kCellSize = 32.0f;
+        static constexpr int64_t kMaximumCells = 64;
+        std::vector<Probe> _probes;
+        std::vector<uint64_t> _seen;
+        std::vector<size_t> _large;
+        std::unordered_map<uint64_t, std::vector<size_t>> _cells;
+        uint64_t _serial = 0;
+
+        static std::optional<Range> range(const Probe& p)
+        {
+            const std::array<float, 4> values{ p.minU, p.minV, p.maxU, p.maxV };
+            for (const auto value : values)
+                if (!std::isfinite(value) || std::abs(value) > 1.0e9f) return std::nullopt;
+            if (p.maxU < p.minU || p.maxV < p.minV) return std::nullopt;
+            const Range r{
+                int32_t(std::floor(p.minU / kCellSize)), int32_t(std::floor(p.minV / kCellSize)),
+                int32_t(std::floor(p.maxU / kCellSize)), int32_t(std::floor(p.maxV / kCellSize))
+            };
+            if ((int64_t(r.x1) - r.x0 + 1) * (int64_t(r.y1) - r.y0 + 1) > kMaximumCells)
+                return std::nullopt;
+            return r;
+        }
+        static uint64_t key(int32_t x, int32_t y)
+        {
+            return (uint64_t(uint32_t(x)) << 32) | uint32_t(y);
+        }
+    public:
+        void insert(const Probe& probe)
+        {
+            const size_t index = _probes.size();
+            _probes.push_back(probe);
+            _seen.push_back(0);
+            const auto cells = range(probe);
+            if (!cells) { _large.push_back(index); return; }
+            for (int32_t y = cells->y0; y <= cells->y1; ++y)
+            for (int32_t x = cells->x0; x <= cells->x1; ++x)
+                _cells[key(x, y)].push_back(index);
+        }
+
+        std::vector<const Probe*> query(const Probe& probe, size_t& remainingChecks)
+        {
+            if (++_serial == 0)
+            {
+                std::fill(_seen.begin(), _seen.end(), 0);
+                ++_serial;
+            }
+            std::vector<const Probe*> result;
+            const auto visit = [&](size_t index) {
+                if (_seen[index] == _serial || remainingChecks == 0) return;
+                _seen[index] = _serial;
+                --remainingChecks;
+                const auto& p = _probes[index];
+                if (p.maxU >= probe.minU && p.minU <= probe.maxU
+                    && p.maxV >= probe.minV && p.minV <= probe.maxV)
+                    result.push_back(&p);
+            };
+            const auto cells = range(probe);
+            if (!cells)
+            {
+                for (size_t i = 0; i < _probes.size() && remainingChecks != 0; ++i) visit(i);
+                return result;
+            }
+            for (const auto index : _large)
+            {
+                if (remainingChecks == 0) return result;
+                visit(index);
+            }
+            for (int32_t y = cells->y0; y <= cells->y1 && remainingChecks != 0; ++y)
+            for (int32_t x = cells->x0; x <= cells->x1 && remainingChecks != 0; ++x)
+            {
+                const auto found = _cells.find(key(x, y));
+                if (found == _cells.end()) continue;
+                for (const auto index : found->second)
+                {
+                    if (remainingChecks == 0) return result;
+                    visit(index);
+                }
+            }
+            return result;
+        }
+    };
+
     // Cached camera planes: do not recalculate the camera's trigonometry for
     // each park tile. A region is rejected only if its WHOLE bounding sphere
     // lies outside a plane (including near/far). Camera roll is supported.
@@ -283,4 +377,3 @@ namespace OpenRCT2::Paint
         VisitFirstPersonRegions(frustum,minX,minY,maxX,maxY,visitor,conservative);
     }
 } // namespace OpenRCT2::Paint
-

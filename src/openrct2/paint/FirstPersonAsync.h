@@ -7,10 +7,13 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
+#include <utility>
 
 namespace OpenRCT2::Paint
 {
@@ -31,6 +34,37 @@ namespace OpenRCT2::Paint
             if (units > _remaining || !available()) return false;
             _remaining -= units;
             return true;
+        }
+    };
+
+    // Publishing one shared asset can wake thousands of instances. Moving a
+    // batch is constant-time; repaint each tile under its own frame budget
+    // rather than hiding an unbounded invalidation loop inside one commit.
+    class FirstPersonTileRepaintQueue
+    {
+        std::deque<std::unordered_set<uint64_t>> _batches;
+        size_t _pending = 0;
+    public:
+        void enqueue(std::unordered_set<uint64_t> tiles)
+        {
+            if (tiles.empty()) return;
+            _pending += tiles.size();
+            _batches.push_back(std::move(tiles));
+        }
+        size_t pending() const { return _pending; }
+        void clear() { _batches.clear(); _pending = 0; }
+        template<typename Repaint>
+        void drain(FirstPersonFrameBudget& budget, Repaint&& repaint)
+        {
+            while (!_batches.empty() && budget.take())
+            {
+                auto& batch = _batches.front();
+                const auto tile = *batch.begin();
+                batch.erase(batch.begin());
+                --_pending;
+                if (batch.empty()) _batches.pop_front();
+                repaint(tile);
+            }
         }
     };
 

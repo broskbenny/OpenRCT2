@@ -4589,7 +4589,7 @@
                     };
 
                 std::unordered_map<
-                    uint64_t, std::vector<PlaneProbe>>
+                    uint64_t, FirstPersonPlaneSpatialIndex<PlaneProbe>>
                     planeBuckets;
                 planeBuckets.reserve(
                     packet.surfaces.size() / 8 + 1);
@@ -4613,9 +4613,10 @@
                 constexpr float kNormalMatch = 0.999f;
                 constexpr float kPlaneDistanceEpsilon = 0.25f;
                 constexpr float kPlaneOverlapEpsilon = 0.5f;
+                size_t remainingPlaneChecks = 32768;
 
                 for (size_t index = 0;
-                     index < packet.surfaces.size(); ++index)
+                     index < packet.surfaces.size() && remainingPlaneChecks != 0; ++index)
                 {
                     auto probe =
                         canonicalPlane(packet.surfaces[index]);
@@ -4661,9 +4662,10 @@
                         if (bucket == planeBuckets.end())
                             continue;
 
-                        for (const auto& peer :
-                             bucket->second)
+                        for (const auto* peerPointer :
+                             bucket->second.query(*probe, remainingPlaneChecks))
                         {
+                            const auto& peer = *peerPointer;
                             const auto& surface =
                                 packet.surfaces[index];
                             const auto& other =
@@ -5013,8 +5015,17 @@
                         ownBucketKey,
                         uint64_t(uint32_t(
                             distanceBucket)));
-                    planeBuckets[ownBucketKey].push_back(
+                    planeBuckets[ownBucketKey].insert(
                         *probe);
+                }
+                // Optional diagnostics must not monopolise a presentation
+                // frame on genuinely dense overlaps. Say when the scan is
+                // partial; geometry and interface resolution are unaffected.
+                static uint64_t reportedBudgetGeneration = std::numeric_limits<uint64_t>::max();
+                if (remainingPlaneChecks == 0 && reportedBudgetGeneration != gFirstPersonDiagnosticGeneration)
+                {
+                    reportedBudgetGeneration = gFirstPersonDiagnosticGeneration;
+                    Console::WriteLine("FP_PLANE_DIAGNOSTICS partial=1 reason=comparison-budget limit=32768");
                 }
             }
 
@@ -5163,4 +5174,3 @@
                 });
             }
         }
-

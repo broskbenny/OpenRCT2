@@ -5,18 +5,27 @@
             uint32_t withoutSourceMaterial = 0;
             uint32_t withoutOpaqueSamples = 0;
             uint32_t unobservedUndersides = 0;
+            bool directConvexSurface = false;
         };
 
         bool BuildSmallSceneryGeometry(FirstPersonScene& scene,
             const SmallSceneryElement& element, const SmallSceneryEntry& metadata,
             ImageId image, const FirstPersonSpriteSnapshot& sprites,
             FirstPersonVisualHullAttempt* reconstructionAttempt = nullptr,
-            SmallSceneryBuildEvidence* buildEvidence = nullptr)
+            SmallSceneryBuildEvidence* buildEvidence = nullptr,
+            std::optional<FirstPersonSmallSceneryWalkingMask>* walkingMask = nullptr)
         {
             if (buildEvidence != nullptr)
                 *buildEvidence = {};
             const auto* small = &element;
             const auto* entry = &metadata;
+            if (walkingMask != nullptr)
+            {
+                walkingMask->reset();
+                if (FirstPersonSmallSceneryCanUseSilhouetteRefinement(metadata) && metadata.height >= 4)
+                    *walkingMask = BuildFirstPersonSmallSceneryWalkingMaskFromSnapshot(metadata, element,
+                        [&](ImageIndex id) { return sprites.get(id); });
+            }
             FirstPersonVisualHull ownedHull{};
             const FirstPersonVisualHull* hull = nullptr;
             if (!FirstPersonSmallSceneryUsesCrossedTreeAppearance(metadata))
@@ -29,6 +38,10 @@
                 if (!ownedHull.valid)
                     return false;
                 hull = &ownedHull;
+                if (walkingMask != nullptr)
+                    *walkingMask = BuildFirstPersonSmallSceneryWalkingMaskFromHull(ownedHull, metadata.height);
+                if (buildEvidence != nullptr)
+                    buildEvidence->directConvexSurface = hull->directConvexSurface;
             }
             const auto appearance =
                 BuildFirstPersonSmallSceneryAppearancePlan(
@@ -326,6 +339,7 @@
                 float sourceCoverage = 0.0f;
                 float score = 0.0f;
                 FirstPersonSilhouette visible;
+                FirstPersonVisualHullFace projectedFace;
             };
 
             const auto edgeLength =
@@ -444,6 +458,10 @@
                             + sourceCoverage
                             + float(silhouette.size()) * 0.001f,
                         std::move(visible),
+                        { { FirstPersonVec3{ float(projected[0].x), float(projected[0].y), 0 },
+                            FirstPersonVec3{ float(projected[1].x), float(projected[1].y), 0 },
+                            FirstPersonVec3{ float(projected[2].x), float(projected[2].y), 0 },
+                            FirstPersonVec3{ float(projected[3].x), float(projected[3].y), 0 } }, {}, {} },
                     });
                 }
 
@@ -502,12 +520,10 @@
                     for (int32_t y = 0; y < height; ++y)
                     for (int32_t x = 0; x < width; ++x)
                     {
+                        const auto uv = FirstPersonVisualHullTexelUV(face, x, y, width, height);
+                        if (!uv) continue;
                         FirstPersonVec3 point{};
-                        if (!FirstPersonVisualHullSampleFace(
-                                face,
-                                (float(x) + 0.5f) / float(width),
-                                (float(y) + 0.5f) / float(height),
-                                point))
+                        if (!FirstPersonVisualHullSampleFace(face, (*uv)[0], (*uv)[1], point))
                             continue;
                         ++drawablePixelCount;
 
@@ -565,17 +581,17 @@
                             }
                             else
                             {
-                                const auto projected =
-                                    FirstPersonSmallSceneryArtworkPoint(
-                                        *entry, sourceView.rotation,
-                                        {
-                                            int32_t(std::lround(
-                                                point.x)),
-                                            int32_t(std::lround(
-                                                point.y)),
-                                            int32_t(std::lround(
-                                                point.z)),
-                                        });
+                                // Interpolate the same projected vertices used by the
+                                // depth raster. Rounding each world-space texel first
+                                // moves samples across silhouette edges and opens pores.
+                                FirstPersonVec3 projectedPoint{};
+                                if (!FirstPersonVisualHullSampleFace(
+                                        candidate.projectedFace,
+                                        (*uv)[0], (*uv)[1], projectedPoint))
+                                    continue;
+                                const ScreenCoordsXY projected{
+                                    int32_t(std::floor(projectedPoint.x)),
+                                    int32_t(std::floor(projectedPoint.y)) };
                                 if (!visibleNear(
                                         candidate.visible,
                                         projected.x,
@@ -801,9 +817,11 @@
             const auto stage = FirstPersonSmallSceneryWitherStage(*entry, *small);
             if (image.GetIndex() != entry->image + (small->getDirectionWithOffset(rotation) & 3u)
                     + uint32_t(stage) * 4u) return false;
+            const bool sharedRotation = FirstPersonSmallSceneryCanShareRotatedAsset(*entry, *small);
+            const uint8_t instanceRotation = sharedRotation ? small->getDirection() : 0;
             uint64_t key = entry->image;
-            ExtendStableKey(key, small->getDirection());
-            ExtendStableKey(key, small->getSceneryQuadrant());
+            ExtendStableKey(key, sharedRotation ? 0u : small->getDirection());
+            ExtendStableKey(key, sharedRotation ? 0u : small->getSceneryQuadrant());
             ExtendStableKey(key, small->getOccupiedQuadrants());
             ExtendStableKey(key, stage);
             auto it = _smallSceneryJobs.find(key);
@@ -821,6 +839,8 @@
                 job->entry.frame_offsets = nullptr;
                 job->entry.FrameOffsetCount = 0;
                 job->element = *small;
+                if (sharedRotation)
+                    job->element.setDirection(0);
                 it = _smallSceneryJobs.emplace(key, std::move(job)).first;
             }
             const auto job = it->second;
@@ -831,8 +851,12 @@
                 {
                     auto surface = local;
                     surface.image = image.WithIndex(local.image.GetIndex());
+                    if (instanceRotation != 0)
+                        surface.outwardNormal = FirstPersonRotateSceneryVector(surface.outwardNormal, instanceRotation);
                     for (auto& vertex : surface.triangles)
                     {
+                        if (instanceRotation != 0)
+                            vertex.world = FirstPersonRotateSceneryPoint(vertex.world, instanceRotation);
                         vertex.world.x += float(ps.MapPos.x);
                         vertex.world.y += float(ps.MapPos.y);
                         vertex.world.z += float(small->getBaseZ());
@@ -852,19 +876,25 @@
                         return true;
                     }
                 job->submitted = _reconstructionWorker.submit([job] {
+                    const auto started = std::chrono::steady_clock::now();
                     FirstPersonScene result;
                     FirstPersonVisualHullAttempt attempt{};
                     SmallSceneryBuildEvidence buildEvidence{};
+                    std::optional<FirstPersonSmallSceneryWalkingMask> walkingMask;
                     BuildSmallSceneryGeometry(result, job->element, job->entry,
                         ImageId(job->entry.image), job->sprites,
-                        &attempt, &buildEvidence);
+                        &attempt, &buildEvidence, &walkingMask);
                     // Only baked surfaces are needed after this worker finishes.
                     // Release copied source sprites here, off the game thread.
                     job->sprites = {};
+                    const auto buildMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - started).count();
                     return [job, surfaces = std::move(result.surfaces),
-                            attempt, buildEvidence]() mutable {
+                            attempt, buildEvidence, buildMicros, walkingMask]() mutable {
                         job->surfaces = std::move(surfaces);
                         job->ready = true;
+                        if (walkingMask)
+                            PublishFirstPersonSmallSceneryWalkingMask(job->entry, job->element, *walkingMask);
                         const uint32_t unsupportedFaces =
                             buildEvidence.withoutSourceMaterial
                             + buildEvidence.withoutOpaqueSamples;
@@ -874,7 +904,8 @@
                         // certified 3D mesh during texture assignment.
                         // Emit once per asset/reconstruction phase, not once
                         // per instance or camera repaint.
-                        if (job->surfaces.empty()
+                        if ((buildEvidence.directConvexSurface && gFirstPersonDiagnosticMask != 0)
+                            || job->surfaces.empty()
                             || (unsupportedFaces > 8
                                 && unsupportedFaces
                                     > buildEvidence.materialFaces / 2))
@@ -897,11 +928,11 @@
                                     " silhouetteIoU=%.3f"
                                     " observedCoverage=%.3f"
                                     " candidateCoverage=%.3f edge=%d"
-                                    " registrationTried=%d",
+                                    " registrationTried=%d method=%s buildUs=%lld",
                                     job->entry.image,
                                     job->surfaces.empty()
                                         ? "native-fallback"
-                                        : "partial-3d",
+                                        : (unsupportedFaces == 0 ? "source-backed-3d" : "partial-3d"),
                                     unsigned(attempt.stage),
                                     unsigned(attempt.nativeViews),
                                     attempt.occupiedCells,
@@ -915,12 +946,12 @@
                                     double(attempt.observedCoverage),
                                     double(attempt.candidateCoverage),
                                     attempt.maximumEdgeError,
-                                    attempt.registrationAttempted ? 1 : 0);
+                                    attempt.registrationAttempted ? 1 : 0,
+                                    buildEvidence.directConvexSurface ? "direct-convex" : "voxel-or-tree",
+                                    static_cast<long long>(buildMicros));
                             }
                         }
-                        for (const auto tile : job->waitingTiles)
-                            InvalidateFirstPersonSceneTile({int32_t(tile >> 32), int32_t(tile)});
-                        job->waitingTiles.clear();
+                        _reconstructionRepaints.enqueue(std::move(job->waitingTiles));
                     };
                 }, [job] {
                     // FirstPersonWorkQueue invokes this continuation only
@@ -939,12 +970,9 @@
                             job->entry.image);
                     }
                     job->ready = true;
-                    for (const auto tile : job->waitingTiles)
-                        InvalidateFirstPersonSceneTile({int32_t(tile >> 32), int32_t(tile)});
-                    job->waitingTiles.clear();
+                    _reconstructionRepaints.enqueue(std::move(job->waitingTiles));
                 });
                 if (!job->submitted) InvalidateFirstPersonSceneTile(ps.MapPos);
             }
             return true; // pending geometry deliberately absent
         }
-

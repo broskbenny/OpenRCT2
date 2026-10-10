@@ -83,6 +83,31 @@ namespace OpenRCT2::Paint
         return true;
     }
 
+    // Nearest texture sampling can select a texel whose centre is outside a
+    // triangular UV domain even though part of that texel lies inside it.
+    // Sample that covered part, rather than leaving a transparent diagonal.
+    // This pads only the texture footprint; it never fills holes in source art.
+    [[nodiscard]] inline std::optional<std::array<float, 2>> FirstPersonVisualHullTexelUV(
+        const FirstPersonVisualHullFace& face, int32_t x, int32_t y, int32_t width, int32_t height)
+    {
+        if (width <= 0 || height <= 0 || x < 0 || y < 0 || x >= width || y >= height)
+            return std::nullopt;
+        float s = (float(x) + 0.5f) / float(width);
+        float t = (float(y) + 0.5f) / float(height);
+        const auto& c = face.corners[2];
+        const auto& d = face.corners[3];
+        const FirstPersonVec3 delta{ d.x - c.x, d.y - c.y, d.z - c.z };
+        if (s < t && FpDot(delta, delta) <= 1.0e-8f)
+        {
+            const float left = float(x) / float(width), right = float(x + 1) / float(width);
+            const float top = float(y) / float(height), bottom = float(y + 1) / float(height);
+            if (right <= top) return std::nullopt;
+            s = right - 0.25f * (right - std::max(left, top));
+            t = top + 0.25f * (std::min(bottom, right) - top);
+        }
+        return std::array<float, 2>{ s, t };
+    }
+
     struct FirstPersonVisualHullAttempt
     {
         // 1=views/bounds, 2=grid, 3=carving, 4=round-trip,
@@ -125,6 +150,7 @@ namespace OpenRCT2::Paint
         // renderable faces. Occupancy/collision remains the original grid.
         std::vector<FirstPersonVisualHullFace> refinedFaces;
         bool continuousSurfaceRefined = false;
+        bool directConvexSurface = false;
         // Exact surface-level round-trip evidence. The legacy coverage fields
         // remain directly readable because reconstruction policies use them as
         // conservative admission gates.

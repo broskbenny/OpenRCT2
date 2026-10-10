@@ -11,6 +11,7 @@
 #include <future>
 #include <thread>
 #include <openrct2/paint/FirstPersonAsync.h>
+#include <openrct2/paint/FirstPersonStreaming.h>
 #include <openrct2/paint/FirstPersonSpriteSnapshot.h>
 #include <algorithm>
 #include <openrct2/paint/FirstPersonRenderer.h>
@@ -4550,4 +4551,295 @@ TEST(FirstPersonAsyncTest, ExpiredCaptureBudgetLeavesSnapshotRetryable)
     EXPECT_TRUE(snapshot.capture(10, &source, nextFrame));
     EXPECT_EQ(snapshot.get(10)->offset[0], 42);
     EXPECT_TRUE(snapshot.capture(10, &source, exhausted)); // already owned
+}
+
+
+namespace
+{
+    std::array<float, 2> ProjectCompactSceneryFixture(uint8_t rotation, FirstPersonVec3 point)
+    {
+        OpenRCT2::SmallSceneryEntry entry{};
+        entry.flags.set(OpenRCT2::SmallSceneryFlag::occupiesFullTile);
+        const auto pixel = FirstPersonSmallSceneryArtworkPoint(entry, rotation,
+            { int32_t(std::lround(point.x)), int32_t(std::lround(point.y)), int32_t(std::lround(point.z)) });
+        return { float(pixel.x), float(pixel.y) };
+    }
+
+    std::vector<FirstPersonVisualHullView> CompactSceneryFixture(int shape, float base = 0)
+    {
+        std::vector<FirstPersonVisualHullFace> faces;
+        const FirstPersonVec3 a{0,0,base}, b{32,0,base}, c{32,32,base}, d{0,32,base};
+        const auto tri = [&](auto x, auto y, auto z) { faces.push_back({ { x,y,z,z }, {}, {} }); };
+        tri(a,c,b); tri(a,d,c);
+        if (shape < 2)
+        {
+            const FirstPersonVec3 peak{ shape == 0 ? 16.0f : 10.0f, shape == 0 ? 16.0f : 22.0f, 24 };
+            tri(a,b,peak); tri(b,c,peak); tri(c,d,peak); tri(d,a,peak);
+        }
+        else
+        {
+            const FirstPersonVec3 e{0,0,24}, f{32,0,24}, g{32,32,24}, h{0,32,24};
+            tri(a,b,f); tri(a,f,e);
+            if (shape == 2)
+            {
+                tri(b,c,g); tri(b,g,f); tri(c,d,h); tri(c,h,g); tri(d,a,e); tri(d,e,h);
+                tri(e,f,g); tri(e,g,h);
+            }
+            else { tri(b,c,f); tri(c,d,e); tri(c,e,f); tri(d,a,e); }
+        }
+        const auto triangles = TriangulateFirstPersonReconstructionFaces(faces);
+        std::vector<FirstPersonVisualHullView> views(4);
+        for (uint8_t r = 0; r < 4; ++r)
+        {
+            views[r].imageDirection = r;
+            views[r].observed = RenderFirstPersonReconstructionSilhouette(triangles, r, ProjectCompactSceneryFixture);
+        }
+        return views;
+    }
+
+    FirstPersonVisualHull FitCompactScenery(const std::vector<FirstPersonVisualHullView>& views)
+    {
+        return BuildFirstPersonConvexVisualHull(views, {0,32,0,32,0,32,2}, {}, ProjectCompactSceneryFixture);
+    }
+}
+
+TEST(FirstPersonVisualHullTest, CompactSolidsReproduceAllNativeViewsWithBoundedFaces)
+{
+    for (int shape = 0; shape < 4; ++shape)
+    for (const float base : { 0.0f, 4.0f })
+    {
+        const auto hull = FitCompactScenery(CompactSceneryFixture(shape, base));
+        ASSERT_TRUE(hull.valid);
+        EXPECT_TRUE(hull.directConvexSurface);
+        EXPECT_FLOAT_EQ(hull.minimumIntersectionOverUnion, 1.0f);
+        EXPECT_LE(hull.refinedFaces.size(), 6u);
+        EXPECT_EQ(hull.roundTripViewCount, 4u);
+        for (const auto& face : hull.refinedFaces)
+        {
+            EXPECT_NEAR(FpDot(face.normal, face.normal), 1.0f, 1.0e-5f);
+            for (const auto p : face.corners) EXPECT_GE(p.z, base);
+        }
+    }
+}
+
+TEST(FirstPersonVisualHullTest, CompactSolidsRejectNativeOpeningsAndDisconnectedArt)
+{
+    auto views = CompactSceneryFixture(2);
+    ASSERT_TRUE(views[0].observed.contains(0, 0));
+    views[0].observed.pixels.erase(FirstPersonSilhouettePixelKey(0, 0));
+    EXPECT_FALSE(FitCompactScenery(views).valid);
+    views = CompactSceneryFixture(0);
+    views[0].observed.add(80, 0);
+    EXPECT_FALSE(FitCompactScenery(views).valid);
+}
+
+TEST(FirstPersonVisualHullTest, CompactSolidsRequireFourConsistentDistinctViews)
+{
+    auto views = CompactSceneryFixture(0);
+    views[0] = CompactSceneryFixture(2)[0];
+    EXPECT_FALSE(FitCompactScenery(views).valid);
+    views = CompactSceneryFixture(0);
+    views[3].imageDirection = 0;
+    EXPECT_FALSE(FitCompactScenery(views).valid);
+    views.pop_back();
+    EXPECT_FALSE(FitCompactScenery(views).valid);
+}
+
+TEST(FirstPersonVisualHullTest, CompactSolidsRejectUnboundedInputs)
+{
+    auto views = CompactSceneryFixture(0);
+    FirstPersonVisualHullBounds bounds{0,32,0,32,0,32,2};
+    bounds.maxUp = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(BuildFirstPersonConvexVisualHull(views, bounds, {}, ProjectCompactSceneryFixture).valid);
+    bounds = {0,100000,0,32,0,32,2};
+    EXPECT_FALSE(BuildFirstPersonConvexVisualHull(views, bounds, {}, ProjectCompactSceneryFixture).valid);
+    views[0].observed.overflowed = true;
+    EXPECT_FALSE(FitCompactScenery(views).valid);
+}
+
+TEST(FirstPersonVisualHullTest, TriangleTexelsCoverGpuFootprintForUnequalDimensions)
+{
+    FirstPersonVisualHullFace face{};
+    face.corners = { FirstPersonVec3{0,0,0}, FirstPersonVec3{32,0,0},
+        FirstPersonVec3{16,16,24}, FirstPersonVec3{16,16,24} };
+    for (const auto dimensions : { std::array<int32_t,2>{32,33}, {1,256}, {256,1}, {17,45} })
+    {
+        const auto [width, height] = dimensions;
+        for (int32_t y = 0; y < height; ++y)
+        for (int32_t x = 0; x < width; ++x)
+        {
+            const bool overlaps = int64_t(x + 1) * height > int64_t(y) * width;
+            const auto uv = FirstPersonVisualHullTexelUV(face, x, y, width, height);
+            EXPECT_EQ(uv.has_value(), overlaps);
+            if (!uv) continue;
+            EXPECT_GE((*uv)[0], (*uv)[1]);
+            EXPECT_GE((*uv)[0], float(x) / width);
+            EXPECT_LE((*uv)[0], float(x + 1) / width);
+            EXPECT_GE((*uv)[1], float(y) / height);
+            EXPECT_LE((*uv)[1], float(y + 1) / height);
+            FirstPersonVec3 point{};
+            EXPECT_TRUE(FirstPersonVisualHullSampleFace(face, (*uv)[0], (*uv)[1], point));
+        }
+    }
+    EXPECT_FALSE(FirstPersonVisualHullTexelUV(face, 0, 0, 0, 1).has_value());
+}
+
+TEST(FirstPersonSmallSceneryTest, SharedRotationPreservesNativeArtworkContract)
+{
+    OpenRCT2::SmallSceneryEntry entry{};
+    entry.flags.set(OpenRCT2::SmallSceneryFlag::occupiesFullTile);
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    for (uint8_t camera = 0; camera < 4; ++camera)
+    for (const FirstPersonVec3 point : { FirstPersonVec3{0,0,0}, {32,32,0}, {10,22,24}, {7,13,5} })
+    {
+        const auto rotated = FirstPersonRotateSceneryPoint(point, direction);
+        const auto shared = FirstPersonSmallSceneryArtworkPoint(entry, camera,
+            { int32_t(rotated.x), int32_t(rotated.y), int32_t(rotated.z) });
+        const auto original = FirstPersonSmallSceneryArtworkPoint(entry, (camera + direction) & 3u,
+            { int32_t(point.x), int32_t(point.y), int32_t(point.z) });
+        EXPECT_EQ(shared.x, original.x);
+        EXPECT_EQ(shared.y, original.y);
+    }
+}
+
+TEST(FirstPersonSmallSceneryTest, SharingExcludesDistinctRepresentationFamilies)
+{
+    OpenRCT2::SmallSceneryEntry entry{};
+    OpenRCT2::SmallSceneryElement element{};
+    element.setOccupiedQuadrants(15);
+    EXPECT_FALSE(FirstPersonSmallSceneryCanShareRotatedAsset(entry, element));
+    entry.flags.set(OpenRCT2::SmallSceneryFlag::occupiesFullTile);
+    EXPECT_TRUE(FirstPersonSmallSceneryCanShareRotatedAsset(entry, element));
+    for (const auto flag : { OpenRCT2::SmallSceneryFlag::isTree, OpenRCT2::SmallSceneryFlag::occupiesHalfTile,
+        OpenRCT2::SmallSceneryFlag::isAnimated, OpenRCT2::SmallSceneryFlag::hasGlass })
+    {
+        auto excluded = entry;
+        excluded.flags.set(flag);
+        EXPECT_FALSE(FirstPersonSmallSceneryCanShareRotatedAsset(excluded, element));
+    }
+    element.setOccupiedQuadrants(3);
+    EXPECT_FALSE(FirstPersonSmallSceneryCanShareRotatedAsset(entry, element));
+}
+
+TEST(FirstPersonAsyncTest, SharedAssetRepaintsAreBudgetedPerTileAndResume)
+{
+    FirstPersonTileRepaintQueue queue;
+    std::unordered_set<uint64_t> tiles;
+    for (uint64_t i = 0; i < 10000; ++i) tiles.insert(i);
+    queue.enqueue(std::move(tiles));
+    queue.enqueue({});
+    std::unordered_set<uint64_t> repainted;
+    FirstPersonFrameBudget budget(32, std::chrono::seconds(5));
+    queue.drain(budget, [&](uint64_t tile) { EXPECT_TRUE(repainted.insert(tile).second); });
+    EXPECT_EQ(repainted.size(), 32u);
+    EXPECT_EQ(queue.pending(), 9968u);
+    FirstPersonFrameBudget empty(0, std::chrono::seconds(5));
+    queue.drain(empty, [&](uint64_t tile) { repainted.insert(tile); });
+    EXPECT_EQ(repainted.size(), 32u);
+    FirstPersonFrameBudget next(10000, std::chrono::seconds(5));
+    queue.drain(next, [&](uint64_t tile) { EXPECT_TRUE(repainted.insert(tile).second); });
+    EXPECT_EQ(repainted.size(), 10000u);
+    EXPECT_EQ(queue.pending(), 0u);
+    queue.enqueue({1,2,3});
+    queue.clear();
+    EXPECT_EQ(queue.pending(), 0u);
+    queue.drain(next, [&](uint64_t) { FAIL(); });
+}
+
+TEST(FirstPersonStreamingTest, PlaneIndexRejectsDistantSurfacesWithoutPairwiseScan)
+{
+    struct Probe { float minU, minV, maxU, maxV; };
+    FirstPersonPlaneSpatialIndex<Probe> index;
+    size_t budget = 32768;
+    for (int32_t i = 0; i < 10000; ++i)
+    {
+        const Probe probe{ float(i * 64), 0, float(i * 64 + 16), 16 };
+        EXPECT_TRUE(index.query(probe, budget).empty());
+        index.insert(probe);
+    }
+    EXPECT_EQ(budget, 32768u);
+    EXPECT_EQ(index.query({640,0,656,16}, budget).size(), 1u);
+    EXPECT_EQ(budget, 32767u);
+}
+
+TEST(FirstPersonStreamingTest, PlaneIndexDeduplicatesCellsAndCapsDenseAndLargeBounds)
+{
+    struct Probe { float minU, minV, maxU, maxV; };
+    FirstPersonPlaneSpatialIndex<Probe> index;
+    index.insert({-40,-40,40,40});
+    size_t budget = 10;
+    EXPECT_EQ(index.query({-40,-40,40,40}, budget).size(), 1u);
+    EXPECT_EQ(budget, 9u);
+    for (size_t i = 0; i < 1000; ++i) index.insert({-10000,-10000,10000,10000});
+    budget = 7;
+    EXPECT_EQ(index.query({0,0,1,1}, budget).size(), 7u);
+    EXPECT_EQ(budget, 0u);
+    EXPECT_TRUE(index.query({0,0,1,1}, budget).empty());
+    budget = 3;
+    EXPECT_EQ(index.query({-1.0e9f,-1.0e9f,1.0e9f,1.0e9f}, budget).size(), 3u);
+    EXPECT_EQ(budget, 0u);
+}
+
+TEST(FirstPersonSmallSceneryCollisionTest, ColdCollisionUsesOnlyAuthoritativeOccupiedQuarters)
+{
+    OpenRCT2::SmallSceneryEntry entry{};
+    OpenRCT2::SmallSceneryElement element{};
+    entry.height = 64;
+    element.setOccupiedQuadrants(1u << 0);
+    const auto mask = BuildFirstPersonSmallSceneryOccupancyMask(entry, element);
+    ASSERT_TRUE(mask.valid);
+    EXPECT_EQ(mask.layerCount, 5u);
+    EXPECT_EQ(mask.layerHighZ[4], 20);
+    for (size_t layer = 0; layer < mask.layerCount; ++layer)
+    for (int32_t y = 0; y < 16; ++y)
+    for (int32_t x = 0; x < 16; ++x)
+        EXPECT_EQ(mask.contains(layer, x, y), x >= 8 && y >= 8);
+    entry.height = 0;
+    EXPECT_FALSE(BuildFirstPersonSmallSceneryOccupancyMask(entry, element).valid);
+}
+
+TEST(FirstPersonSmallSceneryCollisionTest, PublishedMaskReplacesFallbackWithoutReconstruction)
+{
+    FirstPersonSmallSceneryWalkingCache cache;
+    cache.reset(1);
+    int firstSource = 0, replacementSource = 0;
+    size_t fallbackCalls = 0;
+    const auto fallback = [&] {
+        ++fallbackCalls;
+        FirstPersonSmallSceneryWalkingMask mask;
+        mask.layerCount = 1;
+        mask.add(0, 1, 2);
+        return mask;
+    };
+    EXPECT_TRUE(cache.get(42, &firstSource, fallback)->contains(0, 1, 2));
+    EXPECT_TRUE(cache.get(42, &firstSource, fallback)->contains(0, 1, 2));
+    EXPECT_EQ(fallbackCalls, 1u);
+    // An observed empty collision volume must not reinstate occupied fallback.
+    cache.publish(42, &firstSource, {});
+    EXPECT_FALSE(cache.get(42, &firstSource, fallback)->valid);
+    EXPECT_EQ(fallbackCalls, 1u);
+    EXPECT_TRUE(cache.get(42, &replacementSource, fallback)->valid);
+    EXPECT_EQ(fallbackCalls, 2u);
+    cache.reset(2);
+    EXPECT_TRUE(cache.get(42, &replacementSource, fallback)->valid);
+    EXPECT_EQ(fallbackCalls, 3u);
+}
+
+TEST(FirstPersonSmallSceneryCollisionTest, SharedWalkingMaskRotatesAroundTileCentre)
+{
+    FirstPersonSmallSceneryWalkingMask mask;
+    mask.layerCount = 1;
+    mask.layerLowZ[0] = 4;
+    mask.layerHighZ[0] = 8;
+    mask.add(0, 2, 5);
+    const std::array<std::array<int32_t,2>,4> expected{{ {2,5}, {5,13}, {13,10}, {10,2} }};
+    for (uint8_t direction = 0; direction < 4; ++direction)
+    {
+        const auto rotated = RotateFirstPersonSmallSceneryWalkingMask(mask, direction);
+        EXPECT_EQ(rotated.layerLowZ[0], 4);
+        EXPECT_EQ(rotated.layerHighZ[0], 8);
+        for (int32_t y = 0; y < 16; ++y)
+        for (int32_t x = 0; x < 16; ++x)
+            EXPECT_EQ(rotated.contains(0, x, y), x == expected[direction][0] && y == expected[direction][1]);
+    }
 }
