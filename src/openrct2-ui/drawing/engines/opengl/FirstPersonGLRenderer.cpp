@@ -1003,7 +1003,10 @@ void main() {
         {
             const auto packet = std::find_if(scene.staticRegions.begin(), scene.staticRegions.end(),
                 [&](const auto& p) { return p.key == _pendingRegion->key; });
-            if (packet == scene.staticRegions.end() || packet->sourceRevision != _pendingRegion->buffer.sourceRevision
+            if (packet == scene.staticRegions.end()
+                || !Paint::FirstPersonStaticRegionUploadIsCurrent(
+                    *packet, _pendingRegion->buffer.sceneEpoch,
+                    _pendingRegion->buffer.generation, _pendingRegion->buffer.sourceRevision)
                 || _pendingRegion->buffer.dependencyRevisionSerial != textureRevisionSerial)
                 DiscardPendingRegion();
         }
