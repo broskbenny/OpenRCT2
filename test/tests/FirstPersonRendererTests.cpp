@@ -12,6 +12,7 @@
 #include <thread>
 #include <openrct2/paint/FirstPersonAsync.h>
 #include <openrct2/paint/FirstPersonStreaming.h>
+#include "../../src/openrct2-ui/drawing/engines/opengl/FirstPersonRegionTextureRevisions.h"
 #include <openrct2/paint/FirstPersonSpriteSnapshot.h>
 #include <algorithm>
 #include <openrct2/paint/FirstPersonRenderer.h>
@@ -5070,4 +5071,51 @@ TEST(FirstPersonStaticRegionUploadTest, SupersededGeometryMustDiscardStagedUploa
     EXPECT_FALSE(FirstPersonStaticRegionUploadIsCurrent(packet, 3, 16, 5));
     EXPECT_FALSE(FirstPersonStaticRegionUploadIsCurrent(packet, 2, 17, 5));
     EXPECT_FALSE(FirstPersonStaticRegionUploadIsCurrent(packet, 3, 17, 4));
+}
+
+
+TEST(FirstPersonRegionTextureRevisionsTest, UnrelatedAnimatedImageDoesNotReuploadStaticRegion)
+{
+    OpenRCT2::Ui::FirstPersonRegionTextureRevisions tracker;
+    std::array<uint64_t, 16> versions{};
+    versions[5] = 2;
+    versions[8] = 9;
+    const std::vector<uint32_t> dependencies{5, 8};
+    size_t lookups = 0;
+    const auto revision = [&](uint32_t image) { ++lookups; return versions[image]; };
+    tracker.capture(dependencies, 3, revision);
+    lookups = 0;
+    EXPECT_TRUE(tracker.current(dependencies, 3, revision));
+    EXPECT_EQ(lookups, 0u);
+
+    // A scrolling sign or animation invalidates an unrelated G1 image.
+    ++versions[13];
+    EXPECT_TRUE(tracker.current(dependencies, 4, revision));
+    EXPECT_EQ(lookups, dependencies.size());
+    EXPECT_TRUE(tracker.current(dependencies, 4, revision));
+    EXPECT_EQ(lookups, dependencies.size()); // fast path until next invalidation
+}
+
+TEST(FirstPersonRegionTextureRevisionsTest, DependentImageInvalidationRejectsOldUpload)
+{
+    OpenRCT2::Ui::FirstPersonRegionTextureRevisions tracker;
+    std::array<uint64_t, 16> versions{};
+    const std::vector<uint32_t> dependencies{5, 8}; // image and mask
+    size_t lookups = 0;
+    const auto revision = [&](uint32_t image) { ++lookups; return versions[image]; };
+    tracker.capture(dependencies, 1, revision);
+    ++versions[8];
+    EXPECT_FALSE(tracker.current(dependencies, 2, revision));
+    lookups = 0;
+    EXPECT_FALSE(tracker.current(dependencies, 3, revision));
+    EXPECT_EQ(lookups, 0u); // obsolete upload cannot become valid again
+    tracker.capture(dependencies, 3, revision);
+    EXPECT_TRUE(tracker.current(dependencies, 3, revision));
+    const std::vector<uint32_t> alteredDependencies{5};
+    EXPECT_FALSE(tracker.current(alteredDependencies, 4, revision));
+
+    OpenRCT2::Ui::FirstPersonRegionTextureRevisions colourOnly;
+    const std::vector<uint32_t> none;
+    colourOnly.capture(none, 1, revision);
+    EXPECT_TRUE(colourOnly.current(none, 99, revision));
 }
