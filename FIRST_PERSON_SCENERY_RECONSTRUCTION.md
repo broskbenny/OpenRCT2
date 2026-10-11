@@ -76,10 +76,11 @@ fixture performed zero peer comparisons during insertion, avoiding the former
 
 ## Validation and reproduction
 
-Thirteen new tests in `test/tests/FirstPersonRendererTests.cpp` cover compact geometry,
+Fourteen new tests in `test/tests/FirstPersonRendererTests.cpp` cover compact geometry,
 raised bases, openings, contradictory views, malformed bounds, texture footprints,
 rotation contracts, excluded families, queue resumption, spatial budgets, cold
-collision, publication replacement and collision-mask rotations. They pass in a
+collision, publication replacement, collision-mask rotations and missing-versus-empty
+source evidence. They pass in a
 focused C++20 runner with warnings treated as errors, and under UBSan.
 
 Eight actual material-bake fixtures pass normally and under UBSan. Run from the
@@ -120,3 +121,18 @@ New implementation code is header-only; no additional translation unit is needed
 5. General non-convex scenery still relies on the legacy reconstruction family.
    Multiple ridges, overhangs and ornamental structures need further representation
    work. No new stable tag should be created solely from these fixture results.
+
+## Follow-up: missing collision evidence
+
+A production-path regression exposed a distinction missing from the initial worker
+publication change: a missing tree sprite could produce the same empty mask as four
+successfully checked transparent views. Publishing the former incorrectly removed
+collision. Snapshot mask construction now returns an optional result: unavailable,
+null-data and palette sources are unknown; only a complete four-view observation may
+publish an empty mask. The immediate occupancy fallback therefore remains in place
+when source evidence is incomplete.
+
+The production bake runner now checks each missing-view position and a genuinely
+observed empty mask, in addition to the eight solid fixtures. The missing-view case
+was reproduced as a failing assertion before the correction. All fourteen focused
+regressions and the extended production runner pass under UBSan after the fix.

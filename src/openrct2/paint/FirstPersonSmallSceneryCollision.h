@@ -326,8 +326,11 @@ namespace OpenRCT2::Paint
         return 0;
     }
 
+    // Missing or unusable source views are unknown, not evidence that the
+    // physical volume is empty. A present optional with an empty mask records
+    // the distinct result of checking all four native views successfully.
     template<typename SpriteLookup>
-    [[nodiscard]] inline FirstPersonSmallSceneryWalkingMask
+    [[nodiscard]] inline std::optional<FirstPersonSmallSceneryWalkingMask>
         BuildFirstPersonSmallSceneryWalkingMaskFromSnapshot(
             const SmallSceneryEntry& entry,
             const SmallSceneryElement& element, SpriteLookup&& spriteLookup)
@@ -339,12 +342,12 @@ namespace OpenRCT2::Paint
                 SmallSceneryFlag::hasGlass,
                 SmallSceneryFlag::isFountain,
                 SmallSceneryFlag::isCupidFountain))
-            return result;
+            return std::nullopt;
 
         const uint8_t occupied =
             element.getOccupiedQuadrants() & 0x0Fu;
         if (occupied == 0)
-            return result;
+            return std::nullopt;
 
         const int32_t sampleTop =
             std::min<int32_t>(
@@ -371,7 +374,8 @@ namespace OpenRCT2::Paint
             sprites[rotation] = spriteLookup(image);
             const auto* g1 = sprites[rotation];
             constexpr size_t kMaxSourcePixels = 65536;
-            if (g1 == nullptr || g1->width <= 0 || g1->height <= 0
+            if (g1 == nullptr || g1->offset == nullptr || g1->width <= 0 || g1->height <= 0
+                || g1->flags.has(G1Flag::isPalette)
                 || size_t(g1->width) * size_t(g1->height)
                     > kMaxSourcePixels)
                 return {};
@@ -443,7 +447,7 @@ namespace OpenRCT2::Paint
         const SmallSceneryEntry& entry, const SmallSceneryElement& element)
     {
         return BuildFirstPersonSmallSceneryWalkingMaskFromSnapshot(entry, element,
-            [](ImageIndex image) { return GfxGetG1Element(image); });
+            [](ImageIndex image) { return GfxGetG1Element(image); }).value_or(FirstPersonSmallSceneryWalkingMask{});
     }
 
     // A native sprite's drawing offset describes where the image is painted,

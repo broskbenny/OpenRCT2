@@ -4843,3 +4843,35 @@ TEST(FirstPersonSmallSceneryCollisionTest, SharedWalkingMaskRotatesAroundTileCen
             EXPECT_EQ(rotated.contains(0, x, y), x == expected[direction][0] && y == expected[direction][1]);
     }
 }
+
+TEST(FirstPersonSmallSceneryCollisionTest, MissingSourceIsUnknownRatherThanObservedEmpty)
+{
+    OpenRCT2::SmallSceneryEntry entry{};
+    entry.image = 100;
+    entry.height = 32;
+    OpenRCT2::SmallSceneryElement element{};
+    element.setOccupiedQuadrants(15);
+    std::array<uint8_t, 64 * 64> pixels{};
+    OpenRCT2::G1Element sprite{};
+    sprite.width = sprite.height = 64;
+    sprite.xOffset = -32;
+    sprite.yOffset = -48;
+    sprite.offset = pixels.data();
+    sprite.flags.set(OpenRCT2::G1Flag::hasTransparency);
+    for (uint32_t missing = 100; missing < 104; ++missing)
+    {
+        const auto result = BuildFirstPersonSmallSceneryWalkingMaskFromSnapshot(entry, element,
+            [&](ImageIndex image) { return image == missing ? nullptr : &sprite; });
+        EXPECT_FALSE(result.has_value());
+    }
+    const auto readAll = [&](ImageIndex) { return &sprite; };
+    const auto empty = BuildFirstPersonSmallSceneryWalkingMaskFromSnapshot(entry, element, readAll);
+    ASSERT_TRUE(empty.has_value());
+    EXPECT_FALSE(empty->valid);
+    EXPECT_EQ(empty->layerCount, 5u);
+    sprite.offset = nullptr;
+    EXPECT_FALSE(BuildFirstPersonSmallSceneryWalkingMaskFromSnapshot(entry, element, readAll).has_value());
+    sprite.offset = pixels.data();
+    sprite.flags.set(OpenRCT2::G1Flag::isPalette);
+    EXPECT_FALSE(BuildFirstPersonSmallSceneryWalkingMaskFromSnapshot(entry, element, readAll).has_value());
+}

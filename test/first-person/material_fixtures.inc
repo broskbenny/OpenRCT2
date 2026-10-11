@@ -53,4 +53,33 @@ int main() {
             && evidence.withoutOpaqueSamples==0 && missing==0 && attempt.minimumIoU==1);
         std::cout<<"base="<<base<<" shape="<<shape<<" built="<<good<<" hullFaces="<<evidence.hullFaces<<" materialFaces="<<evidence.materialFaces<<" missingSource="<<evidence.withoutSourceMaterial<<" empty="<<evidence.withoutOpaqueSamples<<" underside="<<evidence.unobservedUndersides<<" transparent="<<missing<<"/"<<samples<<" texels="<<texels<<" IoU="<<attempt.minimumIoU<<" ms="<<ms<<"\n";
     }
+    // A missing snapshot is unknown, whereas four transparent source views
+    // provide actual evidence for an empty collision mask.
+    for (int missingView = 0; missingView <= 4; ++missingView)
+    {
+        SmallSceneryEntry entry{};
+        entry.image = 100;
+        entry.height = 32;
+        entry.flags.set(SmallSceneryFlag::isTree);
+        SmallSceneryElement element{};
+        element.setOccupiedQuadrants(15);
+        std::array<uint8_t, 64 * 64> pixels{};
+        G1Element sprite{};
+        sprite.width = sprite.height = 64;
+        sprite.xOffset = -32;
+        sprite.yOffset = -48;
+        sprite.offset = pixels.data();
+        sprite.flags.set(G1Flag::hasTransparency);
+        FirstPersonSpriteSnapshot snapshot;
+        FirstPersonFrameBudget budget(4, std::chrono::seconds(5));
+        for (int view = 0; view < 4; ++view)
+            assert(snapshot.capture(100 + view, view == missingView ? nullptr : &sprite, budget));
+        FirstPersonScene scene;
+        std::optional<FirstPersonSmallSceneryWalkingMask> walkingMask;
+        BuildSmallSceneryGeometry(scene, element, entry, ImageId(100), snapshot, nullptr, nullptr, &walkingMask);
+        assert(walkingMask.has_value() == (missingView == 4));
+        if (walkingMask) assert(!walkingMask->valid);
+    }
+    std::cout << "Missing-view and observed-empty collision publication checks passed\n";
+
 }
