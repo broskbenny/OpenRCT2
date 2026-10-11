@@ -7,6 +7,7 @@
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonLargeSceneryReconstruction.h"
 #include "FirstPersonMaterialInference.h"
+#include "FirstPersonPlanarSolidReconstruction.h"
 #include "FirstPersonParkEntranceReconstruction.h"
 #include "FirstPersonPhysicalProxy.h"
 #include "FirstPersonSmallSceneryAppearance.h"
