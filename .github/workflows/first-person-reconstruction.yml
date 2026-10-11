@@ -1,0 +1,38 @@
+name: First-person reconstruction checks
+
+on:
+  push:
+    branches:
+      - first-person/**
+    paths:
+      - test/first-person/**
+      - src/openrct2/paint/FirstPerson*.h
+      - src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc
+      - src/openrct2/paint/FirstPersonRenderer.Core.inc
+      - .github/workflows/first-person-reconstruction.yml
+  pull_request:
+    paths:
+      - test/first-person/**
+      - src/openrct2/paint/FirstPerson*.h
+      - src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc
+      - src/openrct2/paint/FirstPersonRenderer.Core.inc
+      - .github/workflows/first-person-reconstruction.yml
+
+permissions:
+  contents: read
+
+jobs:
+  headless-reconstruction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install analysis dependencies
+        run: python -m pip install numpy opencv-python-headless trimesh
+      - name: Check real-asset parser, registration, and mesh evaluator
+        run: python -m unittest discover -s test/first-person -p 'test_*.py' -v
+      - name: Exercise exact production small-scenery material bake
+        run: python test/first-person/verify_material_bake.py --sanitize
