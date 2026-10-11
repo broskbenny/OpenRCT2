@@ -3256,7 +3256,13 @@
                             && planarCertificate.maximumEdgeError <= 2
                             && planarCertificate.symmetricDifferencePixels
                                 <= voxelCertificate.symmetricDifferencePixels
-                                    + allowedPixelLoss)
+                                    + allowedPixelLoss
+                            // A good silhouette does not prove a faithful
+                            // solid. Do not close real negative space or
+                            // publish disconnected, nonmanifold patches.
+                            && CertifyFirstPersonCandidateVolume(
+                                   hull, planarFaces)
+                                   .retainsAllCellCentres())
                         {
                             hull.refinedFaces = std::move(planarFaces);
                             hull.planarSurfaceSelected = true;
