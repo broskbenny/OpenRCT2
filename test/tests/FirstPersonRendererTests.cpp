@@ -5248,3 +5248,22 @@ TEST(FirstPersonPlanarSolidTest, RetainsComplexAndPerforatedVoxelGeometry)
     hull = MakeFirstPersonPlanarTestHull({ 2, 7, 2, 7, 2, 7, 2, 7 });
     EXPECT_TRUE(BuildFirstPersonPlanarSolidCandidate(hull).empty());
 }
+
+
+TEST(FirstPersonPlanarSolidTest, PerpendicularRidgeAlsoFormsClosedMesh)
+{
+    auto hull = MakeFirstPersonPlanarTestHull(
+        { 6, 6, 6, 6, 6, 6, 6, 6 }, 8);
+    constexpr std::array<int, 8> ridgeHeights{
+        2, 3, 4, 5, 6, 5, 4, 3
+    };
+    const size_t nx = hull.sizeForward, ny = hull.sizeRight;
+    for (size_t y = 0; y < ny; ++y)
+    for (size_t x = 0; x < nx; ++x)
+    for (int z = 0; z < hull.sizeUp; ++z)
+        hull.occupied[(size_t(z) * ny + y) * nx + x] =
+            z < ridgeHeights[y] ? 1 : 0;
+    const auto faces = BuildFirstPersonPlanarSolidCandidate(hull);
+    ASSERT_EQ(faces.size(), 10u);
+    ExpectFirstPersonPlanarMeshClosed(faces);
+}
