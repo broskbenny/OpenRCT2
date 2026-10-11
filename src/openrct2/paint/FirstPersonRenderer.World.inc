@@ -3195,8 +3195,13 @@
                 if (!hasPixel)
                     continue;
 
-                surface.immutablePixels =
-                    std::move(pixels);
+                // Face material is immutable after the bake. Share the
+                // pixel storage across cached faces, region packet rebuilds
+                // and GPU uploads instead of deep-copying its bitmap.
+                surface.persistentPixels =
+                    std::make_shared<
+                        std::vector<uint8_t>>(
+                            std::move(pixels));
                 surface.immutableWidth =
                     int16_t(width);
                 surface.immutableHeight =
@@ -3231,7 +3236,7 @@
                 ExtendStableKey(
                     fingerprint, height);
                 for (const auto pixel :
-                     surface.immutablePixels)
+                     surface.immutablePixelData())
                 {
                     fingerprint ^= pixel;
                     fingerprint *= 1099511628211ull;
