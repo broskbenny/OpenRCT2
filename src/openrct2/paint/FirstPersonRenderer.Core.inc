@@ -4104,13 +4104,14 @@
                 // may be repaired; larger faces and genuine negative-space
                 // objects pay no extra per-texel evidence allocation.
                 const bool repairIsolatedRasterPinhole =
-                    hull.valid
+                    hull.valid && !candidates.empty()
                     && negativePassage == nullptr
                     && (reconstructionOptions == nullptr
                         || !reconstructionOptions->opaqueBoundaryMaterial)
                     && size_t(width) * size_t(height) <= 1024;
                 std::vector<uint8_t> directNativePixels;
                 std::vector<uint8_t> weaklyTransparentPixels;
+                bool haveWeaklyTransparentPixel = false;
                 if (repairIsolatedRasterPinhole)
                 {
                     directNativePixels.assign(pixels.size(), 0);
@@ -4273,6 +4274,7 @@
                         {
                             weaklyTransparentPixels[
                                 size_t(y) * size_t(width) + size_t(x)] = 1;
+                            haveWeaklyTransparentPixel = true;
                         }
                     }
                     else
@@ -4296,7 +4298,8 @@
                         ++visiblePixelCount;
                 }
 
-                if (repairIsolatedRasterPinhole)
+                if (repairIsolatedRasterPinhole
+                    && haveWeaklyTransparentPixel)
                 {
                     visiblePixelCount +=
                         RepairFirstPersonIsolatedMaterialPinhole(
