@@ -4044,6 +4044,8 @@
                     group.anchor;
                 surface.diagnosticContinuousSurfaceRefined =
                     hull.continuousSurfaceRefined;
+                surface.diagnosticPlanarSurfaceSelected =
+                    hull.planarSurfaceSelected;
                 surface.diagnosticStructuralEvidenceUsed =
                     structuralColumnsSelected
                     || (hull.continuousSurfaceRefined
