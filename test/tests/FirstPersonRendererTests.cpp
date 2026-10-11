@@ -33,6 +33,7 @@
 #include <openrct2/paint/FirstPersonVehicleBodyHull.h>
 #include <openrct2/paint/FirstPersonVisualHull.h>
 #include <openrct2/paint/FirstPersonPlanarSolidReconstruction.h>
+#include <openrct2/paint/FirstPersonVolumePreservation.h>
 #include <map>
 #include <openrct2/paint/FirstPersonWalkingSemantics.h>
 #include <openrct2/paint/Paint.h>
@@ -5328,4 +5329,44 @@ TEST(FirstPersonMaterialContinuityTest, InvalidOrTooSmallMaterialCannotBeRepaire
         pixels, evidence, evidence, 2, 2), 0u);
     EXPECT_EQ(RepairFirstPersonIsolatedUnknownMaterial(
         pixels, {}, evidence, 4, 4), 0u);
+}
+
+
+TEST(FirstPersonVolumePreservationTest, ClosedPlanarCandidateRetainsOriginalCellCentres)
+{
+    const auto hull = MakeFirstPersonPlanarTestHull(
+        { 4, 4, 4, 4, 4, 4, 4, 4 });
+    const auto faces = BuildFirstPersonPlanarSolidCandidate(hull);
+    ASSERT_EQ(faces.size(), 6u);
+    const auto certificate = CertifyFirstPersonCandidateVolume(hull, faces);
+    EXPECT_TRUE(certificate.retainsAllCellCentres());
+    EXPECT_EQ(certificate.falselyFilledEmptyCells, 0u);
+    EXPECT_EQ(certificate.lostOccupiedCells, 0u);
+    EXPECT_EQ(certificate.nonManifoldOrOpenEdges, 0u);
+}
+
+TEST(FirstPersonVolumePreservationTest, RejectsSealedOpeningAndMissingBoundary)
+{
+    auto hull = MakeFirstPersonPlanarTestHull(
+        { 4, 4, 4, 4, 4, 4, 4, 4 });
+    auto faces = BuildFirstPersonPlanarSolidCandidate(hull);
+    ASSERT_EQ(faces.size(), 6u);
+
+    // The candidate remains a solid block after the authoritative occupied
+    // grid acquires a negative-space cell. A silhouette alone might miss it.
+    const size_t index = (size_t(1) * hull.sizeRight + size_t(2))
+        * hull.sizeForward + size_t(3);
+    hull.occupied[index] = 0;
+    const auto filled = CertifyFirstPersonCandidateVolume(hull, faces);
+    EXPECT_TRUE(filled.measured);
+    EXPECT_EQ(filled.falselyFilledEmptyCells, 1u);
+    EXPECT_FALSE(filled.retainsAllCellCentres());
+
+    hull.occupied[index] = 1;
+    faces.pop_back(); // Missing vertical wall: parity probes alone miss this.
+    const auto open = CertifyFirstPersonCandidateVolume(hull, faces);
+    EXPECT_GT(open.nonManifoldOrOpenEdges, 0u);
+    EXPECT_FALSE(open.retainsAllCellCentres());
+    EXPECT_FALSE(CertifyFirstPersonCandidateVolume(
+        hull, faces, 1).measured);
 }
