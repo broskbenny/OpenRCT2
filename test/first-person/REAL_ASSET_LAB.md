@@ -202,3 +202,26 @@ projective error, material provenance, and reconstruction cost.
 The original 486-triangle candidate fills 76 native-grid empty cells and
 loses 493 occupied cells. It remains deliberately **rejected** despite
 its apparent silhouette quality.
+
+## Production candidate volume admission
+
+The production planar path now has an additional conservative gate:
+`FirstPersonVolumePreservation.h` compares candidate closed-surface geometry
+with **both occupied and empty voxel centres** in the original C++ visual hull.
+
+It first checks every candidate polygon edge is paired with another
+opposite-winding edge, rejecting open/nonmanifold seams (including a missing
+vertical wall, which simple top-down ray parity cannot detect). It then
+uses bounded vertical ray-parity probes, disallowing newly closed passages,
+lost solid occupancy, or ambiguous odd intersection counts. The check is
+short-circuited **after** four-view silhouette checks and limited to
+2,000,000 face/column comparisons. On any failure or exceeded budget, the
+previous reconstruction is retained.
+
+Portable tests compile and run the **actual production C++ header** using
+`test_production_volume_preservation.py`; native full-scene C++ execution,
+GPU visualization, and in-game FPS are not tested by this adapter.
+
+The geometry certificate cannot establish real doors absent from the input
+visual hull; nor does it validate native palette mapping or finer sub-grid
+appearance. Structural openings remain a separate evidence requirement.
