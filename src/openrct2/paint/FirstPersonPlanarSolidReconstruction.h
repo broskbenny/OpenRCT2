@@ -31,7 +31,8 @@ namespace OpenRCT2::Paint
             || !(hull.step > 0.0f) || !std::isfinite(hull.step))
             return {};
         const int nx = hull.sizeForward, ny = hull.sizeRight, nz = hull.sizeUp;
-        if (nx < 2 || ny < 2 || nz < 1 || size_t(nx) * size_t(ny) > 4096)
+        if (nx < 2 || ny < 2 || nz < 1 || size_t(nx) * size_t(ny) > 4096
+            || hull.occupied.size() != size_t(nx) * size_t(ny) * size_t(nz))
             return {};
 
         std::vector<double> tops(size_t(nx) * size_t(ny));
