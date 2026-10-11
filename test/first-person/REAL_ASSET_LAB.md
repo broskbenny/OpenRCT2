@@ -124,3 +124,52 @@ portable source-artwork regressions and the existing focused production
 small-scenery material bake on relevant branch pushes and PRs. Its presence
 does not imply GitHub Actions has executed successfully; check workflow status
 before treating CI coverage as verified.
+
+## Three-dimensional free-space preservation
+
+Four-view silhouette IoU is insufficient to certify simplification. An open
+passage may be sealed inside the model while all native projections look
+nearly identical. Use `check_mesh_free_space.py` to compare a candidate
+**watertight triangle mesh** with the occupancy it was reconstructed from:
+
+```sh
+python3 test/first-person/check_mesh_free_space.py /private/occupied_xyz.npy \
+  /private/candidate.glb --step 2 --origin -1 -1 -1 \
+  --max-sealed-exterior-cells 0 --max-lost-solid-cells 10 \
+  --output /tmp/space.json
+```
+
+Important: `--origin -1 -1 -1` applies **only to the independent October
+2026 Python prototype**. Its marching-cubes vertices were offset one world
+unit from the original sampled cell-centre positions. The validator explicitly
+requires the model's true sample registration; an uncalibrated offset can
+manufacture hundreds of false errors. Production geometry must use its own
+correct origin, not inherit this workaround.
+
+On the private SMH2 occupancy (shape 32×32×24, 6,250 occupied cells), the
+experiment measured:
+
+| Candidate | Faces | False-filled empty | Sealed exterior free | Lost solid | Ambiguous rays |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Raw marching-cubes hull | 6,128 | 0 | 0 | 9 | 2 |
+| Clustered compact mesh | 486 | 76 | 76 | 493 | 0 |
+
+These counts use the corrected mesh/occupancy registration. The clustered
+candidate **fails strict gates**, notwithstanding its compact geometry,
+watertightness and apparently reasonable four-view silhouette IoU.
+
+The test uses parity intersections of vertical rays and explicitly fails
+ambiguous ray counts; it does not require `rtree`. It cannot validate a
+non-watertight open shell, prove that the source occupancy respects genuine
+architectural openings, or certify native palette mapping. Do not commit the
+original asset or source-derived occupancy/meshes to this repository.
+
+## Material source transparency safety
+
+`FirstPersonMaterialContinuity.h` can replace only isolated **unknown**
+checkerboard material samples surrounded by direct native-colour evidence.
+It must never change a native-known transparent pixel. The actual SMH2 source
+contains isolated transparent pixels; blindly painting them opaque would
+corrupt the artwork. Production selection also excludes authored negative
+passages and caps the face-size budget. This is a narrowly scoped material
+quality correction, **not** a substitute for a connected-surface reconstruction.
