@@ -24,8 +24,9 @@ class NativeArtworkAuditTest(unittest.TestCase):
         sprites[8] = image([[86]])
         dat = dict(tiles=[dict(x=0, y=0, z=0), dict(x=0, y=0, z=0)],
                    images=sprites)
-        composite, _ = tile_composite(dat, 0)
+        composite, _, owners = tile_composite(dat, 0, include_owners=True)
         self.assertEqual(composite.tolist(), [[86]])
+        self.assertEqual(owners.tolist(), [[1]])
 
     def test_exact_palette_matches_after_translation(self):
         reference = np.array([[0, 0, 0, 0],
@@ -66,6 +67,7 @@ class NativeArtworkAuditTest(unittest.TestCase):
         for row in result['native_preview_comparisons']:
             self.assertEqual(row['exact_reference_fraction'], 1.0)
             self.assertFalse(row['independent_geometry_certificate'])
+            self.assertEqual(row['registered_preview_tile_owners'], [3, 0, 0, 0])
 
 
 if __name__ == '__main__':
