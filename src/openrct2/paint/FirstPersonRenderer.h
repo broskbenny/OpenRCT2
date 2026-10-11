@@ -301,6 +301,17 @@ namespace OpenRCT2::Paint
         size_t vertexCount{};
     };
 
+    // Geometry publication may advance without a tile/source revision.
+    // Do not complete an older staged GPU upload over the new geometry.
+    [[nodiscard]] constexpr bool FirstPersonStaticRegionUploadIsCurrent(
+        const FirstPersonStaticRegion& packet, uint64_t sceneEpoch,
+        uint64_t generation, uint64_t sourceRevision)
+    {
+        return packet.sceneEpoch == sceneEpoch
+            && packet.generation == generation
+            && packet.sourceRevision == sourceRevision;
+    }
+
     struct FirstPersonScene
     {
         // Increments whenever the authoritative first-person world cache is
