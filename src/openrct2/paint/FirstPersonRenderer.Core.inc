@@ -2401,7 +2401,8 @@
             const FirstPersonSpriteSnapshot& sprites, uint64_t assetGeneration,
             const FirstPersonWalkabilityConstraint* negativePassage = nullptr,
             const LargeSceneryReconstructionOptions*
-                reconstructionOptions = nullptr)
+                reconstructionOptions = nullptr,
+            bool allowPlanarSolid = true)
         {
             LargeSceneryGeometryCacheEntry result{};
             result.signature = signature;
@@ -3214,7 +3215,8 @@
             // openings, partial footprints and silhouette disagreements keep
             // the existing (possibly open) reconstruction; they are never
             // filled merely to get a cleaner looking model.
-            if (hull.valid
+            if (allowPlanarSolid
+                && hull.valid
                 && negativePassage == nullptr
                 && (reconstructionOptions == nullptr
                     || reconstructionOptions->supportCells == nullptr))
@@ -4345,6 +4347,22 @@
                 EmitQuad(surface, vertices);
                 result.surfaces.emplace_back(
                     std::move(surface));
+            }
+
+            // A closed connected mesh cannot be published with untextured
+            // or alpha-perforated visible faces. Reuse the existing voxel
+            // reconstruction when the native palette evidence does not cover
+            // every visible plane; the one deliberately unobserved underside
+            // is excluded from this requirement. The second pass explicitly
+            // disables planar selection and therefore cannot recurse again.
+            if (hull.planarSurfaceSelected
+                && (materialCoverage.materialFaces() + 1 < faces.size()
+                    || materialCoverage.opaqueFaces() + 1 < faces.size()))
+            {
+                return BuildLargeSceneryInstanceGeometry(
+                    large, entry, model, group, signature, frame,
+                    sprites, assetGeneration, negativePassage,
+                    reconstructionOptions, false);
             }
 
             materialCoverage.applyTo(result.surfaces.begin(), result.surfaces.end());
