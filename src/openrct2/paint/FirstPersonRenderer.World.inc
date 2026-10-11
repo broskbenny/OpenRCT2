@@ -3459,6 +3459,7 @@
 
             cached.semanticResidentSurfaces.clear();
             cached.semanticStreamedSurfaces.clear();
+            cached.semanticMovingMeshes.clear();
 
             const auto semanticGroups =
                 BuildFirstPersonSemanticViewGroups(cached);
@@ -3609,17 +3610,36 @@
         {
             if (!cached.valid || cached.dirty) return;
             const auto fingerprint = FirstPersonSemanticViewSetFingerprint(cached);
-            if (cached.semanticSurfaceFingerprint == fingerprint) return;
+            // Native painting can stop producing semantic components without
+            // changing the tile signature. Do not retain ghosts or let a
+            // pending job from an earlier view set re-publish them.
             if (std::all_of(cached.rotations.begin(), cached.rotations.end(),
                     [](const auto& rotation) { return rotation.semanticComponents.empty(); }))
             {
+                _semanticJobs.erase(key);
+                const bool hadGeometry = !cached.semanticResidentSurfaces.empty()
+                    || !cached.semanticStreamedSurfaces.empty()
+                    || !cached.semanticMovingMeshes.empty();
+                cached.semanticResidentSurfaces.clear();
+                cached.semanticStreamedSurfaces.clear();
+                cached.semanticMovingMeshes.clear();
                 cached.semanticSurfaceFingerprint = fingerprint;
+                if (hadGeometry)
+                    MarkStaticRegionDirtyForTile(int32_t(key >> 32), int32_t(key));
+                return;
+            }
+            if (cached.semanticSurfaceFingerprint == fingerprint)
+            {
+                if (const auto pending = _semanticJobs.find(key);
+                    pending != _semanticJobs.end() && pending->second->fingerprint != fingerprint)
+                    _semanticJobs.erase(pending);
                 return;
             }
             if (!_snapshotBudget.available() || !_reconstructionWorker.hasCapacity()) return;
             if (!_semanticJobs.contains(key) && _semanticJobs.size() >= 16) return;
             auto& slot = _semanticJobs[key];
-            if (slot && slot->revision != cached.sourceRevision) slot.reset();
+            if (slot && (slot->revision != cached.sourceRevision || slot->fingerprint != fingerprint))
+                slot.reset();
             if (!slot)
             {
                 slot = std::make_shared<SemanticJob>();
@@ -3681,7 +3701,8 @@
                     const auto found = _staticPaintCache.find(key);
                     if (found == _staticPaintCache.end()) return;
                     auto& target = found->second;
-                    if (target.sourceRevision != job->revision || target.semanticRequest != job->request) return;
+                    if (target.sourceRevision != job->revision || target.semanticRequest != job->request
+                        || FirstPersonSemanticViewSetFingerprint(target) != job->fingerprint) return;
                     if (NativeTileSignature({int32_t(key >> 32) * kCoordsXYStep, int32_t(key) * kCoordsXYStep})
                         != job->snapshot.signature || target.viewFlags != job->snapshot.viewFlags)
                     {
