@@ -4100,22 +4100,22 @@
                 std::vector<uint8_t> pixels(
                     size_t(width)
                         * size_t(height), 0);
-                // Only tiny weakly transparent native-sampling pinholes
-                // may be repaired; larger faces and genuine negative-space
-                // objects pay no extra per-texel evidence allocation.
-                const bool repairIsolatedRasterPinhole =
+                // Unknown raster evidence should not force a diagnostic
+                // checkerboard through an otherwise well-observed surface.
+                // Never override source-authored transparent palette pixels.
+                const bool repairUnresolvedMaterial =
                     hull.valid && !candidates.empty()
                     && negativePassage == nullptr
                     && (reconstructionOptions == nullptr
                         || !reconstructionOptions->opaqueBoundaryMaterial)
                     && size_t(width) * size_t(height) <= 1024;
                 std::vector<uint8_t> directNativePixels;
-                std::vector<uint8_t> weaklyTransparentPixels;
-                bool haveWeaklyTransparentPixel = false;
-                if (repairIsolatedRasterPinhole)
+                std::vector<uint8_t> unresolvedMaterialPixels;
+                bool haveUnresolvedMaterialPixel = false;
+                if (repairUnresolvedMaterial)
                 {
                     directNativePixels.assign(pixels.size(), 0);
-                    weaklyTransparentPixels.assign(pixels.size(), 0);
+                    unresolvedMaterialPixels.assign(pixels.size(), 0);
                 }
                 bool haveKnownMaterial = false;
                 bool haveUnknownMaterial = false;
@@ -4257,7 +4257,7 @@
                     {
                         haveKnownMaterial = true;
                         selectedPixel = decision.pixel;
-                        if (repairIsolatedRasterPinhole)
+                        if (repairUnresolvedMaterial)
                             directNativePixels[
                                 size_t(y) * size_t(width) + size_t(x)] = 1;
                     }
@@ -4265,17 +4265,8 @@
                         == FirstPersonMaterialEvidenceKind::
                             transparent)
                     {
+                        // Source-authored transparent pixels must survive.
                         haveKnownMaterial = true;
-                        // Multiple independently transparent native views
-                        // are stronger evidence for a real opening.
-                        if (repairIsolatedRasterPinhole
-                            && decision.transparentViews == 1
-                            && decision.fullyTransparentViews == 1)
-                        {
-                            weaklyTransparentPixels[
-                                size_t(y) * size_t(width) + size_t(x)] = 1;
-                            haveWeaklyTransparentPixel = true;
-                        }
                     }
                     else
                     {
@@ -4287,6 +4278,12 @@
                             selectedPixel =
                                 FirstPersonMissingMaterialPixel(
                                     x, y);
+                            if (repairUnresolvedMaterial)
+                            {
+                                unresolvedMaterialPixels[
+                                    size_t(y) * size_t(width) + size_t(x)] = 1;
+                                haveUnresolvedMaterialPixel = true;
+                            }
                         }
                     }
 
@@ -4298,13 +4295,12 @@
                         ++visiblePixelCount;
                 }
 
-                if (repairIsolatedRasterPinhole
-                    && haveWeaklyTransparentPixel)
+                if (repairUnresolvedMaterial
+                    && haveUnresolvedMaterialPixel)
                 {
-                    visiblePixelCount +=
-                        RepairFirstPersonIsolatedMaterialPinhole(
-                            pixels, directNativePixels,
-                            weaklyTransparentPixels, width, height);
+                    (void)RepairFirstPersonIsolatedUnknownMaterial(
+                        pixels, directNativePixels,
+                        unresolvedMaterialPixels, width, height);
                 }
 
                 if (reconstructionOptions != nullptr
