@@ -5057,3 +5057,17 @@ TEST(FirstPersonStaticRegionSchedulingTest, EqualDistancesHaveStableKeysAndLarge
         FirstPersonGpuRegionKey(1023 * 32, 1023 * 32), false, eye);
     EXPECT_TRUE(std::isfinite(edge.distanceSquared));
 }
+
+
+TEST(FirstPersonStaticRegionUploadTest, SupersededGeometryMustDiscardStagedUpload)
+{
+    FirstPersonStaticRegion packet{};
+    packet.sceneEpoch = 3;
+    packet.generation = 17;
+    packet.sourceRevision = 5;
+    EXPECT_TRUE(FirstPersonStaticRegionUploadIsCurrent(packet, 3, 17, 5));
+    // A worker can republish geometry without advancing sourceRevision.
+    EXPECT_FALSE(FirstPersonStaticRegionUploadIsCurrent(packet, 3, 16, 5));
+    EXPECT_FALSE(FirstPersonStaticRegionUploadIsCurrent(packet, 2, 17, 5));
+    EXPECT_FALSE(FirstPersonStaticRegionUploadIsCurrent(packet, 3, 17, 4));
+}
