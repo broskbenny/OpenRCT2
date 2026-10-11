@@ -173,3 +173,32 @@ contains isolated transparent pixels; blindly painting them opaque would
 corrupt the artwork. Production selection also excludes authored negative
 passages and caps the face-size budget. This is a narrowly scoped material
 quality correction, **not** a substitute for a connected-surface reconstruction.
+
+### Conservative candidate that preserves native-grid free space
+
+A second search over real SMH2 occupancy tested 66 combinations of Gaussian
+preconditioning and vertex clustering. After correcting the prototype's
+one-unit XYZ mesh offset, one candidate using blur sigma 0.35 and clustering
+grid 1.5 had these **measured but experimental** characteristics:
+
+- **5,198 triangles**, compared with the 6,128-triangle raw hull (~15.2% fewer)
+- Native preview four-view mean silhouette IoU: **0.82625** (in-sample)
+- Re-tested at the native 2-unit lattice: **0 falsely filled empty cells,
+  0 lost occupied cells, 0 ambiguous vertical rays**
+- At 1-unit spacing (the input binary cell occupancy upsampled 2× in XYZ):
+  **1,238 falsely filled and 1,463 lost cells**, no ambiguous rays
+- Geometry watertight; **native palette coverage still unverified**
+
+The sub-grid deviations show that even a model passing native-grid sampling
+can diverge between samples. Its original shape is not guaranteed by either
+the matched silhouette or the watertight property.
+
+This conservative candidate is an **independent Python experiment**, not the
+OpenRCT2 production algorithm or a production-ready mesh; it must not be
+silently promoted. Stronger admission should combine grid + sub-grid
+volume checks, connected-component/opening preservation, four-view
+projective error, material provenance, and reconstruction cost.
+
+The original 486-triangle candidate fills 76 native-grid empty cells and
+loses 493 occupied cells. It remains deliberately **rejected** despite
+its apparent silhouette quality.
