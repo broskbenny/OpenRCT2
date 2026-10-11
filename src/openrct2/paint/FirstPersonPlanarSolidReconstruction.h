@@ -17,7 +17,7 @@ namespace OpenRCT2::Paint
 {
     // An optional visual-only replacement for voxel roofs with a provably
     // contiguous rectangular occupancy support. The mesh has six faces for
-    // a planar top or nine for a single straight ridge, with shared edges.
+    // a planar top or ten for a single straight ridge, with shared edges.
     // Its silhouette and source material are independently certified by the
     // caller before the existing reconstruction can be replaced.
     //
@@ -221,7 +221,7 @@ namespace OpenRCT2::Paint
         }
 
         std::vector<FirstPersonVisualHullFace> result;
-        result.reserve(selected.split == 0 ? 6 : 9);
+        result.reserve(selected.split == 0 ? 6 : 10);
         const auto point = [&](double x, double y, double z) {
             return FirstPersonVec3{ float(x), float(y), float(z) };
         };
@@ -289,10 +289,18 @@ namespace OpenRCT2::Paint
                     && addXWall(x1, y0, midY, true) && addXWall(x1, midY, y1, true))
                 : (addXWall(x0, y0, y1, false) && addXWall(x1, y0, y1, true))))
             return {};
-        if (!add(FirstPersonVisualHullFaceKind::bottom, { {
-                point(x0, y1, base), point(x1, y1, base),
-                point(x1, y0, base), point(x0, y0, base)
-            } }))
+        const auto addBottom = [&](double ax, double ay, double bx, double by) {
+            return add(FirstPersonVisualHullFaceKind::bottom, { {
+                point(ax, by, base), point(bx, by, base),
+                point(bx, ay, base), point(ax, ay, base)
+            } });
+        };
+        // Split the underside along the ridge too. Otherwise the split wall
+        // bottoms terminate in T-junctions against one long bottom edge.
+        if (!addBottom(x0, y0, midX, midY)
+            || (selected.split != 0 && !(selected.ridgeAlongX
+                ? addBottom(midX, y0, x1, y1)
+                : addBottom(x0, midY, x1, y1))))
             return {};
         return result;
     }
