@@ -5017,3 +5017,43 @@ TEST(FirstPersonSmallSceneryCollisionTest, MissingSourceIsUnknownRatherThanObser
     sprite.flags.set(OpenRCT2::G1Flag::isPalette);
     EXPECT_FALSE(BuildFirstPersonSmallSceneryWalkingMaskFromSnapshot(entry, element, readAll).has_value());
 }
+
+
+TEST(FirstPersonStaticRegionSchedulingTest, UnpublishedNearbyRegionsGetFirstRebuildSlots)
+{
+    const FirstPersonVec3 eye{512.0f, 512.0f, 25.0f};
+    const auto near = FirstPersonGpuRegionKey(0, 0);
+    const auto second = FirstPersonGpuRegionKey(0, 32);
+    const auto distant = FirstPersonGpuRegionKey(32 * 5, 0);
+    const auto furthest = FirstPersonGpuRegionKey(32 * 6, 0);
+    std::vector<FirstPersonStaticRegionRebuildCandidate> candidates{
+        MakeFirstPersonStaticRegionRebuildCandidate(near, true, eye),
+        MakeFirstPersonStaticRegionRebuildCandidate(furthest, false, eye),
+        MakeFirstPersonStaticRegionRebuildCandidate(distant, true, eye),
+        MakeFirstPersonStaticRegionRebuildCandidate(second, false, eye),
+        MakeFirstPersonStaticRegionRebuildCandidate(near, false, eye),
+    };
+    std::sort(candidates.begin(), candidates.end(), FirstPersonStaticRegionRebuildBefore);
+    EXPECT_EQ(candidates[0].key, near);
+    EXPECT_EQ(candidates[1].key, second);
+    EXPECT_EQ(candidates[2].key, furthest);
+    EXPECT_EQ(candidates[3].key, near);
+    EXPECT_EQ(candidates[4].key, distant);
+    EXPECT_FALSE(candidates[0].hasPublishedGeometry);
+    EXPECT_TRUE(candidates[3].hasPublishedGeometry);
+}
+
+TEST(FirstPersonStaticRegionSchedulingTest, EqualDistancesHaveStableKeysAndLargeParksAreFinite)
+{
+    const FirstPersonVec3 eye{512.0f, 512.0f, 0.0f};
+    const auto a = MakeFirstPersonStaticRegionRebuildCandidate(
+        FirstPersonGpuRegionKey(32, 0), false, eye);
+    const auto b = MakeFirstPersonStaticRegionRebuildCandidate(
+        FirstPersonGpuRegionKey(0, 32), false, eye);
+    EXPECT_EQ(a.distanceSquared, b.distanceSquared);
+    EXPECT_EQ(FirstPersonStaticRegionRebuildBefore(a, b), a.key < b.key);
+    EXPECT_FALSE(FirstPersonStaticRegionRebuildBefore(a, a));
+    const auto edge = MakeFirstPersonStaticRegionRebuildCandidate(
+        FirstPersonGpuRegionKey(1023 * 32, 1023 * 32), false, eye);
+    EXPECT_TRUE(std::isfinite(edge.distanceSquared));
+}

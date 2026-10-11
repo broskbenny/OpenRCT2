@@ -310,6 +310,39 @@ namespace OpenRCT2::Paint
     // a fixed camera-centred ring. Bounds are deliberately conservative until
     // OpenRCT2 exposes authoritative region invalidation and accurate bounds.
     // In particular, raised track is NOT culled by the terrain height below it.
+    // Only packet admission is prioritized. Submission/draw order remains
+    // unchanged; a previously published packet stays drawable while dirty.
+    struct FirstPersonStaticRegionRebuildCandidate
+    {
+        uint64_t key{};
+        bool hasPublishedGeometry = false;
+        double distanceSquared = 0.0;
+    };
+
+    [[nodiscard]] inline FirstPersonStaticRegionRebuildCandidate MakeFirstPersonStaticRegionRebuildCandidate(
+        uint64_t regionKey, bool hasPublishedGeometry, FirstPersonVec3 eye)
+    {
+        // GPU region coordinates are biased by one and span 32x32 map tiles.
+        const int64_t regionX = int64_t(uint32_t(regionKey >> 32)) - 1;
+        const int64_t regionY = int64_t(uint32_t(regionKey)) - 1;
+        const double centerX = double(regionX * 32 + 16) * 32.0;
+        const double centerY = double(regionY * 32 + 16) * 32.0;
+        const double dx = centerX - double(eye.x);
+        const double dy = centerY - double(eye.y);
+        return { regionKey, hasPublishedGeometry, dx * dx + dy * dy };
+    }
+
+    [[nodiscard]] inline bool FirstPersonStaticRegionRebuildBefore(
+        const FirstPersonStaticRegionRebuildCandidate& a,
+        const FirstPersonStaticRegionRebuildCandidate& b)
+    {
+        if (a.hasPublishedGeometry != b.hasPublishedGeometry)
+            return !a.hasPublishedGeometry;
+        if (a.distanceSquared != b.distanceSquared)
+            return a.distanceSquared < b.distanceSquared;
+        return a.key < b.key;
+    }
+
     struct FirstPersonRegionBounds
     {
         FirstPersonVec3 center{};

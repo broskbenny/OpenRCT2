@@ -5174,8 +5174,12 @@
                 }
             }
             materialCursor = materialStart + examined;
-            FirstPersonFrameBudget packetBudget(2, std::chrono::microseconds(1000));
-            scene.staticRegions.reserve(visibleRegions.size());
+            // Hash iteration order must not choose which cold part of the
+            // park gets one of this frame's two synchronous rebuild slots.
+            // Missing geometry comes first, then distance from the observer.
+            // This admission pass does not reorder published draw packets.
+            std::vector<FirstPersonStaticRegionRebuildCandidate> rebuildCandidates;
+            rebuildCandidates.reserve(visibleRegions.size());
             for (const auto key : visibleRegions)
             {
                 auto& packet = _staticRegionPackets[key];
@@ -5197,8 +5201,27 @@
                             _reconstructionSelectionSerial;
                     }
                 }
-                if (packet.dirty && packetBudget.take())
-                    RebuildStaticRegionPacket(key, frame);
+                if (packet.dirty)
+                {
+                    rebuildCandidates.push_back(MakeFirstPersonStaticRegionRebuildCandidate(
+                        key, packet.surfaceStorage != nullptr && !packet.surfaceStorage->empty(),
+                        frustum.eye));
+                }
+            }
+            std::sort(rebuildCandidates.begin(), rebuildCandidates.end(),
+                FirstPersonStaticRegionRebuildBefore);
+            FirstPersonFrameBudget packetBudget(2, std::chrono::microseconds(1000));
+            for (const auto& candidate : rebuildCandidates)
+            {
+                if (!packetBudget.take())
+                    break;
+                RebuildStaticRegionPacket(candidate.key, frame);
+            }
+
+            scene.staticRegions.reserve(visibleRegions.size());
+            for (const auto key : visibleRegions)
+            {
+                auto& packet = _staticRegionPackets[key];
                 packet.lastSeen = frame;
                 // A dirty/source-newer packet is the prospective next
                 // generation. Its currently published storage remains the
