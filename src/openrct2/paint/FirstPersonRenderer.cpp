@@ -9,6 +9,7 @@
 #include "FirstPersonMaterialInference.h"
 #include "FirstPersonMaterialContinuity.h"
 #include "FirstPersonPlanarSolidReconstruction.h"
+#include "FirstPersonVolumePreservation.h"
 #include "FirstPersonParkEntranceReconstruction.h"
 #include "FirstPersonPhysicalProxy.h"
 #include "FirstPersonSmallSceneryAppearance.h"
