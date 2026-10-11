@@ -760,6 +760,7 @@ void main() {
         // game-art reload. Preload unique image/mask IDs BEFORE constructing
         // any resident buffer; never retain stale atlas UV/layer metadata.
         const uint64_t textureRevisionSerial = textures.GetImageTextureRevisionSerial();
+        const auto imageRevision = [&](auto image) { return textures.GetImageTextureRevision(image); };
         Paint::FirstPersonFrameBudget uploadBudget(512 * 1024, std::chrono::microseconds(2000));
         const GLuint currentAtlas = textures.GetAtlasesTexture();
         if (_atlasHandle != currentAtlas)
@@ -1007,7 +1008,8 @@ void main() {
                 || !Paint::FirstPersonStaticRegionUploadIsCurrent(
                     *packet, _pendingRegion->buffer.sceneEpoch,
                     _pendingRegion->buffer.generation, _pendingRegion->buffer.sourceRevision)
-                || _pendingRegion->buffer.dependencyRevisionSerial != textureRevisionSerial)
+                || !_pendingRegion->buffer.imageRevisions.current(
+                    *packet->textureDependencies, textureRevisionSerial, imageRevision))
                 DiscardPendingRegion();
         }
         for (const auto& packet : scene.staticRegions)
@@ -1016,7 +1018,8 @@ void main() {
             const bool ready = found != _staticOpaqueRegions.end()
                 && found->second.sceneEpoch == packet.sceneEpoch
                 && found->second.generation == packet.generation
-                && found->second.dependencyRevisionSerial == textureRevisionSerial;
+                && found->second.imageRevisions.current(
+                    *packet.textureDependencies, textureRevisionSerial, imageRevision);
             if (!ready && !_pendingRegion && packet.surfaceStorage && uploadBudget.available())
             {
                 const auto bytes = packet.vertexCount * sizeof(GPUVertex);
@@ -1044,7 +1047,8 @@ void main() {
                     buffer.sceneEpoch = packet.sceneEpoch;
                     buffer.generation = packet.generation;
                     buffer.sourceRevision = packet.sourceRevision;
-                    buffer.dependencyRevisionSerial = textureRevisionSerial;
+                    buffer.imageRevisions.capture(
+                        *packet.textureDependencies, textureRevisionSerial, imageRevision);
                     buffer.bytes = bytes;
                     glCall(glGenVertexArrays, 1, &buffer.vao);
                     glCall(glGenBuffers, 1, &buffer.vbo);
