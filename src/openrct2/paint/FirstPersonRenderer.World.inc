@@ -4144,8 +4144,13 @@
             // never in the normal presentation loop. Report materially-sized
             // horizontal same-Z overlaps, including ordinary terrain/path
             // surfaces, so visible fighting can be traced to concrete geometry.
-            if (gFirstPersonDiagnosticMask != 0)
+            constexpr uint32_t kHorizontalDiagnosticMask =
+                uint32_t(FirstPersonDiagnosticCategory::horizontalArtwork)
+                | uint32_t(FirstPersonDiagnosticCategory::horizontalPhysical)
+                | uint32_t(FirstPersonDiagnosticCategory::horizontalMixed);
+            if ((gFirstPersonDiagnosticMask & kHorizontalDiagnosticMask) != 0)
             {
+                FirstPersonFrameBudget horizontalBudget(32768, std::chrono::microseconds(500));
                 struct CoplanarProbe
                 {
                     size_t surfaceIndex = 0;
@@ -4235,7 +4240,7 @@
                     };
 
                 for (size_t index = 0;
-                     index < packet.surfaces.size(); ++index)
+                     index < packet.surfaces.size() && horizontalBudget.available(); ++index)
                 {
                     const auto& surface =
                         packet.surfaces[index];
@@ -4295,6 +4300,9 @@
                     auto& peers = buckets[bucketKey];
                     for (const auto& peer : peers)
                     {
+                        // A log limit alone does not bound the pair scan.
+                        if (!horizontalBudget.take())
+                            break;
                         if (peer.tileX != tileX
                             || peer.tileY != tileY
                             || peer.zKey != zKey)
@@ -4450,6 +4458,14 @@
                         tileX, tileY, zKey
                     });
                 }
+                static uint64_t reportedBudgetGeneration = std::numeric_limits<uint64_t>::max();
+                if (!horizontalBudget.available()
+                    && reportedBudgetGeneration != gFirstPersonDiagnosticGeneration)
+                {
+                    reportedBudgetGeneration = gFirstPersonDiagnosticGeneration;
+                    Console::WriteLine(
+                        "FP_HORIZONTAL_DIAGNOSTICS partial=1 reason=work-budget checks=32768 time_us=500");
+                }
             }
 
 
@@ -4458,6 +4474,7 @@
                         FirstPersonDiagnosticCategory::planes))
                 != 0)
             {
+                FirstPersonFrameBudget planeBudget(32768, std::chrono::microseconds(500));
                 struct PlaneProbe
                 {
                     size_t surfaceIndex = 0;
@@ -4616,7 +4633,8 @@
                 size_t remainingPlaneChecks = 32768;
 
                 for (size_t index = 0;
-                     index < packet.surfaces.size() && remainingPlaneChecks != 0; ++index)
+                     index < packet.surfaces.size() && remainingPlaneChecks != 0
+                         && planeBudget.available(); ++index)
                 {
                     auto probe =
                         canonicalPlane(packet.surfaces[index]);
@@ -4657,6 +4675,8 @@
                                 distanceBucket
                                 + bucketOffset)));
 
+                        if (!planeBudget.available())
+                            break;
                         const auto bucket =
                             planeBuckets.find(bucketKey);
                         if (bucket == planeBuckets.end())
@@ -4665,6 +4685,8 @@
                         for (const auto* peerPointer :
                              bucket->second.query(*probe, remainingPlaneChecks))
                         {
+                            if (!planeBudget.take())
+                                break;
                             const auto& peer = *peerPointer;
                             const auto& surface =
                                 packet.surfaces[index];
@@ -5022,10 +5044,12 @@
                 // frame on genuinely dense overlaps. Say when the scan is
                 // partial; geometry and interface resolution are unaffected.
                 static uint64_t reportedBudgetGeneration = std::numeric_limits<uint64_t>::max();
-                if (remainingPlaneChecks == 0 && reportedBudgetGeneration != gFirstPersonDiagnosticGeneration)
+                if ((remainingPlaneChecks == 0 || !planeBudget.available())
+                    && reportedBudgetGeneration != gFirstPersonDiagnosticGeneration)
                 {
                     reportedBudgetGeneration = gFirstPersonDiagnosticGeneration;
-                    Console::WriteLine("FP_PLANE_DIAGNOSTICS partial=1 reason=comparison-budget limit=32768");
+                    Console::WriteLine(
+                        "FP_PLANE_DIAGNOSTICS partial=1 reason=work-budget checks=32768 time_us=500");
                 }
             }
 

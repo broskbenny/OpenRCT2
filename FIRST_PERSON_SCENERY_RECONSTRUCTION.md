@@ -44,9 +44,10 @@ instances. Source identity and reconstruction generation invalidate stale masks.
 This can temporarily block space that the detailed evidence later makes walkable.
 The fallback is collision-only and never becomes visible geometry.
 
-Optional coplanar diagnostics use a spatial broad phase and a 32,768-comparison
-limit per packet. A partial scan is reported explicitly. This changes diagnostics,
-not geometry ownership or rendering order.
+Optional general-plane diagnostics use a spatial broad phase. Horizontal and
+general-plane scans each stop at 32,768 checks or a 500-microsecond cooperative
+deadline per packet. A partial scan is reported explicitly. Allocation, individual
+checks and cleanup can overrun the deadline. Geometry ownership is unaffected.
 
 ## Measured synthetic fixtures
 
@@ -116,7 +117,8 @@ New implementation code is header-only; no additional translation unit is needed
 3. Measure frame-time tails while turning, walking into cold areas, receiving many
    shared instances, changing parks and editing objects while jobs are queued.
 4. Static region packet assembly is still synchronous once admitted. Its previous
-   diagnostic pair scan is bounded, but the packet itself is not a preemptible unit.
+   diagnostic scans have count and time budgets, but the packet itself is not a
+   preemptible unit. Repeated coincident boundary orientations are now aggregated.
    Native painting, ordinary rendering and GPU allocation remain additional costs.
 5. General non-convex scenery still relies on the legacy reconstruction family.
    Multiple ridges, overhangs and ornamental structures need further representation
@@ -136,3 +138,62 @@ The production bake runner now checks each missing-view position and a genuinely
 observed empty mask, in addition to the eight solid fixtures. The missing-view case
 was reproduced as a failing assertion before the correction. All fourteen focused
 regressions and the extended production runner pass under UBSan after the fix.
+
+## Follow-up: region assembly stalls
+
+Comparison baseline: `1d524edfabe59a8b21bba6c38364f56838b81236`.
+
+Internal-boundary resolution previously bucketed exact quads, then re-quantized and
+sorted those same vertices for every pair. Dense coincident faces repeated millions
+of identical geometric decisions. The resolver now caches each owner and quad once.
+Small buckets compare normals directly; larger buckets group identical normal
+representations and count distinct-owner local/local and local/context pairs
+arithmetically. Same-owner faces, authored walls, artwork, partial contacts and
+context-only pairs retain their previous treatment. Retained surfaces stay in order.
+
+Horizontal diagnostics had only a log limit, which did not bound the pair scan.
+Both diagnostic scans now have work budgets. Requesting only plane diagnostics
+also avoids the unrelated horizontal scan. Exhaustion reports a partial result
+once per diagnostic generation.
+
+Representative isolated optimized GCC C++20 measurements on this host:
+
+| Prepared-cache fixture | Baseline region function | Revised region function |
+| --- | ---: | ---: |
+| 4,000 coincident eligible boundary faces, diagnostics off | 1,230 ms | 1.80 ms |
+| 4,000 coincident horizontal faces, diagnostics on | 3,679 ms | 1.65 ms |
+| 4,000 coincident vertical faces, diagnostics on | 15.63 ms | 1.41 ms |
+
+These execute the complete production `RebuildStaticRegionPacket` body with
+deterministic prepared-cache adapters. They are synthetic stress fixtures, not park
+frame times or full game integration. Comparison checked retained face order,
+vertices and UVs, ownership, image/mask dependencies, selection stamps, bounds,
+publication revisions and all interface counters. A mixed fixture also exercised
+terrain, water, overlays, semantic surfaces, selected native rotations, track
+material projections, large scenery, entrance output and neighbouring context.
+Native capture, entrance policy and material acquisition were fixture boundary
+adapters, not end-to-end tests of those systems.
+
+The resolver alone took 0.51 ms versus 1,279 ms for 4,000 coincident faces, and
+2.76 ms versus 4.83 ms for 16,000 faces arranged as separate ordinary contacts.
+Timings are individual observations affected by allocator state and host load.
+Distinct normal orientations can still require pairwise work.
+
+Three added GoogleTest cases cover 4,000 duplicate boundaries without losing
+walls/artwork, dense shared-owner/context-only cases, and 1,000 deterministic
+generated cases checked against an independent pairwise classification oracle.
+The oracle covers the small/large bucket boundary, owner domains, invalid quads,
+near-threshold normals, signed zero, infinities and NaNs. All nine surface
+relationship tests pass in a focused assertion runner, normally and under UBSan.
+Four complete-region fixtures pass under UBSan. Existing production material-bake
+and missing-versus-empty collision checks still pass under UBSan.
+
+Tests are in `test/tests/FirstPersonRendererTests.cpp`; the GoogleTest filter is
+`FirstPersonSurfaceRelationshipTest.*`. No complete GoogleTest or target Windows
+build is claimed.
+
+A draft that paused the entire region assembly was not shipped. Native capture
+may replace a vector without changing its output fingerprint, invalidating a paused
+iterator without a region-content change. A safe scheduler must own immutable
+inputs or reacquire them using stable keys and revisions. This patch removes the
+demonstrated repetition without changing cache lifetimes or packet publication.

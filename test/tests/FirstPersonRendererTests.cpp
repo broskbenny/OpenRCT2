@@ -43,6 +43,7 @@
 #include <openrct2/world/tile_element/PathElement.h>
 
 #include <cmath>
+#include <limits>
 
 using namespace OpenRCT2::Paint;
 using OpenRCT2::Translate3DTo2DWithZ;
@@ -820,6 +821,147 @@ TEST(FirstPersonSurfaceRelationshipTest, SameOwnerArtworkCarrierIsAppearanceNotM
         ClassifyFirstPersonSurfaceRelationship(a, b),
         FirstPersonSurfaceRelationshipKind::
             sameOwnerArtworkCarrier);
+}
+
+TEST(FirstPersonSurfaceRelationshipTest, DenseDuplicateBoundariesCountDistinctOwnersWithoutLosingWalls)
+{
+    std::vector<FirstPersonSurface> surfaces;
+    for (size_t i = 0; i < 4000; ++i)
+        surfaces.push_back(MakeRelationshipTestQuad(0, 32, 16, { 0, i % 2 ? -1.0f : 1.0f, 0 }, i + 1));
+    auto wall = MakeRelationshipTestQuad(0, 32, 16, { 0, -1, 0 }, 9001, false);
+    wall.nativePaintOrdinal = 81;
+    surfaces.insert(surfaces.begin() + 17, wall);
+    auto artwork = wall;
+    artwork.reconstructedOccupancyBoundary = true;
+    artwork.artworkCarrier = true;
+    artwork.nativePaintOrdinal = 82;
+    surfaces.push_back(artwork);
+    const auto result = ResolveFirstPersonInternalOccupancyInterfaces(surfaces);
+    EXPECT_EQ(result.interfaces, 4000000u);
+    EXPECT_EQ(result.suppressedFaces, 4000u);
+    EXPECT_EQ(result.contextMatches, 0u);
+    ASSERT_EQ(surfaces.size(), 2u);
+    EXPECT_EQ(surfaces[0].nativePaintOrdinal, 81u);
+    EXPECT_EQ(surfaces[1].nativePaintOrdinal, 82u);
+}
+
+TEST(FirstPersonSurfaceRelationshipTest, DenseSameOwnerAndContextOnlyPairsAreNeverInternal)
+{
+    std::vector<FirstPersonSurface> surfaces;
+    for (size_t i = 0; i < 32; ++i)
+        surfaces.push_back(MakeRelationshipTestQuad(0, 32, 16, { 0, i % 2 ? -1.0f : 1.0f, 0 }, 77));
+    auto context = surfaces;
+    const auto unchanged = ResolveFirstPersonInternalOccupancyInterfaces(surfaces, context);
+    EXPECT_EQ(unchanged.interfaces, 0u);
+    EXPECT_EQ(unchanged.contextMatches, 0u);
+    EXPECT_EQ(unchanged.suppressedFaces, 0u);
+    EXPECT_EQ(surfaces.size(), 32u);
+    surfaces.clear();
+    for (size_t i = 0; i < context.size(); ++i) context[i].sourceInstanceKey = i + 1;
+    const auto contextOnly = ResolveFirstPersonInternalOccupancyInterfaces(surfaces, context);
+    EXPECT_EQ(contextOnly.interfaces, 0u);
+    EXPECT_EQ(contextOnly.contextMatches, 0u);
+    EXPECT_EQ(context.size(), 32u);
+}
+
+TEST(FirstPersonSurfaceRelationshipTest, AggregatedResolutionMatchesPairwiseClassification)
+{
+    // Independent pairwise oracle, including both sides of the small-bucket
+    // cutoff, neighbouring packet context, shared owners and mixed geometry.
+    uint64_t randomState = 0x6ed39a;
+    const auto next = [&] {
+        randomState = randomState * 6364136223846793005ULL + 1442695040888963407ULL;
+        return uint32_t(randomState >> 32);
+    };
+    const float infinity = std::numeric_limits<float>::infinity();
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const std::array<FirstPersonVec3, 13> normals{{
+        { 0, 1, 0 }, { 0, -1, 0 }, { 1, 0, 0 }, { -1, 0, 0 },
+        { 0.6f, 0.8f, 0 }, { -0.6f, -0.8f, 0 },
+        { 0, -0.9989f, 0 }, { 0, -0.9991f, 0 },
+        { -0.0f, 1, 0 }, { infinity, 1, 1 }, { -1, 1, 1 },
+        { nan, 1, 1 }, { 0, 0, 0 }
+    }};
+    for (size_t trial = 0; trial < 1000; ++trial)
+    {
+        const size_t localCount = next() % 65;
+        const size_t contextCount = next() % 33;
+        std::vector<FirstPersonSurface> input, context;
+        for (size_t i = 0; i < localCount + contextCount; ++i)
+        {
+            const float x = trial % 2 ? 0.0f : float(next() % 4) * 32;
+            auto surface = MakeRelationshipTestQuad(x, x + 32, 16, normals[next() % normals.size()], next() % 17);
+            if (trial % 3 == 0 && i % 3 == 0)
+            {
+                surface.reconstructionGroup = surface.sourceInstanceKey;
+                surface.sourceInstanceKey = 0;
+            }
+            if (trial % 3 == 1 && i % 3 == 0)
+            {
+                surface.diagnosticSemanticGroup = surface.sourceInstanceKey;
+                surface.sourceInstanceKey = 0;
+            }
+            surface.nativePaintOrdinal = i + 1;
+            surface.image = ImageId(uint32_t(i + 100));
+            for (size_t v = 0; v < surface.triangles.size(); ++v)
+            {
+                surface.triangles[v].u = float(i + v);
+                surface.triangles[v].v = float(i * 2 + v);
+            }
+            if (next() % 13 == 0) surface.artworkCarrier = true;
+            if (next() % 13 == 0) surface.reconstructedOccupancyBoundary = false;
+            if (next() % 13 == 0) surface.cameraIndependent = false;
+            // A non-quad must remain even in an otherwise matching bucket.
+            if (next() % 13 == 0) surface.triangles[3].world.x += 2;
+            (i < localCount ? input : context).push_back(surface);
+        }
+        std::vector<bool> suppress(input.size(), false);
+        size_t interfaces = 0, contextMatches = 0;
+        for (size_t i = 0; i < input.size(); ++i)
+        {
+            for (size_t j = i + 1; j < input.size(); ++j)
+            {
+                if (ClassifyFirstPersonSurfaceRelationship(input[i], input[j])
+                    == FirstPersonSurfaceRelationshipKind::internalOccupancyInterface)
+                {
+                    ++interfaces;
+                    suppress[i] = suppress[j] = true;
+                }
+            }
+            for (const auto& neighbour : context)
+            {
+                if (ClassifyFirstPersonSurfaceRelationship(input[i], neighbour)
+                    == FirstPersonSurfaceRelationshipKind::internalOccupancyInterface)
+                {
+                    ++interfaces;
+                    ++contextMatches;
+                    suppress[i] = true;
+                }
+            }
+        }
+        auto actual = input;
+        const auto result = ResolveFirstPersonInternalOccupancyInterfaces(actual, context);
+        EXPECT_EQ(result.interfaces, interfaces);
+        EXPECT_EQ(result.contextMatches, contextMatches);
+        EXPECT_EQ(result.suppressedFaces, size_t(std::count(suppress.begin(), suppress.end(), true)));
+        ASSERT_EQ(actual.size(), input.size() - result.suppressedFaces);
+        size_t target = 0;
+        for (size_t i = 0; i < input.size(); ++i)
+        {
+            if (suppress[i]) continue;
+            const auto& retained = actual[target++];
+            EXPECT_EQ(retained.nativePaintOrdinal, input[i].nativePaintOrdinal);
+            EXPECT_EQ(retained.image, input[i].image);
+            for (size_t v = 0; v < retained.triangles.size(); ++v)
+            {
+                EXPECT_EQ(retained.triangles[v].world.x, input[i].triangles[v].world.x);
+                EXPECT_EQ(retained.triangles[v].world.y, input[i].triangles[v].world.y);
+                EXPECT_EQ(retained.triangles[v].world.z, input[i].triangles[v].world.z);
+                EXPECT_EQ(retained.triangles[v].u, input[i].triangles[v].u);
+                EXPECT_EQ(retained.triangles[v].v, input[i].triangles[v].v);
+            }
+        }
+    }
 }
 
 TEST(FirstPersonAssetReconstructionTest, VerticalCoverageCanSplitOneWallIntoSeveralStrips)

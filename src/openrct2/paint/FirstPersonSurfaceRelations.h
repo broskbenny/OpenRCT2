@@ -9,9 +9,12 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
+#include <map>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -245,6 +248,7 @@ namespace OpenRCT2::Paint
             const FirstPersonSurface* surface = nullptr;
             size_t localIndex = 0;
             bool local = false;
+            uint64_t owner = 0;
         };
 
         std::unordered_map<
@@ -258,16 +262,17 @@ namespace OpenRCT2::Paint
         const auto append =
             [&](const FirstPersonSurface& surface,
                 size_t localIndex, bool local) {
-                if (!FirstPersonSurfaceIsReconstructedOccupancyBoundary(
-                        surface)
-                    || FirstPersonSurfaceRelationshipOwnerKey(surface) == 0)
+                if (!FirstPersonSurfaceIsReconstructedOccupancyBoundary(surface))
+                    return;
+                const uint64_t owner = FirstPersonSurfaceRelationshipOwnerKey(surface);
+                if (owner == 0)
                     return;
                 const auto quad =
                     FirstPersonCanonicalQuadForSurface(surface);
                 if (!quad.has_value())
                     return;
                 buckets[*quad].push_back({
-                    &surface, localIndex, local
+                    &surface, localIndex, local, owner
                 });
             };
 
@@ -279,30 +284,117 @@ namespace OpenRCT2::Paint
         std::vector<uint8_t> suppress(
             surfaces.size(), 0);
         FirstPersonInternalInterfaceResolution result{};
-        for (const auto& [quad, entries] : buckets)
+        struct Counts
         {
-            (void)quad;
-            for (size_t i = 0; i < entries.size(); ++i)
-            for (size_t j = i + 1; j < entries.size(); ++j)
+            size_t local = 0;
+            size_t context = 0;
+            size_t total() const { return local + context; }
+        };
+        struct Orientation
+        {
+            FirstPersonVec3 normal{};
+            Counts count;
+            std::unordered_map<uint64_t, Counts> owners;
+            std::vector<Entry> entries;
+        };
+        while (!buckets.empty())
+        {
+            const auto bucket = buckets.begin();
+            if (bucket->second.size() <= 8)
             {
-                const auto& a = entries[i];
-                const auto& b = entries[j];
-                if (!a.local && !b.local)
-                    continue;
-                if (ClassifyFirstPersonSurfaceRelationship(
-                        *a.surface, *b.surface)
-                    != FirstPersonSurfaceRelationshipKind::
-                        internalOccupancyInterface)
-                    continue;
-
-                ++result.interfaces;
-                if (a.local)
-                    suppress[a.localIndex] = 1;
-                if (b.local)
-                    suppress[b.localIndex] = 1;
-                if (a.local != b.local)
-                    ++result.contextMatches;
+                // Most interfaces have just two faces. Avoid constructing
+                // orientation/owner maps for these ordinary contacts.
+                const auto& entries = bucket->second;
+                for (size_t i = 0; i < entries.size(); ++i)
+                for (size_t j = i + 1; j < entries.size(); ++j)
+                {
+                    const auto& a = entries[i];
+                    const auto& b = entries[j];
+                    if ((!a.local && !b.local) || a.owner == b.owner
+                        || !(FpDot(a.surface->outwardNormal, b.surface->outwardNormal) <= -0.999f))
+                        continue;
+                    ++result.interfaces;
+                    if (a.local)
+                        suppress[a.localIndex] = 1;
+                    if (b.local)
+                        suppress[b.localIndex] = 1;
+                    if (a.local != b.local)
+                        ++result.contextMatches;
+                }
+                buckets.erase(bucket);
+                continue;
             }
+            std::map<std::array<uint32_t, 3>, Orientation> orientations;
+            for (const auto& entry : bucket->second)
+            {
+                const auto n = entry.surface->outwardNormal;
+                // Use representation keys so non-finite normals never become
+                // ordered floating-point keys. The dot predicate below retains
+                // the classifier's exact semantics, including NaN rejection.
+                const std::array<uint32_t, 3> normalKey{
+                    std::bit_cast<uint32_t>(n.x), std::bit_cast<uint32_t>(n.y), std::bit_cast<uint32_t>(n.z)
+                };
+                auto& orientation = orientations[normalKey];
+                orientation.normal = n;
+                auto& owner = orientation.owners[entry.owner];
+                if (entry.local)
+                {
+                    ++orientation.count.local;
+                    ++owner.local;
+                }
+                else
+                {
+                    ++orientation.count.context;
+                    ++owner.context;
+                }
+                orientation.entries.push_back(entry);
+            }
+            // A normal cannot oppose itself. Compare distinct orientations,
+            // then account for all matching instances without repeating the
+            // same geometric predicate for every pair of coincident faces.
+            for (auto a = orientations.begin(); a != orientations.end(); ++a)
+            for (auto b = std::next(a); b != orientations.end(); ++b)
+            {
+                if (!(FpDot(a->second.normal, b->second.normal) <= -0.999f))
+                    continue;
+                auto& left = a->second;
+                auto& right = b->second;
+                if (left.count.local == 0 && right.count.local == 0)
+                    continue;
+                size_t interfaces = left.count.local * right.count.total()
+                    + left.count.context * right.count.local;
+                size_t contextMatches = left.count.local * right.count.context
+                    + left.count.context * right.count.local;
+                // Identical orientations share the same dot-product decision.
+                // Count distinct-owner pairs without comparing every instance.
+                for (const auto& [owner, counts] : left.owners)
+                {
+                    const auto same = right.owners.find(owner);
+                    if (same == right.owners.end())
+                        continue;
+                    interfaces -= counts.local * same->second.total() + counts.context * same->second.local;
+                    contextMatches -= counts.local * same->second.context + counts.context * same->second.local;
+                }
+                result.interfaces += interfaces;
+                result.contextMatches += contextMatches;
+                for (const auto& entry : left.entries)
+                {
+                    if (!entry.local)
+                        continue;
+                    const auto same = right.owners.find(entry.owner);
+                    if (same == right.owners.end() || same->second.total() < right.count.total())
+                        suppress[entry.localIndex] = 1;
+                }
+                for (const auto& entry : right.entries)
+                {
+                    if (!entry.local)
+                        continue;
+                    const auto same = left.owners.find(entry.owner);
+                    if (same == left.owners.end() || same->second.total() < left.count.total())
+                        suppress[entry.localIndex] = 1;
+                }
+            }
+            buckets.erase(bucket);
         }
 
         const size_t before = surfaces.size();
