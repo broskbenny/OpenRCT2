@@ -19,7 +19,7 @@ def rotation_xy(x, y, rotation):
     return ((x, y), (y, -x), (-x, -y), (-y, x))[rotation & 3]
 
 
-def tile_composite(dat, rotation):
+def tile_composite(dat, rotation, include_owners=False):
     """Composite native tile sprites in isometric depth order, not sequence order."""
     tiles, sprites = dat['tiles'], dat['images']
     if len(sprites) < 4 + 4 * len(tiles):
@@ -39,11 +39,17 @@ def tile_composite(dat, rotation):
     if (x1 - x0) * (y1 - y0) > 2_000_000:
         raise ValueError('Tile sprite composite exceeds analysis budget')
     canvas = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+    owners = np.full(canvas.shape, -1, dtype=np.int16) if include_owners else None
     for _, sequence, x, y, item in layers:
         pixels = np.frombuffer(item['pixels'], dtype=np.uint8).reshape(
             (item['height'], item['width']))
         crop = canvas[y - y0:y - y0 + item['height'], x - x0:x - x0 + item['width']]
         crop[pixels != 0] = pixels[pixels != 0]
+        if owners is not None:
+            owner_crop = owners[y - y0:y - y0 + item['height'], x - x0:x - x0 + item['width']]
+            owner_crop[pixels != 0] = sequence
+    if include_owners:
+        return canvas, (x0, y0), owners
     return canvas, (x0, y0)
 
 
@@ -114,8 +120,19 @@ def audit_asset(dat):
         preview = dat['images'][rotation]
         reference = np.frombuffer(preview['pixels'], dtype=np.uint8).reshape(
             (preview['height'], preview['width']))
-        composite, offset = tile_composite(dat, rotation)
+        composite, offset, owners = tile_composite(dat, rotation, include_owners=True)
         row = audit_registration(reference, composite)
+        dx, dy = row['registration_shift_to_preview']
+        y, x = np.nonzero(reference)
+        sx, sy = x - dx, y - dy
+        inside = ((sx >= 0) & (sy >= 0) & (sx < owners.shape[1])
+                  & (sy < owners.shape[0]))
+        valid_owners = owners[sy[inside], sx[inside]]
+        row['registered_preview_tile_owners'] = [
+            int(np.count_nonzero(valid_owners == sequence))
+            for sequence in range(len(dat['tiles']))
+        ]
+        row['owner_order_is_approximate_depth_sort'] = True
         row.update(rotation=rotation,
                    composite_origin_world_projection=list(offset),
                    composite_opaque_pixels=int(np.count_nonzero(composite)))
