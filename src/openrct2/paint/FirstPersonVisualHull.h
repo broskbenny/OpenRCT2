@@ -150,6 +150,9 @@ namespace OpenRCT2::Paint
         // renderable faces. Occupancy/collision remains the original grid.
         std::vector<FirstPersonVisualHullFace> refinedFaces;
         bool continuousSurfaceRefined = false;
+        // Independent visual-only candidate with shared planar roof/wall
+        // edges, accepted only after four-view raster certification.
+        bool planarSurfaceSelected = false;
         bool directConvexSurface = false;
         // Exact surface-level round-trip evidence. The legacy coverage fields
         // remain directly readable because reconstruction policies use them as
