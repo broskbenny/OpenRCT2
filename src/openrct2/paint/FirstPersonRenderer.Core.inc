@@ -3880,6 +3880,7 @@
             bool haveBounds = false;
             FirstPersonVec3 low{}, high{};
             FirstPersonHullMaterialCoverage materialCoverage(faces);
+            bool planarMaterialUnproven = false;
             for (size_t faceIndex = 0;
                  faceIndex < faces.size();
                  ++faceIndex)
@@ -4298,6 +4299,8 @@
                     }
                 }
 
+                if (hull.planarSurfaceSelected && haveUnknownMaterial)
+                    planarMaterialUnproven = true;
                 if (visiblePixelCount == 0
                     && haveKnownMaterial
                     && !haveUnknownMaterial)
@@ -4358,7 +4361,8 @@
             // is excluded from this requirement. The second pass explicitly
             // disables planar selection and therefore cannot recurse again.
             if (hull.planarSurfaceSelected
-                && (materialCoverage.materialFaces() + 1 < faces.size()
+                && (planarMaterialUnproven
+                    || materialCoverage.materialFaces() + 1 < faces.size()
                     || materialCoverage.opaqueFaces() + 1 < faces.size()))
             {
                 return BuildLargeSceneryInstanceGeometry(
