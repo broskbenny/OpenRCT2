@@ -5119,3 +5119,30 @@ TEST(FirstPersonRegionTextureRevisionsTest, DependentImageInvalidationRejectsOld
     colourOnly.capture(none, 1, revision);
     EXPECT_TRUE(colourOnly.current(none, 99, revision));
 }
+
+
+TEST(FirstPersonPersistentSemanticMaterialTest, PacketCopiesReuseImmutableFacePixels)
+{
+    // Rebuilt CPU packets copy faces repeatedly. A persistent material must
+    // carry one immutable pixel allocation, not a new bitmap on every copy.
+    FirstPersonSurface baked{};
+    baked.persistentBitmap = true;
+    baked.immutableWidth = 4;
+    baked.immutableHeight = 2;
+    baked.immutableFingerprint = 771u;
+    baked.persistentPixels = std::make_shared<const std::vector<uint8_t>>(
+        std::vector<uint8_t>{ 0, 1, 2, 3, 4, 5, 6, 7 });
+    std::vector<FirstPersonSurface> regionA{ baked };
+    std::vector<FirstPersonSurface> regionB = regionA;
+
+    ASSERT_TRUE(regionA[0].hasImmutablePixelData());
+    ASSERT_TRUE(regionB[0].hasImmutablePixelData());
+    EXPECT_TRUE(regionA[0].immutablePixels.empty());
+    EXPECT_TRUE(regionB[0].immutablePixels.empty());
+    EXPECT_EQ(regionA[0].persistentPixels, regionB[0].persistentPixels);
+    EXPECT_EQ(regionA[0].immutablePixelData().data(),
+        regionB[0].immutablePixelData().data());
+    EXPECT_EQ(regionB[0].immutablePixelData(),
+        (std::vector<uint8_t>{ 0, 1, 2, 3, 4, 5, 6, 7 }));
+    EXPECT_EQ(regionA[0].immutableFingerprint, regionB[0].immutableFingerprint);
+}
