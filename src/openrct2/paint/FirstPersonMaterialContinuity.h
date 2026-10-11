@@ -10,27 +10,28 @@
 
 namespace OpenRCT2::Paint
 {
-    // Repair only isolated, weakly transparent raster texels embedded in
+    // Repair only isolated unknown-material texels embedded in
     // demonstrably native-coloured material. A real opening, an edge cut-out,
-    // an unknown/checkerboard region or a multi-view-confirmed transparent
-    // pixel must not be overwritten.
+    // a larger unknown/checkerboard region or any transparent source pixel
+    // must not be overwritten.
     //
     // provenance[i] == 1: a nonzero palette index directly observed in native
-    // artwork. eligible[i] == 1: exactly one native view explicitly observed
-    // transparency over the full footprint; other views offered no evidence.
-    // A caller must not mark a pixel eligible where multiple views confirm
-    // transparency or where any authored negative-passage constraint applies.
-    [[nodiscard]] inline size_t RepairFirstPersonIsolatedMaterialPinhole(
+    // artwork. unresolved[i] == 1: material inference had no evidence, and
+    // the caller wrote a nonzero diagnostic marker, not native artwork.
+    // Known-transparent pixels have palette index zero and are NEVER changed.
+    // A caller must not mark a pixel unresolved when an authored negative
+    // passage applies.
+    [[nodiscard]] inline size_t RepairFirstPersonIsolatedUnknownMaterial(
         std::vector<uint8_t>& pixels,
         const std::vector<uint8_t>& provenance,
-        const std::vector<uint8_t>& eligible,
+        const std::vector<uint8_t>& unresolved,
         int32_t width, int32_t height)
     {
         if (width < 3 || height < 3 || width > 256 || height > 256)
             return 0;
         const size_t count = size_t(width) * size_t(height);
         if (pixels.size() != count || provenance.size() != count
-            || eligible.size() != count)
+            || unresolved.size() != count)
             return 0;
 
         size_t repairs = 0;
@@ -38,7 +39,7 @@ namespace OpenRCT2::Paint
         for (int32_t x = 1; x < width - 1; ++x)
         {
             const size_t index = size_t(y) * size_t(width) + size_t(x);
-            if (pixels[index] != 0 || eligible[index] == 0)
+            if (pixels[index] == 0 || unresolved[index] == 0 || provenance[index] != 0)
                 continue;
 
             uint8_t palette[8]{};
