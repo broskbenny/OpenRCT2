@@ -3205,10 +3205,85 @@
                 }
             }
 
+            // Prefer a small connected wall/roof mesh over the voxel
+            // staircase when the occupancy really describes a continuous
+            // rectangular solid. This is visual-only: physical constraints
+            // and walkability continue to use their authoritative sources.
+            //
+            // Four native views must certify this independently. Decorative
+            // openings, partial footprints and silhouette disagreements keep
+            // the existing (possibly open) reconstruction; they are never
+            // filled merely to get a cleaner looking model.
+            if (hull.valid
+                && negativePassage == nullptr
+                && (reconstructionOptions == nullptr
+                    || reconstructionOptions->supportCells == nullptr))
+            {
+                auto planarFaces =
+                    BuildFirstPersonPlanarSolidCandidate(hull);
+                if (!planarFaces.empty())
+                {
+                    const auto voxelFaces =
+                        BuildFirstPersonVisualHullVoxelBoundaryFaces(
+                            hull);
+                    if (planarFaces.size() * 4 <= voxelFaces.size())
+                    {
+                        const auto voxelCertificate =
+                            CertifyFirstPersonReconstruction(
+                                TriangulateFirstPersonReconstructionFaces(
+                                    voxelFaces), hullViews, projectPoint);
+                        const auto planarCertificate =
+                            CertifyFirstPersonReconstruction(
+                                TriangulateFirstPersonReconstructionFaces(
+                                    planarFaces), hullViews, projectPoint);
+                        const size_t allowedPixelLoss =
+                            voxelCertificate.symmetricDifferencePixels / 16
+                            + 32;
+                        if (voxelCertificate.valid
+                            && planarCertificate.valid
+                            && planarCertificate.viewCount == 4
+                            && planarCertificate.minimumIntersectionOverUnion
+                                >= std::max(
+                                    0.95f,
+                                    voxelCertificate.minimumIntersectionOverUnion
+                                        - 0.01f)
+                            && planarCertificate.minimumCandidateCoverage
+                                >= 0.97f
+                            && planarCertificate.minimumObservedCoverage
+                                >= 0.94f
+                            && planarCertificate.maximumEdgeError <= 2
+                            && planarCertificate.symmetricDifferencePixels
+                                <= voxelCertificate.symmetricDifferencePixels
+                                    + allowedPixelLoss)
+                        {
+                            hull.refinedFaces = std::move(planarFaces);
+                            hull.planarSurfaceSelected = true;
+                            hull.voxelRoundTripSymmetricDifference =
+                                voxelCertificate.symmetricDifferencePixels;
+                            hull.roundTripSymmetricDifference =
+                                planarCertificate.symmetricDifferencePixels;
+                            hull.averageIntersectionOverUnion =
+                                planarCertificate.averageIntersectionOverUnion;
+                            hull.minimumIntersectionOverUnion =
+                                planarCertificate.minimumIntersectionOverUnion;
+                            hull.minimumCandidateCoverage =
+                                planarCertificate.minimumCandidateCoverage;
+                            hull.minimumObservedCoverage =
+                                planarCertificate.minimumObservedCoverage;
+                            hull.maximumEdgeError =
+                                planarCertificate.maximumEdgeError;
+                            hull.roundTripViewCount =
+                                planarCertificate.viewCount;
+                        }
+                    }
+                }
+            }
+
             FirstPersonStructuralOwnershipComparison
                 structuralDiagnostics{};
 
             if (hull.valid
+                && !hull.planarSurfaceSelected
                 && (reconstructionOptions == nullptr
                     || reconstructionOptions
                         ->allowContinuousRefinement))
