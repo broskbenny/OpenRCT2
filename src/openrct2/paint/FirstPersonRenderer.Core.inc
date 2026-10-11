@@ -4354,16 +4354,21 @@
                     std::move(surface));
             }
 
-            // A closed connected mesh cannot be published with untextured
-            // or alpha-perforated visible faces. Reuse the existing voxel
-            // reconstruction when the native palette evidence does not cover
-            // every visible plane; the one deliberately unobserved underside
-            // is excluded from this requirement. The second pass explicitly
-            // disables planar selection and therefore cannot recurse again.
+            // Do not publish a connected planar mesh with unknown or
+            // alpha-perforated visible faces. Count the deliberately
+            // untextured undersides (one for a plane, two for a ridge),
+            // without excusing any other absent or partial material.
+            // The fallback disables planar selection to avoid recursion.
+            const size_t unobservedUndersides = hull.planarSurfaceSelected
+                ? size_t(std::count_if(faces.begin(), faces.end(),
+                    [](const auto& face) { return face.normal.z < -0.5f; }))
+                : 0;
             if (hull.planarSurfaceSelected
                 && (planarMaterialUnproven
-                    || materialCoverage.materialFaces() + 1 < faces.size()
-                    || materialCoverage.opaqueFaces() + 1 < faces.size()))
+                    || materialCoverage.materialFaces() + unobservedUndersides
+                        < faces.size()
+                    || materialCoverage.opaqueFaces() + unobservedUndersides
+                        < faces.size()))
             {
                 return BuildLargeSceneryInstanceGeometry(
                     large, entry, model, group, signature, frame,
