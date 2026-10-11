@@ -4100,6 +4100,22 @@
                 std::vector<uint8_t> pixels(
                     size_t(width)
                         * size_t(height), 0);
+                // Only tiny weakly transparent native-sampling pinholes
+                // may be repaired; larger faces and genuine negative-space
+                // objects pay no extra per-texel evidence allocation.
+                const bool repairIsolatedRasterPinhole =
+                    hull.valid
+                    && negativePassage == nullptr
+                    && (reconstructionOptions == nullptr
+                        || !reconstructionOptions->opaqueBoundaryMaterial)
+                    && size_t(width) * size_t(height) <= 1024;
+                std::vector<uint8_t> directNativePixels;
+                std::vector<uint8_t> weaklyTransparentPixels;
+                if (repairIsolatedRasterPinhole)
+                {
+                    directNativePixels.assign(pixels.size(), 0);
+                    weaklyTransparentPixels.assign(pixels.size(), 0);
+                }
                 bool haveKnownMaterial = false;
                 bool haveUnknownMaterial = false;
                 size_t visiblePixelCount = 0;
@@ -4240,12 +4256,24 @@
                     {
                         haveKnownMaterial = true;
                         selectedPixel = decision.pixel;
+                        if (repairIsolatedRasterPinhole)
+                            directNativePixels[
+                                size_t(y) * size_t(width) + size_t(x)] = 1;
                     }
                     else if (decision.kind
                         == FirstPersonMaterialEvidenceKind::
                             transparent)
                     {
                         haveKnownMaterial = true;
+                        // Multiple independently transparent native views
+                        // are stronger evidence for a real opening.
+                        if (repairIsolatedRasterPinhole
+                            && decision.transparentViews == 1
+                            && decision.fullyTransparentViews == 1)
+                        {
+                            weaklyTransparentPixels[
+                                size_t(y) * size_t(width) + size_t(x)] = 1;
+                        }
                     }
                     else
                     {
@@ -4266,6 +4294,14 @@
                         selectedPixel;
                     if (selectedPixel != 0)
                         ++visiblePixelCount;
+                }
+
+                if (repairIsolatedRasterPinhole)
+                {
+                    visiblePixelCount +=
+                        RepairFirstPersonIsolatedMaterialPinhole(
+                            pixels, directNativePixels,
+                            weaklyTransparentPixels, width, height);
                 }
 
                 if (reconstructionOptions != nullptr
