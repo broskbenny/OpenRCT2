@@ -164,6 +164,7 @@ namespace OpenRCT2::Paint
 
                 Profile profile{};
                 profile.valid = true;
+                profile.error = 0.0;
                 profile.ridgeAlongX = axis == 0;
                 profile.split = split;
                 profile.nearHeight = low;
