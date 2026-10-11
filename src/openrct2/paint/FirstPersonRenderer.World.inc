@@ -3753,8 +3753,11 @@
                 // metadata. Object reloads clear the whole first-person scene,
                 // so keeping that unused source atlas entry as a dependency
                 // would only trigger needless preloads/revision checks.
+                // Physical-coverage geometry can still sample the source G1
+                // palette for transparent-edge fallback even when its main
+                // material is immutable. Track that source as a dependency.
                 if (surface.image.HasValue()
-                    && !surface.hasImmutablePixelData())
+                    && (!surface.hasImmutablePixelData() || surface.physicalCoverage))
                 {
                     dependencies.insert(
                         surface.image.GetIndex());
