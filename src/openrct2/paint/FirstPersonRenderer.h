@@ -247,6 +247,7 @@ namespace OpenRCT2::Paint
         // Inverse-reconstruction evidence retained for the click inspector.
         // These do not affect rendering or cache identity.
         bool diagnosticContinuousSurfaceRefined = false;
+        bool diagnosticPlanarSurfaceSelected = false;
         bool diagnosticStructuralEvidenceUsed = false;
         uint32_t diagnosticStructuralPairedSamples = 0;
         uint32_t diagnosticStructuralBaselineMismatches = 0;
