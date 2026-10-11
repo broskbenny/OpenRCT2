@@ -19,6 +19,7 @@
 #include <openrct2/paint/FirstPersonRoundTripReconstruction.h>
 #include <openrct2/paint/FirstPersonAssetReconstruction.h>
 #include <openrct2/paint/FirstPersonMaterialInference.h>
+#include <openrct2/paint/FirstPersonMaterialContinuity.h>
 #include <openrct2/paint/FirstPersonParkEntranceReconstruction.h>
 #include <openrct2/paint/FirstPersonPeriodicPassengerMotion.h>
 #include <openrct2/paint/FirstPersonPhysicalProxy.h>
@@ -5266,4 +5267,63 @@ TEST(FirstPersonPlanarSolidTest, PerpendicularRidgeAlsoFormsClosedMesh)
     const auto faces = BuildFirstPersonPlanarSolidCandidate(hull);
     ASSERT_EQ(faces.size(), 10u);
     ExpectFirstPersonPlanarMeshClosed(faces);
+}
+
+TEST(FirstPersonMaterialContinuityTest, RepairsOnlyProvenSinglePixelNativeSamplingGaps)
+{
+    constexpr int32_t width = 7, height = 7;
+    const auto run = [](int mode) {
+        std::vector<uint8_t> pixels(49, 83);
+        std::vector<uint8_t> provenance(49, 1);
+        std::vector<uint8_t> eligible(49, 0);
+        constexpr size_t centre = 24;
+        pixels[centre] = 0;
+        provenance[centre] = 0;
+        eligible[centre] = 1;
+        if (mode == 1)
+        {
+            pixels[centre + 1] = 0;
+            provenance[centre + 1] = 0;
+            eligible[centre + 1] = 1;
+        }
+        if (mode == 2)
+            provenance[centre + 1] = 0;
+        if (mode == 3)
+            eligible[centre] = 0; // Multiple-view-confirmed transparency.
+        if (mode == 4)
+            for (const size_t i : { 16u, 17u, 18u, 23u })
+                pixels[i] = 95; // Inconsistent palette is not proof.
+        if (mode == 5)
+        {
+            pixels[0] = 0;
+            provenance[0] = 0;
+            eligible[0] = 1; // Outer silhouette must remain transparent.
+        }
+        const size_t filled = RepairFirstPersonIsolatedMaterialPinhole(
+            pixels, provenance, eligible, width, height);
+        if (mode == 0 || mode == 5)
+        {
+            EXPECT_EQ(filled, 1u);
+            EXPECT_EQ(pixels[centre], 83);
+        }
+        else
+        {
+            EXPECT_EQ(filled, 0u);
+            EXPECT_EQ(pixels[centre], 0);
+        }
+        if (mode == 5)
+            EXPECT_EQ(pixels[0], 0);
+    };
+    for (int mode = 0; mode <= 5; ++mode)
+        run(mode);
+}
+
+TEST(FirstPersonMaterialContinuityTest, InvalidOrTooSmallMaterialCannotBeRepaired)
+{
+    std::vector<uint8_t> pixels{ 0, 1, 1, 1 };
+    const std::vector<uint8_t> evidence(4, 1);
+    EXPECT_EQ(RepairFirstPersonIsolatedMaterialPinhole(
+        pixels, evidence, evidence, 2, 2), 0u);
+    EXPECT_EQ(RepairFirstPersonIsolatedMaterialPinhole(
+        pixels, {}, evidence, 4, 4), 0u);
 }
