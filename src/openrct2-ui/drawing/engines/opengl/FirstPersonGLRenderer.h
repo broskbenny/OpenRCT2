@@ -5,6 +5,7 @@
 #pragma once
 #ifndef DISABLE_OPENGL
 #include "OpenGLAPI.h"
+#include "FirstPersonRegionTextureRevisions.h"
 #include <openrct2/paint/FirstPersonRenderer.h>
 #include <memory>
 #include <array>
@@ -46,8 +47,8 @@ namespace OpenRCT2::Ui
         struct RegionBuffer
         {
             GLuint vao{}, vbo{};
-            uint64_t sceneEpoch{}, generation{}, dependencyStamp{}, lastSeen{};
-            uint64_t dependencyRevisionSerial{};
+            uint64_t sceneEpoch{}, generation{}, lastSeen{};
+            FirstPersonRegionTextureRevisions imageRevisions;
             size_t bytes{};
             uint64_t sourceRevision{};
             GLsizei ordinaryCount{};
