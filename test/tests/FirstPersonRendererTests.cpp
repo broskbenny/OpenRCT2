@@ -31,6 +31,8 @@
 #include <openrct2/paint/FirstPersonSurfaceRelations.h>
 #include <openrct2/paint/FirstPersonVehicleBodyHull.h>
 #include <openrct2/paint/FirstPersonVisualHull.h>
+#include <openrct2/paint/FirstPersonPlanarSolidReconstruction.h>
+#include <map>
 #include <openrct2/paint/FirstPersonWalkingSemantics.h>
 #include <openrct2/paint/Paint.h>
 #include <openrct2/entity/EntityBase.h>
@@ -5145,4 +5147,104 @@ TEST(FirstPersonPersistentSemanticMaterialTest, PacketCopiesReuseImmutableFacePi
     EXPECT_EQ(regionB[0].immutablePixelData(),
         (std::vector<uint8_t>{ 0, 1, 2, 3, 4, 5, 6, 7 }));
     EXPECT_EQ(regionA[0].immutableFingerprint, regionB[0].immutableFingerprint);
+}
+
+
+namespace
+{
+    FirstPersonVisualHull MakeFirstPersonPlanarTestHull(
+        const std::vector<int>& ceiling, int ny = 6)
+    {
+        FirstPersonVisualHull hull{};
+        hull.valid = true;
+        hull.step = 2.0f;
+        hull.minForward = 8.0f;
+        hull.minRight = 16.0f;
+        hull.minUp = 4.0f;
+        hull.sizeForward = uint8_t(ceiling.size());
+        hull.sizeRight = uint8_t(ny);
+        hull.sizeUp = 12;
+        hull.occupied.assign(ceiling.size() * size_t(ny) * 12, 0);
+        for (int y = 0; y < ny; ++y)
+        for (size_t x = 0; x < ceiling.size(); ++x)
+        for (int z = 0; z < ceiling[x]; ++z)
+            hull.occupied[(size_t(z) * size_t(ny) + size_t(y))
+                * ceiling.size() + x] = 1;
+        return hull;
+    }
+
+    void ExpectFirstPersonPlanarMeshClosed(
+        const std::vector<FirstPersonVisualHullFace>& faces)
+    {
+        using V = std::array<int64_t, 3>;
+        using Edge = std::pair<V, V>;
+        std::map<Edge, std::pair<int, int>> edges;
+        const auto key = [](FirstPersonVec3 p) -> V {
+            return { std::llround(double(p.x) * 1024.0),
+                std::llround(double(p.y) * 1024.0),
+                std::llround(double(p.z) * 1024.0) };
+        };
+        for (const auto& face : faces)
+        {
+            for (size_t i = 0; i < face.corners.size(); ++i)
+            {
+                const auto a = key(face.corners[i]);
+                const auto b = key(face.corners[(i + 1) % face.corners.size()]);
+                ASSERT_NE(a, b);
+                const bool forward = a < b;
+                auto& record = edges[forward ? Edge{ a, b } : Edge{ b, a }];
+                ++record.first;
+                record.second += forward ? 1 : -1;
+            }
+        }
+        ASSERT_FALSE(edges.empty());
+        for (const auto& [edge, record] : edges)
+        {
+            EXPECT_EQ(record.first, 2) << "nonmanifold or T-junction";
+            EXPECT_EQ(record.second, 0) << "opposing face windings differ";
+        }
+    }
+}
+
+TEST(FirstPersonPlanarSolidTest, FlatAndSlopingRoofsBecomeSixConnectedFaces)
+{
+    for (const auto& heights : {
+        std::vector<int>{ 4, 4, 4, 4, 4, 4, 4, 4 },
+        std::vector<int>{ 3, 3, 4, 4, 5, 5, 6, 6 } })
+    {
+        const auto hull = MakeFirstPersonPlanarTestHull(heights);
+        const auto faces = BuildFirstPersonPlanarSolidCandidate(hull);
+        ASSERT_EQ(faces.size(), 6u);
+        EXPECT_EQ(std::count_if(faces.begin(), faces.end(), [](const auto& f) {
+            return f.kind == FirstPersonVisualHullFaceKind::top; }), 1);
+        ExpectFirstPersonPlanarMeshClosed(faces);
+    }
+}
+
+TEST(FirstPersonPlanarSolidTest, RidgeSharesAllVerticesWithoutTJunctions)
+{
+    const auto hull = MakeFirstPersonPlanarTestHull({ 2, 3, 4, 5, 6, 5, 4, 3 });
+    const auto faces = BuildFirstPersonPlanarSolidCandidate(hull);
+    ASSERT_EQ(faces.size(), 10u);
+    EXPECT_EQ(std::count_if(faces.begin(), faces.end(), [](const auto& f) {
+        return f.kind == FirstPersonVisualHullFaceKind::top; }), 2);
+    EXPECT_EQ(std::count_if(faces.begin(), faces.end(), [](const auto& f) {
+        return f.kind == FirstPersonVisualHullFaceKind::bottom; }), 2);
+    ExpectFirstPersonPlanarMeshClosed(faces);
+}
+
+TEST(FirstPersonPlanarSolidTest, RetainsComplexAndPerforatedVoxelGeometry)
+{
+    auto hull = MakeFirstPersonPlanarTestHull({ 2, 3, 4, 5, 6, 5, 4, 3 });
+    const size_t ny = hull.sizeRight, nx = hull.sizeForward;
+    hull.occupied[(size_t(1) * ny + size_t(2)) * nx + size_t(3)] = 0;
+    EXPECT_TRUE(BuildFirstPersonPlanarSolidCandidate(hull).empty());
+
+    hull = MakeFirstPersonPlanarTestHull({ 4, 4, 4, 4, 4, 4, 4, 4 });
+    for (int z = 0; z < hull.sizeUp; ++z)
+        hull.occupied[(size_t(z) * ny + size_t(2)) * nx + size_t(3)] = 0;
+    EXPECT_TRUE(BuildFirstPersonPlanarSolidCandidate(hull).empty());
+
+    hull = MakeFirstPersonPlanarTestHull({ 2, 7, 2, 7, 2, 7, 2, 7 });
+    EXPECT_TRUE(BuildFirstPersonPlanarSolidCandidate(hull).empty());
 }
