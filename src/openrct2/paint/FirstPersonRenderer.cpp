@@ -539,10 +539,11 @@ namespace OpenRCT2::Paint
                 || surface.diagnosticReconstructionKind == 3)
             {
                 Console::WriteLine(
-                    "  reconstructionEvidence continuous=%d structural=%d "
+                    "  reconstructionEvidence continuous=%d planar=%d structural=%d "
                     "structuralSamples=%u structuralMismatch=%u->%u "
                     "roundTripPixels=%llu->%llu",
                     surface.diagnosticContinuousSurfaceRefined ? 1 : 0,
+                    surface.diagnosticPlanarSurfaceSelected ? 1 : 0,
                     surface.diagnosticStructuralEvidenceUsed ? 1 : 0,
                     surface.diagnosticStructuralPairedSamples,
                     surface.diagnosticStructuralBaselineMismatches,
