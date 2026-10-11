@@ -101,3 +101,26 @@ reuse tile-artwork pixels and were also used to construct the experimental
 mesh. Future native appearance checks must compare geometry and palette
 ownership per frontmost 3D surface and report genuinely held-out-view results
 separately. This audit does not execute the game's C++ reconstruction.
+
+### Observed sequence attribution
+
+For SMH2, the exact preview-palette pixels were attributed by the fitted,
+approximate native depth-order composite to these tile sequences
+(`[sequence 0, sequence 1, sequence 2, sequence 3]`):
+
+- Rotation 0: `[0, 0, 202, 2513]`
+- Rotation 1: `[0, 2523, 0, 0]`
+- Rotation 2: `[2243, 0, 196, 0]`
+- Rotation 3: `[0, 0, 2613, 10]`
+
+The owner map is screen-pixel provenance from native 2D compositing;
+**it is not proof that a given reconstructed 3D triangle belongs to that
+sequence**. Establishing 3D frontmost material ownership is the next
+nontrivial integration step. Fitted image shifts must not be silently
+baked into the runtime reconstruction transform.
+
+The optional `.github/workflows/first-person-reconstruction.yml` schedules
+portable source-artwork regressions and the existing focused production
+small-scenery material bake on relevant branch pushes and PRs. Its presence
+does not imply GitHub Actions has executed successfully; check workflow status
+before treating CI coverage as verified.
