@@ -63,3 +63,41 @@ and real openings separately. Then export production-generated meshes through
 a deterministic test adapter, enabling headless comparison against these same
 checks. More DATs should cover both enclosed and genuinely open structures,
 different roof profiles and different tile layouts.
+
+## Native source-composite consistency (SMH2)
+
+The original DAT includes four preview sprites and four painted tile
+sequences with four direction images per sequence. Unlike independently
+captured photographs, these preview pixels are **not independent source
+observations**. The same indexed artwork appears within the per-tile composites.
+A calibrated translation contains all native preview foreground pixels with
+the **exact palette index**:
+
+| Rotation | Exact preview pixels | Preview foreground | Other composite foreground pixels |
+| --- | ---: | ---: | ---: |
+| 0 | 2715 | 2715 | 3529 total |
+| 1 | 2523 | 2523 | 3253 total |
+| 2 | 2439 | 2439 | 3272 total |
+| 3 | 2623 | 2623 | 3349 total |
+
+The registration is fitted against each preview, so this is a proof of
+**decoding and palette consistency after fitted translation**, not an
+independent test of geometry or an independently determined world placement.
+Extra composite pixels need separate analysis; they are not scored as failed
+preview containment. OpenRCT2's full painter remains the source of truth for
+scene occlusion/ownership.
+
+To reproduce without committing a DAT:
+
+```sh
+python3 test/first-person/audit_native_artwork.py /path/to/SMH2.DAT \
+  --require-exact-preview-containment --output /tmp/smh2-native-audit.json
+python3 -m unittest discover -s test/first-person -p 'test_*.py'
+```
+
+**Important corrective finding:** Any score described as a model being
+independently validated by SMH2's previews must be revised. The previews
+reuse tile-artwork pixels and were also used to construct the experimental
+mesh. Future native appearance checks must compare geometry and palette
+ownership per frontmost 3D surface and report genuinely held-out-view results
+separately. This audit does not execute the game's C++ reconstruction.
