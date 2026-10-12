@@ -225,3 +225,57 @@ GPU visualization, and in-game FPS are not tested by this adapter.
 The geometry certificate cannot establish real doors absent from the input
 visual hull; nor does it validate native palette mapping or finer sub-grid
 appearance. Structural openings remain a separate evidence requirement.
+
+
+## Exact connected planar-patch retessellation (offline candidate)
+
+A real-asset experiment found that **connected, exactly coplanar** triangles
+can be recombined into polygonal surface regions, then retriangulated while
+preserving *every original boundary edge and vertex*. No voxel cells, texture
+pixels, or world-space vertex positions are altered by this operation.
+
+On the privately supplied SMH2 DAT, using the independent marching-cubes
+visual hull from the research laboratory:
+
+| Measurement | Original | Connected planar patches |
+| --- | ---: | ---: |
+| Triangle count | 6,128 | **3,660** |
+| Triangle reduction | — | **40.3%** |
+| Watertight | yes | yes |
+| Consistent winding | yes | yes |
+| Euler characteristic | -16 | -16 |
+| Signed enclosed-volume delta | — | **0** |
+| View 0 IoU | 0.8297 | 0.8297 |
+| View 1 IoU | 0.8122 | 0.8122 |
+| View 2 IoU | 0.8260 | 0.8260 |
+| View 3 IoU | 0.8083 | 0.8083 |
+
+All four projected **binary silhouettes were pixel-for-pixel identical**, not
+merely close in average IoU. **169** patches were successfully replaced,
+saving **2,468** triangles. There was no need to guess new vertex positions
+or seal known openings. The nontrivial original tunnel topology remained
+unchanged.
+
+The reusable source in \`retessellate_planar_patches.py\` implements strict
+boundary-loop, coplanarity, area, contour edge, manifold/winding, Euler,
+and signed-volume checks. The synthetic tests include a subdivided box,
+a genuine through-opening, and non-coplanar shapes. Run:
+
+\`\`\`sh
+python -m pip install numpy trimesh 'shapely>=2.1' scikit-image
+python test/first-person/retessellate_planar_patches.py \\
+  /private/visual_hull.glb /tmp/retessellated.glb --report /tmp/patches.json
+python -m unittest discover -s test/first-person -p 'test_retessellate_planar_patches.py' -v
+\`\`\`
+
+This is **not a production renderer modification**. The source mesh comes from
+an independent research prototype; it is not the game's current greedy
+voxel-face boundary. This pass changes triangle connectivity, not 3D surface
+geometry, and it **does not solve source-artwork UV ownership, porosity caused
+by incorrect alpha, or intrinsically voxel-derived silhouette staircases**.
+
+The useful next step is to exploit these exact planar regions as larger
+native-textured surface domains, and separately fit non-coplanar roof/wall
+surfaces under existing four-view plus 3D free-space certificates. Do not
+promote this geometry-only export into the renderer without material and
+runtime validation. Never commit private DAT-derived meshes.
