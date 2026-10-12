@@ -371,6 +371,9 @@ overlaps the face; material coordinates interpolate the projected vertices
 used by the depth raster; frontmost depth ties count as visibility. Samples
 outside a triangular UV domain are unknown, rather than transparent native
 observations. Geometry, occupancy and the two-view cutout policy are unchanged.
+The face's preferred source view now supplies colour whenever it has direct
+evidence; a different view's larger sub-sample count cannot replace it per
+texel. Other views still supply missing colour and corroborate transparency.
 
 `test_large_scenery_material_bake.py` extracts and compiles the exact production
 depth, candidate-selection and material-bake blocks. Synthetic decoded sprites
@@ -380,6 +383,7 @@ isolate sampling defects from reconstruction. Compared with `9d011bbd`:
 | --- | ---: | ---: |
 | Roof triangle, 30×47 texture: transparent GPU-covered texels | 38 | 0 |
 | Thin triangle, 1×256 texture: transparent GPU-covered texels | 128 | 0 |
+| Two-view roof face: palette-placement errors against its preferred view | 70 | 0 |
 | Single-view surface: independently checked palette-placement errors | 93 | 0 |
 | Corroborated authored cutout: transparent texels | 24 | 24 |
 

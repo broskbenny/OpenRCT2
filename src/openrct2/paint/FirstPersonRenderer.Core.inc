@@ -4103,6 +4103,7 @@
 
                     FirstPersonMaterialPatchAccumulator
                         materialEvidence{};
+                    uint8_t preferredNativePixel = 0;
                     for (const auto& candidate :
                          candidates)
                     {
@@ -4183,6 +4184,12 @@
                                             colour;
                                     evidence.pixel =
                                         sample.pixel;
+                                    // Keep the face's selected native view
+                                    // coherent. Distinct sub-sample counts
+                                    // must not switch views from texel to
+                                    // texel and create a palette mosaic.
+                                    if (preferredNativePixel == 0)
+                                        preferredNativePixel = sample.pixel;
                                     break;
                                 case FirstPersonNativeCompositeKind::
                                     transparent:
@@ -4214,7 +4221,7 @@
                             colour)
                     {
                         haveKnownMaterial = true;
-                        selectedPixel = decision.pixel;
+                        selectedPixel = preferredNativePixel;
                         if (repairUnresolvedMaterial)
                             directNativePixels[
                                 size_t(y) * size_t(width) + size_t(x)] = 1;

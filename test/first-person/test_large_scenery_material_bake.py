@@ -88,7 +88,7 @@ using namespace OpenRCT2::Paint;
 
 SETUP = r'''
 struct Result {
-    int width{}, height{}, candidates{};
+    int width{}, height{}, candidates{}, primaryDirection{};
     size_t drawable{}, visible{};
     std::vector<uint8_t> pixels;
 };
@@ -190,16 +190,18 @@ int main()
                 const uint8_t pixel = result.pixels[size_t(y) * size_t(width) + size_t(x)];
                 holes += pixel == 0;
                 unknown += pixel == 10 || pixel == 44;
-                if (label == "single_view_projection")
+                if (label == "single_view_projection" || (label == "triangle_30x47"
+                    && (x + 0.5) / width >= (y + 0.5) / height))
                 {
                     // Independently interpolate the GPU's projected vertices.
-                    // The fixture has one visible native view and constant
-                    // horizontal palette bands, so the centre sample is exact.
+                    // Constant palette bands make the chosen face-view's
+                    // centre sample exact. More sub-samples from another view
+                    // must not create a mosaic within this coherent face.
                     std::array<ScreenCoordsXY, 4> projected;
                     for (size_t corner = 0; corner < 4; ++corner)
                     {
                         const auto& p = faces[i].corners[corner];
-                        projected[corner] = Translate3DTo2DWithZ(0,
+                        projected[corner] = Translate3DTo2DWithZ(result.primaryDirection,
                             {int32_t(std::lround(p.x)), int32_t(std::lround(p.y)), int32_t(std::lround(p.z))});
                     }
                     const double s = (x + 0.5) / width, t = (y + 0.5) / height;
@@ -217,6 +219,7 @@ int main()
                       << ",\"width\":" << width << ",\"height\":" << height
                       << ",\"gpu_texels\":" << gpuTexels << ",\"holes\":" << holes
                       << ",\"unknown\":" << unknown << ",\"candidates\":" << result.candidates
+                      << ",\"primary_direction\":" << result.primaryDirection
                       << ",\"projection_errors\":" << projectionErrors
                       << ",\"bake_ms\":" << lastBakeMilliseconds
                       << ",\"drawable\":" << result.drawable << ",\"corners\":[";
@@ -281,7 +284,7 @@ def source_for(core):
     out += "std::vector<Result> results;\nfor (size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {\nconst auto& face = faces[faceIndex];\n"
     out += between(core, "                struct LargeSceneryFaceView", "\n                ImageId fallbackImage{};")
     out += between(core, "                std::vector<uint8_t> pixels(", "\n                if (hull.planarSurfaceSelected && haveUnknownMaterial")
-    out += "(void)haveKnownMaterial; (void)haveUnknownMaterial;\nresults.push_back({width, height, int(candidates.size()), drawablePixelCount, visiblePixelCount, std::move(pixels)});\n}\nlastBakeMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bakeStart).count();\nreturn results;\n}\n"
+    out += "(void)haveKnownMaterial; (void)haveUnknownMaterial;\nresults.push_back({width, height, int(candidates.size()), candidates.empty() ? -1 : int(candidates.front().nativeDirection), drawablePixelCount, visiblePixelCount, std::move(pixels)});\n}\nlastBakeMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bakeStart).count();\nreturn results;\n}\n"
     out += MAIN
     return out
 
@@ -315,6 +318,8 @@ class LargeSceneryMaterialBakeTest(unittest.TestCase):
         projection = next(r for r in results if r["name"] == "single_view_projection")
         self.assertEqual(projection["candidates"], 1)
         self.assertEqual(projection["projection_errors"], 0)
+        roof = next(r for r in results if r["name"] == "triangle_30x47")
+        self.assertEqual(roof["projection_errors"], 0)
 
 
 if __name__ == "__main__":
