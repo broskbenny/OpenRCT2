@@ -4103,7 +4103,7 @@
                             faceCenter.y
                             / float(kCoordsXYStep))));
 
-                const int32_t width =
+                int32_t width =
                     std::clamp(
                         int32_t(std::ceil(std::max(
                             edgeLength(
@@ -4113,7 +4113,7 @@
                                 face.corners[3],
                                 face.corners[2])))),
                         1, 256);
-                const int32_t height =
+                int32_t height =
                     std::clamp(
                         int32_t(std::ceil(std::max(
                             edgeLength(
@@ -4123,6 +4123,13 @@
                                 face.corners[1],
                                 face.corners[2])))),
                         1, 256);
+                // Diagnostic undersides contain no native image detail.
+                // Avoid expensive full-resolution bitmap allocations.
+                if (markUnknownUnderside)
+                {
+                    width = std::min(width, 16);
+                    height = std::min(height, 16);
+                }
                 std::vector<uint8_t> pixels(
                     size_t(width)
                         * size_t(height), 0);

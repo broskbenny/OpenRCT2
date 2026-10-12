@@ -46,6 +46,8 @@ class UnknownUndersideTests(unittest.TestCase):
         self.assertIn("if (!fallbackImage.HasValue() && markUnknownUnderside)",core)
         self.assertIn("FirstPersonMissingMaterialPixel(px, py)",core)
         self.assertIn("drawablePixelCount = pixels.size()",core)
+        self.assertIn("width = std::min(width, 16)",core)
+        self.assertIn("height = std::min(height, 16)",core)
 
 if __name__ == "__main__":
     unittest.main()

@@ -335,3 +335,30 @@ production source projection on that basis alone.
 
 The candidate textured GLB remains diagnostic: unknown material stays
 visibly marked, never silently painted over or made transparent.
+
+
+## Unobservable underside diagnosis (October 12, 2026)
+
+In the production large-scenery baker, `face.normal.z < -0.5f` previously
+skipped *all* ordinary down-facing boundaries, before any native-material
+sampling. Additionally, an underside with no native-visible source was
+discarded when `fallbackImage` remained unset. These are omitted 3D faces,
+not merely black/transparent pixels.
+
+Accepted elevated underside faces now bypass those omissions and receive
+the existing conspicuous unknown-material checkerboard. Ground-contact
+bottoms remain hidden to avoid Z-fighting with terrain. Native artwork is
+not hallucinated. The diagnostic texture is capped at 16×16 palette
+pixels per face for memory/CPU control; its actual 3D geometry is unchanged.
+Entrance-specific opaque-boundary handling is unchanged.
+
+**Crucial limitation:** the original SMH2 pick log independently records
+`REJECTED_MATERIAL pixel=0` on a *side-facing* reconstructed face, with
+normal approximately `(0.980,-0.140,0.140)`. Therefore missing downward
+faces do **not** explain all observed pixel porosity. The reported
+`1165 boundary / 969 materialized / 924 opaque` face counts cannot
+uniquely attribute their missing material to undersides.
+
+No complete Windows build, renderer frame or FPS result has been verified.
+This marker is an evidence/debuggability improvement, not a certified
+overall porosity fix.
