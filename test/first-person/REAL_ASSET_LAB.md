@@ -279,3 +279,59 @@ native-textured surface domains, and separately fit non-coplanar roof/wall
 surfaces under existing four-view plus 3D free-space certificates. Do not
 promote this geometry-only export into the renderer without material and
 runtime validation. Never commit private DAT-derived meshes.
+
+
+## Exact native C++ connected-planar surface operator
+
+The geometry-only algorithm is now implemented in **production-compatible
+header-only C++** as \`FirstPersonConnectedPlanarMesh.h\`. It accepts indexed
+triangles and 3D vertices (without moving any source vertex), clusters
+edge-connected oriented coplanar triangles, extracts simple patch boundaries,
+ear-clips the region, and admits the replacement only if:
+
+- the patch has one unambiguous closed boundary loop (holes/branches fall back);
+- the result uses fewer triangles, with identical patch border edges;
+- its triangles share the original outward direction, without zero-area folds;
+- the total 3D patch area agrees with the original within a strict tolerance.
+
+The C++ test runner consumes a native binary triangle mesh and returns indexed
+triangles. No proprietary asset is bundled. \`test_native_connected_planar.py\`
+compiles the exact C++ header with GCC and undefined-behavior sanitizer and
+tests a heavily subdivided box, a genuine through-opening, a noncoplanar sphere,
+and (when \`SMH2_RAW_HULL_MESH\` is set) the actual privately supplied raw hull.
+
+All four tests passed locally against the exact source committed to Git,
+including the optional SMH2 fixture. Actual SMH2 C++ result:
+**6,128 → 3,660 triangles (40.3% fewer), 169 regions retessellated**;
+unchanged enclosed volume, Euler characteristic -16, consistent winding,
+watertight and all four original view masks **pixel-identical**. The
+standalone C++ operation took approximately 6 ms in a local optimized run
+(nonportable measurement, excludes sprite decoding, GPU uploads and textures).
+
+**The header is NOT called by the production renderer yet**: current
+large-scenery surfaces are independently textured quads, while this algorithm
+outputs triangles. Converting them directly into independent material patches
+would risk *increasing* draw calls and seams. Native artwork must be mapped
+onto connected planar regions coherently first; only then should this
+algorithm replace the existing voxel-face publication path. There is no
+claim of improved game FPS or solved roof appearance.
+
+### Real-source surface provenance (experimental)
+
+For the 3,660-triangle SMH2 result, there were 1,001 connected oriented
+coplanar surface regions. A depth-tested four-view raster found direct
+native foreground pixels for 515 regions; 486 had no such evidence. Some
+regions may be fully occluded, internal or on undersides.
+
+Selecting a single native view per region and projecting that view's palette
+index directly resulted in a 100% same-view match **by construction** using
+pixel-cell (floor) sampling. It does **not** independently validate materials:
+cross-view exact palette agreement remained very poor (roughly 1–7% in visible
+overlap), due to native view-dependent artwork and/or surface correspondence.
+The experimental pipeline had previously rounded pixel-centre projections,
+causing avoidable one-pixel lookups. This is a Python sampler defect, not proof
+that the OpenRCT2 C++ integer-coordinate projection is wrong. Do not change
+production source projection on that basis alone.
+
+The candidate textured GLB remains diagnostic: unknown material stays
+visibly marked, never silently painted over or made transparent.
