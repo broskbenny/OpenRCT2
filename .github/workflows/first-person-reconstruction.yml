@@ -9,6 +9,7 @@ on:
       - src/openrct2/paint/FirstPerson*.h
       - src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc
       - src/openrct2/paint/FirstPersonRenderer.Core.inc
+      - src/openrct2/paint/FirstPersonRenderer.cpp
       - .github/workflows/first-person-reconstruction.yml
   pull_request:
     paths:
@@ -16,6 +17,7 @@ on:
       - src/openrct2/paint/FirstPerson*.h
       - src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc
       - src/openrct2/paint/FirstPersonRenderer.Core.inc
+      - src/openrct2/paint/FirstPersonRenderer.cpp
       - .github/workflows/first-person-reconstruction.yml
 
 permissions:
@@ -36,3 +38,23 @@ jobs:
         run: python -m unittest discover -s test/first-person -p 'test_*.py' -v
       - name: Exercise exact production small-scenery material bake
         run: python test/first-person/verify_material_bake.py --sanitize
+
+  windows-release:
+    name: First-person Windows Release x64
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      PLATFORM: x64
+      OPENRCT2_CL_ADDITIONALOPTIONS: /D_SILENCE_CXX20_U8PATH_DEPRECATION_WARNING /wd4267 /U__ENABLE_DISCORD__
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and link the production renderer and application
+        shell: cmd
+        run: scripts\vstool.cmd msbuild src\openrct2-win\openrct2-win.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /m:1 /p:BuildInParallel=false /p:CL_MPCount=1 /verbosity:minimal
+      - name: Retain the tested application
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-person-windows-x64
+          path: bin/openrct2.exe
+          if-no-files-found: error
+

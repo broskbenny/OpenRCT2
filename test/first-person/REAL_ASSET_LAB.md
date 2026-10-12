@@ -362,3 +362,55 @@ uniquely attribute their missing material to undersides.
 No complete Windows build, renderer frame or FPS result has been verified.
 This marker is an evidence/debuggability improvement, not a certified
 overall porosity fix.
+
+## Production large-scenery material sampling correction (October 12, 2026)
+
+The large-scenery baker now uses the same surface-sampling contracts already
+used by small scenery: triangle texels are admitted when their GPU footprint
+overlaps the face; material coordinates interpolate the projected vertices
+used by the depth raster; frontmost depth ties count as visibility. Samples
+outside a triangular UV domain are unknown, rather than transparent native
+observations. Geometry, occupancy and the two-view cutout policy are unchanged.
+
+`test_large_scenery_material_bake.py` extracts and compiles the exact production
+depth, candidate-selection and material-bake blocks. Synthetic decoded sprites
+isolate sampling defects from reconstruction. Compared with `9d011bbd`:
+
+| Fixture / measurement | Before | After |
+| --- | ---: | ---: |
+| Roof triangle, 30×47 texture: transparent GPU-covered texels | 38 | 0 |
+| Thin triangle, 1×256 texture: transparent GPU-covered texels | 128 | 0 |
+| Single-view surface: independently checked palette-placement errors | 93 | 0 |
+| Corroborated authored cutout: transparent texels | 24 | 24 |
+
+The thin-triangle test retains **123 explicitly unknown texels** where the
+native depth raster supplies no observation. Removing silent transparency
+does not create missing artwork. A fully occluded face still has no native
+material candidates. This adapter tests decoded input, not DAT loading,
+complete scene paint capture or GPU execution; the footprint oracle is an
+independent integer intersection of texel squares with the rendered UV triangle.
+
+`FirstPersonNativeComposite.h` preserves the original per-sequence native-depth
+lookup, including palette zero, uncovered gaps and first-sequence depth ties.
+48,054 cached/direct comparisons pass with undefined-behaviour sanitizer.
+Each cached view uses at most 262,144 pixels and two bytes per pixel; oversized
+or insufficiently reused views retain direct lookup. A standalone 32-sequence,
+200,000-lookup measurement includes cache construction; its timing is reported
+by `test_native_composite.py`, never interpreted as game FPS.
+
+To reproduce the old/new material comparison without proprietary assets:
+
+```sh
+git show 9d011bbd:src/openrct2/paint/FirstPersonRenderer.Core.inc > /tmp/fp-before.inc
+python test/first-person/test_large_scenery_material_bake.py --core /tmp/fp-before.inc
+python test/first-person/test_large_scenery_material_bake.py
+python test/first-person/test_native_composite.py
+```
+
+The reconstruction workflow also builds the complete Windows Release x64
+application independently of the repository-wide formatting gate. Check the
+exact commit's Actions result before claiming a successful Windows build.
+The earlier `9d011bbd` headless workflow did pass; its general CI stopped at
+formatting and skipped native builds. No SMH2 result, smoother geometry,
+complete porosity fix or runtime FPS claim follows from these fixtures.
+

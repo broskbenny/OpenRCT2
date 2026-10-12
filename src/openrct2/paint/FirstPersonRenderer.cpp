@@ -7,6 +7,7 @@
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonLargeSceneryReconstruction.h"
 #include "FirstPersonMaterialInference.h"
+#include "FirstPersonNativeComposite.h"
 #include "FirstPersonBoundaryMaterialPolicy.h"
 #include "FirstPersonUnknownUnderside.h"
 #include "FirstPersonMaterialContinuity.h"
@@ -1967,3 +1968,4 @@ namespace OpenRCT2::Paint
 
     }
 } // namespace OpenRCT2::Paint
+

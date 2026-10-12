@@ -3782,105 +3782,51 @@
                     return std::sqrt(
                         dx * dx + dy * dy + dz * dz);
                 };
-            const auto ownedNear =
-                [&](uint8_t rotation,
-                    uint32_t owner,
-                    int32_t x, int32_t y) {
-                    for (int32_t dy = -1;
-                         dy <= 1; ++dy)
-                    for (int32_t dx = -1;
-                         dx <= 1; ++dx)
-                    {
-                        const auto found =
-                            depthOwners[rotation].find(
-                                FirstPersonSilhouettePixelKey(
-                                    x + dx,
-                                    y + dy));
-                        if (found
-                                != depthOwners[
-                                       rotation]
-                                       .end()
-                            && found->second.owner
-                                == owner)
+            const auto visibleNear =
+                [](const FirstPersonSilhouette& visible, int32_t x, int32_t y) {
+                    for (int32_t dy = -1; dy <= 1; ++dy)
+                    for (int32_t dx = -1; dx <= 1; ++dx)
+                        if (visible.contains(x + dx, y + dy))
                             return true;
-                    }
                     return false;
                 };
-            enum class LargeSceneryCompositeSampleKind : uint8_t
+            // Budget from face area conservatively counts one source query
+            // per texel. Only precompose views that can amortize the work;
+            // nine-sample footprints usually reuse each native pixel.
+            std::array<size_t, 4> expectedCompositeSamples{};
+            for (const auto& face : faces)
             {
-                unknown,
-                transparent,
-                colour,
-            };
-            struct LargeSceneryCompositeSample
+                const auto extent = [&](size_t a, size_t b, size_t c, size_t d) {
+                    return size_t(std::clamp(int32_t(std::ceil(std::max(
+                        edgeLength(face.corners[a], face.corners[b]),
+                        edgeLength(face.corners[c], face.corners[d])))), 1, 256));
+                };
+                const size_t area = extent(0, 1, 3, 2) * extent(0, 3, 1, 2);
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                    if (faceVisible(face, rotation))
+                        expectedCompositeSamples[nativeDirectionForRotation[rotation]] += area;
+            }
+            std::array<FirstPersonNativeComposite, 4> nativeComposites;
+            for (uint8_t direction = 0; direction < 4; ++direction)
             {
-                LargeSceneryCompositeSampleKind kind =
-                    LargeSceneryCompositeSampleKind::unknown;
-                uint8_t pixel = 0;
-            };
+                std::vector<FirstPersonNativeCompositeSource> sources;
+                for (size_t sequence = 0; sequence < entry.tiles.size(); ++sequence)
+                {
+                    const auto* source = decodedView(sequence, direction);
+                    if (source == nullptr)
+                        continue;
+                    sources.push_back({
+                        source->spritePos.x + source->g1->xOffset,
+                        source->spritePos.y + source->g1->yOffset,
+                        source->g1->width, source->g1->height,
+                        source->nativeDepth, &source->pixels,
+                    });
+                }
+                nativeComposites[direction].build(std::move(sources), expectedCompositeSamples[direction]);
+            }
             const auto sampleComposite =
-                [&](uint8_t nativeDirection,
-                    ScreenCoordsXY projected)
-                    -> LargeSceneryCompositeSample {
-                    bool coveredByAnySprite = false;
-                    const LargeSceneryDecodedView*
-                        bestSource = nullptr;
-                    uint8_t bestPixel = 0;
-                    for (size_t sequence = 0;
-                         sequence < entry.tiles.size();
-                         ++sequence)
-                    {
-                        const auto* source =
-                            decodedView(
-                                sequence, nativeDirection);
-                        if (source == nullptr)
-                            continue;
-                        const int32_t u =
-                            projected.x
-                            - source->spritePos.x
-                            - source->g1->xOffset;
-                        const int32_t v =
-                            projected.y
-                            - source->spritePos.y
-                            - source->g1->yOffset;
-                        if (u < 0 || v < 0
-                            || u >= source->g1->width
-                            || v >= source->g1->height)
-                            continue;
-                        coveredByAnySprite = true;
-                        const uint8_t pixel =
-                            source->pixels[
-                                size_t(v)
-                                    * size_t(source->g1->width)
-                                + size_t(u)];
-                        if (pixel == 0)
-                            continue;
-                        if (bestSource == nullptr
-                            || source->nativeDepth
-                                > bestSource->nativeDepth)
-                        {
-                            bestSource = source;
-                            bestPixel = pixel;
-                        }
-                    }
-                    if (bestSource != nullptr)
-                    {
-                        return {
-                            LargeSceneryCompositeSampleKind::colour,
-                            bestPixel,
-                        };
-                    }
-                    if (coveredByAnySprite)
-                    {
-                        return {
-                            LargeSceneryCompositeSampleKind::transparent,
-                            0,
-                        };
-                    }
-                    return {
-                        LargeSceneryCompositeSampleKind::unknown,
-                        0,
-                    };
+                [&](uint8_t nativeDirection, ScreenCoordsXY projected) {
+                    return nativeComposites[nativeDirection].sample(projected.x, projected.y);
                 };
 
             bool haveBounds = false;
@@ -3938,86 +3884,62 @@
                     uint8_t rotation = 0;
                     uint8_t nativeDirection = 0;
                     float score = 0.0f;
+                    FirstPersonSilhouette visible;
+                    FirstPersonVisualHullFace projectedFace;
                 };
-                std::vector<LargeSceneryFaceView>
-                    candidates;
-                for (uint8_t rotation = 0;
-                     rotation < 4; ++rotation)
+                std::vector<LargeSceneryFaceView> candidates;
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
-                    if (!faceVisible(
-                            face, rotation))
+                    if (!faceVisible(face, rotation))
                         continue;
-                    std::array<ScreenCoordsXY, 4>
-                        projected{};
-                    FirstPersonSilhouette silhouette{};
-                    for (size_t i = 0;
-                         i < face.corners.size();
-                         ++i)
+                    std::array<ScreenCoordsXY, 4> projected{};
+                    std::array<float, 4> depth{};
+                    FirstPersonVisualHullFace projectedFace{};
+                    for (size_t i = 0; i < face.corners.size(); ++i)
                     {
-                        const auto& p =
-                            face.corners[i];
-                        projected[i] =
-                            Translate3DTo2DWithZ(
-                                rotation,
-                                {
-                                    int32_t(
-                                        std::lround(
-                                            p.x)),
-                                    int32_t(
-                                        std::lround(
-                                            p.y)),
-                                    int32_t(
-                                        std::lround(
-                                            p.z)),
-                                });
+                        const auto& p = face.corners[i];
+                        const CoordsXYZ point{
+                            int32_t(std::lround(p.x)),
+                            int32_t(std::lround(p.y)),
+                            int32_t(std::lround(p.z)),
+                        };
+                        projected[i] = Translate3DTo2DWithZ(rotation, point);
+                        depth[i] = FirstPersonIsoDepth(rotation, point);
+                        projectedFace.corners[i] = { float(projected[i].x), float(projected[i].y), 0.0f };
                     }
-                    AddFirstPersonSilhouetteQuad(
-                        silhouette,
-                        projected);
-                    const float ownership =
-                        FirstPersonDepthOwnerCoverage(
-                            depthOwners[rotation],
-                            uint32_t(faceIndex),
-                            silhouette);
-                    if (ownership < 0.20f)
+                    // Adjacent triangles can tie at the frontmost depth.
+                    // Visibility must not require a unique triangle owner.
+                    auto visibility = BuildFirstPersonDepthVisibility(depthOwners[rotation], projected, depth);
+                    const float coverage = visibility.coverage();
+                    if (coverage < 0.20f)
                         continue;
                     candidates.push_back({
-                        rotation,
-                        nativeDirectionForRotation[
-                            rotation],
-                        ownership
-                            * float(std::max<size_t>(
-                                1,
-                                silhouette.size())),
+                        rotation, nativeDirectionForRotation[rotation],
+                        coverage * float(std::max<size_t>(1, visibility.projected.size())),
+                        std::move(visibility.visible), projectedFace,
                     });
                 }
-                std::sort(
-                    candidates.begin(),
-                    candidates.end(),
-                    [](const LargeSceneryFaceView& a,
-                       const LargeSceneryFaceView& b) {
-                        if (a.score != b.score)
-                            return a.score > b.score;
-                        return a.rotation
-                            < b.rotation;
-                    });
+                std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+                    return a.score != b.score ? a.score > b.score : a.rotation < b.rotation;
+                });
 
-                const bool structuralAppearanceFallback =
-                    candidates.empty()
-                    && reconstructionOptions != nullptr
-                    && reconstructionOptions
-                        ->opaqueBoundaryMaterial;
+                const bool structuralAppearanceFallback = candidates.empty()
+                    && reconstructionOptions != nullptr && reconstructionOptions->opaqueBoundaryMaterial;
                 if (structuralAppearanceFallback)
                 {
-                    for (uint8_t rotation = 0;
-                         rotation < 4; ++rotation)
+                    for (uint8_t rotation = 0; rotation < 4; ++rotation)
                     {
-                        candidates.push_back({
-                            rotation,
-                            nativeDirectionForRotation[
-                                rotation],
-                            0.0f,
-                        });
+                        LargeSceneryFaceView candidate{};
+                        candidate.rotation = rotation;
+                        candidate.nativeDirection = nativeDirectionForRotation[rotation];
+                        for (size_t i = 0; i < face.corners.size(); ++i)
+                        {
+                            const auto& p = face.corners[i];
+                            const auto projected = Translate3DTo2DWithZ(rotation,
+                                { int32_t(std::lround(p.x)), int32_t(std::lround(p.y)), int32_t(std::lround(p.z)) });
+                            candidate.projectedFace.corners[i] = { float(projected.x), float(projected.y), 0.0f };
+                        }
+                        candidates.push_back(std::move(candidate));
                     }
                 }
 
@@ -4172,12 +4094,10 @@
                 for (int32_t x = 0;
                      x < width; ++x)
                 {
-                    FirstPersonVec3 centrePoint{};
-                    if (!FirstPersonVisualHullSampleFace(
-                            face,
-                            (float(x) + 0.5f) / float(width),
-                            (float(y) + 0.5f) / float(height),
-                            centrePoint))
+                    // Nearest filtering can use a texel whose centre lies
+                    // outside a triangle. Bake its covered portion as well.
+                    const auto uv = FirstPersonVisualHullTexelUV(face, x, y, width, height);
+                    if (!uv)
                         continue;
                     ++drawablePixelCount;
 
@@ -4199,33 +4119,26 @@
                         for (const auto& offset :
                              FirstPersonMaterialPatchOffsets())
                         {
-                            auto& evidence =
-                                patchSamples[patchIndex++];
-                            FirstPersonVec3 worldPoint{};
+                            const bool centreSample = patchIndex == 0;
+                            auto& evidence = patchSamples[patchIndex++];
+                            FirstPersonVec3 projectedPoint{};
                             if (!FirstPersonVisualHullSampleFace(
-                                    face,
-                                    (float(x) + offset.s)
-                                        / float(width),
-                                    (float(y) + offset.t)
-                                        / float(height),
-                                    worldPoint))
+                                    candidate.projectedFace,
+                                    centreSample ? (*uv)[0] : (float(x) + offset.s) / float(width),
+                                    centreSample ? (*uv)[1] : (float(y) + offset.t) / float(height),
+                                    projectedPoint))
                             {
-                                evidence.kind =
-                                    FirstPersonMaterialEvidenceKind::
-                                        transparent;
+                                // Outside the triangle is not a native alpha
+                                // observation and cannot corroborate a cutout.
                                 continue;
                             }
-                            const auto projected =
-                                Translate3DTo2DWithZ(
-                                    candidate.rotation,
-                                    {
-                                        int32_t(std::lround(
-                                            worldPoint.x)),
-                                        int32_t(std::lround(
-                                            worldPoint.y)),
-                                        int32_t(std::lround(
-                                            worldPoint.z)),
-                                    });
+                            // Match the projected vertices and pixel cells of
+                            // the depth raster, as the small-scenery bake does.
+                            // Rounding each world sample first shifts artwork.
+                            const ScreenCoordsXY projected{
+                                int32_t(std::floor(projectedPoint.x)),
+                                int32_t(std::floor(projectedPoint.y)),
+                            };
                             const uint64_t projectedKey =
                                 FirstPersonSilhouettePixelKey(
                                     projected.x,
@@ -4249,11 +4162,7 @@
                                 projectedKey;
 
                             if (!structuralAppearanceFallback
-                                && !ownedNear(
-                                    candidate.rotation,
-                                    uint32_t(faceIndex),
-                                    projected.x,
-                                    projected.y))
+                                && !visibleNear(candidate.visible, projected.x, projected.y))
                             {
                                 evidence.kind =
                                     FirstPersonMaterialEvidenceKind::
@@ -4267,7 +4176,7 @@
                                     projected);
                             switch (sample.kind)
                             {
-                                case LargeSceneryCompositeSampleKind::
+                                case FirstPersonNativeCompositeKind::
                                     colour:
                                     evidence.kind =
                                         FirstPersonMaterialEvidenceKind::
@@ -4275,13 +4184,13 @@
                                     evidence.pixel =
                                         sample.pixel;
                                     break;
-                                case LargeSceneryCompositeSampleKind::
+                                case FirstPersonNativeCompositeKind::
                                     transparent:
                                     evidence.kind =
                                         FirstPersonMaterialEvidenceKind::
                                             transparent;
                                     break;
-                                case LargeSceneryCompositeSampleKind::
+                                case FirstPersonNativeCompositeKind::
                                     unknown:
                                     evidence.kind =
                                         FirstPersonMaterialEvidenceKind::
@@ -6901,3 +6810,4 @@
                 if (found != _trackMaterialJobs.end() && found->second == job) _trackMaterialJobs.erase(found);
             });
         }
+
