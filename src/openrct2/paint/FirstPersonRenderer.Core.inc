@@ -3892,10 +3892,15 @@
                  ++faceIndex)
             {
                 const auto& face = faces[faceIndex];
+                const bool opaqueStructuralMode =
+                    reconstructionOptions != nullptr
+                    && reconstructionOptions->opaqueBoundaryMaterial;
+                const bool markUnknownUnderside =
+                    FirstPersonRevealUnknownUnderside(
+                        face, hull.minUp, hull.step,
+                        hull.valid, opaqueStructuralMode);
                 if (face.normal.z < -0.5f
-                    && (reconstructionOptions == nullptr
-                        || !reconstructionOptions
-                                ->opaqueBoundaryMaterial))
+                    && !opaqueStructuralMode && !markUnknownUnderside)
                     continue;
 
                 FirstPersonVec3 faceCenter{};
@@ -4035,6 +4040,21 @@
                     if (fallbackImage.HasValue())
                         break;
                 }
+                // An underside cannot win native isometric view ownership.
+                // Still publish its accepted 3D face with explicit unknown
+                // material rather than silently omitting the geometry.
+                if (!fallbackImage.HasValue() && markUnknownUnderside)
+                {
+                    for (size_t sequence = 0;
+                         sequence < entry.tiles.size(); ++sequence)
+                    {
+                        const auto* source = decodedView(sequence, 0);
+                        if (source == nullptr)
+                            continue;
+                        fallbackImage = source->image;
+                        break;
+                    }
+                }
                 if (!fallbackImage.HasValue())
                     continue;
 
@@ -4128,6 +4148,18 @@
                 size_t visiblePixelCount = 0;
                 size_t drawablePixelCount = 0;
 
+                if (markUnknownUnderside)
+                {
+                    for (int32_t py = 0; py < height; ++py)
+                    for (int32_t px = 0; px < width; ++px)
+                        pixels[size_t(py) * size_t(width) + size_t(px)] =
+                            FirstPersonMissingMaterialPixel(px, py);
+                    drawablePixelCount = pixels.size();
+                    visiblePixelCount = pixels.size();
+                    haveUnknownMaterial = true;
+                }
+                else
+                {
                 for (int32_t y = 0;
                      y < height; ++y)
                 for (int32_t x = 0;
@@ -4304,6 +4336,7 @@
                     if (selectedPixel != 0)
                         ++visiblePixelCount;
                 }
+                }
 
                 if (repairUnresolvedMaterial
                     && haveUnresolvedMaterialPixel)
@@ -4344,7 +4377,8 @@
                     }
                 }
 
-                if (hull.planarSurfaceSelected && haveUnknownMaterial)
+                if (hull.planarSurfaceSelected && haveUnknownMaterial
+                    && !markUnknownUnderside)
                     planarMaterialUnproven = true;
                 if (visiblePixelCount == 0
                     && haveKnownMaterial
@@ -4399,14 +4433,19 @@
                     std::move(surface));
             }
 
-            // Do not publish a connected planar mesh with unknown or
-            // alpha-perforated visible faces. Count the deliberately
-            // untextured undersides (one for a plane, two for a ridge),
-            // without excusing any other absent or partial material.
+            // Do not publish planar meshes with unknown visible material.
+            // Only ground-contact bottoms are deliberately untextured;
+            // elevated undersides now show explicit unknown artwork.
             // The fallback disables planar selection to avoid recursion.
             const size_t unobservedUndersides = hull.planarSurfaceSelected
                 ? size_t(std::count_if(faces.begin(), faces.end(),
-                    [](const auto& face) { return face.normal.z < -0.5f; }))
+                    [&](const auto& face) {
+                        return face.normal.z < -0.5f
+                            && !FirstPersonRevealUnknownUnderside(
+                                face, hull.minUp, hull.step, hull.valid,
+                                reconstructionOptions != nullptr
+                                    && reconstructionOptions->opaqueBoundaryMaterial);
+                    }))
                 : 0;
             if (hull.planarSurfaceSelected
                 && (planarMaterialUnproven

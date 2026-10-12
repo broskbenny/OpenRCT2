@@ -8,6 +8,7 @@
 #include "FirstPersonLargeSceneryReconstruction.h"
 #include "FirstPersonMaterialInference.h"
 #include "FirstPersonBoundaryMaterialPolicy.h"
+#include "FirstPersonUnknownUnderside.h"
 #include "FirstPersonMaterialContinuity.h"
 #include "FirstPersonPlanarSolidReconstruction.h"
 #include "FirstPersonVolumePreservation.h"

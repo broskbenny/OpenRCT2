@@ -20,6 +20,7 @@
 #include <openrct2/paint/FirstPersonAssetReconstruction.h>
 #include <openrct2/paint/FirstPersonMaterialInference.h>
 #include <openrct2/paint/FirstPersonBoundaryMaterialPolicy.h>
+#include <openrct2/paint/FirstPersonUnknownUnderside.h>
 #include <openrct2/paint/FirstPersonMaterialContinuity.h>
 #include <openrct2/paint/FirstPersonParkEntranceReconstruction.h>
 #include <openrct2/paint/FirstPersonPeriodicPassengerMotion.h>
@@ -5413,4 +5414,29 @@ TEST(FirstPersonBoundaryMaterialPolicyTest, SpriteAlphaCannotDeleteReconstructed
         coloured.finish(), true);
     EXPECT_EQ(acceptedColour.kind, FirstPersonMaterialEvidenceKind::colour);
     EXPECT_EQ(acceptedColour.pixel, 63);
+}
+
+TEST(FirstPersonUnknownUndersideTest, MarksElevatedNativeUnobservedSurfaces)
+{
+    FirstPersonVisualHullFace face{};
+    face.normal = { 0.0f, 0.0f, -1.0f };
+    face.corners = { {
+        { 0.0f, 0.0f, 8.0f }, { 8.0f, 0.0f, 8.0f },
+        { 8.0f, 8.0f, 8.0f }, { 0.0f, 8.0f, 8.0f }
+    } };
+    EXPECT_TRUE(FirstPersonRevealUnknownUnderside(
+        face, 0.0f, 2.0f, true, false));
+    EXPECT_FALSE(FirstPersonRevealUnknownUnderside(
+        face, 0.0f, 2.0f, true, true));
+    EXPECT_FALSE(FirstPersonRevealUnknownUnderside(
+        face, 0.0f, 2.0f, false, false));
+    for (auto& vertex : face.corners)
+        vertex.z = 0.0f;
+    EXPECT_FALSE(FirstPersonRevealUnknownUnderside(
+        face, 0.0f, 2.0f, true, false));
+    face.normal = { 0.0f, 0.0f, 1.0f };
+    for (auto& vertex : face.corners)
+        vertex.z = 8.0f;
+    EXPECT_FALSE(FirstPersonRevealUnknownUnderside(
+        face, 0.0f, 2.0f, true, false));
 }
