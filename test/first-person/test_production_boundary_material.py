@@ -14,28 +14,31 @@ SOURCE = r'''
 #include <iostream>
 using namespace OpenRCT2::Paint;
 enum class Kind : uint8_t { unknown, transparent, colour };
-struct Decision { Kind kind{}; uint8_t pixel{}; int observedViews{}; };
+struct Decision { Kind kind{}; uint8_t pixel{}; int observedViews{}; int transparentViews{}; };
 
 int main()
 {
     for (int geometry = 0; geometry < 2; ++geometry)
     {
         auto colour = ResolveFirstPersonBoundaryMaterial(
-            Decision{Kind::colour, 42, 4}, geometry != 0);
+            Decision{Kind::colour, 42, 4, 0}, geometry != 0);
         assert(colour.kind == Kind::colour && colour.pixel == 42);
         assert(colour.observedViews == 4);
 
         auto absent = ResolveFirstPersonBoundaryMaterial(
-            Decision{Kind::unknown, 0, 1}, geometry != 0);
+            Decision{Kind::unknown, 0, 1, 0}, geometry != 0);
         assert(absent.kind == Kind::unknown);
 
         auto alpha = ResolveFirstPersonBoundaryMaterial(
-            Decision{Kind::transparent, 0, 1}, geometry != 0);
+            Decision{Kind::transparent, 0, 1, 1}, geometry != 0);
         assert(alpha.kind == (geometry ? Kind::unknown : Kind::transparent));
         assert(alpha.observedViews == 1);
+        auto consensus = ResolveFirstPersonBoundaryMaterial(
+            Decision{Kind::transparent, 0, 2, 2}, geometry != 0);
+        assert(consensus.kind == Kind::transparent);
     }
     constexpr auto alpha4 = ResolveFirstPersonBoundaryMaterial(
-        Decision{Kind::transparent, 0, 4}, true);
+        Decision{Kind::transparent, 0, 4, 1}, true);
     static_assert(alpha4.kind == Kind::unknown);
     std::cout << "production boundary material policy: PASS\n";
 }

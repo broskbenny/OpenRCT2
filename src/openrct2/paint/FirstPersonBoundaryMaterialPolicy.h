@@ -9,15 +9,16 @@ namespace OpenRCT2::Paint
     // A source sprite's alpha describes one *projected image*, not an
     // independently verified hole in an already reconstructed 3D surface.
     // Geometry (including known negative passages) decides where faces exist.
-    // A transparent material reading on an accepted occupancy boundary is
-    // unresolved APPEARANCE evidence, never permission to erase that face.
+    // A lone transparent native projection is unresolved APPEARANCE evidence
+    // on a solid boundary. Preserve cutouts with agreement from two views.
     // The caller must retain its separate unknown-material diagnostic/fallback.
     template<typename TDecision>
     [[nodiscard]] constexpr TDecision ResolveFirstPersonBoundaryMaterial(
         TDecision decision, bool acceptedOccupancyBoundary)
     {
         if (acceptedOccupancyBoundary
-            && decision.kind == decltype(decision.kind)::transparent)
+            && decision.kind == decltype(decision.kind)::transparent
+            && decision.transparentViews < 2)
         {
             decision.kind = decltype(decision.kind)::unknown;
             decision.pixel = 0;

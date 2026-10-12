@@ -5390,6 +5390,16 @@ TEST(FirstPersonBoundaryMaterialPolicyTest, SpriteAlphaCannotDeleteReconstructed
     EXPECT_EQ(reconstructed.pixel, 0);
     EXPECT_EQ(reconstructed.observedViews, sourceDecision.observedViews);
 
+    // Two distinct native views corroborating a cutout may retain material
+    // transparency even on coarse geometry, preserving small honest openings.
+    FirstPersonMaterialPatchAccumulator corroborated{};
+    corroborated.addView(transparent);
+    corroborated.addView(transparent);
+    const auto confirmedCutout =
+        ResolveFirstPersonBoundaryMaterial(corroborated.finish(), true);
+    EXPECT_EQ(confirmedCutout.transparentViews, 2u);
+    EXPECT_EQ(confirmedCutout.kind, FirstPersonMaterialEvidenceKind::transparent);
+
     // The policy is explicitly restricted to accepted volume boundaries.
     const auto sourceSprite = ResolveFirstPersonBoundaryMaterial(
         sourceDecision, false);
