@@ -4254,8 +4254,12 @@
                             patchSamples);
                     }
 
+                    // Transparent artwork is evidence about a 2D view,
+                    // not a second permission to punch a hole through
+                    // geometry already accepted by four-view carving.
                     const auto decision =
-                        materialEvidence.finish();
+                        ResolveFirstPersonBoundaryMaterial(
+                            materialEvidence.finish(), hull.valid);
                     uint8_t selectedPixel = 0;
                     if (decision.kind
                         == FirstPersonMaterialEvidenceKind::

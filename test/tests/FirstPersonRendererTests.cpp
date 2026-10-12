@@ -19,6 +19,7 @@
 #include <openrct2/paint/FirstPersonRoundTripReconstruction.h>
 #include <openrct2/paint/FirstPersonAssetReconstruction.h>
 #include <openrct2/paint/FirstPersonMaterialInference.h>
+#include <openrct2/paint/FirstPersonBoundaryMaterialPolicy.h>
 #include <openrct2/paint/FirstPersonMaterialContinuity.h>
 #include <openrct2/paint/FirstPersonParkEntranceReconstruction.h>
 #include <openrct2/paint/FirstPersonPeriodicPassengerMotion.h>
@@ -5369,4 +5370,37 @@ TEST(FirstPersonVolumePreservationTest, RejectsSealedOpeningAndMissingBoundary)
     EXPECT_FALSE(open.retainsAllCellCentres());
     EXPECT_FALSE(CertifyFirstPersonCandidateVolume(
         hull, faces, 1).measured);
+}
+
+TEST(FirstPersonBoundaryMaterialPolicyTest, SpriteAlphaCannotDeleteReconstructedVolume)
+{
+    std::array<FirstPersonMaterialEvidenceSample, 9> transparent{};
+    for (auto& pixel : transparent)
+        pixel.kind = FirstPersonMaterialEvidenceKind::transparent;
+
+    FirstPersonMaterialPatchAccumulator accumulator{};
+    accumulator.addView(transparent);
+    const auto sourceDecision = accumulator.finish();
+    ASSERT_EQ(sourceDecision.kind, FirstPersonMaterialEvidenceKind::transparent);
+    // Four-view carving has already accepted this actual 3D face. An empty
+    // native view means texture evidence is unresolved, NOT absent geometry.
+    const auto reconstructed = ResolveFirstPersonBoundaryMaterial(
+        sourceDecision, true);
+    EXPECT_EQ(reconstructed.kind, FirstPersonMaterialEvidenceKind::unknown);
+    EXPECT_EQ(reconstructed.pixel, 0);
+    EXPECT_EQ(reconstructed.observedViews, sourceDecision.observedViews);
+
+    // The policy is explicitly restricted to accepted volume boundaries.
+    const auto sourceSprite = ResolveFirstPersonBoundaryMaterial(
+        sourceDecision, false);
+    EXPECT_EQ(sourceSprite.kind, FirstPersonMaterialEvidenceKind::transparent);
+
+    FirstPersonMaterialPatchAccumulator coloured{};
+    transparent[4].kind = FirstPersonMaterialEvidenceKind::colour;
+    transparent[4].pixel = 63;
+    coloured.addView(transparent);
+    const auto acceptedColour = ResolveFirstPersonBoundaryMaterial(
+        coloured.finish(), true);
+    EXPECT_EQ(acceptedColour.kind, FirstPersonMaterialEvidenceKind::colour);
+    EXPECT_EQ(acceptedColour.pixel, 63);
 }
