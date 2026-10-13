@@ -168,9 +168,9 @@ int main()
     for (const auto& [name, faces] : cases)
     {
         const std::string label(name);
-        const int width = label == "thin_triangle_1x256" ? 1 : label == "triangle_30x47" ? 30 : 32;
-        const int height = label == "thin_triangle_1x256" ? 256 : label == "triangle_30x47" ? 47 : 32;
-        const auto results = bake(faces, width, height, label.find("cutout") != std::string::npos,
+        const int requestedWidth = label == "thin_triangle_1x256" ? 1 : label == "triangle_30x47" ? 30 : 32;
+        const int requestedHeight = label == "thin_triangle_1x256" ? 256 : label == "triangle_30x47" ? 47 : 32;
+        const auto results = bake(faces, requestedWidth, requestedHeight, label.find("cutout") != std::string::npos,
                                    label == "structural_cutout");
         for (size_t i = 0; i < results.size(); ++i)
         {
@@ -178,6 +178,7 @@ int main()
             if (!first) std::cout << ',';
             first = false;
             const auto& result = results[i];
+            const int width = result.width, height = result.height;
             size_t gpuTexels = 0, holes = 0, unknown = 0, projectionErrors = 0;
             for (int y = 0; y < height; ++y)
             for (int x = 0; x < width; ++x)
