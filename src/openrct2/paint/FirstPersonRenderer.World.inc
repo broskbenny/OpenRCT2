@@ -1063,11 +1063,9 @@
                 view.nearClip, view.farClip);
             const auto map = getGameState().mapSize;
             auto visit = [&](int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
-                for (int32_t ty = y0; ty < y1; ++ty)
-                for (int32_t tx = x0; tx < x1; ++tx)
-                {
+                auto visitTile = [&](int32_t tx, int32_t ty) {
                     const CoordsXY world{ tx * kCoordsXYStep, ty * kCoordsXYStep };
-                    if (!MapIsLocationValid(world)) continue;
+                    if (!MapIsLocationValid(world)) return;
                     const auto semantic = CachedTileVisibilityBounds(
                         world, getGameState().currentTicks);
                     if (semantic.has_value()
@@ -1075,7 +1073,9 @@
                     {
                         scene.visibleTiles.emplace_back(world);
                     }
-                }
+                };
+                VisitFirstPersonLeafTilesNearEye(
+                    frustum.eye, x0, y0, x1, y1, visitTile);
             };
             auto bounds = [](int32_t x0,int32_t y0,int32_t x1,int32_t y1) {
                 return CachedRegionBounds(x0,y0,x1,y1);

@@ -373,16 +373,80 @@ namespace OpenRCT2::Paint
         if (maxY - minY >= maxX - minX)
         {
             const int32_t mid = minY + (maxY - minY) / 2;
-            VisitFirstPersonRegions(frustum, minX, minY, maxX, mid, visitor, bounds);
-            VisitFirstPersonRegions(frustum, minX, mid, maxX, maxY, visitor, bounds);
+            // The near half earns the scarce cold-cache snapshot budget first.
+            // Always traverse both halves; this is priority, not culling.
+            if (frustum.eye.y >= float(mid) * 32.0f)
+            {
+                VisitFirstPersonRegions(frustum, minX, mid, maxX, maxY, visitor, bounds);
+                VisitFirstPersonRegions(frustum, minX, minY, maxX, mid, visitor, bounds);
+            }
+            else
+            {
+                VisitFirstPersonRegions(frustum, minX, minY, maxX, mid, visitor, bounds);
+                VisitFirstPersonRegions(frustum, minX, mid, maxX, maxY, visitor, bounds);
+            }
         }
         else
         {
             const int32_t mid = minX + (maxX - minX) / 2;
-            VisitFirstPersonRegions(frustum, minX, minY, mid, maxY, visitor, bounds);
-            VisitFirstPersonRegions(frustum, mid, minY, maxX, maxY, visitor, bounds);
+            if (frustum.eye.x >= float(mid) * 32.0f)
+            {
+                VisitFirstPersonRegions(frustum, mid, minY, maxX, maxY, visitor, bounds);
+                VisitFirstPersonRegions(frustum, minX, minY, mid, maxY, visitor, bounds);
+            }
+            else
+            {
+                VisitFirstPersonRegions(frustum, minX, minY, mid, maxY, visitor, bounds);
+                VisitFirstPersonRegions(frustum, mid, minY, maxX, maxY, visitor, bounds);
+            }
         }
     }
+    // Leaf visits expand out from the nearest tile to the camera. Each
+    // tile is still visited exactly once, regardless of camera position.
+    template<class Visitor>
+    void VisitFirstPersonLeafTilesNearEye(
+        FirstPersonVec3 eye, int32_t x0, int32_t y0,
+        int32_t x1, int32_t y1, Visitor& visitor)
+    {
+        if (x0 >= x1 || y0 >= y1)
+            return;
+        constexpr float kTileSize = 32.0f;
+        const int32_t cx = std::clamp(
+            int32_t(std::floor(eye.x / kTileSize)), x0, x1 - 1);
+        const int32_t cy = std::clamp(
+            int32_t(std::floor(eye.y / kTileSize)), y0, y1 - 1);
+        const int32_t reach = std::max({
+            cx - x0, x1 - cx - 1, cy - y0, y1 - cy - 1
+        });
+        for (int32_t radius = 0; radius <= reach; ++radius)
+        {
+            const int32_t top = cy - radius;
+            const int32_t bottom = cy + radius;
+            for (int32_t x = cx - radius; x <= cx + radius; ++x)
+            {
+                if (x < x0 || x >= x1)
+                    continue;
+                if (top >= y0 && top < y1)
+                    visitor(x, top);
+                if (radius != 0 && bottom >= y0 && bottom < y1)
+                    visitor(x, bottom);
+            }
+            if (radius == 0)
+                continue;
+            const int32_t left = cx - radius;
+            const int32_t right = cx + radius;
+            for (int32_t y = top + 1; y < bottom; ++y)
+            {
+                if (y < y0 || y >= y1)
+                    continue;
+                if (left >= x0 && left < x1)
+                    visitor(left, y);
+                if (right >= x0 && right < x1)
+                    visitor(right, y);
+            }
+        }
+    }
+
     template<class Visitor>
     void VisitFirstPersonRegions(
         const FirstPersonFrustum& frustum, int32_t minX, int32_t minY,
