@@ -3725,14 +3725,37 @@
             });
         }
 
-        void RebuildStaticRegionPacket(uint64_t regionKey, uint64_t frame)
+        // Build in a private packet. Only completed, current generations are
+        // published; the previous immutable GPU packet stays drawable.
+        struct FirstPersonStaticPacketStaging
         {
-            auto& packet = _staticRegionPackets[regionKey];
-            packet.surfaces.clear();
-            packet.vertexCount = 0;
-            packet.textureDependencies.clear();
-            packet.reconstructionGroups.clear();
-            packet.reconstructionSelectionStamp = 0;
+            FirstPersonPacketBuildProgress progress{};
+            StaticRegionPacketCache packet{};
+            bool haveBounds = false;
+            FirstPersonVec3 low{}, high{};
+            std::unordered_set<uint32_t> dependencies;
+            std::unordered_set<uint64_t> reconstructionDependencies;
+        };
+        static std::unordered_map<uint64_t, FirstPersonStaticPacketStaging>
+            _staticRegionPacketBuilds;
+
+        [[nodiscard]] bool RebuildStaticRegionPacket(uint64_t regionKey, uint64_t frame)
+        {
+            auto& published = _staticRegionPackets[regionKey];
+            auto& staging = _staticRegionPacketBuilds[regionKey];
+            if (staging.progress.needsRestart(
+                    published.invalidationSerial, _reconstructionSelectionSerial))
+            {
+                staging = {};
+                staging.progress.restart(
+                    published.invalidationSerial, _reconstructionSelectionSerial);
+            }
+            auto& packet = staging.packet;
+            auto& haveBounds = staging.haveBounds;
+            auto& low = staging.low;
+            auto& high = staging.high;
+            auto& dependencies = staging.dependencies;
+            auto& reconstructionDependencies = staging.reconstructionDependencies;
 
             const int32_t regionX = int32_t(uint32_t(regionKey >> 32)) - 1;
             const int32_t regionY = int32_t(uint32_t(regionKey & 0xffffffffu)) - 1;
@@ -3741,10 +3764,6 @@
             const int32_t x1 = x0 + 32;
             const int32_t y1 = y0 + 32;
 
-            bool haveBounds = false;
-            FirstPersonVec3 low{}, high{};
-            std::unordered_set<uint32_t> dependencies;
-            std::unordered_set<uint64_t> reconstructionDependencies;
             auto addSurface = [&](const FirstPersonSurface& surface) {
                 if (!IsResidentStaticSurface(surface) || surface.gpuRegion != regionKey)
                     return;
@@ -3809,9 +3828,16 @@
                 }
             };
 
-            for (int32_t ty = y0; ty < y1; ++ty)
-            for (int32_t tx = x0; tx < x1; ++tx)
+            // A 32x32 packet is gathered in bounded, resumable tile slices.
+            constexpr size_t kRegionTileCount = 32u * 32u;
+            FirstPersonFrameBudget gatherBudget(
+                96, std::chrono::microseconds(700));
+            while (!staging.progress.tilesDone(kRegionTileCount)
+                   && gatherBudget.take())
             {
+                const size_t index = staging.progress.nextTile++;
+                const int32_t ty = y0 + int32_t(index / 32);
+                const int32_t tx = x0 + int32_t(index % 32);
                 const auto tileKey = TerrainKey(tx, ty);
                 if (const auto terrainIt = _terrainCache.entries.find(tileKey);
                     terrainIt != _terrainCache.entries.end() && !terrainIt->second.dirty)
@@ -3919,6 +3945,10 @@
                 }
             }
 
+            if (!staging.progress.tilesDone(kRegionTileCount))
+                return false;
+            if (!staging.progress.groupsAdded)
+            {
             if (const auto membership =
                     _trackTrajectoryGroupsByRegion.find(
                         regionKey);
@@ -4014,6 +4044,12 @@
                 }
             }
 
+                staging.progress.groupsAdded = true;
+            }
+            if (!gatherBudget.available())
+                return false;
+            if (!staging.progress.relationshipsResolved)
+            {
             std::vector<FirstPersonSurface>
                 relationshipContext;
             const auto addRelationshipContext =
@@ -4146,6 +4182,11 @@
                 relationshipResolution.contextMatches;
             packet.vertexCount =
                 packet.surfaces.size() * 6;
+
+                staging.progress.relationshipsResolved = true;
+            }
+            if (!gatherBudget.available())
+                return false;
 
             const auto reconstructionKindName =
                 [](const FirstPersonSurface& surface)
@@ -5120,10 +5161,16 @@
                 packet.radius = 0.0f;
             }
             packet.surfaceStorage = std::make_shared<const std::vector<FirstPersonSurface>>(std::move(packet.surfaces));
-            packet.publishedSourceRevision = packet.sourceRevision;
-            ++packet.generation;
+            // Publish all metadata and immutable geometry in one move.
+            packet.sourceRevision = published.sourceRevision;
+            packet.publishedSourceRevision = published.sourceRevision;
+            packet.invalidationSerial = published.invalidationSerial;
+            packet.generation = published.generation + 1;
             packet.lastSeen = frame;
             packet.dirty = false;
+            published = std::move(packet);
+            _staticRegionPacketBuilds.erase(regionKey);
+            return true;
         }
 
         void SubmitVisibleStaticRegions(
@@ -5166,6 +5213,16 @@
                 }
             }
 
+            // Reclaim abandoned partial geometry after a camera move.
+            for (auto it = _staticRegionPacketBuilds.begin();
+                 it != _staticRegionPacketBuilds.end();)
+            {
+                if (!visibleRegions.contains(it->first))
+                    it = _staticRegionPacketBuilds.erase(it);
+                else
+                    ++it;
+            }
+
             _snapshotBudget = FirstPersonFrameBudget(32, std::chrono::microseconds(1000));
             static size_t materialCursor = 0;
             size_t examined = 0;
@@ -5201,7 +5258,7 @@
                     if (packet.reconstructionSelectionStamp
                         != currentSelectionStamp)
                     {
-                        packet.dirty = true;
+                        MarkStaticRegionPacketDirty(key);
                     }
                     else
                     {
@@ -5224,7 +5281,7 @@
                 if (!packetBudget.take())
                     break;
                 const auto buildStarted = std::chrono::steady_clock::now();
-                RebuildStaticRegionPacket(candidate.key, frame);
+                const bool complete = RebuildStaticRegionPacket(candidate.key, frame);
                 const auto buildFinished = std::chrono::steady_clock::now();
                 const auto buildUs = std::chrono::duration_cast<std::chrono::microseconds>(
                     buildFinished - buildStarted).count();
@@ -5234,9 +5291,10 @@
                 {
                     lastSlowPacketReport = buildFinished;
                     Console::WriteLine(
-                        "FP_REGION_PACKET_SLOW region=%llu buildUs=%lld dirtyCandidates=%zu",
+                        "FP_REGION_PACKET_SLOW region=%llu buildUs=%lld dirtyCandidates=%zu complete=%d",
                         static_cast<unsigned long long>(candidate.key),
-                        static_cast<long long>(buildUs), rebuildCandidates.size());
+                        static_cast<long long>(buildUs), rebuildCandidates.size(),
+                        complete ? 1 : 0);
                 }
             }
 

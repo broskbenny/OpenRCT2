@@ -1776,6 +1776,7 @@
             uint64_t generation{};
             uint64_t sourceRevision{};
             uint64_t publishedSourceRevision{};
+            uint64_t invalidationSerial{};
             size_t vertexCount{};
             size_t resolvedInternalInterfaces{};
             size_t suppressedInternalFaces{};
@@ -1792,6 +1793,15 @@
             uint64_t reconstructionSelectionSerial{};
         };
         static std::unordered_map<uint64_t, StaticRegionPacketCache> _staticRegionPackets;
+
+        // All sources of region invalidation advance the staging epoch,
+        // including edits to regions that were already dirty.
+        void MarkStaticRegionPacketDirty(uint64_t key)
+        {
+            auto& packet = _staticRegionPackets[key];
+            packet.dirty = true;
+            ++packet.invalidationSerial;
+        }
 
         struct TrackTrajectoryCacheEntry
         {
@@ -1949,8 +1959,7 @@
             {
                 if (surface.gpuRegion != 0)
                 {
-                    _staticRegionPackets[
-                        surface.gpuRegion].dirty = true;
+                    MarkStaticRegionPacketDirty(surface.gpuRegion);
                     MarkStaticRegionRelationshipNeighboursDirty(
                         surface.gpuRegion);
                 }
@@ -2058,16 +2067,14 @@
                     cached.minTileX, cached.minTileY,
                     cached.maxTileX, cached.maxTileY,
                     [&](uint64_t regionKey) {
-                        _staticRegionPackets[
-                            regionKey].dirty = true;
+                        MarkStaticRegionPacketDirty(regionKey);
                     });
             }
             for (const auto& surface : cached.surfaces)
             {
                 if (surface.gpuRegion != 0)
                 {
-                    _staticRegionPackets[
-                        surface.gpuRegion].dirty = true;
+                    MarkStaticRegionPacketDirty(surface.gpuRegion);
                     MarkStaticRegionRelationshipNeighboursDirty(
                         surface.gpuRegion);
                 }
@@ -6003,9 +6010,8 @@
                 const int32_t y = regionY + offset[1];
                 if (x < 0 || y < 0)
                     continue;
-                _staticRegionPackets[
-                    FirstPersonGpuRegionKey(
-                        x * 32, y * 32)].dirty = true;
+                MarkStaticRegionPacketDirty(FirstPersonGpuRegionKey(
+                        x * 32, y * 32));
             }
         }
 
@@ -6013,7 +6019,7 @@
         {
             const uint64_t regionKey =
                 FirstPersonGpuRegionKey(tileX, tileY);
-            _staticRegionPackets[regionKey].dirty = true;
+            MarkStaticRegionPacketDirty(regionKey);
 
             const int32_t localX =
                 ((tileX % 32) + 32) % 32;
@@ -6025,9 +6031,8 @@
                 [&](int32_t x, int32_t y) {
                     if (x < 0 || y < 0)
                         return;
-                    _staticRegionPackets[
-                        FirstPersonGpuRegionKey(
-                            x * 32, y * 32)].dirty = true;
+                    MarkStaticRegionPacketDirty(FirstPersonGpuRegionKey(
+                            x * 32, y * 32));
                 };
             if (localX == 0)
                 dirty(regionX - 1, regionY);
@@ -6046,7 +6051,7 @@
                  cached.regionSurfaceIndices)
             {
                 (void)indices;
-                _staticRegionPackets[regionKey].dirty = true;
+                MarkStaticRegionPacketDirty(regionKey);
             }
         }
 

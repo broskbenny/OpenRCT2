@@ -4,6 +4,7 @@
  *****************************************************************************/
 #include "FirstPersonRenderer.h"
 #include "FirstPersonSpriteSnapshot.h"
+#include "FirstPersonPacketBuildProgress.h"
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonLargeSceneryReconstruction.h"
 #include "FirstPersonMaterialInference.h"
@@ -1615,6 +1616,7 @@ namespace OpenRCT2::Paint
         _parkEntranceGroupsByBoundsRegion.clear();
         _parkEntranceGeometryEnabled = false;
         ClearFirstPersonSemanticComponents();
+        _staticRegionPacketBuilds.clear();
         _staticRegionPackets.clear();
     }
     void InvalidateFirstPersonSceneRegion(CoordsXY low, CoordsXY high)
@@ -1683,7 +1685,7 @@ namespace OpenRCT2::Paint
             const uint64_t regionKey =
                 FirstPersonGpuRegionKey(
                     regionX * 32, regionY * 32);
-            _staticRegionPackets[regionKey].dirty = true;
+            MarkStaticRegionPacketDirty(regionKey);
             ++_staticRegionPackets[regionKey].sourceRevision;
             MarkStaticRegionRelationshipNeighboursDirty(
                 regionKey);
