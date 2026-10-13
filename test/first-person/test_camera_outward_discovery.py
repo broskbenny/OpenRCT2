@@ -38,7 +38,7 @@ int main() {
     };
     VisitFirstPersonRegions(frustum,0,0,64,64,leaf,bounds);
     assert(leaves.size()==16 && leaves.front()==std::make_pair(48,48));
-    assert(std::set<std::pair<int32_t,int32_t>>(leaves.begin(),leaves.end()).size()==16);
+    assert((std::set<std::pair<int32_t,int32_t>>(leaves.begin(),leaves.end()).size()==16));
     FirstPersonFrameBudget budget(2,std::chrono::seconds(5));
     std::vector<std::pair<int32_t,int32_t>> admitted;
     auto admit = [&](int32_t x,int32_t y,int32_t,int32_t) {
@@ -50,11 +50,11 @@ int main() {
     auto record = [&](int32_t x,int32_t y){ tiles.emplace_back(x,y); };
     VisitFirstPersonLeafTilesNearEye({40*32.0f,42*32.0f,0},32,32,48,48,record);
     assert(tiles.size()==256 && tiles.front()==std::make_pair(40,42));
-    assert(std::set<std::pair<int32_t,int32_t>>(tiles.begin(),tiles.end()).size()==256);
+    assert((std::set<std::pair<int32_t,int32_t>>(tiles.begin(),tiles.end()).size()==256));
     tiles.clear();
     VisitFirstPersonLeafTilesNearEye({100000,-100000,0},32,32,48,48,record);
     assert(tiles.size()==256 && tiles.front()==std::make_pair(47,32));
-    assert(std::set<std::pair<int32_t,int32_t>>(tiles.begin(),tiles.end()).size()==256);
+    assert((std::set<std::pair<int32_t,int32_t>>(tiles.begin(),tiles.end()).size()==256));
     camera.position = {3*32.0f,3*32.0f,0};
     const FirstPersonFrustum moved(camera,90,1,0,100000);
     leaves.clear();
