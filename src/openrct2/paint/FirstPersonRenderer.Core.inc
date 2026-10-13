@@ -3943,6 +3943,12 @@
                     }
                 }
 
+                // An accepted boundary can be fully hidden in all native
+                // cameras. Missing appearance evidence must not remove its
+                // geometry from a freely moving first-person viewpoint.
+                const bool markUnknownUnobservedFace =
+                    hull.valid && candidates.empty();
+
                 ImageId fallbackImage{};
                 for (const auto& candidate : candidates)
                 {
@@ -3962,10 +3968,11 @@
                     if (fallbackImage.HasValue())
                         break;
                 }
-                // An underside cannot win native isometric view ownership.
-                // Still publish its accepted 3D face with explicit unknown
-                // material rather than silently omitting the geometry.
-                if (!fallbackImage.HasValue() && markUnknownUnderside)
+                // A face hidden in every native projection cannot win native
+                // material ownership. Keep the accepted 3D boundary visibly
+                // unknown instead of silently omitting it.
+                if (!fallbackImage.HasValue()
+                    && (markUnknownUnderside || markUnknownUnobservedFace))
                 {
                     for (size_t sequence = 0;
                          sequence < entry.tiles.size(); ++sequence)
@@ -4045,9 +4052,9 @@
                                 face.corners[1],
                                 face.corners[2])))),
                         1, 256);
-                // Diagnostic undersides contain no native image detail.
+                // Unobserved boundaries contain no native image detail.
                 // Avoid expensive full-resolution bitmap allocations.
-                if (markUnknownUnderside)
+                if (markUnknownUnderside || markUnknownUnobservedFace)
                 {
                     width = std::min(width, 16);
                     height = std::min(height, 16);
@@ -4077,7 +4084,7 @@
                 size_t visiblePixelCount = 0;
                 size_t drawablePixelCount = 0;
 
-                if (markUnknownUnderside)
+                if (markUnknownUnderside || markUnknownUnobservedFace)
                 {
                     for (int32_t py = 0; py < height; ++py)
                     for (int32_t px = 0; px < width; ++px)

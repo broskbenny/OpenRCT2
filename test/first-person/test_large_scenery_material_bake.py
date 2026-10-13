@@ -45,6 +45,7 @@ ADAPTER = r'''
 #include <unordered_map>
 #include <unordered_set>
 namespace OpenRCT2 {
+struct ImageId { int32_t id{}; bool HasValue() const { return id != 0; } };
 struct CoordsXY {
     int32_t x{}, y{};
     constexpr CoordsXY rotate(int32_t rotation) const {
@@ -74,6 +75,7 @@ struct FirstPersonVisualHullFace {
 };
 struct Sprite { int32_t width{}, height{}, xOffset{}, yOffset{}; };
 struct LargeSceneryDecodedView {
+    ImageId image{1};
     const Sprite* g1{};
     ScreenCoordsXY spritePos{};
     float nativeDepth{};
@@ -88,7 +90,7 @@ using namespace OpenRCT2::Paint;
 
 SETUP = r'''
 struct Result {
-    int width{}, height{}, candidates{}, primaryDirection{};
+    int faceIndex{}, width{}, height{}, candidates{}, primaryDirection{};
     size_t drawable{}, visible{};
     std::vector<uint8_t> pixels;
 };
@@ -172,6 +174,7 @@ int main()
                                    label == "structural_cutout");
         for (size_t i = 0; i < results.size(); ++i)
         {
+            const size_t faceIndex = size_t(results[i].faceIndex);
             if (!first) std::cout << ',';
             first = false;
             const auto& result = results[i];
@@ -179,8 +182,8 @@ int main()
             for (int y = 0; y < height; ++y)
             for (int x = 0; x < width; ++x)
             {
-                const auto& c = faces[i].corners[2];
-                const auto& d = faces[i].corners[3];
+                const auto& c = faces[faceIndex].corners[2];
+                const auto& d = faces[faceIndex].corners[3];
                 const bool triangle = c.x == d.x && c.y == d.y && c.z == d.z;
                 // Independent integer intersection of the nearest-filtered UV
                 // texel square with the GPU triangle s >= t.
@@ -200,7 +203,7 @@ int main()
                     std::array<ScreenCoordsXY, 4> projected;
                     for (size_t corner = 0; corner < 4; ++corner)
                     {
-                        const auto& p = faces[i].corners[corner];
+                        const auto& p = faces[faceIndex].corners[corner];
                         projected[corner] = Translate3DTo2DWithZ(result.primaryDirection,
                             {int32_t(std::lround(p.x)), int32_t(std::lround(p.y)), int32_t(std::lround(p.z))});
                     }
@@ -215,7 +218,7 @@ int main()
                     projectionErrors += pixel != expected;
                 }
             }
-            std::cout << "{\"name\":\"" << name << "\",\"face\":" << i
+            std::cout << "{\"name\":\"" << name << "\",\"face\":" << result.faceIndex
                       << ",\"width\":" << width << ",\"height\":" << height
                       << ",\"gpu_texels\":" << gpuTexels << ",\"holes\":" << holes
                       << ",\"unknown\":" << unknown << ",\"candidates\":" << result.candidates
@@ -226,7 +229,7 @@ int main()
             for (size_t corner = 0; corner < 4; ++corner)
             {
                 if (corner) std::cout << ',';
-                const auto& p = faces[i].corners[corner];
+                const auto& p = faces[faceIndex].corners[corner];
                 std::cout << '[' << p.x << ',' << p.y << ',' << p.z << ']';
             }
             std::cout << "],\"pixels\":[";
@@ -283,8 +286,10 @@ def source_for(core):
     out += core[begin:core.index("            bool haveBounds = false;", begin)]
     out += "std::vector<Result> results;\nfor (size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {\nconst auto& face = faces[faceIndex];\n"
     out += between(core, "                struct LargeSceneryFaceView", "\n                ImageId fallbackImage{};")
+    out += between(core, "                ImageId fallbackImage{};", "\n                FirstPersonSurface surface{};")
+    out += between(core, "                // Unobserved boundaries contain no native image detail.", "\n                std::vector<uint8_t> pixels(")
     out += between(core, "                std::vector<uint8_t> pixels(", "\n                if (hull.planarSurfaceSelected && haveUnknownMaterial")
-    out += "(void)haveKnownMaterial; (void)haveUnknownMaterial;\nresults.push_back({width, height, int(candidates.size()), candidates.empty() ? -1 : int(candidates.front().nativeDirection), drawablePixelCount, visiblePixelCount, std::move(pixels)});\n}\nlastBakeMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bakeStart).count();\nreturn results;\n}\n"
+    out += "(void)haveKnownMaterial; (void)haveUnknownMaterial;\nresults.push_back({int(faceIndex), width, height, int(candidates.size()), candidates.empty() ? -1 : int(candidates.front().nativeDirection), drawablePixelCount, visiblePixelCount, std::move(pixels)});\n}\nlastBakeMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - bakeStart).count();\nreturn results;\n}\n"
     out += MAIN
     return out
 
@@ -315,6 +320,9 @@ class LargeSceneryMaterialBakeTest(unittest.TestCase):
         self.assertEqual(cutout["pixels"][16 * 32 + 16], 0)
         hidden = next(r for r in results if r["name"] == "occluded_face" and r["face"] == 0)
         self.assertEqual(hidden["candidates"], 0)
+        self.assertEqual(hidden["unknown"], hidden["gpu_texels"])
+        self.assertEqual(hidden["holes"], 0)
+        self.assertEqual(hidden["width"], 16)
         projection = next(r for r in results if r["name"] == "single_view_projection")
         self.assertEqual(projection["candidates"], 1)
         self.assertEqual(projection["projection_errors"], 0)
