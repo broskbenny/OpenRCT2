@@ -43,7 +43,7 @@ class UnknownUndersideTests(unittest.TestCase):
 
     def test_renderer_bypasses_missing_source_for_elevated_undersides(self):
         core = (ROOT/"src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text()
-        self.assertIn("if (!fallbackImage.HasValue() && markUnknownUnderside)",core)
+        self.assertIn("&& (markUnknownUnderside || markUnknownUnobservedFace)", core)
         self.assertIn("FirstPersonMissingMaterialPixel(px, py)",core)
         self.assertIn("drawablePixelCount = pixels.size()",core)
         self.assertIn("width = std::min(width, 16)",core)
