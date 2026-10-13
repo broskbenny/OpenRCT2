@@ -82,6 +82,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -1876,6 +1877,10 @@ namespace OpenRCT2::Paint
         const ScreenCoordsXY screenOrigin{
             viewport.getLeft(), viewport.getTop()
         };
+        using Clock = std::chrono::steady_clock;
+        const auto perfStart = Clock::now();
+        auto collectionDone = perfStart;
+        auto paintDone = perfStart;
         const bool reusePrepared =
             _preparedFrame.active
             && _preparedFrame.valid
@@ -1919,11 +1924,13 @@ namespace OpenRCT2::Paint
                 scene = &localScene;
             }
 
+            collectionDone = Clock::now();
             scene->screenOrigin = screenOrigin;
             scene->presentationFrameSerial =
                 _preparedFrame.active
                     ? _preparedFrame.serial : 0;
             CollectPaintSprites(*scene, rt);
+            paintDone = Clock::now();
 
             if (_preparedFrame.active)
             {
@@ -1934,6 +1941,12 @@ namespace OpenRCT2::Paint
                     rt.DrawingEngine;
                 _preparedFrame.valid = true;
             }
+        }
+
+        if (reusePrepared)
+        {
+            collectionDone = Clock::now();
+            paintDone = collectionDone;
         }
 
         if (gFirstPersonInteractionPickRequested)
@@ -1963,9 +1976,36 @@ namespace OpenRCT2::Paint
 
         auto* context =
             rt.DrawingEngine->GetDrawingContext();
+        const auto drawStart = Clock::now();
         if (context != nullptr)
             context->DrawFirstPersonScene(rt, *scene);
 
+        const auto finished = Clock::now();
+        const auto totalUs = std::chrono::duration_cast<std::chrono::microseconds>(
+            finished - perfStart).count();
+        // Low-frequency slow-frame telemetry: a worker's buildUs is not
+        // foreground latency. These stages identify the actual caller cost.
+        static auto lastSlowFrameReport = Clock::time_point{};
+        if (totalUs >= 16000
+            && finished - lastSlowFrameReport >= std::chrono::seconds(2))
+        {
+            lastSlowFrameReport = finished;
+            const auto collectionUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                collectionDone - perfStart).count();
+            const auto paintUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                paintDone - collectionDone).count();
+            const auto drawUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                finished - drawStart).count();
+            Console::WriteLine(
+                "FP_FRAME_TIMING totalUs=%lld collectUs=%lld paintUs=%lld"
+                " drawUs=%lld tiles=%zu regions=%zu surfaces=%zu reused=%d",
+                static_cast<long long>(totalUs),
+                static_cast<long long>(collectionUs),
+                static_cast<long long>(paintUs),
+                static_cast<long long>(drawUs),
+                scene->visibleTiles.size(), scene->staticRegions.size(),
+                scene->surfaces.size(), reusePrepared ? 1 : 0);
+        }
     }
 } // namespace OpenRCT2::Paint
 

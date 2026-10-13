@@ -5223,7 +5223,21 @@
             {
                 if (!packetBudget.take())
                     break;
+                const auto buildStarted = std::chrono::steady_clock::now();
                 RebuildStaticRegionPacket(candidate.key, frame);
+                const auto buildFinished = std::chrono::steady_clock::now();
+                const auto buildUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                    buildFinished - buildStarted).count();
+                static auto lastSlowPacketReport = std::chrono::steady_clock::time_point{};
+                if (buildUs >= 8000
+                    && buildFinished - lastSlowPacketReport >= std::chrono::seconds(2))
+                {
+                    lastSlowPacketReport = buildFinished;
+                    Console::WriteLine(
+                        "FP_REGION_PACKET_SLOW region=%llu buildUs=%lld dirtyCandidates=%zu",
+                        static_cast<unsigned long long>(candidate.key),
+                        static_cast<long long>(buildUs), rebuildCandidates.size());
+                }
             }
 
             scene.staticRegions.reserve(visibleRegions.size());
