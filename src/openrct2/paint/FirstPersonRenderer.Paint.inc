@@ -26,12 +26,20 @@
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
                 view.nearClip, view.farClip);
+            // Selection/invalidation probes can be more expensive than the
+            // native-capture count itself. Even when every view is cached, an
+            // unbounded sweep of visible tiles can monopolize the paint frame.
+            // Resume where the previous frame stopped; this retains coverage
+            // without delaying nearby cold captures on first entry.
+            FirstPersonFrameBudget captureScanBudget(
+                256, std::chrono::microseconds(1200));
             static size_t captureCursor = 0;
             const size_t captureStart = scene.visibleTiles.empty() ? 0 : captureCursor % scene.visibleTiles.size();
-            captureCursor += nativeCapturesRemaining;
-            for (size_t visit = 0; visit < scene.visibleTiles.size(); ++visit)
+            size_t captureExamined = 0;
+            while (captureExamined < scene.visibleTiles.size()
+                   && nativeCapturesRemaining != 0 && captureScanBudget.take())
             {
-                const auto tile = scene.visibleTiles[(captureStart + visit) % scene.visibleTiles.size()];
+                const auto tile = scene.visibleTiles[(captureStart + captureExamined++) % scene.visibleTiles.size()];
                 const int32_t tx = tile.x / kCoordsXYStep;
                 const int32_t ty = tile.y / kCoordsXYStep;
                 const auto key = TerrainKey(tx, ty);
@@ -329,6 +337,7 @@
                 }
             }
 
+            captureCursor += captureExamined;
             const auto selectedViewsDone = PaintClock::now();
             // The shared semantic visual hull needs four native observations
             // to carve a volumetric box/local-hull envelope reliably. Camera
@@ -1243,6 +1252,7 @@
                 int64_t packetUs = 0;
                 size_t captures = 0;
                 size_t tiles = 0;
+                size_t scannedTiles = 0;
             };
             static PaintStageWindow window{};
             if (window.begin == PaintClock::time_point{})
@@ -1263,6 +1273,7 @@
                 for (const auto& requested : missesByRotation)
                     window.captures += requested.size();
                 window.tiles = scene.visibleTiles.size();
+                window.scannedTiles = captureExamined;
             }
             if (finished - window.begin >= std::chrono::seconds(2))
             {
@@ -1271,14 +1282,14 @@
                     Console::WriteLine(
                         "FP_PAINT_STAGES totalUs=%lld selectUs=%lld reconPrepUs=%lld"
                         " nativeSessionUs=%lld assembleUs=%lld packetsUs=%lld"
-                        " captures=%zu visibleTiles=%zu",
+                        " captures=%zu visibleTiles=%zu scannedTiles=%zu",
                         static_cast<long long>(window.worstUs),
                         static_cast<long long>(window.selectUs),
                         static_cast<long long>(window.reconstructionUs),
                         static_cast<long long>(window.nativeUs),
                         static_cast<long long>(window.assemblyUs),
                         static_cast<long long>(window.packetUs),
-                        window.captures, window.tiles);
+                        window.captures, window.tiles, window.scannedTiles);
                 }
                 window = {};
                 window.begin = finished;
