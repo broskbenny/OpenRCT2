@@ -3781,6 +3781,7 @@
             std::unordered_set<uint64_t> reconstructionDependencies;
             std::array<std::vector<uint64_t>, 3> groupedKeys;
             bool groupsInitialized = false;
+            bool relationshipSubmitted = false;
             size_t groupPhase = 0;
             size_t groupOffset = 0;
             size_t surfaceOffset = 0;
@@ -4098,6 +4099,11 @@
                 return false;
             if (!staging.progress.relationshipsResolved)
             {
+            // The background worker owns the relationship snapshot until
+            // publication. Do not regenerate neighbouring contexts while it
+            // is resolving this packet.
+            if (staging.relationshipSubmitted)
+                return false;
             std::vector<FirstPersonSurface>
                 relationshipContext;
             const auto addRelationshipContext =
@@ -4218,6 +4224,77 @@
                         neighbourY * 32));
             }
 
+            // Large occupancy/interface meshes use the same one-worker
+            // bounded queue as the other snapshot-only reconstruction jobs.
+            // Copy/move only independently owned surfaces into that job:
+            // never read the mutable live park from its worker thread.
+            if (packet.surfaces.size() >= 256)
+            {
+                if (!_reconstructionWorker.hasCapacity())
+                    return false;
+                struct RelationshipInput
+                {
+                    std::vector<FirstPersonSurface> surfaces;
+                    std::vector<FirstPersonSurface> context;
+                };
+                auto input = std::make_shared<RelationshipInput>();
+                input->surfaces = std::move(packet.surfaces);
+                input->context = std::move(relationshipContext);
+                const auto serial = published.invalidationSerial;
+                const auto selection = _reconstructionSelectionSerial;
+                const auto epoch = _sceneEpoch;
+                const bool accepted = _reconstructionWorker.submit(
+                    [input, regionKey, serial, selection, epoch]() {
+                        auto result = ResolveFirstPersonInternalOccupancyInterfaces(
+                            input->surfaces, input->context);
+                        return [input, regionKey, serial, selection, epoch, result]() mutable {
+                            if (_sceneEpoch != epoch
+                                || _reconstructionSelectionSerial != selection)
+                                return;
+                            const auto live = _staticRegionPackets.find(regionKey);
+                            if (live == _staticRegionPackets.end()
+                                || live->second.invalidationSerial != serial)
+                                return;
+                            const auto pending = _staticRegionPacketBuilds.find(regionKey);
+                            if (pending == _staticRegionPacketBuilds.end()
+                                || pending->second.progress.invalidationSerial != serial
+                                || pending->second.progress.selectionSerial != selection
+                                || !pending->second.relationshipSubmitted)
+                                return;
+                            auto& pendingPacket = pending->second.packet;
+                            pendingPacket.surfaces = std::move(input->surfaces);
+                            pendingPacket.resolvedInternalInterfaces = result.interfaces;
+                            pendingPacket.suppressedInternalFaces = result.suppressedFaces;
+                            pendingPacket.crossPacketInternalInterfaces = result.contextMatches;
+                            pendingPacket.vertexCount = pendingPacket.surfaces.size() * 6;
+                            pending->second.progress.relationshipsResolved = true;
+                            pending->second.relationshipSubmitted = false;
+                        };
+                    },
+                    [regionKey, serial, selection, epoch] {
+                        if (_sceneEpoch != epoch
+                            || _reconstructionSelectionSerial != selection)
+                            return;
+                        const auto pending = _staticRegionPacketBuilds.find(regionKey);
+                        if (pending != _staticRegionPacketBuilds.end()
+                            && pending->second.progress.invalidationSerial == serial
+                            && pending->second.progress.selectionSerial == selection)
+                        {
+                            // A failed worker cannot publish an unknown
+                            // partial suppression result: restart cleanly.
+                            pending->second.progress.invalidationSerial =
+                                std::numeric_limits<uint64_t>::max();
+                            pending->second.relationshipSubmitted = false;
+                        }
+                    });
+                if (!accepted)
+                {
+                    packet.surfaces = std::move(input->surfaces);
+                    return false;
+                }
+                staging.relationshipSubmitted = true;
+                return false;
+            }
             const auto relationshipResolution =
                 ResolveFirstPersonInternalOccupancyInterfaces(
                     packet.surfaces,
