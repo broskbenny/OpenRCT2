@@ -3780,6 +3780,22 @@
             FirstPersonVec3 low{}, high{};
             std::unordered_set<uint32_t> dependencies;
             std::unordered_set<uint64_t> reconstructionDependencies;
+            // Neighbour occupancy context is also gathered across frames.
+            // Preserve its cursor and only the structural evidence the
+            // resolver reads, not full copies of source sprite bitmaps.
+            struct NeighbourSource
+            {
+                uint64_t region{};
+                uint64_t group{};
+                uint8_t kind = 0;
+            };
+            std::vector<FirstPersonSurface> relationshipContext;
+            std::vector<NeighbourSource> neighbourSources;
+            size_t relationshipTile = 0;
+            size_t relationshipTileSurface = 0;
+            size_t neighbourSource = 0;
+            size_t neighbourSourceSurface = 0;
+            bool neighbourSourcesInitialized = false;
             std::array<std::vector<uint64_t>, 3> groupedKeys;
             bool groupsInitialized = false;
             bool relationshipSubmitted = false;
@@ -4107,124 +4123,135 @@
             // is resolving this packet.
             if (staging.relationshipSubmitted)
                 return false;
-            std::vector<FirstPersonSurface>
-                relationshipContext;
+            auto& relationshipContext = staging.relationshipContext;
             const auto addRelationshipContext =
-                [&](const FirstPersonSurface& surface) {
-                    if (!IsResidentStaticSurface(surface)
-                        || surface.gpuRegion == regionKey
-                        || !surface.reconstructedOccupancyBoundary)
+                [&](const FirstPersonSurface& source) {
+                    if (!IsResidentStaticSurface(source)
+                        || source.gpuRegion == regionKey
+                        || !source.reconstructedOccupancyBoundary)
                         return;
-                    relationshipContext.push_back(surface);
+                    // ResolveFirstPersonInternalOccupancyInterfaces uses only
+                    // these fields for identity, exact quad and orientation.
+                    // Native material pixels would only inflate foreground
+                    // copying and background job memory.
+                    FirstPersonSurface geometry{};
+                    geometry.cameraIndependent = source.cameraIndependent;
+                    geometry.reconstructedOccupancyBoundary = source.reconstructedOccupancyBoundary;
+                    geometry.artworkCarrier = source.artworkCarrier;
+                    geometry.reconstructionGroup = source.reconstructionGroup;
+                    geometry.diagnosticSemanticGroup = source.diagnosticSemanticGroup;
+                    geometry.sourceInstanceKey = source.sourceInstanceKey;
+                    geometry.outwardNormal = source.outwardNormal;
+                    geometry.triangles = source.triangles;
+                    relationshipContext.emplace_back(std::move(geometry));
                 };
 
-            for (int32_t ty = y0 - 1;
-                 ty <= y1; ++ty)
-            for (int32_t tx = x0 - 1;
-                 tx <= x1; ++tx)
+            // The original perimeter is four strips of 32 non-corner tiles.
+            // Finish one cached tile's resident surfaces before advancing,
+            // and yield between individual surfaces when the budget expires.
+            while (staging.relationshipTile < 128)
             {
-                if (tx < 0 || ty < 0)
-                    continue;
-                if (tx >= x0 && tx < x1
-                    && ty >= y0 && ty < y1)
-                    continue;
-                if ((tx < x0 || tx >= x1)
-                    && (ty < y0 || ty >= y1))
-                    continue;
-
-                const auto cache =
-                    _staticPaintCache.find(
-                        TerrainKey(tx, ty));
-                if (cache == _staticPaintCache.end()
-                    || !cache->second.valid
-                    || cache->second.dirty
-                    || cache->second.animated)
-                    continue;
-                for (const auto& surface :
-                     cache->second
-                         .cameraIndependentResidentSurfaces)
-                    addRelationshipContext(surface);
+                const size_t offset = staging.relationshipTile % 32;
+                const size_t side = staging.relationshipTile / 32;
+                const int32_t tx = side < 2
+                    ? x0 + int32_t(offset)
+                    : (side == 2 ? x0 - 1 : x1);
+                const int32_t ty = side >= 2
+                    ? y0 + int32_t(offset)
+                    : (side == 0 ? y0 - 1 : y1);
+                if (tx >= 0 && ty >= 0)
+                {
+                    const auto cache = _staticPaintCache.find(TerrainKey(tx, ty));
+                    if (cache != _staticPaintCache.end()
+                        && cache->second.valid
+                        && !cache->second.dirty
+                        && !cache->second.animated)
+                    {
+                        const auto& surfaces =
+                            cache->second.cameraIndependentResidentSurfaces;
+                        while (staging.relationshipTileSurface < surfaces.size())
+                        {
+                            if (!gatherBudget.take())
+                                return false;
+                            addRelationshipContext(
+                                surfaces[staging.relationshipTileSurface++]);
+                        }
+                    }
+                }
+                ++staging.relationshipTile;
+                staging.relationshipTileSurface = 0;
             }
 
-            const auto appendGroupedContext =
-                [&](uint64_t neighbourRegion) {
-                    if (_largeSceneryGeometryEnabled)
-                    {
-                        const auto groups =
-                            _largeSceneryGroupsByRegion.find(
-                                neighbourRegion);
-                        if (groups
-                            != _largeSceneryGroupsByRegion.end())
-                        {
-                            for (const auto groupKey :
-                                 groups->second)
-                            {
-                                const auto geometry =
-                                    _largeSceneryGeometryCache.find(
-                                        groupKey);
-                                if (geometry
-                                        == _largeSceneryGeometryCache.end()
-                                    || geometry->second.dirty)
-                                    continue;
-                                for (const auto& surface :
-                                     geometry->second.surfaces)
-                                {
-                                    if (surface.gpuRegion
-                                            == neighbourRegion)
-                                        addRelationshipContext(
-                                            surface);
-                                }
-                            }
-                        }
-                    }
-                    if (_parkEntranceGeometryEnabled)
-                    {
-                        const auto groups =
-                            _parkEntranceGroupsByRegion.find(
-                                neighbourRegion);
-                        if (groups
-                            != _parkEntranceGroupsByRegion.end())
-                        {
-                            for (const auto groupKey :
-                                 groups->second)
-                            {
-                                const auto geometry =
-                                    _parkEntranceGeometryCache.find(
-                                        groupKey);
-                                if (geometry
-                                        == _parkEntranceGeometryCache.end()
-                                    || geometry->second.dirty)
-                                    continue;
-                                for (const auto& surface :
-                                     geometry->second.surfaces)
-                                {
-                                    if (surface.gpuRegion
-                                            == neighbourRegion)
-                                        addRelationshipContext(
-                                            surface);
-                                }
-                            }
-                        }
-                    }
-                };
-            constexpr std::array<std::array<int32_t, 2>, 4>
-                relationshipRegionOffsets{ {
-                    { -1, 0 }, { 1, 0 },
-                    { 0, -1 }, { 0, 1 },
-                } };
-            for (const auto& offset :
-                 relationshipRegionOffsets)
+            if (!staging.neighbourSourcesInitialized)
             {
-                const int32_t neighbourX =
-                    regionX + offset[0];
-                const int32_t neighbourY =
-                    regionY + offset[1];
-                if (neighbourX < 0 || neighbourY < 0)
-                    continue;
-                appendGroupedContext(
-                    FirstPersonGpuRegionKey(
-                        neighbourX * 32,
-                        neighbourY * 32));
+                constexpr std::array<std::array<int32_t, 2>, 4>
+                    kOffsets{ {
+                        { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 },
+                    } };
+                for (const auto& offset : kOffsets)
+                {
+                    const int32_t nx = regionX + offset[0];
+                    const int32_t ny = regionY + offset[1];
+                    if (nx < 0 || ny < 0)
+                        continue;
+                    const uint64_t neighbourRegion =
+                        FirstPersonGpuRegionKey(nx * 32, ny * 32);
+                    const auto appendGroups =
+                        [&](const auto& index, uint8_t kind) {
+                            const auto found = index.find(neighbourRegion);
+                            if (found == index.end())
+                                return;
+                            for (const auto key : found->second)
+                                staging.neighbourSources.push_back(
+                                    { neighbourRegion, key, kind });
+                        };
+                    if (_largeSceneryGeometryEnabled)
+                        appendGroups(_largeSceneryGroupsByRegion, 1);
+                    if (_parkEntranceGeometryEnabled)
+                        appendGroups(_parkEntranceGroupsByRegion, 2);
+                }
+                std::sort(staging.neighbourSources.begin(),
+                          staging.neighbourSources.end(),
+                          [](const auto& left, const auto& right) {
+                              if (left.region != right.region)
+                                  return left.region < right.region;
+                              if (left.kind != right.kind)
+                                  return left.kind < right.kind;
+                              return left.group < right.group;
+                          });
+                staging.neighbourSourcesInitialized = true;
+            }
+            while (staging.neighbourSource < staging.neighbourSources.size())
+            {
+                const auto& source = staging.neighbourSources[staging.neighbourSource];
+                const std::vector<FirstPersonSurface>* surfaces = nullptr;
+                if (source.kind == 1)
+                {
+                    const auto geometry = _largeSceneryGeometryCache.find(source.group);
+                    if (geometry != _largeSceneryGeometryCache.end()
+                        && !geometry->second.dirty)
+                        surfaces = &geometry->second.surfaces;
+                }
+                else
+                {
+                    const auto geometry = _parkEntranceGeometryCache.find(source.group);
+                    if (geometry != _parkEntranceGeometryCache.end()
+                        && !geometry->second.dirty)
+                        surfaces = &geometry->second.surfaces;
+                }
+                if (surfaces != nullptr)
+                {
+                    while (staging.neighbourSourceSurface < surfaces->size())
+                    {
+                        if (!gatherBudget.take())
+                            return false;
+                        const auto& surface = (*surfaces)[staging.neighbourSourceSurface++];
+                        if (surface.gpuRegion == source.region)
+                            addRelationshipContext(surface);
+                    }
+                }
+                ++staging.neighbourSource;
+                staging.neighbourSourceSurface = 0;
             }
 
             // Large occupancy/interface meshes use the same one-worker
@@ -4296,6 +4323,7 @@
                 if (!accepted)
                 {
                     packet.surfaces = std::move(input->surfaces);
+                    relationshipContext = std::move(input->context);
                     return false;
                 }
                 staging.relationshipSubmitted = true;
