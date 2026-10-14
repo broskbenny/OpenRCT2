@@ -1413,9 +1413,20 @@
             uint64_t lastSeen{};
             bool dirty = true;
         };
+        struct FirstPersonTerrainResidentMaterial
+        {
+            std::shared_ptr<const std::vector<uint8_t>> pixels;
+            int16_t width = 0;
+            int16_t height = 0;
+            int16_t padding = 0;
+            uint64_t fingerprint = 0;
+        };
         struct TerrainCache
         {
             std::unordered_map<uint64_t, TerrainCacheEntry> entries;
+            // One immutable expanded raster per native terrain image, not per
+            // tile or frame. Persistent GPU atlas uses the same fingerprint.
+            std::unordered_map<ImageIndex, FirstPersonTerrainResidentMaterial> materials;
             uint64_t frame{};
         };
         static TerrainCache _terrainCache;

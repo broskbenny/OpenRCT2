@@ -8,6 +8,7 @@
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonLargeSceneryReconstruction.h"
 #include "FirstPersonMaterialInference.h"
+#include "FirstPersonTerrainEdgeMaterial.h"
 #include "FirstPersonNativeComposite.h"
 #include "FirstPersonBoundaryMaterialPolicy.h"
 #include "FirstPersonUnknownUnderside.h"
@@ -1593,6 +1594,7 @@ namespace OpenRCT2::Paint
         if (_sceneEpoch == 0)
             _sceneEpoch = 1;
         _terrainCache.entries.clear();
+        _terrainCache.materials.clear();
         _terrainCache.frame = 0;
         _regionBounds.clear();
         _staticPaintCache.clear();

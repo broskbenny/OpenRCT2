@@ -1237,6 +1237,50 @@
                         cache.ground.image = image;
                         cache.ground.physicalCoverage = true;
                         cache.ground.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
+
+                        // Native terrain coverage is a diamond/warped raster,
+                        // not an authored transparent cut-out. Its zero border
+                        // and crop must not turn into broad solid-colour wedges
+                        // along a 3D tile or triangle seam. Build the padded
+                        // real-palette material at most once per image.
+                        auto materialIt = _terrainCache.materials.find(image.GetIndex());
+                        if (materialIt == _terrainCache.materials.end())
+                        {
+                            FirstPersonTerrainResidentMaterial material{};
+                            if (const auto decoded = DecodeFirstPersonSpritePixels(*g1);
+                                decoded.has_value())
+                            {
+                                if (auto expanded = BuildFirstPersonTerrainEdgeMaterial(
+                                        *decoded, g1->width, g1->height))
+                                {
+                                    material.width = int16_t(expanded->width);
+                                    material.height = int16_t(expanded->height);
+                                    material.padding = int16_t(expanded->padding);
+                                    material.pixels = std::make_shared<const std::vector<uint8_t>>(
+                                        std::move(expanded->pixels));
+                                    material.fingerprint = 0x7e22cebb24fb21a1ull;
+                                    ExtendStableKey(material.fingerprint, image.GetIndex());
+                                    ExtendStableKey(material.fingerprint, uint64_t(material.width));
+                                    ExtendStableKey(material.fingerprint, uint64_t(material.height));
+                                }
+                            }
+                            materialIt = _terrainCache.materials.emplace(
+                                image.GetIndex(), std::move(material)).first;
+                        }
+                        const auto& residentMaterial = materialIt->second;
+                        if (residentMaterial.pixels != nullptr)
+                        {
+                            for (auto& vertex : v)
+                            {
+                                vertex.u += float(residentMaterial.padding);
+                                vertex.v += float(residentMaterial.padding);
+                            }
+                            cache.ground.persistentPixels = residentMaterial.pixels;
+                            cache.ground.immutableWidth = residentMaterial.width;
+                            cache.ground.immutableHeight = residentMaterial.height;
+                            cache.ground.immutableFingerprint = residentMaterial.fingerprint;
+                            cache.ground.persistentBitmap = true;
+                        }
                         EmitQuad(cache.ground, v, UsesOppositeTerrainDiagonal(slope));
                         cache.water.clear();
                         cache.waterOverlay.clear();
