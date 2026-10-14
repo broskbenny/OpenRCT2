@@ -63,6 +63,10 @@ int main() {
         self.assertIn("published = std::move(packet);",build)
         self.assertIn("packet.generation = published.generation + 1;",build)
         self.assertIn("published.invalidationSerial",build)
+        self.assertIn("packet.surfaces.size() >= 256",build)
+        self.assertIn("staging.relationshipSubmitted = true;",build)
+        self.assertIn("pending->second.progress.relationshipsResolved = true;",build)
+        self.assertIn("_sceneEpoch != epoch",build)
         self.assertIn("MarkStaticRegionPacketDirty(uint64_t key)",core)
         self.assertIn("_staticRegionPacketBuilds.clear();",renderer)
 
