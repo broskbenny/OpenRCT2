@@ -1985,6 +1985,74 @@ namespace OpenRCT2::Paint
         const auto finished = Clock::now();
         const auto totalUs = std::chrono::duration_cast<std::chrono::microseconds>(
             finished - perfStart).count();
+        // Measure BOTH foreground CPU cost and the interval between POV
+        // submissions. Neither metric alone is equivalent to GPU-presented
+        // frames; report both so missed 60 Hz budgets are not misdiagnosed.
+        struct FrameBudgetWindow
+        {
+            Clock::time_point begin{};
+            Clock::time_point previousStart{};
+            uint64_t frames = 0;
+            uint64_t cpuMisses = 0;
+            uint64_t cadenceMisses = 0;
+            int64_t worstCpuUs = 0;
+            int64_t worstCadenceUs = 0;
+            int64_t worstCollectUs = 0;
+            int64_t worstPaintUs = 0;
+            int64_t worstDrawUs = 0;
+        };
+        static FrameBudgetWindow budgetWindow{};
+        constexpr int64_t kSixtyFpsFrameBudgetUs = 16667;
+        if (budgetWindow.begin == Clock::time_point{})
+            budgetWindow.begin = perfStart;
+        const auto collectUs = std::chrono::duration_cast<std::chrono::microseconds>(
+            collectionDone - perfStart).count();
+        const auto paintUs = std::chrono::duration_cast<std::chrono::microseconds>(
+            paintDone - collectionDone).count();
+        const auto drawUs = std::chrono::duration_cast<std::chrono::microseconds>(
+            finished - drawStart).count();
+        ++budgetWindow.frames;
+        if (totalUs > kSixtyFpsFrameBudgetUs)
+            ++budgetWindow.cpuMisses;
+        if (totalUs > budgetWindow.worstCpuUs)
+        {
+            budgetWindow.worstCpuUs = totalUs;
+            budgetWindow.worstCollectUs = collectUs;
+            budgetWindow.worstPaintUs = paintUs;
+            budgetWindow.worstDrawUs = drawUs;
+        }
+        if (budgetWindow.previousStart != Clock::time_point{})
+        {
+            const auto cadenceUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                perfStart - budgetWindow.previousStart).count();
+            if (cadenceUs > kSixtyFpsFrameBudgetUs)
+                ++budgetWindow.cadenceMisses;
+            budgetWindow.worstCadenceUs =
+                std::max<int64_t>(budgetWindow.worstCadenceUs, cadenceUs);
+        }
+        budgetWindow.previousStart = perfStart;
+        if (finished - budgetWindow.begin >= std::chrono::seconds(2))
+        {
+            if (budgetWindow.cpuMisses != 0 || budgetWindow.cadenceMisses != 0)
+            {
+                Console::WriteLine(
+                    "FP_60FPS_BUDGET frames=%llu cpuOver16ms=%llu cadenceOver16ms=%llu"
+                    " worstCpuUs=%lld worstCollectUs=%lld worstPaintUs=%lld"
+                    " worstDrawUs=%lld worstCadenceUs=%lld",
+                    static_cast<unsigned long long>(budgetWindow.frames),
+                    static_cast<unsigned long long>(budgetWindow.cpuMisses),
+                    static_cast<unsigned long long>(budgetWindow.cadenceMisses),
+                    static_cast<long long>(budgetWindow.worstCpuUs),
+                    static_cast<long long>(budgetWindow.worstCollectUs),
+                    static_cast<long long>(budgetWindow.worstPaintUs),
+                    static_cast<long long>(budgetWindow.worstDrawUs),
+                    static_cast<long long>(budgetWindow.worstCadenceUs));
+            }
+            budgetWindow = {};
+            budgetWindow.begin = finished;
+            budgetWindow.previousStart = perfStart;
+        }
+
         // Low-frequency slow-frame telemetry: a worker's buildUs is not
         // foreground latency. These stages identify the actual caller cost.
         static auto lastSlowFrameReport = Clock::time_point{};

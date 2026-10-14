@@ -6,12 +6,17 @@
         void CollectPaintSprites(FirstPersonScene& scene, Drawing::RenderTarget& rt)
         {
             PROFILED_FUNCTION();
+            using PaintClock = std::chrono::steady_clock;
+            const auto started = PaintClock::now();
             const auto& opt = scene.options;
             const auto basis = GetFirstPersonBasis(opt.camera);
             const auto frame = _terrainCache.frame;
             const uint32_t sourceGeneration = getGameState().currentTicks;
             constexpr uint64_t kSemanticProbeInterval = 240;
-            size_t nativeCapturesRemaining = 16;
+            // Spread synchronous native art captures over more frames.
+            // Reconstruction workers remain asynchronous; this caps the
+            // foreground TileElementPaintSetup/PaintSessionArrange work.
+            size_t nativeCapturesRemaining = 8;
             std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
             for (auto& misses : missesByRotation)
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
@@ -326,6 +331,7 @@
                 }
             }
 
+            const auto selectedViewsDone = PaintClock::now();
             // The shared semantic visual hull needs four native observations
             // to carve a volumetric box/local-hull envelope reliably. Camera
             // selection alone may never request the other three. Acquire them
@@ -342,7 +348,7 @@
             // can trigger expensive semantic cache work. Use a low duty
             // cycle for *optional* views; foreground camera requests retain
             // all their existing priority and budget.
-            if (nativeCapturesRemaining == 16
+            if (nativeCapturesRemaining == 8
                 && !scene.visibleTiles.empty()
                 && (frame & 3u) == 0)
             {
@@ -433,6 +439,7 @@
             _snapshotBudget = FirstPersonFrameBudget(64, std::chrono::microseconds(1500));
             UpdateLargeSceneryReconstructions(scene, frame);
             UpdateParkEntranceReconstructions(scene, frame);
+            const auto reconstructionPrepDone = PaintClock::now();
 
             struct PaintWorkItem
             {
@@ -530,7 +537,7 @@
                 return collection;
             };
 
-            constexpr size_t kTilesPerPaintSession = 256;
+            constexpr size_t kTilesPerPaintSession = 32;
             for (uint8_t rotation = 0; rotation < 4; ++rotation)
             {
                 auto& rotationWork = workByRotation[rotation];
@@ -945,6 +952,8 @@
                 }
             }
 
+            const auto nativeCaptureDone = PaintClock::now();
+
             // Promote a requested source view only after its capture is
             // complete. Until then, keep the previous selected rotation so a
             // camera turn cannot publish an empty resident representation.
@@ -1221,6 +1230,34 @@
                 });
             }
 
+            const auto assemblyDone = PaintClock::now();
             SubmitVisibleStaticRegions(scene, worldFrustum, frame);
+            const auto finished = PaintClock::now();
+            const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                finished - started).count();
+            static auto lastBreakdown = PaintClock::time_point{};
+            if (elapsedUs >= 16000 && finished - lastBreakdown >= std::chrono::seconds(2))
+            {
+                lastBreakdown = finished;
+                const auto stageUs = [](auto before, auto after) {
+                    return static_cast<long long>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            after - before).count());
+                };
+                size_t scheduledCaptures = 0;
+                for (const auto& requested : missesByRotation)
+                    scheduledCaptures += requested.size();
+                Console::WriteLine(
+                    "FP_PAINT_STAGES totalUs=%lld selectUs=%lld reconPrepUs=%lld"
+                    " nativeSessionUs=%lld assembleUs=%lld packetsUs=%lld"
+                    " captures=%zu visibleTiles=%zu",
+                    static_cast<long long>(elapsedUs),
+                    stageUs(started, selectedViewsDone),
+                    stageUs(selectedViewsDone, reconstructionPrepDone),
+                    stageUs(reconstructionPrepDone, nativeCaptureDone),
+                    stageUs(nativeCaptureDone, assemblyDone),
+                    stageUs(assemblyDone, finished),
+                    scheduledCaptures, scene.visibleTiles.size());
+            }
         }
 
