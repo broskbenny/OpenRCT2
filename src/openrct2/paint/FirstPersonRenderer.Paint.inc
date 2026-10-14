@@ -1230,29 +1230,58 @@
             const auto finished = PaintClock::now();
             const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
                 finished - started).count();
-            static auto lastBreakdown = PaintClock::time_point{};
-            if (elapsedUs >= 16000 && finished - lastBreakdown >= std::chrono::seconds(2))
+            // Report the WORST stage breakdown in each window, not merely
+            // the first slow frame (which can conceal later 1-second stalls).
+            struct PaintStageWindow
             {
-                lastBreakdown = finished;
+                PaintClock::time_point begin{};
+                int64_t worstUs = 0;
+                int64_t selectUs = 0;
+                int64_t reconstructionUs = 0;
+                int64_t nativeUs = 0;
+                int64_t assemblyUs = 0;
+                int64_t packetUs = 0;
+                size_t captures = 0;
+                size_t tiles = 0;
+            };
+            static PaintStageWindow window{};
+            if (window.begin == PaintClock::time_point{})
+                window.begin = started;
+            if (elapsedUs > window.worstUs)
+            {
                 const auto stageUs = [](auto before, auto after) {
-                    return static_cast<long long>(
-                        std::chrono::duration_cast<std::chrono::microseconds>(
-                            after - before).count());
+                    return std::chrono::duration_cast<std::chrono::microseconds>(
+                        after - before).count();
                 };
-                size_t scheduledCaptures = 0;
+                window.worstUs = elapsedUs;
+                window.selectUs = stageUs(started, selectedViewsDone);
+                window.reconstructionUs = stageUs(selectedViewsDone, reconstructionPrepDone);
+                window.nativeUs = stageUs(reconstructionPrepDone, nativeCaptureDone);
+                window.assemblyUs = stageUs(nativeCaptureDone, assemblyDone);
+                window.packetUs = stageUs(assemblyDone, finished);
+                window.captures = 0;
                 for (const auto& requested : missesByRotation)
-                    scheduledCaptures += requested.size();
-                Console::WriteLine(
-                    "FP_PAINT_STAGES totalUs=%lld selectUs=%lld reconPrepUs=%lld"
-                    " nativeSessionUs=%lld assembleUs=%lld packetsUs=%lld"
-                    " captures=%zu visibleTiles=%zu",
-                    static_cast<long long>(elapsedUs),
-                    stageUs(started, selectedViewsDone),
-                    stageUs(selectedViewsDone, reconstructionPrepDone),
-                    stageUs(reconstructionPrepDone, nativeCaptureDone),
-                    stageUs(nativeCaptureDone, assemblyDone),
-                    stageUs(assemblyDone, finished),
-                    scheduledCaptures, scene.visibleTiles.size());
+                    window.captures += requested.size();
+                window.tiles = scene.visibleTiles.size();
+            }
+            if (finished - window.begin >= std::chrono::seconds(2))
+            {
+                if (window.worstUs > 16667)
+                {
+                    Console::WriteLine(
+                        "FP_PAINT_STAGES totalUs=%lld selectUs=%lld reconPrepUs=%lld"
+                        " nativeSessionUs=%lld assembleUs=%lld packetsUs=%lld"
+                        " captures=%zu visibleTiles=%zu",
+                        static_cast<long long>(window.worstUs),
+                        static_cast<long long>(window.selectUs),
+                        static_cast<long long>(window.reconstructionUs),
+                        static_cast<long long>(window.nativeUs),
+                        static_cast<long long>(window.assemblyUs),
+                        static_cast<long long>(window.packetUs),
+                        window.captures, window.tiles);
+                }
+                window = {};
+                window.begin = finished;
             }
         }
 
