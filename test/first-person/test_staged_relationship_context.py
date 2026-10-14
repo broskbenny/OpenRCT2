@@ -18,7 +18,7 @@ class StagedRelationshipContextTests(unittest.TestCase):
         self.assertIn("staging.relationshipTileSurface < surfaces.size()",s)
         self.assertIn("staging.neighbourSource < staging.neighbourSources.size()",s)
         self.assertIn("staging.neighbourSourceSurface < surfaces->size()",s)
-        self.assertGreaterEqual(s.count("if (!gatherBudget.take())\n                                return false;"),2)
+        self.assertGreaterEqual(s.count("if (!gatherBudget.take())"),4)
         self.assertIn("staging.neighbourSourcesInitialized = true;",s)
 
     def test_interface_evidence_copy_does_not_duplicate_textures(self):
