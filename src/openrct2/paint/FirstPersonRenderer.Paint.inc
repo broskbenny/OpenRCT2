@@ -22,8 +22,6 @@
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
             std::unordered_set<uint64_t>
                 cameraIndependentRefreshKeys;
-            std::unordered_map<uint64_t, uint8_t>
-                requestedTileRotations;
             const auto& view = scene.resolvedView;
             const FirstPersonFrustum worldFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
@@ -156,7 +154,7 @@
                 // make it the presentation source until that variant has
                 // actually been captured. The previous valid source remains
                 // the last-known-good representation during acquisition.
-                requestedTileRotations[key] = tileRotation;
+                cached.requestedRotation = tileRotation;
                 cached.lastSeen = frame;
 
                 bool hasTerrainEdgeSemantic = false;
@@ -376,11 +374,9 @@
                     if (!cached.valid || cached.dirty || cached.animated)
                         continue;
 
-                    const auto requested =
-                        requestedTileRotations.find(key);
-                    if (requested == requestedTileRotations.end()
+                    if (cached.requestedRotation >= 4
                         || !cached.rotations[
-                            requested->second].semanticValid)
+                            cached.requestedRotation].semanticValid)
                         continue;
 
                     const bool needsFourViews = std::any_of(
@@ -957,19 +953,18 @@
             // Promote a requested source view only after its capture is
             // complete. Until then, keep the previous selected rotation so a
             // camera turn cannot publish an empty resident representation.
-            for (const auto& [key, requested] :
-                 requestedTileRotations)
+            for (const auto tile : scene.visibleTiles)
             {
-                const auto cacheIt =
-                    _staticPaintCache.find(key);
-                if (cacheIt == _staticPaintCache.end()
-                    || requested
-                        >= cacheIt->second.rotations.size()
-                    || !cacheIt->second
-                            .rotations[requested].valid)
+                const uint64_t key = TerrainKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+                const auto cacheIt = _staticPaintCache.find(key);
+                if (cacheIt == _staticPaintCache.end())
                     continue;
-
                 auto& cached = cacheIt->second;
+                const uint8_t requested = cached.requestedRotation;
+                if (requested >= cached.rotations.size()
+                    || !cached.rotations[requested].valid)
+                    continue;
                 if (!cached.hasSelectedRotation
                     || cached.selectedRotation != requested)
                 {

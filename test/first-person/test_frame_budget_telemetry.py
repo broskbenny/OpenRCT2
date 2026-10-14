@@ -27,6 +27,9 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
         self.assertIn("reconstructionPrepDone", paint)
         self.assertIn("nativeCaptureDone", paint)
         self.assertIn("assemblyDone", paint)
+        self.assertNotIn("requestedTileRotations", paint)
+        self.assertIn("cached.requestedRotation = tileRotation", paint)
+        self.assertIn("cached.requestedRotation >= 4", paint)
 
 
 if __name__ == "__main__":

@@ -1518,6 +1518,9 @@
             bool animated = false;
             bool hasSelectedRotation = false;
             uint8_t selectedRotation = 0;
+            // The tile's desired source view for the active presentation;
+            // avoid rebuilding a 20k-entry temporary hash table every frame.
+            uint8_t requestedRotation = 0xFF;
             bool hasUngroupedResident = false;
             bool hasCameraDependentFallback = false;
             bool visibilityBoundValid = false;
