@@ -3774,6 +3774,7 @@
         struct FirstPersonStaticPacketStaging
         {
             FirstPersonPacketBuildProgress progress{};
+            uint64_t buildToken = 0;
             StaticRegionPacketCache packet{};
             bool haveBounds = false;
             FirstPersonVec3 low{}, high{};
@@ -3788,6 +3789,7 @@
         };
         static std::unordered_map<uint64_t, FirstPersonStaticPacketStaging>
             _staticRegionPacketBuilds;
+        static uint64_t _nextStaticPacketBuildToken = 0;
 
         [[nodiscard]] bool RebuildStaticRegionPacket(uint64_t regionKey, uint64_t frame)
         {
@@ -3799,6 +3801,7 @@
                 staging = {};
                 staging.progress.restart(
                     published.invalidationSerial, _reconstructionSelectionSerial);
+                staging.buildToken = ++_nextStaticPacketBuildToken;
             }
             auto& packet = staging.packet;
             auto& haveBounds = staging.haveBounds;
@@ -4243,11 +4246,12 @@
                 const auto serial = published.invalidationSerial;
                 const auto selection = _reconstructionSelectionSerial;
                 const auto epoch = _sceneEpoch;
+                const auto token = staging.buildToken;
                 const bool accepted = _reconstructionWorker.submit(
-                    [input, regionKey, serial, selection, epoch]() {
+                    [input, regionKey, serial, selection, epoch, token]() {
                         auto result = ResolveFirstPersonInternalOccupancyInterfaces(
                             input->surfaces, input->context);
-                        return [input, regionKey, serial, selection, epoch, result]() mutable {
+                        return [input, regionKey, serial, selection, epoch, token, result]() mutable {
                             if (_sceneEpoch != epoch
                                 || _reconstructionSelectionSerial != selection)
                                 return;
@@ -4259,6 +4263,7 @@
                             if (pending == _staticRegionPacketBuilds.end()
                                 || pending->second.progress.invalidationSerial != serial
                                 || pending->second.progress.selectionSerial != selection
+                                || pending->second.buildToken != token
                                 || !pending->second.relationshipSubmitted)
                                 return;
                             auto& pendingPacket = pending->second.packet;
@@ -4271,14 +4276,15 @@
                             pending->second.relationshipSubmitted = false;
                         };
                     },
-                    [regionKey, serial, selection, epoch] {
+                    [regionKey, serial, selection, epoch, token] {
                         if (_sceneEpoch != epoch
                             || _reconstructionSelectionSerial != selection)
                             return;
                         const auto pending = _staticRegionPacketBuilds.find(regionKey);
                         if (pending != _staticRegionPacketBuilds.end()
                             && pending->second.progress.invalidationSerial == serial
-                            && pending->second.progress.selectionSerial == selection)
+                            && pending->second.progress.selectionSerial == selection
+                            && pending->second.buildToken == token)
                         {
                             // A failed worker cannot publish an unknown
                             // partial suppression result: restart cleanly.
