@@ -67,6 +67,8 @@ int main() {
         self.assertIn("staging.relationshipSubmitted = true;",build)
         self.assertIn("pending->second.progress.relationshipsResolved = true;",build)
         self.assertIn("_sceneEpoch != epoch",build)
+        self.assertIn("pending->second.buildToken != token",build)
+        self.assertIn("staging.buildToken = ++_nextStaticPacketBuildToken",build)
         self.assertIn("MarkStaticRegionPacketDirty(uint64_t key)",core)
         self.assertIn("_staticRegionPacketBuilds.clear();",renderer)
 

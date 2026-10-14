@@ -9,6 +9,7 @@ on:
       - src/openrct2/paint/FirstPerson*.h
       - src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc
       - src/openrct2/paint/FirstPersonRenderer.Core.inc
+      - src/openrct2/paint/FirstPersonRenderer.World.inc
       - src/openrct2/paint/FirstPersonRenderer.cpp
       - .github/workflows/first-person-reconstruction.yml
   pull_request:
@@ -17,6 +18,7 @@ on:
       - src/openrct2/paint/FirstPerson*.h
       - src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc
       - src/openrct2/paint/FirstPersonRenderer.Core.inc
+      - src/openrct2/paint/FirstPersonRenderer.World.inc
       - src/openrct2/paint/FirstPersonRenderer.cpp
       - .github/workflows/first-person-reconstruction.yml
 
