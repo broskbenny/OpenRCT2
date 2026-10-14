@@ -380,9 +380,9 @@
                         continue;
 
                     const bool needsFourViews = std::any_of(
-                        cached.rotations[requested->second]
+                        cached.rotations[cached.requestedRotation]
                             .semanticComponents.begin(),
-                        cached.rotations[requested->second]
+                        cached.rotations[cached.requestedRotation]
                             .semanticComponents.end(),
                         [](const FirstPersonPaintSemanticComponent& component) {
                             if (component.role

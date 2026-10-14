@@ -2064,10 +2064,6 @@ namespace OpenRCT2::Paint
             lastSlowFrameReport = finished;
             const auto collectionUs = std::chrono::duration_cast<std::chrono::microseconds>(
                 collectionDone - perfStart).count();
-            const auto paintUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                paintDone - collectionDone).count();
-            const auto drawUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                finished - drawStart).count();
             Console::WriteLine(
                 "FP_FRAME_TIMING totalUs=%lld collectUs=%lld paintUs=%lld"
                 " drawUs=%lld tiles=%zu regions=%zu surfaces=%zu reused=%d",
