@@ -3735,6 +3735,11 @@
             FirstPersonVec3 low{}, high{};
             std::unordered_set<uint32_t> dependencies;
             std::unordered_set<uint64_t> reconstructionDependencies;
+            std::array<std::vector<uint64_t>, 3> groupedKeys;
+            bool groupsInitialized = false;
+            size_t groupPhase = 0;
+            size_t groupOffset = 0;
+            size_t surfaceOffset = 0;
         };
         static std::unordered_map<uint64_t, FirstPersonStaticPacketStaging>
             _staticRegionPacketBuilds;
@@ -3949,101 +3954,100 @@
                 return false;
             if (!staging.progress.groupsAdded)
             {
-            if (const auto membership =
-                    _trackTrajectoryGroupsByRegion.find(
-                        regionKey);
-                membership
-                    != _trackTrajectoryGroupsByRegion.end())
-            {
-                for (const auto groupKey :
-                     membership->second)
+                if (!staging.groupsInitialized)
                 {
-                    // Track geometry and its face-selected native
-                    // material are both camera-independent.
-                    const auto trajectory =
-                        _trackTrajectoryCache.find(
-                            groupKey);
-                    if (trajectory
-                            == _trackTrajectoryCache.end()
-                        || trajectory->second.dirty)
-                        continue;
-                    const auto indices =
-                        trajectory->second
-                            .regionSurfaceIndices.find(
-                                regionKey);
-                    if (indices
-                        == trajectory->second
-                            .regionSurfaceIndices.end())
-                        continue;
-                    for (const auto index :
-                         indices->second)
-                    {
-                        if (index
-                            < trajectory->second
-                                .surfaces.size())
-                        {
-                            const auto& sourceSurface =
-                                trajectory->second
-                                    .surfaces[index];
-                            if (sourceSurface.artworkCarrier)
-                            {
-                                EnsureTrackMaterials(groupKey, trajectory->second);
-                                const auto projected = trajectory->second.projectedSurfaces.find(index);
-                                if (projected != trajectory->second.projectedSurfaces.end())
-                                    for (const auto& surface : projected->second) addSurface(surface);
-                            }
-                            else
-                            {
-                                addSurface(sourceSurface);
-                            }
-                        }
-                    }
+                    const auto gatherGroups = [&](size_t phase, const auto& index) {
+                        const auto found = index.find(regionKey);
+                        if (found == index.end())
+                            return;
+                        auto& keys = staging.groupedKeys[phase];
+                        keys.assign(found->second.begin(), found->second.end());
+                        std::sort(keys.begin(), keys.end());
+                    };
+                    gatherGroups(0, _trackTrajectoryGroupsByRegion);
+                    if (_largeSceneryGeometryEnabled)
+                        gatherGroups(1, _largeSceneryGroupsByRegion);
+                    if (_parkEntranceGeometryEnabled)
+                        gatherGroups(2, _parkEntranceGroupsByRegion);
+                    staging.groupsInitialized = true;
                 }
-            }
-            if (_largeSceneryGeometryEnabled)
-            {
-                if (const auto membership =
-                        _largeSceneryGroupsByRegion.find(regionKey);
-                    membership != _largeSceneryGroupsByRegion.end())
-                {
-                    for (const auto groupKey : membership->second)
-                    {
-                        const auto geometry =
-                            _largeSceneryGeometryCache.find(groupKey);
-                        if (geometry == _largeSceneryGeometryCache.end()
-                            || geometry->second.dirty)
-                            continue;
-                        for (const auto& surface : geometry->second.surfaces)
-                            addSurface(surface);
-                    }
-                }
-            }
-            if (_parkEntranceGeometryEnabled)
-            {
-                if (const auto membership =
-                        _parkEntranceGroupsByRegion.find(regionKey);
-                    membership
-                        != _parkEntranceGroupsByRegion.end())
-                {
-                    for (const auto groupKey :
-                         membership->second)
-                    {
-                        const auto geometry =
-                            _parkEntranceGeometryCache.find(
-                                groupKey);
-                        if (geometry
-                                == _parkEntranceGeometryCache.end()
-                            || geometry->second.dirty)
-                            continue;
-                        for (const auto& surface :
-                             geometry->second.surfaces)
-                        {
-                            addSurface(surface);
-                        }
-                    }
-                }
-            }
 
+                // Each indexed group advances its own resumable surface cursor.
+                // A large track or reconstructed object cannot consume an
+                // entire frame merely because its group is one cache entry.
+                while (staging.groupPhase < staging.groupedKeys.size())
+                {
+                    const auto& keys = staging.groupedKeys[staging.groupPhase];
+                    while (staging.groupOffset < keys.size())
+                    {
+                        const uint64_t groupKey = keys[staging.groupOffset];
+                        if (staging.groupPhase == 0)
+                        {
+                            const auto trajectory = _trackTrajectoryCache.find(groupKey);
+                            if (trajectory != _trackTrajectoryCache.end()
+                                && !trajectory->second.dirty)
+                            {
+                                const auto indices = trajectory->second.regionSurfaceIndices.find(regionKey);
+                                if (indices != trajectory->second.regionSurfaceIndices.end())
+                                {
+                                    while (staging.surfaceOffset < indices->second.size())
+                                    {
+                                        if (!gatherBudget.take())
+                                            return false;
+                                        const auto index = indices->second[staging.surfaceOffset++];
+                                        if (index >= trajectory->second.surfaces.size())
+                                            continue;
+                                        const auto& sourceSurface = trajectory->second.surfaces[index];
+                                        if (!sourceSurface.artworkCarrier)
+                                        {
+                                            addSurface(sourceSurface);
+                                            continue;
+                                        }
+                                        EnsureTrackMaterials(groupKey, trajectory->second);
+                                        const auto projected = trajectory->second.projectedSurfaces.find(index);
+                                        if (projected != trajectory->second.projectedSurfaces.end())
+                                            for (const auto& surface : projected->second)
+                                                addSurface(surface);
+                                    }
+                                }
+                            }
+                        }
+                        else if (staging.groupPhase == 1)
+                        {
+                            const auto geometry = _largeSceneryGeometryCache.find(groupKey);
+                            if (geometry != _largeSceneryGeometryCache.end()
+                                && !geometry->second.dirty)
+                            {
+                                const auto& surfaces = geometry->second.surfaces;
+                                while (staging.surfaceOffset < surfaces.size())
+                                {
+                                    if (!gatherBudget.take())
+                                        return false;
+                                    addSurface(surfaces[staging.surfaceOffset++]);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            const auto geometry = _parkEntranceGeometryCache.find(groupKey);
+                            if (geometry != _parkEntranceGeometryCache.end()
+                                && !geometry->second.dirty)
+                            {
+                                const auto& surfaces = geometry->second.surfaces;
+                                while (staging.surfaceOffset < surfaces.size())
+                                {
+                                    if (!gatherBudget.take())
+                                        return false;
+                                    addSurface(surfaces[staging.surfaceOffset++]);
+                                }
+                            }
+                        }
+                        ++staging.groupOffset;
+                        staging.surfaceOffset = 0;
+                    }
+                    ++staging.groupPhase;
+                    staging.groupOffset = 0;
+                }
                 staging.progress.groupsAdded = true;
             }
             if (!gatherBudget.available())
@@ -5291,10 +5295,15 @@
                 {
                     lastSlowPacketReport = buildFinished;
                     Console::WriteLine(
-                        "FP_REGION_PACKET_SLOW region=%llu buildUs=%lld dirtyCandidates=%zu complete=%d",
+                        "FP_REGION_PACKET_SLOW region=%llu buildUs=%lld dirtyCandidates=%zu complete=%d phase=%u",
                         static_cast<unsigned long long>(candidate.key),
                         static_cast<long long>(buildUs), rebuildCandidates.size(),
-                        complete ? 1 : 0);
+                        complete ? 1 : 0,
+                        complete ? 5u
+                            : unsigned(_staticRegionPacketBuilds[candidate.key].progress.nextTile < 1024
+                                ? 0u : !_staticRegionPacketBuilds[candidate.key].progress.groupsAdded
+                                    ? 1u : !_staticRegionPacketBuilds[candidate.key].progress.relationshipsResolved
+                                        ? 2u : 3u));
                 }
             }
 
