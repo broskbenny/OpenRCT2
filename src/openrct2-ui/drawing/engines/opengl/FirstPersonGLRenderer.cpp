@@ -42,6 +42,7 @@ layout(location=8) in vec2 aMaskSize;
 layout(location=9) in int aMaskLayer;
 layout(location=10) in uint aPaintOrdinal;
 layout(location=11) in vec3 aOutwardNormal;
+layout(location=12) in vec4 aPlane;
 uniform vec3 uEye;
 uniform vec3 uForward;
 uniform vec3 uRight;
@@ -60,6 +61,7 @@ flat out vec2 fMaskSize;
 flat out int fMaskLayer;
 flat out uint fPaintOrdinal;
 flat out vec3 fOutwardNormal;
+flat out vec4 fPlane;
 void main() {
     vec3 delta = aWorld - uEye;
     float x = dot(delta, uRight);
@@ -81,6 +83,7 @@ void main() {
     fMaskLayer = aMaskLayer;
     fPaintOrdinal = aPaintOrdinal;
     fOutwardNormal = aOutwardNormal;
+    fPlane = aPlane;
 }
 )GLSL";
         constexpr char kFragmentShader[] = R"GLSL(#version 330 core
@@ -94,6 +97,10 @@ uniform bool uPeeling;
 uniform int uPeelStage;
 uniform vec3 uEye;
 uniform vec3 uForward;
+uniform vec3 uRight;
+uniform vec3 uUp;
+uniform vec2 uFocal;
+uniform vec4 uViewport;
 uniform vec2 uNearFar;
 in vec2 fUV;
 in vec3 fWorld;
@@ -107,6 +114,7 @@ flat in vec2 fMaskSize;
 flat in int fMaskLayer;
 flat in uint fPaintOrdinal;
 flat in vec3 fOutwardNormal;
+flat in vec4 fPlane;
 layout(location=0) out uint oIndex;
 
 float CoplanarDepthTolerance(float physicalDepth) {
@@ -188,6 +196,27 @@ void main() {
     // Logarithmic physical depth leaves usable precision at the far end of
     // a complete RCT2 park while allowing the passenger near geometry.
     float depth = max(0.0, dot(fWorld - uEye, uForward));
+    // Opaque/native-order owners may have different tessellation and opposite
+    // winding on the exact same plane (e.g. adjacent wall source tiles).
+    // Interpolated fWorld gives them slightly different depth keys and defeats
+    // GL_LEQUAL/native-order replay. Reconstruct the physical intersection of
+    // this pixel ray with the canonical triangle plane instead. Equal planes
+    // now have bit-identical depth from every source tile, with NO geometry
+    // offset or artificial draw-depth bias.
+    if ((fFlags & 4) != 0 && dot(fPlane.xyz, fPlane.xyz) > 0.5) {
+        vec2 ndc = 2.0 * (gl_FragCoord.xy - uViewport.xy)
+            / uViewport.zw - vec2(1.0);
+        vec3 ray = uForward
+            + (ndc.x / uFocal.x) * uRight
+            + (ndc.y / uFocal.y) * uUp;
+        float denominator = dot(fPlane.xyz, ray);
+        if (abs(denominator) > 0.000001) {
+            float planarDepth =
+                (fPlane.w - dot(fPlane.xyz, uEye)) / denominator;
+            if (planarDepth > 0.0)
+                depth = planarDepth;
+        }
+    }
     float logarithmic = log2(1.0 + depth)/log2(1.0 + uNearFar.y);
     gl_FragDepth = logarithmic;
     if ((fFlags & 4) != 0 && (fFlags & 1) == 0) {
@@ -319,6 +348,7 @@ void main() {
             int32_t maskLayer;
             uint32_t paintOrdinal;
             float outwardNormal[3];
+            float plane[4];
         };
         void ConfigureVertexInput(GLuint vao, GLuint vbo)
         {
@@ -348,6 +378,8 @@ void main() {
         glCall(glVertexAttribIPointer, 10, 1, GL_UNSIGNED_INT, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, paintOrdinal)));
         glCall(glEnableVertexAttribArray, 11);
         glCall(glVertexAttribPointer, 11, 3, GL_FLOAT, GL_FALSE, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, outwardNormal)));
+        glCall(glEnableVertexAttribArray, 12);
+        glCall(glVertexAttribPointer, 12, 4, GL_FLOAT, GL_FALSE, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, plane)));
         }
         GLuint Compile(GLenum type, const char* source)
         {
@@ -736,6 +768,9 @@ void main() {
         const float foc = 1.0f / std::tan(halfFov);
         glCall(glUniform2f, Uniform(_program, "uFocal"), foc, foc * float(width) / float(height));
         glCall(glUniform2f, Uniform(_program, "uNearFar"), view.nearClip, view.farClip);
+        glCall(glUniform4f, Uniform(_program, "uViewport"),
+            float(left), float(screenHeight - top - height),
+            float(width), float(height));
         OpenGLAPI::SetTexture(0, GL_TEXTURE_2D_ARRAY, textures.GetAtlasesTexture());
         OpenGLAPI::SetTexture(1, GL_TEXTURE_2D, textures.GetPaletteTexture());
         glCall(glUniform1i, Uniform(_program, "uSprites"), 0);
@@ -923,8 +958,45 @@ void main() {
                 count=1;
                 palettes[0]=PaletteY(static_cast<Drawing::FilterPaletteID>(image.GetRemap()));
             }
-            for(const auto& p:surface.triangles)
-                vertices.push_back({
+            const bool isCoplanarOwner = forceCoplanarOwner
+                || (!suppressCoplanarOwner && surface.coplanarOwner);
+            // A triangle's canonical plane is independent of its winding or
+            // its native sprite source. Avoid per-pixel interpolation disagreement
+            // when two owners occupy precisely the same world plane.
+            for (size_t triangle = 0; triangle < surface.triangles.size(); triangle += 3)
+            {
+                std::array<float, 4> plane{};
+                if (isCoplanarOwner && triangle + 2 < surface.triangles.size())
+                {
+                    const auto& a = surface.triangles[triangle].world;
+                    const auto& b = surface.triangles[triangle + 1].world;
+                    const auto& c = surface.triangles[triangle + 2].world;
+                    const double ux = double(b.x) - a.x, uy = double(b.y) - a.y, uz = double(b.z) - a.z;
+                    const double vx = double(c.x) - a.x, vy = double(c.y) - a.y, vz = double(c.z) - a.z;
+                    double nx = uy * vz - uz * vy;
+                    double ny = uz * vx - ux * vz;
+                    double nz = ux * vy - uy * vx;
+                    const double length = std::sqrt(nx * nx + ny * ny + nz * nz);
+                    if (length > 0.000001)
+                    {
+                        nx /= length; ny /= length; nz /= length;
+                        // Choose one canonical orientation for either side of
+                        // the same shared wall, including flipped triangle winding.
+                        const double dominant = std::max({ std::abs(nx), std::abs(ny), std::abs(nz) });
+                        if ((std::abs(nx) == dominant && nx < 0)
+                            || (std::abs(nx) != dominant && std::abs(ny) == dominant && ny < 0)
+                            || (std::abs(nx) != dominant && std::abs(ny) != dominant && nz < 0))
+                        {
+                            nx = -nx; ny = -ny; nz = -nz;
+                        }
+                        plane = { float(nx), float(ny), float(nz),
+                            float(nx * a.x + ny * a.y + nz * a.z) };
+                    }
+                }
+                for (size_t i = triangle; i < std::min(triangle + 3, surface.triangles.size()); ++i)
+                {
+                    const auto& p = surface.triangles[i];
+                    vertices.push_back({
                     {p.world.x,p.world.y,p.world.z},{p.u,p.v},
                     {tex.coords.x,tex.coords.y,tex.coords.z,tex.coords.w},
                     {imageWidth,imageHeight},int32_t(tex.index),
@@ -950,7 +1022,10 @@ void main() {
                         0x00ffffffull)),
                     {surface.outwardNormal.x,
                      surface.outwardNormal.y,
-                     surface.outwardNormal.z}});
+                     surface.outwardNormal.z},
+                    {plane[0], plane[1], plane[2], plane[3]}});
+                }
+            }
             return true;
         };
         std::vector<GPUVertex> opaqueOrdinaryVertices;
