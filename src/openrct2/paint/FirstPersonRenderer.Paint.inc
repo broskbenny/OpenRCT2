@@ -551,6 +551,12 @@
             int64_t nativeSetupUs = 0;
             int64_t nativeArrangeUs = 0;
             int64_t nativeExtractUs = 0;
+            int64_t nativeOrdinalUs = 0;
+            int64_t nativeAppendUs = 0;
+            int64_t nativePostUs = 0;
+            int64_t nativeWorstAppendUs = 0;
+            uint32_t nativeWorstImage = 0;
+            size_t nativeRoots = 0;
             size_t nativeStaticItems = 0;
             size_t nativeEntityItems = 0;
             // Camera-independent geometry merges evidence from multiple
@@ -715,6 +721,8 @@
                             root, prefix);
                     }
 
+                    nativeOrdinalUs += std::chrono::duration_cast<std::chrono::microseconds>(
+                        PaintClock::now() - nativeArrangeDone).count();
                     for (auto* root = session->PaintHead; root; root = root->NextQuadrantEntry)
                     {
                         // PaintSessionArrange provides the authoritative local
@@ -798,6 +806,7 @@
                             }
                         }
 
+                        const auto rootWorkStart = PaintClock::now();
                         const auto fallbackAnchor = Anchor(*root);
                         const auto reconstruction = GetSpriteReconstructionFrame(
                             *root, fallbackAnchor);
@@ -813,6 +822,15 @@
                             scene, *root, anchor, basis, isoAnchor,
                             opt.viewFlags, opt.hiddenEntity, opt.hiddenSeatIndex,
                             rotation);
+                        const auto appended = PaintClock::now();
+                        const auto appendMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+                            appended - rootWorkStart).count();
+                        nativeAppendUs += appendMicros;
+                        if (appendMicros > nativeWorstAppendUs)
+                        {
+                            nativeWorstAppendUs = appendMicros;
+                            nativeWorstImage = root->image_id.GetIndex();
+                        }
                         for (size_t i = startSurface;
                              i < scene.surfaces.size(); ++i)
                         {
@@ -979,6 +997,9 @@
                                     }),
                                 scene.surfaces.end());
                         }
+                        nativePostUs += std::chrono::duration_cast<std::chrono::microseconds>(
+                            PaintClock::now() - appended).count();
+                        ++nativeRoots;
                     }
                     Drawing::ScrollingText::EndFirstPersonSnapshotCapture();
                     PaintSessionFree(session);
@@ -999,12 +1020,20 @@
                 lastNativeStallReport = nativeCaptureDone;
                 Console::WriteLine(
                     "FP_NATIVE_STALL totalUs=%lld allocUs=%lld setupUs=%lld arrangeUs=%lld"
-                    " extractUs=%lld staticItems=%zu entityItems=%zu",
+                    " extractUs=%lld ordinalUs=%lld appendUs=%lld postUs=%lld"
+                    " roots=%zu worstAppendUs=%lld worstImage=%u"
+                    " staticItems=%zu entityItems=%zu",
                     static_cast<long long>(nativeTotalUs),
                     static_cast<long long>(nativeAllocUs),
                     static_cast<long long>(nativeSetupUs),
                     static_cast<long long>(nativeArrangeUs),
                     static_cast<long long>(nativeExtractUs),
+                    static_cast<long long>(nativeOrdinalUs),
+                    static_cast<long long>(nativeAppendUs),
+                    static_cast<long long>(nativePostUs),
+                    nativeRoots,
+                    static_cast<long long>(nativeWorstAppendUs),
+                    nativeWorstImage,
                     nativeStaticItems, nativeEntityItems);
             }
 
