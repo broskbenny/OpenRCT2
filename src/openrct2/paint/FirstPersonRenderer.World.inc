@@ -4185,6 +4185,23 @@
             }
             if (!gatherBudget.available())
                 return false;
+            // Exact internal-interface removal applies ONLY to physical
+            // occupancy boundaries. Native-ordered walls, paths, scenery
+            // artwork and other appearance layers cannot be suppressed by
+            // ResolveFirstPersonInternalOccupancyInterfaces. Previously any
+            // packet with >=256 surfaces was sent to the single reconstruction
+            // worker, even when it contained zero interface candidates. That
+            // left large regions invisible while unrelated jobs occupied
+            // the worker. The empty relation is already proven here.
+            if (!staging.progress.relationshipsResolved
+                && std::none_of(
+                    packet.surfaces.begin(), packet.surfaces.end(),
+                    [](const FirstPersonSurface& surface) {
+                        return FirstPersonSurfaceIsReconstructedOccupancyBoundary(surface);
+                    }))
+            {
+                staging.progress.relationshipsResolved = true;
+            }
             if (!staging.progress.relationshipsResolved)
             {
             // The background worker owns the relationship snapshot until
