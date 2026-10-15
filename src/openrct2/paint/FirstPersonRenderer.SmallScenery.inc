@@ -831,7 +831,7 @@
                 {
                     // Revisit this native view next frame; never fall through
                     // to a synchronous silhouette reconstruction.
-                    InvalidateFirstPersonSceneTile(ps.MapPos);
+                    RequestFirstPersonNativeSceneryRetry(ps.MapPos, rotation);
                     return true;
                 }
                 auto job = std::make_shared<SmallSceneryJob>();
@@ -872,7 +872,7 @@
                 for (uint8_t view = 0; view < 4; ++view)
                     if (!job->sprites.capture(entry->image + view + uint32_t(stage) * 4u, _snapshotBudget))
                     {
-                        InvalidateFirstPersonSceneTile(ps.MapPos);
+                        RequestFirstPersonNativeSceneryRetry(ps.MapPos, rotation);
                         return true;
                     }
                 job->submitted = _reconstructionWorker.submit([job] {
@@ -972,7 +972,7 @@
                     job->ready = true;
                     _reconstructionRepaints.enqueue(std::move(job->waitingTiles));
                 });
-                if (!job->submitted) InvalidateFirstPersonSceneTile(ps.MapPos);
+                if (!job->submitted) RequestFirstPersonNativeSceneryRetry(ps.MapPos, rotation);
             }
             return true; // pending geometry deliberately absent
         }
