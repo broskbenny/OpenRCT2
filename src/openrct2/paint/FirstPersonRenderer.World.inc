@@ -3780,6 +3780,10 @@
             FirstPersonVec3 low{}, high{};
             std::unordered_set<uint32_t> dependencies;
             std::unordered_set<uint64_t> reconstructionDependencies;
+            // Only source-view selections read by this region can invalidate
+            // its in-progress packet. An unrelated group turning must not
+            // discard several frames of staged geometry.
+            std::unordered_map<uint64_t, uint8_t> selectedGroups;
             // Neighbour occupancy context is also gathered across frames.
             // Preserve its cursor and only the structural evidence the
             // resolver reads, not full copies of source sprite bitmaps.
@@ -3807,17 +3811,46 @@
             _staticRegionPacketBuilds;
         static uint64_t _nextStaticPacketBuildToken = 0;
 
+        [[nodiscard]] bool FirstPersonStagedPacketSelectionChanged(
+            const FirstPersonStaticPacketStaging& staging)
+        {
+            for (const auto& [key, captured] : staging.selectedGroups)
+            {
+                const auto found = _reconstructionRotations.find(key);
+                const uint8_t current =
+                    found != _reconstructionRotations.end()
+                        && found->second.hasSelectedRotation
+                    ? found->second.selectedRotation : 0xffu;
+                if (current != captured)
+                    return true;
+            }
+            return false;
+        }
+
         [[nodiscard]] bool RebuildStaticRegionPacket(uint64_t regionKey, uint64_t frame)
         {
             auto& published = _staticRegionPackets[regionKey];
             auto& staging = _staticRegionPacketBuilds[regionKey];
-            if (staging.progress.needsRestart(
-                    published.invalidationSerial, _reconstructionSelectionSerial))
+            // A global selection serial is a cheap change detector, not an
+            // authority to restart every in-flight region. Completed packets
+            // already use per-group selection stamps; staged packets need the
+            // same locality to make progress while the camera moves.
+            const bool sourceChanged =
+                staging.progress.invalidationSerial != published.invalidationSerial;
+            const bool relevantSelectionChanged =
+                !sourceChanged
+                && staging.progress.selectionSerial != _reconstructionSelectionSerial
+                && FirstPersonStagedPacketSelectionChanged(staging);
+            if (sourceChanged || relevantSelectionChanged)
             {
                 staging = {};
                 staging.progress.restart(
                     published.invalidationSerial, _reconstructionSelectionSerial);
                 staging.buildToken = ++_nextStaticPacketBuildToken;
+            }
+            else
+            {
+                staging.progress.selectionSerial = _reconstructionSelectionSerial;
             }
             auto& packet = staging.packet;
             auto& haveBounds = staging.haveBounds;
@@ -4000,12 +4033,15 @@
                             const auto group =
                                 _reconstructionRotations.find(
                                     surface.reconstructionGroup);
-                            if (group
-                                    == _reconstructionRotations.end()
-                                || !group->second.hasSelectedRotation)
+                            const uint8_t captured =
+                                group != _reconstructionRotations.end()
+                                    && group->second.hasSelectedRotation
+                                ? group->second.selectedRotation : 0xffu;
+                            staging.selectedGroups.emplace(
+                                surface.reconstructionGroup, captured);
+                            if (captured == 0xffu)
                                 continue;
-                            selected =
-                                group->second.selectedRotation;
+                            selected = captured;
                         }
                         if (selected != rotation)
                             continue;
@@ -4033,6 +4069,19 @@
                         gatherGroups(1, _largeSceneryGroupsByRegion);
                     if (_parkEntranceGeometryEnabled)
                         gatherGroups(2, _parkEntranceGroupsByRegion);
+                    // Group geometry may not appear in tile-level fallbacks.
+                    // Track its selection independently before the expensive
+                    // group copy, so worker completions can verify its inputs.
+                    for (const auto& keys : staging.groupedKeys)
+                    for (const auto key : keys)
+                    {
+                        const auto found = _reconstructionRotations.find(key);
+                        const uint8_t captured =
+                            found != _reconstructionRotations.end()
+                                && found->second.hasSelectedRotation
+                            ? found->second.selectedRotation : 0xffu;
+                        staging.selectedGroups.emplace(key, captured);
+                    }
                     staging.groupsInitialized = true;
                 }
 
@@ -4271,16 +4320,14 @@
                 input->surfaces = std::move(packet.surfaces);
                 input->context = std::move(relationshipContext);
                 const auto serial = published.invalidationSerial;
-                const auto selection = _reconstructionSelectionSerial;
                 const auto epoch = _sceneEpoch;
                 const auto token = staging.buildToken;
                 const bool accepted = _reconstructionWorker.submit(
-                    [input, regionKey, serial, selection, epoch, token]() {
+                    [input, regionKey, serial, epoch, token]() {
                         auto result = ResolveFirstPersonInternalOccupancyInterfaces(
                             input->surfaces, input->context);
-                        return [input, regionKey, serial, selection, epoch, token, result]() mutable {
-                            if (_sceneEpoch != epoch
-                                || _reconstructionSelectionSerial != selection)
+                        return [input, regionKey, serial, epoch, token, result]() mutable {
+                            if (_sceneEpoch != epoch)
                                 return;
                             const auto live = _staticRegionPackets.find(regionKey);
                             if (live == _staticRegionPackets.end()
@@ -4289,10 +4336,17 @@
                             const auto pending = _staticRegionPacketBuilds.find(regionKey);
                             if (pending == _staticRegionPacketBuilds.end()
                                 || pending->second.progress.invalidationSerial != serial
-                                || pending->second.progress.selectionSerial != selection
                                 || pending->second.buildToken != token
                                 || !pending->second.relationshipSubmitted)
                                 return;
+                            if (FirstPersonStagedPacketSelectionChanged(pending->second))
+                            {
+                                // Reject an obsolete worker snapshot and
+                                // force a clean staged rebuild next frame.
+                                pending->second.progress.selectionSerial =
+                                    std::numeric_limits<uint64_t>::max();
+                                return;
+                            }
                             auto& pendingPacket = pending->second.packet;
                             pendingPacket.surfaces = std::move(input->surfaces);
                             pendingPacket.resolvedInternalInterfaces = result.interfaces;
@@ -4303,14 +4357,12 @@
                             pending->second.relationshipSubmitted = false;
                         };
                     },
-                    [regionKey, serial, selection, epoch, token] {
-                        if (_sceneEpoch != epoch
-                            || _reconstructionSelectionSerial != selection)
+                    [regionKey, serial, epoch, token] {
+                        if (_sceneEpoch != epoch)
                             return;
                         const auto pending = _staticRegionPacketBuilds.find(regionKey);
                         if (pending != _staticRegionPacketBuilds.end()
                             && pending->second.progress.invalidationSerial == serial
-                            && pending->second.progress.selectionSerial == selection
                             && pending->second.buildToken == token)
                         {
                             // A failed worker cannot publish an unknown
