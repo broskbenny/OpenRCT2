@@ -3775,6 +3775,7 @@
         {
             FirstPersonPacketBuildProgress progress{};
             uint64_t buildToken = 0;
+            uint64_t initialSourceRevision = 0;
             StaticRegionPacketCache packet{};
             bool haveBounds = false;
             FirstPersonVec3 low{}, high{};
@@ -3838,8 +3839,19 @@
             // authority to restart every in-flight region. Completed packets
             // already use per-group selection stamps; staged packets need the
             // same locality to make progress while the camera moves.
+            // During first publication, new native observations can dirty
+            // an entire region every frame. Restarting its 1024-tile traversal
+            // at each observation starves the first coherent packet. Finish
+            // that snapshot, publish it marked dirty, then reconcile the newer
+            // generation. Once a last-known-good packet exists, honour normal
+            // authoritative invalidations immediately.
+            const bool havePublishedPacket =
+                published.surfaceStorage != nullptr
+                && !published.surfaceStorage->empty();
             const bool sourceChanged =
-                staging.progress.invalidationSerial != published.invalidationSerial;
+                staging.progress.invalidationSerial == std::numeric_limits<uint64_t>::max()
+                || (havePublishedPacket
+                    && staging.progress.invalidationSerial != published.invalidationSerial);
             const bool relevantSelectionChanged =
                 !sourceChanged
                 && staging.progress.selectionSerial != _reconstructionSelectionSerial
@@ -3853,6 +3865,7 @@
                 staging = {};
                 staging.progress.restart(
                     published.invalidationSerial, _reconstructionSelectionSerial);
+                staging.initialSourceRevision = published.sourceRevision;
                 staging.buildToken = ++_nextStaticPacketBuildToken;
             }
             else
@@ -4338,7 +4351,9 @@
                                 return;
                             const auto live = _staticRegionPackets.find(regionKey);
                             if (live == _staticRegionPackets.end()
-                                || live->second.invalidationSerial != serial)
+                                || (live->second.invalidationSerial != serial
+                                    && live->second.surfaceStorage != nullptr
+                                    && !live->second.surfaceStorage->empty()))
                                 return;
                             const auto pending = _staticRegionPacketBuilds.find(regionKey);
                             if (pending == _staticRegionPacketBuilds.end()
@@ -5380,12 +5395,18 @@
             }
             packet.surfaceStorage = std::make_shared<const std::vector<FirstPersonSurface>>(std::move(packet.surfaces));
             // Publish all metadata and immutable geometry in one move.
+            // A first cold packet can be older than a source observation
+            // made while it was assembling. It is a complete packet snapshot,
+            // never partially published; keep the newer revision pending so
+            // the next build converges without hiding this last-known-good.
+            const bool missedSourceChanges =
+                staging.progress.invalidationSerial != published.invalidationSerial;
             packet.sourceRevision = published.sourceRevision;
-            packet.publishedSourceRevision = published.sourceRevision;
+            packet.publishedSourceRevision = staging.initialSourceRevision;
             packet.invalidationSerial = published.invalidationSerial;
             packet.generation = published.generation + 1;
             packet.lastSeen = frame;
-            packet.dirty = false;
+            packet.dirty = missedSourceChanges;
             published = std::move(packet);
             _staticRegionPacketBuilds.erase(regionKey);
             ++_staticPacketPublishes;
