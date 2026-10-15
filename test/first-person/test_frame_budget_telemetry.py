@@ -51,5 +51,22 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
         self.assertIn("cached.requestedRotation >= 4", paint)
 
 
+    def test_first_person_automatically_uses_variable_pacing_without_changing_preferences(self):
+        context = (ROOT / "src/openrct2/Context.cpp").read_text(encoding="utf-8")
+        tweener = (ROOT / "src/openrct2/entity/EntityTweener.h").read_text(encoding="utf-8")
+        controller = (ROOT / "src/openrct2-ui/FirstPersonController.cpp").read_text(encoding="utf-8")
+        policy = context.split("bool ShouldRunVariableFrame()", 1)[1].split("void RunGameLoop()", 1)[0]
+        self.assertIn("Config::Get().general.uncapFPS", policy)
+        self.assertIn("|| EntityTweener::get().hasFirstPersonView()", policy)
+        self.assertIn("if (gGameSpeed > 4)", policy)
+        self.assertIn("return false;", policy)
+        self.assertIn("FP_FRAME_PACING firstPerson=%d variable=%d userUncap=%d", context)
+        self.assertIn("bool hasFirstPersonView() const noexcept", tweener)
+        self.assertIn("return _firstPersonView.has_value();", tweener)
+        self.assertIn("setFirstPersonView(", controller)
+        self.assertIn("clearFirstPersonView();", controller)
+        self.assertNotIn("general.uncapFPS =", context)
+
+
 if __name__ == "__main__":
     unittest.main()
