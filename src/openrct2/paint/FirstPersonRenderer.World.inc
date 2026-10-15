@@ -3804,6 +3804,12 @@
             std::array<std::vector<uint64_t>, 3> groupedKeys;
             bool groupsInitialized = false;
             bool relationshipSubmitted = false;
+            bool boundaryCandidateCountReady = false;
+            size_t boundaryCandidateCount = 0;
+            // Complete local region geometry can be presented while its
+            // internal occupancy suppression is still resolving in a worker.
+            // Worker-owned copies never mutate this immutable source snapshot.
+            std::shared_ptr<const std::vector<FirstPersonSurface>> provisionalSurfaces;
             size_t groupPhase = 0;
             size_t groupOffset = 0;
             size_t surfaceOffset = 0;
@@ -4185,22 +4191,66 @@
             }
             if (!gatherBudget.available())
                 return false;
-            // Exact internal-interface removal applies ONLY to physical
-            // occupancy boundaries. Native-ordered walls, paths, scenery
-            // artwork and other appearance layers cannot be suppressed by
-            // ResolveFirstPersonInternalOccupancyInterfaces. Previously any
-            // packet with >=256 surfaces was sent to the single reconstruction
-            // worker, even when it contained zero interface candidates. That
-            // left large regions invisible while unrelated jobs occupied
-            // the worker. The empty relation is already proven here.
-            if (!staging.progress.relationshipsResolved
-                && std::none_of(
+            // Suppression only concerns reconstructed physical occupancy
+            // interfaces, never arbitrary artwork. Use the *candidate* count,
+            // not total material faces, for background worker admission.
+            if (!staging.boundaryCandidateCountReady)
+            {
+                staging.boundaryCandidateCount = size_t(std::count_if(
                     packet.surfaces.begin(), packet.surfaces.end(),
                     [](const FirstPersonSurface& surface) {
                         return FirstPersonSurfaceIsReconstructedOccupancyBoundary(surface);
-                    }))
-            {
-                staging.progress.relationshipsResolved = true;
+                    }));
+                staging.boundaryCandidateCountReady = true;
+                if (staging.boundaryCandidateCount == 0)
+                    staging.progress.relationshipsResolved = true;
+                else if (staging.boundaryCandidateCount >= 256)
+                {
+                    // All tiles and grouped sources are complete. Present
+                    // this unmodified, immutable 3D geometry NOW, without
+                    // waiting for one shared worker or copying large texture
+                    // payloads on the foreground thread. Background interface
+                    // removal will atomically replace it when ready.
+                    staging.provisionalSurfaces =
+                        std::make_shared<const std::vector<FirstPersonSurface>>(
+                            std::move(packet.surfaces));
+                    if (!published.surfaceStorage || published.surfaceStorage->empty())
+                    {
+                        published.surfaceStorage = staging.provisionalSurfaces;
+                        published.vertexCount = staging.provisionalSurfaces->size() * 6;
+                        published.textureDependencies.assign(
+                            dependencies.begin(), dependencies.end());
+                        std::sort(
+                            published.textureDependencies.begin(),
+                            published.textureDependencies.end());
+                        published.reconstructionGroups.assign(
+                            reconstructionDependencies.begin(),
+                            reconstructionDependencies.end());
+                        std::sort(
+                            published.reconstructionGroups.begin(),
+                            published.reconstructionGroups.end());
+                        published.reconstructionSelectionStamp =
+                            CurrentReconstructionSelectionStamp(published.reconstructionGroups);
+                        published.reconstructionSelectionSerial =
+                            _reconstructionSelectionSerial;
+                        if (haveBounds)
+                        {
+                            published.center = {
+                                0.5f * (low.x + high.x),
+                                0.5f * (low.y + high.y),
+                                0.5f * (low.z + high.z),
+                            };
+                            const float dx = 0.5f * (high.x - low.x);
+                            const float dy = 0.5f * (high.y - low.y);
+                            const float dz = 0.5f * (high.z - low.z);
+                            published.radius = std::sqrt(dx * dx + dy * dy + dz * dz) + 2.0f;
+                        }
+                        published.publishedSourceRevision = staging.initialSourceRevision;
+                        ++published.generation;
+                        published.lastSeen = frame;
+                        published.dirty = true;
+                    }
+                }
             }
             if (!staging.progress.relationshipsResolved)
             {
@@ -4344,23 +4394,27 @@
             // bounded queue as the other snapshot-only reconstruction jobs.
             // Copy/move only independently owned surfaces into that job:
             // never read the mutable live park from its worker thread.
-            if (packet.surfaces.size() >= 256)
+            if (staging.boundaryCandidateCount >= 256)
             {
                 if (!_reconstructionWorker.hasCapacity())
                     return false;
                 struct RelationshipInput
                 {
+                    std::shared_ptr<const std::vector<FirstPersonSurface>> source;
                     std::vector<FirstPersonSurface> surfaces;
                     std::vector<FirstPersonSurface> context;
                 };
                 auto input = std::make_shared<RelationshipInput>();
-                input->surfaces = std::move(packet.surfaces);
+                input->source = staging.provisionalSurfaces;
                 input->context = std::move(relationshipContext);
                 const auto serial = published.invalidationSerial;
                 const auto epoch = _sceneEpoch;
                 const auto token = staging.buildToken;
                 const bool accepted = _reconstructionWorker.submit(
                     [input, regionKey, serial, epoch, token]() {
+                        // Copy to mutable working storage OFF the foreground
+                        // thread; the same immutable source stays visible.
+                        input->surfaces = *input->source;
                         auto result = ResolveFirstPersonInternalOccupancyInterfaces(
                             input->surfaces, input->context);
                         return [input, regionKey, serial, epoch, token, result]() mutable {
@@ -4413,7 +4467,6 @@
                     });
                 if (!accepted)
                 {
-                    packet.surfaces = std::move(input->surfaces);
                     relationshipContext = std::move(input->context);
                     return false;
                 }
