@@ -43,6 +43,19 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
         self.assertIn("seenIt->second.insert(", paint)
         self.assertNotIn("const bool duplicate =\n                                            std::any_of(",paint)
 
+    def test_worker_congestion_retries_native_capture_without_world_invalidation(self):
+        core = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text(encoding="utf-8")
+        small = (ROOT / "src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc").read_text(encoding="utf-8")
+        paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(encoding="utf-8")
+        self.assertIn("void RequestFirstPersonNativeSceneryRetry(", core)
+        self.assertIn("found->second.nativeRetryMask |=", core)
+        self.assertIn("found->second.rotations[rotation].valid = false;", core)
+        self.assertIn("rotationMask |= cached.nativeRetryMask;", paint)
+        self.assertIn("cached.nativeRetryMask &=", paint)
+        self.assertEqual(small.count("RequestFirstPersonNativeSceneryRetry(ps.MapPos, rotation);"), 3)
+        self.assertNotIn("InvalidateFirstPersonSceneTile(ps.MapPos);", small)
+        self.assertIn("_reconstructionRepaints.enqueue(", small)
+
     def test_native_work_is_admitted_in_smaller_foreground_batches(self):
         paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(encoding="utf-8")
         self.assertIn("nativeCapturesRemaining = 2;", paint)
