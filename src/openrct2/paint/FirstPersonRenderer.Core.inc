@@ -1559,6 +1559,10 @@
         };
         static std::unordered_map<uint64_t, StaticPaintCacheEntry> _staticPaintCache;
 
+        // World.inc defines TerrainKey later in this translation unit.
+        // The native-scenery retry helper is defined before that include.
+        uint64_t TerrainKey(int32_t tx, int32_t ty);
+
         void RequestFirstPersonNativeSceneryRetry(CoordsXY tile, uint8_t rotation)
         {
             if (rotation >= 4)
