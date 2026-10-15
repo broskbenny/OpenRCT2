@@ -141,6 +141,7 @@ namespace OpenRCT2
         float _realtimeAccumulator = 0.0f;
         float _timeScale = 1.0f;
         bool _variableFrame = false;
+        bool _previousFirstPersonFramePacing = false;
 
         // If set, will end the OpenRCT2 game loop. Intentionally private to this module so that the flag can not be set back to
         // false.
@@ -1226,11 +1227,15 @@ namespace OpenRCT2
         {
             if (!ShouldDraw())
                 return false;
-            if (!Config::Get().general.uncapFPS)
-                return false;
             if (gGameSpeed > 4)
                 return false;
-            return true;
+            // First person needs presentation frames independently of the
+            // 40 Hz simulation tick, even when Uncap FPS is disabled in the
+            // user's normal preferences. The controller's published camera
+            // view is authoritative for walking and ride attachment.
+            // Do not modify or save the user's configuration.
+            return Config::Get().general.uncapFPS
+                || EntityTweener::get().hasFirstPersonView();
         }
 
         /**
@@ -1260,7 +1265,16 @@ namespace OpenRCT2
             const auto deltaTime = _timer.GetElapsedTimeAndRestart().count();
 
             // Make sure we catch the state change and reset it.
-            bool useVariableFrame = ShouldRunVariableFrame();
+            const bool firstPersonActive = EntityTweener::get().hasFirstPersonView();
+            const bool useVariableFrame = ShouldRunVariableFrame();
+            if (firstPersonActive != _previousFirstPersonFramePacing)
+            {
+                _previousFirstPersonFramePacing = firstPersonActive;
+                Console::WriteLine(
+                    "FP_FRAME_PACING firstPerson=%d variable=%d userUncap=%d",
+                    firstPersonActive ? 1 : 0, useVariableFrame ? 1 : 0,
+                    Config::Get().general.uncapFPS ? 1 : 0);
+            }
             if (_variableFrame != useVariableFrame)
             {
                 _variableFrame = useVariableFrame;
