@@ -16,6 +16,14 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
         self.assertIn('paintDone - collectionDone', renderer)
         self.assertIn('finished - drawStart', renderer)
 
+    def test_opengl_call_stage_attribution_is_active(self):
+        source = (ROOT / "src/openrct2-ui/drawing/engines/opengl/OpenGLDrawingEngine.cpp").read_text(encoding="utf-8")
+        self.assertIn("FP_GL_CALL_STAGES", source)
+        self.assertIn("flushUs=", source)
+        self.assertIn("renderUs=", source)
+        self.assertIn("FlushCommandBuffers();", source)
+        self.assertIn("_firstPerson->Draw(", source)
+
     def test_native_work_is_admitted_in_smaller_foreground_batches(self):
         paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(encoding="utf-8")
         self.assertIn("nativeCapturesRemaining = 2;", paint)
