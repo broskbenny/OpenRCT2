@@ -29,6 +29,9 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
         transparency = gl.split("std::vector<TransparentIndexRange> tileRanges(", 1)[1]
         self.assertIn("range.start * sizeof(GLuint)", transparency)
         self.assertIn("GL_UNSIGNED_INT,indexOffset", transparency)
+        self.assertIn("FP_GL_RENDER_STAGES", gl)
+        self.assertIn("coverageWaitUs=", gl)
+        self.assertIn("executedPeels", gl)
         self.assertEqual(transparency.count("glBufferData,GL_ELEMENT_ARRAY_BUFFER"), 1)
         self.assertNotIn("GLsizei(tileIndices.size())", transparency)
 
@@ -49,6 +52,9 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
         self.assertIn("captureCursor += captureExamined;", paint)
         self.assertIn("scannedTiles=%zu", paint)
         self.assertIn("FP_NATIVE_STALL", paint)
+        self.assertIn("nativeWorstAppendUs", paint)
+        self.assertIn("worstImage=%u", paint)
+        self.assertIn("nativePostUs", paint)
         for stage in ("allocUs=", "setupUs=", "arrangeUs=", "extractUs=", "staticItems=", "entityItems="):
             self.assertIn(stage, paint)
         self.assertIn("nativeCapturesRemaining - 1", paint)
