@@ -1645,49 +1645,53 @@ void main() {
             glCall(
                 glBindBuffer,
                 GL_ELEMENT_ARRAY_BUFFER,_ebo);
-            std::vector<GLuint> tileIndices;
-            for (const auto& tile : transparencyTiles)
+            // A single index upload services every screen tile. Separate
+            // indexed draws preserve exact clipping and the order of all
+            // physical-depth/native-ordinal peel layers.
+            struct TransparentIndexRange
             {
+                size_t start{};
+                GLsizei count{};
+            };
+            std::vector<TransparentIndexRange> tileRanges(
+                transparencyTiles.size());
+            std::vector<GLuint> tileIndices;
+            for (size_t tileIndex = 0;
+                 tileIndex < transparencyTiles.size(); ++tileIndex)
+            {
+                const auto& tile = transparencyTiles[tileIndex];
                 const auto dirtyTileClip = tileClip(tile);
                 if (tile.candidates.empty()
                     || dirtyTileClip.getWidth() <= 0
                     || dirtyTileClip.getHeight() <= 0)
                     continue;
-
-                // Every transparent surface was packed once above. A screen
-                // tile now uploads only compact indices into that shared
-                // vertex buffer rather than recopying full GPUVertex structs.
                 size_t tileVertexCount = 0;
-                for (const auto& candidate :
-                     tile.candidates)
-                {
-                    tileVertexCount +=
-                        candidate.vertexCount;
-                }
-                tileIndices.clear();
-                tileIndices.reserve(tileVertexCount);
-                for (const auto& candidate :
-                     tile.candidates)
-                {
-                    for (size_t i = 0;
-                         i < candidate.vertexCount; ++i)
-                    {
-                        tileIndices.push_back(
-                            GLuint(
-                                candidate.vertexOffset
-                                + i));
-                    }
-                }
-                if (tileIndices.empty())
+                for (const auto& candidate : tile.candidates)
+                    tileVertexCount += candidate.vertexCount;
+                if (tileVertexCount > size_t(std::numeric_limits<GLsizei>::max()))
                     continue;
-
-                glCall(
-                    glBufferData,
-                    GL_ELEMENT_ARRAY_BUFFER,
-                    GLsizeiptr(
-                        tileIndices.size()
-                        * sizeof(GLuint)),
-                    tileIndices.data(),GL_STREAM_DRAW);
+                const size_t first = tileIndices.size();
+                tileIndices.reserve(first + tileVertexCount);
+                for (const auto& candidate : tile.candidates)
+                    for (size_t i = 0; i < candidate.vertexCount; ++i)
+                        tileIndices.push_back(GLuint(candidate.vertexOffset + i));
+                tileRanges[tileIndex] = {
+                    first, GLsizei(tileIndices.size() - first)
+                };
+            }
+            glCall(glBufferData,GL_ELEMENT_ARRAY_BUFFER,
+                GLsizeiptr(tileIndices.size() * sizeof(GLuint)),
+                tileIndices.empty() ? nullptr : tileIndices.data(),
+                GL_STREAM_DRAW);
+            for (size_t tileIndex = 0;
+                 tileIndex < transparencyTiles.size(); ++tileIndex)
+            {
+                const auto& tile = transparencyTiles[tileIndex];
+                const auto range = tileRanges[tileIndex];
+                if (range.count == 0)
+                    continue;
+                const void* indexOffset = reinterpret_cast<const void*>(
+                    range.start * sizeof(GLuint));
 
                 // The rectangle-overlap maximum is conservative: transparent
                 // pixels can only reduce it. Exact physical-depth/native-order
@@ -1777,8 +1781,8 @@ void main() {
                     }
                     glCall(
                         glDrawElements,GL_TRIANGLES,
-                        GLsizei(tileIndices.size()),
-                        GL_UNSIGNED_INT,nullptr);
+                        range.count,
+                        GL_UNSIGNED_INT,indexOffset);
                     if (coverageSlot
                         < _peelCoverageQueries.size())
                     {
@@ -1826,8 +1830,8 @@ void main() {
                     OpenGLAPI::SetTexture(5,GL_TEXTURE_2D,physicalLayer.GetDepthTexture());
                     glCall(
                         glDrawElements,GL_TRIANGLES,
-                        GLsizei(tileIndices.size()),
-                        GL_UNSIGNED_INT,nullptr);
+                        range.count,
+                        GL_UNSIGNED_INT,indexOffset);
                     composeLayer(logicalLayer,tile);
 
                     if (probeExhaustion
