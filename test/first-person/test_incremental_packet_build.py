@@ -80,7 +80,7 @@ int main() {
         self.assertIn("staging.progress.invalidationSerial != published.invalidationSerial",build)
         self.assertLess(build.index("staging.progress.relationshipsResolved = true;"),build.index("published = std::move(packet);"))
         self.assertIn("published.invalidationSerial",build)
-        self.assertIn("packet.surfaces.size() >= 256",build)
+        self.assertIn("staging.boundaryCandidateCount >= 256",build)
         self.assertIn("staging.relationshipSubmitted = true;",build)
         self.assertIn("pending->second.progress.relationshipsResolved = true;",build)
         self.assertIn("_sceneEpoch != epoch",build)
