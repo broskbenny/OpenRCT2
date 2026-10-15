@@ -16,7 +16,7 @@
             // Spread synchronous native art captures over more frames.
             // Reconstruction workers remain asynchronous; this caps the
             // foreground TileElementPaintSetup/PaintSessionArrange work.
-            size_t nativeCapturesRemaining = 8;
+            size_t nativeCapturesRemaining = 2;
             std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
             for (auto& misses : missesByRotation)
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
@@ -355,7 +355,7 @@
             // can trigger expensive semantic cache work. Use a low duty
             // cycle for *optional* views; foreground camera requests retain
             // all their existing priority and budget.
-            if (nativeCapturesRemaining == 8
+            if (nativeCapturesRemaining == 2
                 && !scene.visibleTiles.empty()
                 && (frame & 3u) == 0)
             {
@@ -366,7 +366,7 @@
                     kEvidenceTilesPerFrame, scene.visibleTiles.size());
                 size_t evidenceRemaining = std::min(
                     kEvidenceCapturesPerFrame,
-                    nativeCapturesRemaining - 4);
+                    nativeCapturesRemaining - 1);
                 size_t examined = 0;
                 const size_t start =
                     evidenceCursor % scene.visibleTiles.size();
@@ -542,7 +542,17 @@
                 return collection;
             };
 
+            // The eight-capture allowance in the preceding build produced
+            // repeated half-second foreground paint stalls. Keep cold static
+            // observations progressive while recording which native phase is
+            // expensive; animation and entities remain in the dynamic pass.
             constexpr size_t kTilesPerPaintSession = 32;
+            int64_t nativeAllocUs = 0;
+            int64_t nativeSetupUs = 0;
+            int64_t nativeArrangeUs = 0;
+            int64_t nativeExtractUs = 0;
+            size_t nativeStaticItems = 0;
+            size_t nativeEntityItems = 0;
             for (uint8_t rotation = 0; rotation < 4; ++rotation)
             {
                 auto& rotationWork = workByRotation[rotation];
@@ -553,7 +563,11 @@
                 for (size_t offset = 0; offset < rotationWork.size(); offset += kTilesPerPaintSession)
                 {
                     const size_t end = std::min(offset + kTilesPerPaintSession, rotationWork.size());
+                    const auto nativeSessionStart = PaintClock::now();
                     auto* session = PaintSessionAlloc(collection, opt.viewFlags, rotation);
+                    const auto nativeSessionAllocated = PaintClock::now();
+                    nativeAllocUs += std::chrono::duration_cast<std::chrono::microseconds>(
+                        nativeSessionAllocated - nativeSessionStart).count();
                     if (session == nullptr)
                     {
                         for (const auto key : missesByRotation[rotation])
@@ -575,6 +589,7 @@
                         session->CurrentlyDrawnTileElement = nullptr;
                         if (item.staticMiss)
                         {
+                            ++nativeStaticItems;
                             std::vector<FirstPersonPaintSemanticComponent>
                                 semanticComponents;
                             session->CurrentSource = PaintStructSource::tile;
@@ -630,6 +645,7 @@
                         }
                         else if (!item.entity.IsNull())
                         {
+                            ++nativeEntityItems;
                             if (auto* entity = getGameState().entities.tryGetEntity<EntityBase>(item.entity);
                                 entity != nullptr)
                             {
@@ -640,7 +656,13 @@
                         }
                     }
 
+                    const auto nativeSetupDone = PaintClock::now();
+                    nativeSetupUs += std::chrono::duration_cast<std::chrono::microseconds>(
+                        nativeSetupDone - nativeSessionAllocated).count();
                     PaintSessionArrange(*session);
+                    const auto nativeArrangeDone = PaintClock::now();
+                    nativeArrangeUs += std::chrono::duration_cast<std::chrono::microseconds>(
+                        nativeArrangeDone - nativeSetupDone).count();
                     _snapshotBudget = FirstPersonFrameBudget(64, std::chrono::microseconds(1500));
 
                     // PaintSessionArrange orders roots; each root then owns an
@@ -954,10 +976,31 @@
                     }
                     Drawing::ScrollingText::EndFirstPersonSnapshotCapture();
                     PaintSessionFree(session);
+                    nativeExtractUs += std::chrono::duration_cast<std::chrono::microseconds>(
+                        PaintClock::now() - nativeArrangeDone).count();
                 }
             }
 
             const auto nativeCaptureDone = PaintClock::now();
+            // Report only serious native stalls, with phase attribution.
+            // When they are resolved this tag becomes silent automatically.
+            static auto lastNativeStallReport = PaintClock::time_point{};
+            const auto nativeTotalUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                nativeCaptureDone - reconstructionPrepDone).count();
+            if (nativeTotalUs >= 16667
+                && nativeCaptureDone - lastNativeStallReport >= std::chrono::seconds(2))
+            {
+                lastNativeStallReport = nativeCaptureDone;
+                Console::WriteLine(
+                    "FP_NATIVE_STALL totalUs=%lld allocUs=%lld setupUs=%lld arrangeUs=%lld"
+                    " extractUs=%lld staticItems=%zu entityItems=%zu",
+                    static_cast<long long>(nativeTotalUs),
+                    static_cast<long long>(nativeAllocUs),
+                    static_cast<long long>(nativeSetupUs),
+                    static_cast<long long>(nativeArrangeUs),
+                    static_cast<long long>(nativeExtractUs),
+                    nativeStaticItems, nativeEntityItems);
+            }
 
             // Promote a requested source view only after its capture is
             // complete. Until then, keep the previous selected rotation so a
