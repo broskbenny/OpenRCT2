@@ -11,8 +11,10 @@
 #include "TextureCache.h"
 #include <openrct2/drawing/Drawing.Sprite.h>
 #include <openrct2/profiling/Profiling.h>
+#include <openrct2/core/Console.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
@@ -594,6 +596,8 @@ void main() {
         const ScreenRect& dirtyClip)
     {
         PROFILED_FUNCTION();
+        using FrameClock = std::chrono::steady_clock;
+        const auto renderStarted = FrameClock::now();
         const int32_t left = scene.screenOrigin.x;
         const int32_t top = scene.screenOrigin.y;
         const int32_t width = scene.dimensions.width;
@@ -617,6 +621,9 @@ void main() {
         const int32_t clipBottom = clip.getBottom();
         const int32_t clipWidth = clip.getWidth();
         const int32_t clipHeight = clip.getHeight();
+        int64_t coverageWaitUs = 0;
+        size_t executedPeels = 0;
+        size_t activeTransparencyTiles = 0;
         const auto pollPeelCoverageQueries =
             [&](uint64_t token) {
                 bool exhausted = false;
@@ -685,10 +692,13 @@ void main() {
                     return false;
 
                 GLuint anySamples = 1;
+                const auto waitedAt = FrameClock::now();
                 glCall(
                     glGetQueryObjectuiv,
                     _peelCoverageQueries[slot],
                     GL_QUERY_RESULT, &anySamples);
+                coverageWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(
+                    FrameClock::now() - waitedAt).count();
                 const bool exhausted =
                     _peelCoverageTokens[slot] == token
                     && anySamples == 0;
@@ -1310,6 +1320,7 @@ void main() {
                 clipWidth,clipHeight);
         }
 
+        const auto opaqueDone = FrameClock::now();
         if (!streamedTransparent.empty())
         {
             // Material/atlas resolution is independent of screen-tile binning.
@@ -1690,6 +1701,7 @@ void main() {
                 const auto range = tileRanges[tileIndex];
                 if (range.count == 0)
                     continue;
+                ++activeTransparencyTiles;
                 const void* indexOffset = reinterpret_cast<const void*>(
                     range.start * sizeof(GLuint));
 
@@ -1742,6 +1754,7 @@ void main() {
                     auto& physicalLayer = *_peelDepthLayers[size_t(pass&1)];
                     auto& logicalLayer = *_peelLayers[size_t(pass&1)];
                     const bool peeling = pass != 0;
+                    ++executedPeels;
 
                     // Stage 1: select the farthest remaining PHYSICAL depth.
                     physicalLayer.Bind();
@@ -1849,6 +1862,7 @@ void main() {
             glCall(glUniform1i,Uniform(_program,"uPeelStage"),0);
             glCall(glUniform1i,Uniform(_program,"uPeeling"),0);
         }
+        const auto transparencyDone = FrameClock::now();
         // Separate physical depth from the game's draw-order depth, without
         // destroying depth belonging to ALREADY drawn windows outside this
         // viewport. Keep the scissor active until the depth clear finishes.
@@ -1858,6 +1872,28 @@ void main() {
         glCall(glViewport, 0, 0, screenWidth, screenHeight);
         glCall(glBindVertexArray, 0);
         OpenGLState::Reset();
+        const auto renderDone = FrameClock::now();
+        static auto lastDetailedSlowReport = FrameClock::time_point{};
+        if (renderDone - renderStarted >= std::chrono::microseconds(16667)
+            && renderDone - lastDetailedSlowReport >= std::chrono::seconds(2))
+        {
+            lastDetailedSlowReport = renderDone;
+            const auto elapsed = [](auto before, auto after) {
+                return std::chrono::duration_cast<std::chrono::microseconds>(
+                    after - before).count();
+            };
+            Console::WriteLine(
+                "FP_GL_RENDER_STAGES totalUs=%lld opaqueUs=%lld transparencyUs=%lld"
+                " finishUs=%lld transparencySurfaces=%zu tiles=%zu peels=%zu coverageWaitUs=%lld"
+                " streamedOpaque=%zu staticRegions=%zu",
+                static_cast<long long>(elapsed(renderStarted, renderDone)),
+                static_cast<long long>(elapsed(renderStarted, opaqueDone)),
+                static_cast<long long>(elapsed(opaqueDone, transparencyDone)),
+                static_cast<long long>(elapsed(transparencyDone, renderDone)),
+                streamedTransparent.size(), activeTransparencyTiles, executedPeels,
+                static_cast<long long>(coverageWaitUs),
+                streamedOpaque.size(), scene.staticRegions.size());
+        }
     }
 } // namespace OpenRCT2::Ui
 #endif
