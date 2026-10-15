@@ -46,8 +46,10 @@ class StagedRelationshipContextTests(unittest.TestCase):
 
     def test_failed_submission_restores_both_snapshots(self):
         s=self.stage
-        self.assertIn("packet.surfaces = std::move(input->surfaces);",s)
+        self.assertIn("input->source = staging.provisionalSurfaces;",s)
+        self.assertIn("pendingPacket.surfaces = std::move(input->surfaces);",s)
         self.assertIn("relationshipContext = std::move(input->context);",s)
+        self.assertIn("published.surfaceStorage = staging.provisionalSurfaces;",s)
         self.assertIn("pending->second.buildToken != token",s)
         self.assertIn("published = std::move(packet);",s)
 
