@@ -18,12 +18,16 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
 
     def test_native_work_is_admitted_in_smaller_foreground_batches(self):
         paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(encoding="utf-8")
-        self.assertIn("nativeCapturesRemaining = 8;", paint)
+        self.assertIn("nativeCapturesRemaining = 2;", paint)
         self.assertIn("FirstPersonFrameBudget captureScanBudget(", paint)
         self.assertIn("256, std::chrono::microseconds(1200)", paint)
         self.assertIn("nativeCapturesRemaining != 0 && captureScanBudget.take()", paint)
         self.assertIn("captureCursor += captureExamined;", paint)
         self.assertIn("scannedTiles=%zu", paint)
+        self.assertIn("FP_NATIVE_STALL", paint)
+        for stage in ("allocUs=", "setupUs=", "arrangeUs=", "extractUs=", "staticItems=", "entityItems="):
+            self.assertIn(stage, paint)
+        self.assertIn("nativeCapturesRemaining - 1", paint)
         self.assertNotIn("for (size_t visit = 0; visit < scene.visibleTiles.size(); ++visit)", paint)
         self.assertIn("kTilesPerPaintSession = 32;", paint)
         self.assertIn("FP_PAINT_STAGES", paint)
