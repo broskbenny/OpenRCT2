@@ -64,6 +64,12 @@ namespace OpenRCT2
         {
             _firstPersonView.reset();
         }
+        // The camera controller publishes this view on entry and clears it on
+        // exit. Core frame pacing can use it without depending on UI code.
+        [[nodiscard]] bool hasFirstPersonView() const noexcept
+        {
+            return _firstPersonView.has_value();
+        }
 
         void setTrackedVehicle(EntityId id)
         {
