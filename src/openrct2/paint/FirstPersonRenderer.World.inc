@@ -3810,6 +3810,9 @@
         static std::unordered_map<uint64_t, FirstPersonStaticPacketStaging>
             _staticRegionPacketBuilds;
         static uint64_t _nextStaticPacketBuildToken = 0;
+        static uint64_t _staticPacketSourceRestarts = 0;
+        static uint64_t _staticPacketSelectionRestarts = 0;
+        static uint64_t _staticPacketPublishes = 0;
 
         [[nodiscard]] bool FirstPersonStagedPacketSelectionChanged(
             const FirstPersonStaticPacketStaging& staging)
@@ -3843,6 +3846,10 @@
                 && FirstPersonStagedPacketSelectionChanged(staging);
             if (sourceChanged || relevantSelectionChanged)
             {
+                if (sourceChanged)
+                    ++_staticPacketSourceRestarts;
+                else
+                    ++_staticPacketSelectionRestarts;
                 staging = {};
                 staging.progress.restart(
                     published.invalidationSerial, _reconstructionSelectionSerial);
@@ -5381,6 +5388,7 @@
             packet.dirty = false;
             published = std::move(packet);
             _staticRegionPacketBuilds.erase(regionKey);
+            ++_staticPacketPublishes;
             return true;
         }
 
@@ -5536,5 +5544,45 @@
                     &packet.textureDependencies, packet.surfaceStorage,
                     packet.publishedSourceRevision, packet.vertexCount
                 });
+            }
+
+            // A zero-region view for several seconds is not a benign slow
+            // frame: it indicates staged packets may be starved or their
+            // bounds may be rejected. Log one compact, conditional diagnostic
+            // instead of dumping every packet or silently rendering nothing.
+            static auto lastRegionHealthReport = std::chrono::steady_clock::time_point{};
+            const auto now = std::chrono::steady_clock::now();
+            if (scene.staticRegions.empty() && !visibleRegions.empty()
+                && now - lastRegionHealthReport >= std::chrono::seconds(2))
+            {
+                lastRegionHealthReport = now;
+                size_t staged = 0;
+                size_t waiting = 0;
+                size_t ready = 0;
+                size_t maxTile = 0;
+                for (const auto key : visibleRegions)
+                {
+                    const auto published = _staticRegionPackets.find(key);
+                    if (published != _staticRegionPackets.end()
+                        && published->second.surfaceStorage != nullptr
+                        && !published->second.surfaceStorage->empty())
+                        ++ready;
+                    const auto build = _staticRegionPacketBuilds.find(key);
+                    if (build != _staticRegionPacketBuilds.end())
+                    {
+                        ++staged;
+                        maxTile = std::max(maxTile, build->second.progress.nextTile);
+                        if (build->second.relationshipSubmitted)
+                            ++waiting;
+                    }
+                }
+                Console::WriteLine(
+                    "FP_REGION_HEALTH candidates=%zu staged=%zu waiting=%zu"
+                    " published=%zu maxTile=%zu sourceRestarts=%llu"
+                    " selectionRestarts=%llu publishedSinceStart=%llu",
+                    visibleRegions.size(), staged, waiting, ready, maxTile,
+                    static_cast<unsigned long long>(_staticPacketSourceRestarts),
+                    static_cast<unsigned long long>(_staticPacketSelectionRestarts),
+                    static_cast<unsigned long long>(_staticPacketPublishes));
             }
         }
