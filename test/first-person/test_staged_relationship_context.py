@@ -40,7 +40,8 @@ class StagedRelationshipContextTests(unittest.TestCase):
         self.assertIn("relevantSelectionChanged", s)
         self.assertIn("staging.progress.selectionSerial = _reconstructionSelectionSerial", s)
         self.assertIn("FirstPersonStagedPacketSelectionChanged(pending->second)", s)
-        self.assertIn("FP_REGION_HEALTH", s)
+        world = (ROOT/"src/openrct2/paint/FirstPersonRenderer.World.inc").read_text()
+        self.assertIn("FP_REGION_HEALTH", world)
         self.assertNotIn("_reconstructionSelectionSerial != selection", s)
 
     def test_failed_submission_restores_both_snapshots(self):
