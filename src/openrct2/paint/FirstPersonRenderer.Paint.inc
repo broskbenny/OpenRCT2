@@ -553,6 +553,13 @@
             int64_t nativeExtractUs = 0;
             size_t nativeStaticItems = 0;
             size_t nativeEntityItems = 0;
+            // Camera-independent geometry merges evidence from multiple
+            // source rotations. Testing every new surface against all earlier
+            // surfaces was quadratic on complex multi-part scenery.
+            std::unordered_map<uint64_t, std::unordered_set<uint64_t>>
+                seenIndependentResident;
+            std::unordered_map<uint64_t, std::unordered_set<uint64_t>>
+                seenIndependentStreamed;
             for (uint8_t rotation = 0; rotation < 4; ++rotation)
             {
                 auto& rotationWork = workByRotation[rotation];
@@ -923,19 +930,18 @@
                                                 .cameraIndependentResidentSurfaces
                                             : cacheIt->second
                                                 .cameraIndependentStreamedSurfaces;
-                                        const uint64_t independentKey =
-                                            CameraIndependentSurfaceKey(
-                                                surface);
-                                        const bool duplicate =
-                                            std::any_of(
-                                                target.begin(),
-                                                target.end(),
-                                                [&](const FirstPersonSurface& existing) {
-                                                    return CameraIndependentSurfaceKey(
-                                                        existing)
-                                                        == independentKey;
-                                                });
-                                        if (!duplicate)
+                                        auto& seenByTile = IsResidentStaticSurface(surface)
+                                            ? seenIndependentResident : seenIndependentStreamed;
+                                        auto [seenIt, firstObservation] =
+                                            seenByTile.try_emplace(key);
+                                        if (firstObservation)
+                                        {
+                                            for (const auto& existing : target)
+                                                seenIt->second.insert(
+                                                    CameraIndependentSurfaceKey(existing));
+                                        }
+                                        if (seenIt->second.insert(
+                                                CameraIndependentSurfaceKey(surface)).second)
                                             target.push_back(surface);
                                         continue;
                                     }
