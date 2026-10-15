@@ -33,6 +33,16 @@ class StagedRelationshipContextTests(unittest.TestCase):
         self.assertNotIn("geometry.immutablePixels =",context)
         self.assertNotIn("geometry.persistentPixels =",context)
 
+    def test_unrelated_view_changes_preserve_packet_and_worker(self):
+        s=self.stage
+        self.assertIn("FirstPersonStagedPacketSelectionChanged(", s)
+        self.assertIn("staging.selectedGroups.emplace(", s)
+        self.assertIn("relevantSelectionChanged", s)
+        self.assertIn("staging.progress.selectionSerial = _reconstructionSelectionSerial", s)
+        self.assertIn("FirstPersonStagedPacketSelectionChanged(pending->second)", s)
+        self.assertIn("FP_REGION_HEALTH", s)
+        self.assertNotIn("_reconstructionSelectionSerial != selection", s)
+
     def test_failed_submission_restores_both_snapshots(self):
         s=self.stage
         self.assertIn("packet.surfaces = std::move(input->surfaces);",s)
