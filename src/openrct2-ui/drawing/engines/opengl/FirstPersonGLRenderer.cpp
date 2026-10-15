@@ -14,6 +14,7 @@
 #include <openrct2/core/Console.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
