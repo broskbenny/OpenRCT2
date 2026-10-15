@@ -43,6 +43,41 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
         self.assertIn("seenIt->second.insert(", paint)
         self.assertNotIn("const bool duplicate =\n                                            std::any_of(",paint)
 
+    def test_coplanar_native_owners_share_analytic_plane_depth(self):
+        # Identical world planes must have identical keys even when native
+        # sprites come from opposite tiles and have reversed winding.
+        from math import sqrt
+        def plane(a, b, c):
+            u = [b[i] - a[i] for i in range(3)]
+            v = [c[i] - a[i] for i in range(3)]
+            n = [u[1]*v[2] - u[2]*v[1],
+                 u[2]*v[0] - u[0]*v[2],
+                 u[0]*v[1] - u[1]*v[0]]
+            length = sqrt(sum(x*x for x in n))
+            n = [x/length for x in n]
+            dominant = max(range(3), key=lambda i: abs(n[i]))
+            if n[dominant] < 0:
+                n = [-x for x in n]
+            return tuple(n + [sum(n[i]*a[i] for i in range(3))])
+        # Two source tiles at opposite sides of the same clicked wall.
+        face_a = ((2976,4064,112),(2976,4096,112),(2976,4096,120))
+        face_b = ((2976,4096,112),(2976,4064,112),(2976,4064,120))
+        self.assertEqual(plane(*face_a), plane(*face_b))
+        gl = (ROOT / "src/openrct2-ui/drawing/engines/opengl/FirstPersonGLRenderer.cpp").read_text(encoding="utf-8")
+        for contract in (
+            "layout(location=12) in vec4 aPlane;",
+            "flat out vec4 fPlane;",
+            "flat in vec4 fPlane;",
+            "gl_FragCoord.xy - uViewport.xy",
+            "(fPlane.w - dot(fPlane.xyz, uEye)) / denominator",
+            "float planarDepth",
+            "isCoplanarOwner",
+            "std::array<float, 4> plane{}",
+            "GL_LEQUAL",
+            "surface.nativePaintOrdinal",
+        ):
+            self.assertIn(contract, gl)
+
     def test_worker_congestion_retries_native_capture_without_world_invalidation(self):
         core = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text(encoding="utf-8")
         small = (ROOT / "src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc").read_text(encoding="utf-8")
