@@ -28,6 +28,8 @@
     #include <algorithm>
     #include <cassert>
     #include <cmath>
+    #include <chrono>
+    #include <openrct2/core/Console.hpp>
     #include <openrct2/config/Config.h>
     #include <openrct2/drawing/Drawing.Sprite.h>
     #include <openrct2/drawing/Drawing.String.h>
@@ -690,14 +692,36 @@ void OpenGLDrawingContext::FinishDraw()
 bool OpenGLDrawingContext::DrawFirstPersonScene(RenderTarget& rt, const Paint::FirstPersonScene& scene)
 {
     Guard::Assert(_inDraw == true);
+    using Clock = std::chrono::steady_clock;
+    const auto begun = Clock::now();
     FlushCommandBuffers();
+    const auto flushed = Clock::now();
     if (_firstPerson == nullptr)
         _firstPerson = std::make_unique<FirstPersonGLRenderer>();
     const auto clip = CalculateClipping(rt);
     auto& framebuffer = _swapFramebuffer->GetFinalFramebuffer();
+    const auto renderStarted = Clock::now();
     _firstPerson->Draw(
         scene, *_textureCache, *_swapFramebuffer,
         framebuffer.GetWidth(), framebuffer.GetHeight(), clip);
+    const auto finished = Clock::now();
+    static auto lastReport = Clock::time_point{};
+    if (finished - begun >= std::chrono::microseconds(16667)
+        && finished - lastReport >= std::chrono::seconds(2))
+    {
+        lastReport = finished;
+        const auto us = [](auto a, auto b) {
+            return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+        };
+        Console::WriteLine(
+            "FP_GL_CALL_STAGES totalUs=%lld flushUs=%lld setupUs=%lld renderUs=%lld"
+            " streamSurfaces=%zu staticRegions=%zu",
+            static_cast<long long>(us(begun, finished)),
+            static_cast<long long>(us(begun, flushed)),
+            static_cast<long long>(us(flushed, renderStarted)),
+            static_cast<long long>(us(renderStarted, finished)),
+            scene.surfaces.size(), scene.staticRegions.size());
+    }
     return true;
 }
 
