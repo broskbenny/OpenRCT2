@@ -205,6 +205,9 @@
                     needsTileSourceView
                     ? uint8_t(1u << tileRotation)
                     : 0;
+                // Revisit source views whose 3D asset job was not yet admitted,
+                // without inventing a map change or restarting region packets.
+                rotationMask |= cached.nativeRetryMask;
 
                 for (const auto& group : cached.reconstructionGroups)
                 {
@@ -319,6 +322,8 @@
                     if (stale && nativeCapturesRemaining != 0)
                     {
                         --nativeCapturesRemaining;
+                        cached.nativeRetryMask &=
+                            uint8_t(~uint8_t(1u << rotation));
                         // Another native view is additional artwork evidence
                         // for the same physical object. Preserve already-ready
                         // camera-independent reconstruction and merge/deduplicate
