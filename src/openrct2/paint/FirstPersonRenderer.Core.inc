@@ -1042,6 +1042,9 @@
             return true;
         }
 
+// A pending asset admission is not an authoritative map edit. The capture
+        // scheduler below retries just this native observation next frame.
+        void RequestFirstPersonNativeSceneryRetry(CoordsXY tile, uint8_t rotation);
 #include "FirstPersonRenderer.SmallScenery.inc"
 
         [[nodiscard]] uint64_t
@@ -1521,6 +1524,7 @@
             // The tile's desired source view for the active presentation;
             // avoid rebuilding a 20k-entry temporary hash table every frame.
             uint8_t requestedRotation = 0xFF;
+            uint8_t nativeRetryMask = 0;
             bool hasUngroupedResident = false;
             bool hasCameraDependentFallback = false;
             bool visibilityBoundValid = false;
@@ -1554,6 +1558,22 @@
             std::array<StaticPaintRotationCache, 4> rotations;
         };
         static std::unordered_map<uint64_t, StaticPaintCacheEntry> _staticPaintCache;
+
+        void RequestFirstPersonNativeSceneryRetry(CoordsXY tile, uint8_t rotation)
+        {
+            if (rotation >= 4)
+                return;
+            const auto key = TerrainKey(
+                tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+            const auto found = _staticPaintCache.find(key);
+            if (found == _staticPaintCache.end())
+                return;
+            // The native sprite source itself is unchanged: do not invalidate
+            // terrain, trajectories, neighbouring regions, or a region packet
+            // just because the worker queue could not yet admit its 3D asset.
+            found->second.nativeRetryMask |= uint8_t(1u << rotation);
+            found->second.rotations[rotation].valid = false;
+        }
 
         [[nodiscard]] std::optional<uint8_t> CachedVerticalTunnelHeight(uint64_t key)
         {
