@@ -24,6 +24,22 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
         self.assertIn("FlushCommandBuffers();", source)
         self.assertIn("_firstPerson->Draw(", source)
 
+    def test_transparency_uses_one_element_upload_for_all_screen_tiles(self):
+        gl = (ROOT / "src/openrct2-ui/drawing/engines/opengl/FirstPersonGLRenderer.cpp").read_text(encoding="utf-8")
+        transparency = gl.split("std::vector<TransparentIndexRange> tileRanges(", 1)[1]
+        self.assertIn("range.start * sizeof(GLuint)", transparency)
+        self.assertIn("GL_UNSIGNED_INT,indexOffset", transparency)
+        self.assertEqual(transparency.count("glBufferData,GL_ELEMENT_ARRAY_BUFFER"), 1)
+        self.assertNotIn("GLsizei(tileIndices.size())", transparency)
+
+    def test_camera_independent_surface_deduplication_is_hash_indexed(self):
+        paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(encoding="utf-8")
+        self.assertIn("seenIndependentResident", paint)
+        self.assertIn("seenIndependentStreamed", paint)
+        self.assertIn("seenByTile.try_emplace(key)", paint)
+        self.assertIn("seenIt->second.insert(", paint)
+        self.assertNotIn("const bool duplicate =\n                                            std::any_of(",paint)
+
     def test_native_work_is_admitted_in_smaller_foreground_batches(self):
         paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(encoding="utf-8")
         self.assertIn("nativeCapturesRemaining = 2;", paint)
