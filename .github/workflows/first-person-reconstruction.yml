@@ -55,7 +55,7 @@ jobs:
       - name: Validate first-person OpenGL shaders
         run: |
           sudo apt-get update
-          sudo apt-get install -y glslang-tools
+          sudo apt-get install -y glslang-tools libegl1-mesa-dev libgl1-mesa-dri libgbm1
           python test/first-person/validate_first_person_shaders.py
       - name: Check real-asset parser, registration, and mesh evaluator
         run: python -m unittest discover -s test/first-person -p 'test_*.py' -v
