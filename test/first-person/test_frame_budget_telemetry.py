@@ -35,6 +35,20 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
         self.assertEqual(transparency.count("glBufferData,GL_ELEMENT_ARRAY_BUFFER"), 1)
         self.assertNotIn("GLsizei(tileIndices.size())", transparency)
 
+    def test_coverage_queries_remain_bounded_and_nonblocking_until_saturation(self):
+        renderer_header = (ROOT / "src/openrct2-ui/drawing/engines/opengl/FirstPersonGLRenderer.h").read_text(encoding="utf-8")
+        renderer = (ROOT / "src/openrct2-ui/drawing/engines/opengl/FirstPersonGLRenderer.cpp").read_text(encoding="utf-8")
+        self.assertIn("kPeelCoverageQuerySlots = 32", renderer_header)
+        for field in ("_peelCoverageQueries", "_peelCoveragePending", "_peelCoverageTokens"):
+            self.assertIn(f"std::array<", renderer_header)
+            self.assertIn(f"kPeelCoverageQuerySlots> {field}", renderer_header)
+        self.assertIn("GL_QUERY_RESULT_AVAILABLE", renderer)
+        self.assertIn("if (coverageSlot", renderer)
+        self.assertIn("== _peelCoverageQueries.size())", renderer)
+        self.assertIn("waitForPeelCoverageQuery(", renderer)
+        self.assertIn("FP_GL_RENDER_STAGES", renderer)
+        self.assertIn("coverageWaitUs=", renderer)
+
     def test_camera_independent_surface_deduplication_is_hash_indexed(self):
         paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(encoding="utf-8")
         self.assertIn("seenIndependentResident", paint)
