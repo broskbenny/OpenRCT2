@@ -75,9 +75,17 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         source = RENDERER.read_text(encoding="utf-8")
         shaders = dict(EXTRACT.findall(source))
         cls.ctx = moderngl.create_standalone_context(require=330, backend="egl")
+        diagnostic_fragment = shaders["kFragmentShader"].replace(
+            "if (logarithmic > opaqueDepth + opaqueDepthEps) discard;",
+            "if (logarithmic > opaqueDepth + opaqueDepthEps)"
+            " { oIndex = 77u; return; }",
+        ).replace(
+            "if (col == 0u) discard;",
+            "if (col == 0u) { oIndex = 88u; return; }",
+        )
         cls.shader = cls.ctx.program(
             vertex_shader=shaders["kVertexShader"],
-            fragment_shader=shaders["kFragmentShader"],
+            fragment_shader=diagnostic_fragment,
         )
         print("GL_TEST_CONTEXT", cls.ctx.info.get("GL_RENDERER"),
               cls.ctx.info.get("GL_VERSION"), file=sys.stderr)
@@ -115,6 +123,9 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         self.sprites.use(location=0)
         self.palettes.use(location=1)
         self.opaque_depth.use(location=2)
+        if "uOpaqueDepth" in program:
+            print("GL_DEPTH_SAMPLER_UNIT", program["uOpaqueDepth"].value,
+                  file=sys.stderr)
         for name, location in (
             ("uSprites", 0), ("uPalettes", 1), ("uOpaqueDepth", 2)):
             if name in program:
