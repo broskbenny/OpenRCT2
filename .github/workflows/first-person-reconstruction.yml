@@ -51,7 +51,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install analysis dependencies
-        run: python -m pip install numpy opencv-python-headless trimesh 'shapely>=2.1' scikit-image
+        run: python -m pip install numpy opencv-python-headless trimesh 'shapely>=2.1' scikit-image moderngl glcontext
       - name: Validate first-person OpenGL shaders
         run: |
           sudo apt-get update
