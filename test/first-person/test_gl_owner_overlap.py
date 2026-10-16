@@ -12,6 +12,7 @@ the entire game or checking sprite texture quality.
 from pathlib import Path
 import math
 import re
+import sys
 import unittest
 
 import moderngl
@@ -78,6 +79,8 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
             vertex_shader=shaders["kVertexShader"],
             fragment_shader=shaders["kFragmentShader"],
         )
+        print("GL_TEST_CONTEXT", cls.ctx.info.get("GL_RENDERER"),
+              cls.ctx.info.get("GL_VERSION"), file=sys.stderr)
         cls.colour = cls.ctx.texture((WIDTH, HEIGHT), components=1, dtype="u4")
         cls.depth = cls.ctx.depth_renderbuffer((WIDTH, HEIGHT))
         cls.target = cls.ctx.framebuffer(
@@ -102,7 +105,7 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
     def render_overlap(self, yaw, eye):
         ctx, program = self.ctx, self.shader
         self.target.use()
-        self.target.viewport = (0, 0, WIDTH, HEIGHT)
+        ctx.viewport = (0, 0, WIDTH, HEIGHT)
         self.colour.write(bytes(WIDTH * HEIGHT * 4))
         self.target.clear(depth=1.0)
         self.sprites.use(location=0)
@@ -148,6 +151,10 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         for yaw, eye in views:
             with self.subTest(yaw=yaw, eye=eye):
                 pixels = self.render_overlap(yaw, eye)
+                print("GL_OWNER_DIAGNOSTICS", yaw,
+                      "center", int(pixels[HEIGHT // 2, WIDTH // 2]),
+                      "colours", np.unique(pixels, return_counts=True),
+                      file=sys.stderr)
                 # Camera center ray passes through the actual overlap.
                 self.assertEqual(int(pixels[HEIGHT // 2, WIDTH // 2]), 9)
                 self.assertGreater(np.count_nonzero(pixels == 9), 0)
