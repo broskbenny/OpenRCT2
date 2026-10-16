@@ -39,14 +39,13 @@ VERTEX_FORMAT = np.dtype([
     ("maskLayer", "<i4"),
     ("paintOrdinal", "<u4"),
     ("normal", "<f4", (3,)),
-    ("ownerPlane", "<f4", (4,)),
 ], align=False)
 ATTRIBUTES = (
     "aWorld", "aUV", "aAtlas", "aSize", "aAtlasLayer",
     "aPalettes", "aFlags", "aMaskAtlas", "aMaskSize", "aMaskLayer",
-    "aPaintOrdinal", "aOutwardNormal", "aOwnerPlane",
+    "aPaintOrdinal", "aOutwardNormal",
 )
-FORMAT = "3f 2f 4f 2f 1i 4i 1i 4f 2f 1i 1u 3f 4f"
+FORMAT = "3f 2f 4f 2f 1i 4i 1i 4f 2f 1i 1u 3f"
 
 
 def quad(z0, z1, colour, opposite_diagonal):
@@ -67,7 +66,7 @@ def quad(z0, z1, colour, opposite_diagonal):
     vertices["palettes"][:, 3] = colour
     vertices["maskLayer"] = -1
     vertices["paintOrdinal"] = colour
-    vertices["ownerPlane"][:] = (0.0, 1.0, 0.0, 4544.0)
+    vertices["normal"][:] = (2.0, 4544.0, 17.0)
     return vertices
 
 
@@ -180,7 +179,7 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
                 program[name].value = value
         buf = ctx.buffer(quad(120, 136, 9, False).tobytes())
         vao = ctx.vertex_array(
-            program, [(buf, "3f 36x 4i 1i 60x",
+            program, [(buf, "3f 36x 4i 1i 44x",
                        "aWorld", "aPalettes", "aFlags")])
         vao.render(moderngl.TRIANGLES)
         pixels = np.frombuffer(self.colour.read(), dtype=np.uint32).reshape(HEIGHT, WIDTH)
@@ -212,7 +211,7 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
             """,
         )
         buf = ctx.buffer(quad(120, 136, 9, False).tobytes())
-        vao = ctx.vertex_array(program, [(buf, "3f 116x", "aWorld")])
+        vao = ctx.vertex_array(program, [(buf, "3f 100x", "aWorld")])
         vao.render(moderngl.TRIANGLES)
         pixels = np.frombuffer(self.colour.read(), dtype=np.uint32).reshape(HEIGHT, WIDTH)
         print("GL_REFERENCE_DIAGNOSTICS", np.unique(pixels, return_counts=True),
