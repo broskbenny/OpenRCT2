@@ -36,14 +36,9 @@ namespace OpenRCT2::Ui
         // Normal polling is nonblocking. If all probes are in flight on a
         // pathological stack, bounded backpressure waits for one completed
         // probe instead of queuing unbounded extra peel passes.
-        // Eight slots forced a synchronous readback during ordinary overlapping
-        // transparency stacks (FP_GL_RENDER_STAGES coverageWaitUs). Allow a
-        // larger but still bounded queue of probes. All existing loops derive
-        // their bounds from .size(); no draw, depth or composition rules change.
-        static constexpr size_t kPeelCoverageQuerySlots = 32;
-        std::array<GLuint, kPeelCoverageQuerySlots> _peelCoverageQueries{};
-        std::array<bool, kPeelCoverageQuerySlots> _peelCoveragePending{};
-        std::array<uint64_t, kPeelCoverageQuerySlots> _peelCoverageTokens{};
+        std::array<GLuint,8> _peelCoverageQueries{};
+        std::array<bool,8> _peelCoveragePending{};
+        std::array<uint64_t,8> _peelCoverageTokens{};
         uint64_t _nextPeelCoverageToken{};
         std::unique_ptr<OpenGLFramebuffer> _background; // indexed composite scratch
         std::unique_ptr<OpenGLFramebuffer> _opaqueSnapshot; // indexed pixels AND physical depth
