@@ -59,11 +59,14 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
 
     def test_experimental_axis_owner_depth_requires_real_plane_and_viewport(self):
         gl = (ROOT / "src/openrct2-ui/drawing/engines/opengl/FirstPersonGLRenderer.cpp").read_text(encoding="utf-8")
-        self.assertIn("layout(location=12) in vec4 aOwnerPlane;", gl)
-        self.assertIn("flat in vec4 fOwnerPlane;", gl)
+        self.assertNotIn("layout(location=12) in vec4 aOwnerPlane;", gl)
+        self.assertIn("fOutwardNormal.z == 17.0", gl)
+        self.assertIn("encodedOutwardNormal", gl)
+        self.assertIn("!surface.exteriorOnly", gl)
         self.assertIn("uViewport", gl)
         self.assertIn("std::all_of(surface.triangles.begin()", gl)
         self.assertIn("planeDepth > 0.0", gl)
+        self.assertNotIn("float ownerPlane[4];", gl)
         self.assertIn("GL_LEQUAL", gl)
         self.assertIn("surface.nativePaintOrdinal", gl)
 
