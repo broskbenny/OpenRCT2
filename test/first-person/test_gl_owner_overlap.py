@@ -140,6 +140,37 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
             buf.release()
         return np.frombuffer(self.colour.read(), dtype=np.uint32).reshape(HEIGHT, WIDTH)
 
+    def test_software_framebuffer_rasterizes_reference_quad(self):
+        ctx = self.ctx
+        self.target.use()
+        ctx.viewport = (0, 0, WIDTH, HEIGHT)
+        self.colour.write(bytes(WIDTH * HEIGHT * 4))
+        ctx.disable(moderngl.DEPTH_TEST)
+        program = ctx.program(
+            vertex_shader="""#version 330 core
+                in vec3 aWorld;
+                void main() {
+                    gl_Position = vec4(
+                        (aWorld.x - 2640.0)/44.0,
+                        (aWorld.z - 124.0)/44.0, 0.0, 1.0);
+                }
+            """,
+            fragment_shader="""#version 330 core
+                layout(location=0) out uint oIndex;
+                void main() { oIndex = 9u; }
+            """,
+        )
+        buf = ctx.buffer(quad(120, 136, 9, False).tobytes())
+        vao = ctx.vertex_array(program, [(buf, "3f 100x", "aWorld")])
+        vao.render(moderngl.TRIANGLES)
+        pixels = np.frombuffer(self.colour.read(), dtype=np.uint32).reshape(HEIGHT, WIDTH)
+        print("GL_REFERENCE_DIAGNOSTICS", np.unique(pixels, return_counts=True),
+              file=sys.stderr)
+        self.assertEqual(int(pixels[HEIGHT//2, WIDTH//2]), 9)
+        vao.release()
+        buf.release()
+        program.release()
+
     def test_later_native_wall_wins_overlap_without_erasing_uncovered_rail(self):
         views = [
             (0.0, (2640.0, 4500.0, 124.0)),
