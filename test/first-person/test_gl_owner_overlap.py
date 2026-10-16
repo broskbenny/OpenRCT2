@@ -138,6 +138,7 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
             ("uForward", forward), ("uRight", right),
             ("uUp", (0.0, 0.0, 1.0)),
             ("uNearFar", (1.0, 10000.0)), ("uFocal", (1.0, 1.0)),
+            ("uViewport", (0.0, 0.0, float(WIDTH), float(HEIGHT))),
             ("uPeeling", False), ("uPeelStage", 0)):
             if name in program:
                 program[name].value = value
