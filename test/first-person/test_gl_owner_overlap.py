@@ -242,6 +242,43 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
                 self.assertEqual(int(pixels[HEIGHT // 2, WIDTH // 2]), 9)
                 self.assertGreater(np.count_nonzero(pixels == 9), 0)
                 self.assertGreater(np.count_nonzero(pixels == 6), 0)
+                # Every interior pixel has one analytically known ray/plane
+                # intersection. Compare the WHOLE overlap, not just its
+                # centre: z-fighting can produce narrow stripes of wrong
+                # native artwork without changing that centre pixel.
+                forward = (math.sin(yaw), math.cos(yaw), 0.0)
+                right = (math.cos(yaw), -math.sin(yaw), 0.0)
+                mismatches = []
+                checked = {6: 0, 9: 0}
+                for row in range(HEIGHT):
+                    v = (2.0 * (row + 0.5) / HEIGHT) - 1.0
+                    for column in range(WIDTH):
+                        u = (2.0 * (column + 0.5) / WIDTH) - 1.0
+                        ry = forward[1] + u * right[1]
+                        if ry <= 0:
+                            continue
+                        t = (4544.0 - eye[1]) / ry
+                        x = eye[0] + t * (forward[0] + u * right[0])
+                        z = eye[2] + t * v
+                        if not (2624.5 < x < 2655.5):
+                            continue
+                        expected = (
+                            6 if 112.5 < z < 119.5
+                            else 9 if 120.5 < z < 135.5
+                            else 0
+                        )
+                        if expected == 0:
+                            continue
+                        checked[expected] += 1
+                        actual = int(pixels[row, column])
+                        if actual != expected:
+                            mismatches.append((row, column, expected, actual))
+                print("GL_OWNER_PIXEL_COVERAGE", yaw,
+                      checked, "mismatches", len(mismatches),
+                      "sample", mismatches[:8], file=sys.stderr)
+                self.assertGreater(checked[6], 0)
+                self.assertGreater(checked[9], 0)
+                self.assertEqual(mismatches, [])
 
 
 if __name__ == "__main__":
