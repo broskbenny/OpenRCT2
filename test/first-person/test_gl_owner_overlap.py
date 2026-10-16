@@ -99,7 +99,7 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.ctx.release()
 
-    def render_overlap(self, yaw):
+    def render_overlap(self, yaw, eye):
         ctx, program = self.ctx, self.shader
         self.target.use()
         self.target.viewport = (0, 0, WIDTH, HEIGHT)
@@ -115,7 +115,7 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         forward = (math.sin(yaw), math.cos(yaw), 0)
         right = (math.cos(yaw), -math.sin(yaw), 0)
         for name, value in (
-            ("uEye", (2640.0, 4500.0, 124.0)),
+            ("uEye", eye),
             ("uForward", forward), ("uRight", right),
             ("uUp", (0.0, 0.0, 1.0)),
             ("uNearFar", (1.0, 10000.0)), ("uFocal", (1.0, 1.0)),
@@ -134,9 +134,20 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         return np.frombuffer(self.colour.read(), dtype=np.uint32).reshape(HEIGHT, WIDTH)
 
     def test_later_native_wall_wins_overlap_without_erasing_uncovered_rail(self):
-        for yaw in (0, 0.015, -0.015, 0.07, -0.07):
-            with self.subTest(yaw=yaw):
-                pixels = self.render_overlap(yaw)
+        views = [
+            (0.0, (2640.0, 4500.0, 124.0)),
+            (0.015, (2640.0, 4500.0, 124.0)),
+            (-0.015, (2640.0, 4500.0, 124.0)),
+            (0.07, (2640.0, 4500.0, 124.0)),
+            (-0.07, (2640.0, 4500.0, 124.0)),
+            # Close to the exact clicked ray: x/y camera direction
+            # ~= 0.655/0.742, with a large world-space x displacement.
+            (0.723, (2597.100, 4506.453, 124.764)),
+            (0.718, (2597.100, 4506.453, 124.764)),
+        ]
+        for yaw, eye in views:
+            with self.subTest(yaw=yaw, eye=eye):
+                pixels = self.render_overlap(yaw, eye)
                 # Camera center ray passes through the actual overlap.
                 self.assertEqual(int(pixels[HEIGHT // 2, WIDTH // 2]), 9)
                 self.assertGreater(np.count_nonzero(pixels == 9), 0)
