@@ -75,17 +75,9 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         source = RENDERER.read_text(encoding="utf-8")
         shaders = dict(EXTRACT.findall(source))
         cls.ctx = moderngl.create_standalone_context(require=330, backend="egl")
-        diagnostic_fragment = shaders["kFragmentShader"].replace(
-            "if (logarithmic > opaqueDepth + opaqueDepthEps) discard;",
-            "if (logarithmic > opaqueDepth + opaqueDepthEps)"
-            " { oIndex = 77u; return; }",
-        ).replace(
-            "if (col == 0u) discard;",
-            "if (col == 0u) { oIndex = 88u; return; }",
-        )
         cls.shader = cls.ctx.program(
             vertex_shader=shaders["kVertexShader"],
-            fragment_shader=diagnostic_fragment,
+            fragment_shader=shaders["kFragmentShader"],
         )
         print("GL_TEST_CONTEXT", cls.ctx.info.get("GL_RENDERER"),
               cls.ctx.info.get("GL_VERSION"), file=sys.stderr)
@@ -101,6 +93,9 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
             (1, 1, 1), components=1, data=b"\x01", dtype="u1")
         cls.palettes = cls.ctx.texture(
             (256, 256), components=1, data=bytes(256 * 256), dtype="u1")
+        cls.previous_layer = cls.ctx.texture(
+            (WIDTH, HEIGHT), components=1,
+            data=bytes(WIDTH * HEIGHT * 4), dtype="u4")
         cls.ctx.enable(moderngl.DEPTH_TEST)
         cls.ctx.disable(moderngl.CULL_FACE)
         cls.ctx.disable(moderngl.BLEND)
@@ -116,18 +111,22 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         ctx.viewport = (0, 0, WIDTH, HEIGHT)
         self.colour.write(bytes(WIDTH * HEIGHT * 4))
         self.target.clear(depth=1.0)
-        # Diagnostic: first prove shader-visible wall pixels are emitted
-        # independent of the depth attachment. Re-enable depth after this
-        # becomes a nonzero offscreen reference.
-        ctx.disable(moderngl.DEPTH_TEST)
+        ctx.enable(moderngl.DEPTH_TEST)
+        ctx.depth_func = "<="
         self.sprites.use(location=0)
         self.palettes.use(location=1)
         self.opaque_depth.use(location=2)
-        if "uOpaqueDepth" in program:
-            print("GL_DEPTH_SAMPLER_UNIT", program["uOpaqueDepth"].value,
-                  file=sys.stderr)
+        self.opaque_depth.use(location=3)
+        self.previous_layer.use(location=4)
+        self.opaque_depth.use(location=5)
+        # Every active GLSL sampler must have a compatible texture unit,
+        # including those used only by inactive peel branches. Leaving a
+        # sampler2D and usampler2DArray aliased on unit zero invalidates
+        # the entire draw on core-profile OpenGL.
         for name, location in (
-            ("uSprites", 0), ("uPalettes", 1), ("uOpaqueDepth", 2)):
+            ("uSprites", 0), ("uPalettes", 1), ("uOpaqueDepth", 2),
+            ("uPreviousDepth", 3), ("uPreviousLayer", 4),
+            ("uSelectedPhysicalDepth", 5)):
             if name in program:
                 program[name].value = location
         forward = (math.sin(yaw), math.cos(yaw), 0)
