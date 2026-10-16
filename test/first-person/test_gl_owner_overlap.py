@@ -140,6 +140,44 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
             buf.release()
         return np.frombuffer(self.colour.read(), dtype=np.uint32).reshape(HEIGHT, WIDTH)
 
+    def test_production_vertex_shader_preserves_owner_flags_and_palette(self):
+        shaders = dict(EXTRACT.findall(RENDERER.read_text(encoding="utf-8")))
+        ctx = self.ctx
+        self.target.use()
+        ctx.viewport = (0, 0, WIDTH, HEIGHT)
+        self.colour.write(bytes(WIDTH * HEIGHT * 4))
+        ctx.disable(moderngl.DEPTH_TEST)
+        program = ctx.program(
+            vertex_shader=shaders["kVertexShader"],
+            fragment_shader="""#version 330 core
+                flat in ivec4 fPalettes;
+                flat in int fFlags;
+                layout(location=0) out uint oIndex;
+                void main() { oIndex = uint(fPalettes.w * 100 + fFlags); }
+            """,
+        )
+        for name, value in (
+            ("uEye", (2640.0, 4500.0, 124.0)),
+            ("uForward", (0.0, 1.0, 0.0)),
+            ("uRight", (1.0, 0.0, 0.0)),
+            ("uUp", (0.0, 0.0, 1.0)),
+            ("uNearFar", (1.0, 10000.0)), ("uFocal", (1.0, 1.0)),
+        ):
+            if name in program:
+                program[name].value = value
+        buf = ctx.buffer(quad(120, 136, 9, False).tobytes())
+        vao = ctx.vertex_array(
+            program, [(buf, "3f 36x 4i 1i 44x",
+                       "aWorld", "aPalettes", "aFlags")])
+        vao.render(moderngl.TRIANGLES)
+        pixels = np.frombuffer(self.colour.read(), dtype=np.uint32).reshape(HEIGHT, WIDTH)
+        print("GL_PRODUCTION_INPUT_DIAGNOSTICS", np.unique(pixels, return_counts=True),
+              file=sys.stderr)
+        self.assertEqual(int(pixels[HEIGHT//2, WIDTH//2]), 920)
+        vao.release()
+        buf.release()
+        program.release()
+
     def test_software_framebuffer_rasterizes_reference_quad(self):
         ctx = self.ctx
         self.target.use()
