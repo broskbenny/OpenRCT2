@@ -226,6 +226,20 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         buf.release()
         program.release()
 
+    def test_ordinary_opaque_depth_still_blocks_coplanar_artwork(self):
+        # This is the guard against fixing wall z-fighting by letting native
+        # artwork bleed through nearer terrain, coaster structures or walls.
+        mask = np.ones((HEIGHT, WIDTH), dtype=np.float32)
+        mask[:, :WIDTH // 2] = 0.01
+        self.opaque_depth.write(mask.tobytes())
+        try:
+            pixels = self.render_overlap(0.0, (2640.0, 4500.0, 124.0))
+            self.assertEqual(int(pixels[HEIGHT//2, WIDTH//2 - 7]), 0)
+            self.assertEqual(int(pixels[HEIGHT//2, WIDTH//2 + 7]), 9)
+        finally:
+            self.opaque_depth.write(
+                np.ones((HEIGHT, WIDTH), dtype=np.float32).tobytes())
+
     def test_later_native_wall_wins_overlap_without_erasing_uncovered_rail(self):
         views = [
             (0.0, (2640.0, 4500.0, 124.0)),
