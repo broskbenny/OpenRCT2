@@ -14,6 +14,7 @@
 #include <openrct2/core/Console.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -42,6 +43,7 @@ layout(location=8) in vec2 aMaskSize;
 layout(location=9) in int aMaskLayer;
 layout(location=10) in uint aPaintOrdinal;
 layout(location=11) in vec3 aOutwardNormal;
+layout(location=12) in vec4 aOwnerPlane;
 uniform vec3 uEye;
 uniform vec3 uForward;
 uniform vec3 uRight;
@@ -60,6 +62,7 @@ flat out vec2 fMaskSize;
 flat out int fMaskLayer;
 flat out uint fPaintOrdinal;
 flat out vec3 fOutwardNormal;
+flat out vec4 fOwnerPlane;
 void main() {
     vec3 delta = aWorld - uEye;
     float x = dot(delta, uRight);
@@ -81,6 +84,7 @@ void main() {
     fMaskLayer = aMaskLayer;
     fPaintOrdinal = aPaintOrdinal;
     fOutwardNormal = aOutwardNormal;
+    fOwnerPlane = aOwnerPlane;
 }
 )GLSL";
         constexpr char kFragmentShader[] = R"GLSL(#version 330 core
@@ -94,6 +98,10 @@ uniform bool uPeeling;
 uniform int uPeelStage;
 uniform vec3 uEye;
 uniform vec3 uForward;
+uniform vec3 uRight;
+uniform vec3 uUp;
+uniform vec2 uFocal;
+uniform vec4 uViewport;
 uniform vec2 uNearFar;
 in vec2 fUV;
 in vec3 fWorld;
@@ -107,6 +115,7 @@ flat in vec2 fMaskSize;
 flat in int fMaskLayer;
 flat in uint fPaintOrdinal;
 flat in vec3 fOutwardNormal;
+flat in vec4 fOwnerPlane;
 layout(location=0) out uint oIndex;
 
 float CoplanarDepthTolerance(float physicalDepth) {
@@ -188,6 +197,26 @@ void main() {
     // Logarithmic physical depth leaves usable precision at the far end of
     // a complete RCT2 park while allowing the passenger near geometry.
     float depth = max(0.0, dot(fWorld - uEye, uForward));
+    // Only exact world-axis-aligned, world-fixed native artwork owners have
+    // a canonical plane. Two triangulations of the same plane can interpolate
+    // fWorld differently at one pixel, causing a lower native ordinal to
+    // win a GL_LEQUAL depth fight. Intersect the current pixel's camera ray
+    // with their SHARED plane instead. Non-owners and nonplanar surfaces keep
+    // their original physical depth, with no positional offsets or biases.
+    if ((fFlags & 4) != 0 && dot(fOwnerPlane.xyz, fOwnerPlane.xyz) > 0.5) {
+        vec2 ndc = 2.0 * (gl_FragCoord.xy - uViewport.xy)
+            / uViewport.zw - vec2(1.0);
+        vec3 ray = uForward
+            + (ndc.x / uFocal.x) * uRight
+            + (ndc.y / uFocal.y) * uUp;
+        float denominator = dot(fOwnerPlane.xyz, ray);
+        if (abs(denominator) > 0.000001) {
+            float planeDepth =
+                (fOwnerPlane.w - dot(fOwnerPlane.xyz, uEye)) / denominator;
+            if (planeDepth > 0.0 && planeDepth <= uNearFar.y)
+                depth = planeDepth;
+        }
+    }
     float logarithmic = log2(1.0 + depth)/log2(1.0 + uNearFar.y);
     gl_FragDepth = logarithmic;
     if ((fFlags & 4) != 0 && (fFlags & 1) == 0) {
@@ -319,6 +348,7 @@ void main() {
             int32_t maskLayer;
             uint32_t paintOrdinal;
             float outwardNormal[3];
+            float ownerPlane[4];
         };
         void ConfigureVertexInput(GLuint vao, GLuint vbo)
         {
@@ -348,6 +378,8 @@ void main() {
         glCall(glVertexAttribIPointer, 10, 1, GL_UNSIGNED_INT, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, paintOrdinal)));
         glCall(glEnableVertexAttribArray, 11);
         glCall(glVertexAttribPointer, 11, 3, GL_FLOAT, GL_FALSE, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, outwardNormal)));
+        glCall(glEnableVertexAttribArray, 12);
+        glCall(glVertexAttribPointer, 12, 4, GL_FLOAT, GL_FALSE, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, ownerPlane)));
         }
         GLuint Compile(GLenum type, const char* source)
         {
@@ -736,6 +768,9 @@ void main() {
         const float foc = 1.0f / std::tan(halfFov);
         glCall(glUniform2f, Uniform(_program, "uFocal"), foc, foc * float(width) / float(height));
         glCall(glUniform2f, Uniform(_program, "uNearFar"), view.nearClip, view.farClip);
+        glCall(glUniform4f, Uniform(_program, "uViewport"),
+            float(left), float(screenHeight - top - height),
+            float(width), float(height));
         OpenGLAPI::SetTexture(0, GL_TEXTURE_2D_ARRAY, textures.GetAtlasesTexture());
         OpenGLAPI::SetTexture(1, GL_TEXTURE_2D, textures.GetPaletteTexture());
         glCall(glUniform1i, Uniform(_program, "uSprites"), 0);
@@ -923,6 +958,34 @@ void main() {
                 count=1;
                 palettes[0]=PaletteY(static_cast<Drawing::FilterPaletteID>(image.GetRemap()));
             }
+            // Restrict the canonical-depth path to exact axis-aligned quads.
+            // For a native wall the constant world coordinate is authoritative
+            // across adjacent tiles, unlike perspective-interpolated fWorld.
+            // Slopes, curved scenery, terrain, ordinary geometry and sprites
+            // retain their existing shader depth without approximation.
+            std::array<float, 4> ownerPlane{};
+            if (forceCoplanarOwner
+                || (!suppressCoplanarOwner && surface.coplanarOwner))
+            {
+                const auto coordinate = [](const Paint::FirstPersonVec3& point, int axis) {
+                    return axis == 0 ? point.x : axis == 1 ? point.y : point.z;
+                };
+                for (int axis = 0; axis < 3; ++axis)
+                {
+                    const float position = coordinate(surface.triangles[0].world, axis);
+                    if (!std::isfinite(position))
+                        continue;
+                    if (std::all_of(surface.triangles.begin(), surface.triangles.end(),
+                        [&](const auto& vertex) {
+                            return coordinate(vertex.world, axis) == position;
+                        }))
+                    {
+                        ownerPlane[size_t(axis)] = 1.0f;
+                        ownerPlane[3] = position;
+                        break;
+                    }
+                }
+            }
             for(const auto& p:surface.triangles)
                 vertices.push_back({
                     {p.world.x,p.world.y,p.world.z},{p.u,p.v},
@@ -950,7 +1013,8 @@ void main() {
                         0x00ffffffull)),
                     {surface.outwardNormal.x,
                      surface.outwardNormal.y,
-                     surface.outwardNormal.z}});
+                     surface.outwardNormal.z},
+                    {ownerPlane[0], ownerPlane[1], ownerPlane[2], ownerPlane[3]}});
             return true;
         };
         std::vector<GPUVertex> opaqueOrdinaryVertices;
