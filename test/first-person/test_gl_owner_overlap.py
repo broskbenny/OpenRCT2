@@ -108,6 +108,10 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         ctx.viewport = (0, 0, WIDTH, HEIGHT)
         self.colour.write(bytes(WIDTH * HEIGHT * 4))
         self.target.clear(depth=1.0)
+        # Diagnostic: first prove shader-visible wall pixels are emitted
+        # independent of the depth attachment. Re-enable depth after this
+        # becomes a nonzero offscreen reference.
+        ctx.disable(moderngl.DEPTH_TEST)
         self.sprites.use(location=0)
         self.palettes.use(location=1)
         self.opaque_depth.use(location=2)
