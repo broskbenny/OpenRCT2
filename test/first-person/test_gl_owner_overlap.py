@@ -62,7 +62,11 @@ def quad(z0, z1, colour, opposite_diagonal):
         ]
     vertices = np.zeros(6, dtype=VERTEX_FORMAT)
     vertices["world"] = points
-    vertices["flags"] = 4 | 16  # coplanar owner, solid indexed palette colour
+    # Actual clicked walls sample native indexed atlas artwork.
+    vertices["flags"] = 4
+    vertices["size"][:] = (2.0, 2.0)
+    vertices["atlas"][:] = (0.0, 0.0, 2.0, 2.0)
+    vertices["atlasLayer"] = 0 if colour == 6 else 1
     vertices["palettes"][:, 3] = colour
     vertices["maskLayer"] = -1
     vertices["paintOrdinal"] = colour
@@ -91,7 +95,8 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
             data=np.ones((HEIGHT, WIDTH), dtype=np.float32).tobytes(),
             dtype="f4")
         cls.sprites = cls.ctx.texture_array(
-            (1, 1, 1), components=1, data=b"\x01", dtype="u1")
+            (2, 2, 2), components=1,
+            data=bytes([6] * 4 + [9] * 4), dtype="u1")
         cls.palettes = cls.ctx.texture(
             (256, 256), components=1, data=bytes(256 * 256), dtype="u1")
         cls.previous_layer = cls.ctx.texture(
@@ -185,7 +190,7 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         pixels = np.frombuffer(self.colour.read(), dtype=np.uint32).reshape(HEIGHT, WIDTH)
         print("GL_PRODUCTION_INPUT_DIAGNOSTICS", np.unique(pixels, return_counts=True),
               file=sys.stderr)
-        self.assertEqual(int(pixels[HEIGHT//2, WIDTH//2]), 920)
+        self.assertEqual(int(pixels[HEIGHT//2, WIDTH//2]), 904)
         vao.release()
         buf.release()
         program.release()
