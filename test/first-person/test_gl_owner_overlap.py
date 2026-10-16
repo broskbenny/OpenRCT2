@@ -48,8 +48,8 @@ ATTRIBUTES = (
 FORMAT = "3f 2f 4f 2f 1i 4i 1i 4f 2f 1i 1u 3f"
 
 
-def quad(z0, z1, colour, opposite_diagonal):
-    x0, x1, y = 2624.0, 2656.0, 4544.0
+def quad(z0, z1, colour, opposite_diagonal, y=4544.0):
+    x0, x1 = 2624.0, 2656.0
     if opposite_diagonal:
         points = [
             (x0, y, z0), (x1, y, z0), (x1, y, z1),
@@ -70,7 +70,7 @@ def quad(z0, z1, colour, opposite_diagonal):
     vertices["palettes"][:, 3] = colour
     vertices["maskLayer"] = -1
     vertices["paintOrdinal"] = colour
-    vertices["normal"][:] = (2.0, 4544.0, 17.0)
+    vertices["normal"][:] = (2.0, y, 17.0)
     return vertices
 
 
@@ -111,7 +111,7 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.ctx.release()
 
-    def render_overlap(self, yaw, eye):
+    def render_overlap(self, yaw, eye, surfaces=None):
         ctx, program = self.ctx, self.shader
         self.target.use()
         ctx.viewport = (0, 0, WIDTH, HEIGHT)
@@ -148,7 +148,9 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
                 program[name].value = value
         # The lower paint ordinal rail material comes first. Its top eight
         # units overlap the primary wall, whose greater ordinal must win.
-        for vertices in (quad(112, 128, 6, True), quad(120, 136, 9, False)):
+        if surfaces is None:
+            surfaces = (quad(112, 128, 6, True), quad(120, 136, 9, False))
+        for vertices in surfaces:
             buf = ctx.buffer(vertices.tobytes())
             vao = ctx.vertex_array(
                 program, [(buf, FORMAT, *ATTRIBUTES)])
@@ -225,6 +227,19 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         vao.release()
         buf.release()
         program.release()
+
+    def test_true_nearer_wall_beats_later_native_ordinal(self):
+        # Native paint order decides ties only. A later ordinal at an
+        # objectively farther world plane must never paint over a nearer wall.
+        near = quad(112, 128, 6, True, y=4544.0)
+        far = quad(120, 136, 9, False, y=4548.0)
+        for yaw, eye in (
+            (0.0, (2640.0, 4500.0, 124.0)),
+            (0.718, (2597.100, 4506.453, 124.764)),
+        ):
+            with self.subTest(yaw=yaw):
+                pixels = self.render_overlap(yaw, eye, surfaces=(near, far))
+                self.assertEqual(int(pixels[HEIGHT//2, WIDTH//2]), 6)
 
     def test_ordinary_opaque_depth_still_blocks_coplanar_artwork(self):
         # This is the guard against fixing wall z-fighting by letting native
