@@ -43,7 +43,6 @@ layout(location=8) in vec2 aMaskSize;
 layout(location=9) in int aMaskLayer;
 layout(location=10) in uint aPaintOrdinal;
 layout(location=11) in vec3 aOutwardNormal;
-layout(location=12) in vec4 aOwnerPlane;
 uniform vec3 uEye;
 uniform vec3 uForward;
 uniform vec3 uRight;
@@ -62,7 +61,6 @@ flat out vec2 fMaskSize;
 flat out int fMaskLayer;
 flat out uint fPaintOrdinal;
 flat out vec3 fOutwardNormal;
-flat out vec4 fOwnerPlane;
 void main() {
     vec3 delta = aWorld - uEye;
     float x = dot(delta, uRight);
@@ -84,7 +82,6 @@ void main() {
     fMaskLayer = aMaskLayer;
     fPaintOrdinal = aPaintOrdinal;
     fOutwardNormal = aOutwardNormal;
-    fOwnerPlane = aOwnerPlane;
 }
 )GLSL";
         constexpr char kFragmentShader[] = R"GLSL(#version 330 core
@@ -115,7 +112,6 @@ flat in vec2 fMaskSize;
 flat in int fMaskLayer;
 flat in uint fPaintOrdinal;
 flat in vec3 fOutwardNormal;
-flat in vec4 fOwnerPlane;
 layout(location=0) out uint oIndex;
 
 float CoplanarDepthTolerance(float physicalDepth) {
@@ -203,16 +199,25 @@ void main() {
     // win a GL_LEQUAL depth fight. Intersect the current pixel's camera ray
     // with their SHARED plane instead. Non-owners and nonplanar surfaces keep
     // their original physical depth, with no positional offsets or biases.
-    if ((fFlags & 4) != 0 && dot(fOwnerPlane.xyz, fOwnerPlane.xyz) > 0.5) {
+    // The native-owner-only plane is tagged in the unused outward-normal
+    // attribute: (axis 1..3, coordinate, marker 17). Physical exterior faces
+    // retain their true normal and never use this path. Thus the GPU vertex
+    // remains its original size, with no new attribute or bandwidth penalty.
+    if ((fFlags & 4) != 0 && (fFlags & 64) == 0
+        && fOutwardNormal.z == 17.0) {
+        vec3 axis =
+            fOutwardNormal.x == 1.0 ? vec3(1.0, 0.0, 0.0)
+            : fOutwardNormal.x == 2.0 ? vec3(0.0, 1.0, 0.0)
+            : vec3(0.0, 0.0, 1.0);
         vec2 ndc = 2.0 * (gl_FragCoord.xy - uViewport.xy)
             / uViewport.zw - vec2(1.0);
         vec3 ray = uForward
             + (ndc.x / uFocal.x) * uRight
             + (ndc.y / uFocal.y) * uUp;
-        float denominator = dot(fOwnerPlane.xyz, ray);
+        float denominator = dot(axis, ray);
         if (abs(denominator) > 0.000001) {
             float planeDepth =
-                (fOwnerPlane.w - dot(fOwnerPlane.xyz, uEye)) / denominator;
+                (fOutwardNormal.y - dot(axis, uEye)) / denominator;
             if (planeDepth > 0.0 && planeDepth <= uNearFar.y)
                 depth = planeDepth;
         }
@@ -348,7 +353,6 @@ void main() {
             int32_t maskLayer;
             uint32_t paintOrdinal;
             float outwardNormal[3];
-            float ownerPlane[4];
         };
         void ConfigureVertexInput(GLuint vao, GLuint vbo)
         {
@@ -378,8 +382,6 @@ void main() {
         glCall(glVertexAttribIPointer, 10, 1, GL_UNSIGNED_INT, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, paintOrdinal)));
         glCall(glEnableVertexAttribArray, 11);
         glCall(glVertexAttribPointer, 11, 3, GL_FLOAT, GL_FALSE, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, outwardNormal)));
-        glCall(glEnableVertexAttribArray, 12);
-        glCall(glVertexAttribPointer, 12, 4, GL_FLOAT, GL_FALSE, sizeof(GPUVertex), reinterpret_cast<void*>(offsetof(GPUVertex, ownerPlane)));
         }
         GLuint Compile(GLenum type, const char* source)
         {
@@ -963,9 +965,17 @@ void main() {
             // across adjacent tiles, unlike perspective-interpolated fWorld.
             // Slopes, curved scenery, terrain, ordinary geometry and sprites
             // retain their existing shader depth without approximation.
-            std::array<float, 4> ownerPlane{};
-            if (forceCoplanarOwner
-                || (!suppressCoplanarOwner && surface.coplanarOwner))
+            std::array<float, 3> encodedOutwardNormal{
+                surface.outwardNormal.x,
+                surface.outwardNormal.y,
+                surface.outwardNormal.z,
+            };
+            // Only native, non-exterior owners can reuse this field. Exterior
+            // occupancy boundaries still need their world outward normals for
+            // true front/back visibility; all other faces retain their data.
+            if (!surface.exteriorOnly
+                && (forceCoplanarOwner
+                    || (!suppressCoplanarOwner && surface.coplanarOwner)))
             {
                 const auto coordinate = [](const Paint::FirstPersonVec3& point, int axis) {
                     return axis == 0 ? point.x : axis == 1 ? point.y : point.z;
@@ -980,8 +990,9 @@ void main() {
                             return coordinate(vertex.world, axis) == position;
                         }))
                     {
-                        ownerPlane[size_t(axis)] = 1.0f;
-                        ownerPlane[3] = position;
+                        encodedOutwardNormal = {
+                            float(axis + 1), position, 17.0f
+                        };
                         break;
                     }
                 }
@@ -1011,10 +1022,9 @@ void main() {
                     uint32_t(std::min<uint64_t>(
                         surface.nativePaintOrdinal,
                         0x00ffffffull)),
-                    {surface.outwardNormal.x,
-                     surface.outwardNormal.y,
-                     surface.outwardNormal.z},
-                    {ownerPlane[0], ownerPlane[1], ownerPlane[2], ownerPlane[3]}});
+                    {encodedOutwardNormal[0],
+                     encodedOutwardNormal[1],
+                     encodedOutwardNormal[2]}});
             return true;
         };
         std::vector<GPUVertex> opaqueOrdinaryVertices;
