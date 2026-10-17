@@ -99,7 +99,14 @@ def quad_x(x, y0, y1, z0, z1, colour, outward_sign):
     vertices["atlasLayer"] = 0 if colour == 6 else 1
     vertices["maskLayer"] = -1
     vertices["paintOrdinal"] = colour
-    vertices["normal"][:] = (float(outward_sign), x, 17.0)
+    # Use the identical edge-cross-product rule as the C++ GPU packer,
+    # instead of feeding the expected facing sign straight into the shader.
+    edge_u = vertices["world"][1] - vertices["world"][0]
+    edge_v = vertices["world"][2] - vertices["world"][0]
+    winding = np.cross(edge_u, edge_v)[0]
+    assert winding * outward_sign > 0
+    vertices["normal"][:] = (
+        math.copysign(1.0, winding), x, 17.0)
     return vertices
 
 
@@ -262,6 +269,28 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         vao.release()
         buf.release()
         program.release()
+
+    def test_logged_wall_vertices_encode_actual_opposite_native_faces(self):
+        # The 2026-10-17 pick recorded these exact first triangles.
+        # wallbr32 from (2944,4064), x2976, is outward -X; wallcf16
+        # from (2752,4448), x2752, is outward +X.
+        wallbr32 = np.array([
+            (2976, 4096, 112), (2976, 4064, 112),
+            (2976, 4064, 144)], dtype=np.float32)
+        wallcf16 = np.array([
+            (2752, 4448, 120), (2752, 4480, 120),
+            (2752, 4480, 136)], dtype=np.float32)
+        for points, expected_sign in (
+            (wallbr32, -1), (wallcf16, 1)
+        ):
+            winding = np.cross(points[1] - points[0],
+                               points[2] - points[0])
+            self.assertEqual(int(np.sign(winding[0])), expected_sign)
+            self.assertEqual(float(winding[1]), 0.0)
+            self.assertEqual(float(winding[2]), 0.0)
+        renderer = (ROOT / "src/openrct2-ui/drawing/engines/opengl/FirstPersonGLRenderer.cpp").read_text(encoding="utf-8")
+        self.assertIn("std::copysign(float(axis + 1), cross[axis])", renderer)
+        self.assertIn("uOwnerSidePass", renderer)
 
     def test_actual_opposite_tile_sides_ignore_wrong_native_ordinal(self):
         # The two clicked pairs lie on x=2752 and x=2976, respectively.
