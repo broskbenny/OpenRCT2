@@ -53,6 +53,9 @@ namespace OpenRCT2::Ui
             uint64_t sourceRevision{};
             GLsizei ordinaryCount{};
             GLsizei ownerCount{};
+            // A scene without authored opposing wall owners keeps the
+            // original single-pass native owner replay.
+            bool hasDirectionalWallOwner = false;
         };
         std::unordered_map<uint64_t,RegionBuffer> _staticOpaqueRegions;
         struct PendingRegion
