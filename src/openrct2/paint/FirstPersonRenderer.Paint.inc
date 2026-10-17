@@ -95,6 +95,73 @@
                 if (!mapped)
                     continue;
 
+                // A visual hull may split a coherent sign face into dozens
+                // of tiny 4-unit patches. Its affine projection extends to
+                // an infinite plane; a centre point alone is NOT enough to
+                // certify a whole glyph (or a row crossing patch seams).
+                // Sample the source rectangle in both directions and demand
+                // support from actual, consistently oriented mesh triangles.
+                // An unsupported projection stays in the native fallback,
+                // rather than letting text float outside the 3D sign.
+                const auto glyphSupported = [&] {
+                    constexpr std::array<float, 3> offsets{
+                        1.0f / 6.0f, 0.5f, 5.0f / 6.0f
+                    };
+                    for (const float y : offsets)
+                    for (const float x : offsets)
+                    {
+                        const auto& a = mapped->corners[0];
+                        const auto& b = mapped->corners[1];
+                        const auto& d = mapped->corners[3];
+                        const FirstPersonAttachedArtworkPoint3 sample{
+                            a.x + x * (b.x - a.x) + y * (d.x - a.x),
+                            a.y + x * (b.y - a.y) + y * (d.y - a.y),
+                            a.z + x * (b.z - a.z) + y * (d.z - a.z)
+                        };
+                        bool supported = false;
+                        for (const auto& other : body.surfaces)
+                        {
+                            const auto& t = other.triangles;
+                            const FirstPersonVec3 otherU =
+                                Sub(t[1].world, t[0].world);
+                            const FirstPersonVec3 otherV =
+                                Sub(t[5].world, t[0].world);
+                            const FirstPersonVec3 otherCross{
+                                otherU.y * otherV.z - otherU.z * otherV.y,
+                                otherU.z * otherV.x - otherU.x * otherV.z,
+                                otherU.x * otherV.y - otherU.y * otherV.x
+                            };
+                            const float otherLength =
+                                std::sqrt(FpDot(otherCross, otherCross));
+                            if (otherLength <= 0.001f
+                                || FpDot(otherCross, normal)
+                                    < otherLength * 0.98f)
+                                continue;
+                            const auto point = [](const FirstPersonVec3& v) {
+                                return FirstPersonAttachedArtworkPoint3{
+                                    v.x, v.y, v.z
+                                };
+                            };
+                            const std::array<FirstPersonAttachedArtworkPoint3, 4>
+                                otherFace{ {
+                                    point(t[0].world), point(t[1].world),
+                                    point(t[2].world), point(t[5].world)
+                                } };
+                            if (FirstPersonAttachedArtworkPointOnFace(
+                                    sample, otherFace))
+                            {
+                                supported = true;
+                                break;
+                            }
+                        }
+                        if (!supported)
+                            return false;
+                    }
+                    return true;
+                };
+                if (!glyphSupported())
+                    continue;
+
                 const auto midpoint = Add(p0,
                     Add(Mul(u, mapped->centerS),
                         Mul(v, mapped->centerT)));
