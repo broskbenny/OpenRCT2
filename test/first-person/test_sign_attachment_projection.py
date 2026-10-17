@@ -75,6 +75,39 @@ class NativeSignAttachedTextProjectionTest(unittest.TestCase):
                     self.assertLessEqual(abs(inverse[0] - world[0]), 2.0)
                     self.assertLessEqual(abs(inverse[2] - world[2]), 2.0)
 
+    def test_two_tile_three_d_text_line_has_one_world_plane(self):
+        # Native ssig2 has two lengthwise tiles at offsets (0,0) and
+        # (0,32), a 62-pixel-wide 3D font line, and glyphs up to 10px high.
+        # This is a representative full-panel world frame, not an assumption
+        # that each reconstructed 4-unit face owns a complete glyph.
+        face = (
+            (3008, 4096, 152),
+            (3072, 4096, 152),
+            (3072, 4096, 168),
+            (3008, 4096, 168),
+        )
+        for rotation in range(4):
+            world_text_centers = []
+            for glyph_x in (0, 8, 16, 24, 40, 54):
+                s = (glyph_x + 4.0) / 64.0
+                t = 8.0 / 16.0
+                world = (
+                    face[0][0] + s * (face[1][0] - face[0][0]),
+                    4096.0,
+                    face[0][2] + t * (face[3][2] - face[0][2]),
+                )
+                mapped = inverse_on_quad(face, rotation, project(rotation, world))
+                self.assertIsNotNone(mapped)
+                self.assertAlmostEqual(mapped[1], 4096.0, places=4)
+                self.assertLessEqual(abs(mapped[0] - world[0]), 2.0)
+                world_text_centers.append(mapped)
+            # A row of native 3D glyphs must progress along the same
+            # tangent, not turn perpendicular between reconstructed faces.
+            self.assertTrue(all(
+                a[0] < b[0]
+                for a, b in zip(world_text_centers, world_text_centers[1:])
+            ), f"text orientation reversed at rotation {rotation}")
+
     def test_render_path_never_reorients_successfully_attached_text(self):
         self.assertIn("AttachFirstPersonLargeTextToWorld(", PAINT)
         self.assertIn("if (!worldAttached)", PAINT)
