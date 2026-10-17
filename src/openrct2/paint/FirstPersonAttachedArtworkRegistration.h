@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <optional>
 
 namespace OpenRCT2::Paint
@@ -87,7 +88,7 @@ namespace OpenRCT2::Paint
         FirstPersonAttachedArtworkPlacement result{};
         result.centerS = middle[0];
         result.centerT = middle[1];
-        for (size_t i = 0; i < corners.size(); ++i)
+        for (std::size_t i = 0; i < corners.size(); ++i)
         {
             const auto uv = inverse(corners[i].x, corners[i].y);
             result.corners[i] = {
