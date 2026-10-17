@@ -29,14 +29,6 @@
                 float(anchorPixel.x) + glyph.billboardLeft;
             const float top =
                 float(anchorPixel.y) + glyph.billboardTop;
-            const std::array<std::array<float, 2>, 4> textScreen{ {
-                { left, top },
-                { left + glyph.billboardWidth, top },
-                { left + glyph.billboardWidth,
-                  top + glyph.billboardHeight },
-                { left, top + glyph.billboardHeight }
-            } };
-
             float bestDepth =
                 -std::numeric_limits<float>::infinity();
             float bestArea = 0.0f;
@@ -67,11 +59,6 @@
                 const auto p3 = panel.triangles[5].world;
                 const auto u = Sub(p1, p0);
                 const auto v = Sub(p3, p0);
-                // Only stable planar parallelograms. Warped or degenerate
-                // reconstruction is not an authoritative text plane.
-                const auto error = Sub(Add(p1, v), p2);
-                if (FpDot(error, error) > 0.25f)
-                    continue;
                 const FirstPersonVec3 cross{
                     u.y * v.z - u.z * v.y,
                     u.z * v.x - u.x * v.z,
@@ -89,42 +76,44 @@
                 const auto p0s = project(p0);
                 const auto p1s = project(p1);
                 const auto p3s = project(p3);
-                const float ux = p1s[0] - p0s[0];
-                const float uy = p1s[1] - p0s[1];
-                const float vx = p3s[0] - p0s[0];
-                const float vy = p3s[1] - p0s[1];
-                const float determinant = ux * vy - uy * vx;
-                if (std::abs(determinant) < 0.5f)
+                const std::array<FirstPersonAttachedArtworkPoint3, 4>
+                    worldFace{ {
+                        { p0.x, p0.y, p0.z },
+                        { p1.x, p1.y, p1.z },
+                        { p2.x, p2.y, p2.z },
+                        { p3.x, p3.y, p3.z }
+                    } };
+                const std::array<FirstPersonAttachedArtworkPoint2, 3>
+                    sourceFace{ {
+                        { p0s[0], p0s[1] },
+                        { p1s[0], p1s[1] },
+                        { p3s[0], p3s[1] }
+                    } };
+                const auto mapped = ReprojectFirstPersonAttachedArtwork(
+                    worldFace, sourceFace, left, top,
+                    glyph.billboardWidth, glyph.billboardHeight);
+                if (!mapped)
                     continue;
-                const auto inverse = [&](float x, float y,
-                                         float& s, float& t) {
-                    const float dx = x - p0s[0];
-                    const float dy = y - p0s[1];
-                    s = (dx * vy - dy * vx) / determinant;
-                    t = (ux * dy - uy * dx) / determinant;
-                };
-                float cs = 0.0f, ct = 0.0f;
-                inverse(left + 0.5f * glyph.billboardWidth,
-                        top + 0.5f * glyph.billboardHeight,
-                        cs, ct);
-                if (cs < -0.05f || cs > 1.05f
-                    || ct < -0.05f || ct > 1.05f)
-                    continue;
-                std::array<FirstPersonVec3, 4> world{};
-                for (size_t i = 0; i < 4; ++i)
-                {
-                    float a = 0.0f, b = 0.0f;
-                    inverse(textScreen[i][0], textScreen[i][1], a, b);
-                    world[i] = Add(p0, Add(Mul(u, a), Mul(v, b)));
-                }
-                const auto midpoint =
-                    Add(p0, Add(Mul(u, cs), Mul(v, ct)));
+
+                const auto midpoint = Add(p0,
+                    Add(Mul(u, mapped->centerS),
+                        Mul(v, mapped->centerT)));
                 const float depth = FirstPersonIsoDepth(
                     sourceRotation,
                     { int32_t(std::lround(midpoint.x)),
                       int32_t(std::lround(midpoint.y)),
                       int32_t(std::lround(midpoint.z)) });
-                const float area = std::abs(determinant);
+                const float ux = p1s[0] - p0s[0];
+                const float uy = p1s[1] - p0s[1];
+                const float vx = p3s[0] - p0s[0];
+                const float vy = p3s[1] - p0s[1];
+                const float area = std::abs(ux * vy - uy * vx);
+                std::array<FirstPersonVec3, 4> world{};
+                for (size_t i = 0; i < world.size(); ++i)
+                {
+                    const auto& point = mapped->corners[i];
+                    world[i] = { point.x, point.y, point.z };
+                }
                 if (found && (depth < bestDepth - 0.001f
                     || (std::abs(depth - bestDepth) <= 0.001f
                         && area <= bestArea)))
