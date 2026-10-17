@@ -78,6 +78,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: first-person-windows-x64
-          path: bin/openrct2.exe
+          path: |
+            bin/openrct2.exe
+            bin/renderdoc.dll
+            bin/renderdoc-LICENSE.md
           if-no-files-found: error
 

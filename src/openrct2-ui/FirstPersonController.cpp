@@ -8,6 +8,7 @@
  *****************************************************************************/
 
 #include "FirstPersonController.h"
+#include "FirstPersonRenderDocCapture.h"
 
 #include "UiContext.h"
 #include "input/InputManager.h"
@@ -1055,7 +1056,10 @@ namespace OpenRCT2::Ui::FirstPerson
         {
             if (event.button == SDL_BUTTON_LEFT
                 && event.state == InputEventState::down)
+            {
                 Paint::RequestFirstPersonInspectorPick();
+                FirstPersonRenderDocCapture::RequestOnInspectorClick();
+            }
             return true;
         }
         if (event.deviceKind != InputDeviceKind::keyboard)

@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <iterator>
 #include <openrct2-ui/Ui.h>
+#include <openrct2-ui/FirstPersonRenderDocCapture.h>
 #include <openrct2/core/EnumUtils.hpp>
 #include <openrct2/core/String.hpp>
 #include <string>
@@ -34,6 +35,7 @@ static std::vector<std::string> GetCommandLineArgs(int argc, wchar_t** argvW);
  */
 int wmain(int argc, wchar_t** argvW, [[maybe_unused]] wchar_t* envp)
 {
+    OpenRCT2::Ui::FirstPersonRenderDocCapture::InitialiseAtStartup();
     auto argvStrings = GetCommandLineArgs(argc, argvW);
 
     SetConsoleCP(EnumValue(OpenRCT2::CodePage::utf8));

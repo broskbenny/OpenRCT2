@@ -91,4 +91,7 @@
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="StageFirstPersonRenderDoc" AfterTargets="Build" Condition="'$(Platform)' == 'x64'">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(SolutionDir)scripts\stage-first-person-renderdoc.ps1&quot; -OutputDirectory &quot;$(SolutionDir)bin&quot;" />
+  </Target>
 </Project>

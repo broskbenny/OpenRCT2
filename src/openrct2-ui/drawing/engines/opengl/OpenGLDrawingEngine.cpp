@@ -17,6 +17,7 @@
     #include "DrawLineShader.h"
     #include "DrawRectShader.h"
     #include "FirstPersonGLRenderer.h"
+    #include <openrct2-ui/FirstPersonRenderDocCapture.h>
     #include "GLSLTypes.h"
     #include "OpenGLAPI.h"
     #include "OpenGLFramebuffer.h"
@@ -336,6 +337,7 @@ public:
     {
         assert(_screenFramebuffer != nullptr);
 
+        FirstPersonRenderDocCapture::BeginFrame();
         _drawingContext->StartNewDraw();
         Paint::BeginFirstPersonPresentationFrame();
     }
@@ -375,6 +377,7 @@ public:
         _drawingContext->FinishDraw();
 
         Display();
+        FirstPersonRenderDocCapture::EndFrame();
     }
 
     void PaintWindows() override
