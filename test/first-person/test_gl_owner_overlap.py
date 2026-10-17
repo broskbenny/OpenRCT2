@@ -352,6 +352,27 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         self.assertEqual(int(pixels[HEIGHT//2 - 7, WIDTH//2]), 9)
         self.assertEqual(int(pixels[HEIGHT//2 + 6, WIDTH//2]), 6)
 
+    def test_directional_ownership_also_handles_y_aligned_wall_planes(self):
+        # The rule is a property of reconstructed planar wall normals, not
+        # the two specific x-aligned tile edges in the picked park.
+        positive = quad(112, 128, 9, False)  # winding +Y
+        negative = quad(112, 128, 6, True)  # winding -Y
+        positive["normal"][:] = (2.0, 4544.0, 18.0)
+        negative["normal"][:] = (-2.0, 4544.0, 18.0)
+        for side in (-1, 1):
+            eye = (2640.0, 4544.0 + 60.0 * side, 120.0)
+            forward = (0.0, -float(side), 0.0)
+            right = (-float(side), 0.0, 0.0)
+            expected = 9 if side > 0 else 6
+            for layers in ((positive, negative), (negative, positive)):
+                with self.subTest(side=side,
+                                  first=int(layers[0]["paintOrdinal"][0])):
+                    pixels = self.render_overlap(
+                        0, eye, surfaces=layers, side_passes=(1, 2),
+                        forward_override=forward, right_override=right)
+                    self.assertEqual(
+                        int(pixels[HEIGHT//2, WIDTH//2]), expected)
+
     def test_far_camera_facing_wall_cannot_overwrite_nearer_rear_face(self):
         # Physical occlusion must dominate directional material priority.
         # An authored rear-facing plane 60 units from the camera occludes a
