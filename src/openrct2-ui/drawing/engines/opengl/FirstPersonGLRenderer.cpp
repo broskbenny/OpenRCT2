@@ -1113,10 +1113,18 @@ void main() {
                     : second->nativePaintOrdinal;
                 return ao < bo;
             });
+        bool streamedDirectionalWallOwner = false;
         for (const auto* surface : streamedOwners)
-            appendVertices(
-                opaqueOwnerVertices, *surface,
-                true, false);
+        {
+            if (appendVertices(
+                    opaqueOwnerVertices, *surface,
+                    true, false)
+                && !surface->exteriorOnly
+                && surface->diagnosticSemanticRole
+                    == static_cast<uint8_t>(
+                        FirstPersonPaintSemanticRole::wall))
+                streamedDirectionalWallOwner = true;
+        }
         std::vector<uint64_t> regionDraws;
         regionDraws.reserve(scene.staticRegions.size());
         // CPU packing/drawing cached content does not consume the next upload
@@ -1263,6 +1271,11 @@ void main() {
                         if (!appendVertices(
                                 packed, surface, true, false))
                             break;
+                        if (!surface.exteriorOnly
+                            && surface.diagnosticSemanticRole
+                                == static_cast<uint8_t>(
+                                    FirstPersonPaintSemanticRole::wall))
+                            pending.buffer.hasDirectionalWallOwner = true;
                         if (++pending.nextOwner
                             == pending.owners.begin()
                                    ->second.size())
@@ -1344,6 +1357,18 @@ void main() {
             }
         }
 
+        bool hasDirectionalWallOwner = streamedDirectionalWallOwner;
+        if (!hasDirectionalWallOwner)
+        {
+            for (const auto key : regionDraws)
+            {
+                if (_staticOpaqueRegions.at(key).hasDirectionalWallOwner)
+                {
+                    hasDirectionalWallOwner = true;
+                    break;
+                }
+            }
+        }
         size_t opaqueOwnerDrawCalls = 0;
         size_t opaqueOwnerSubmittedVertices = 0;
         const auto ownerReplayBegin = FrameClock::now();
@@ -1408,7 +1433,12 @@ void main() {
                         * sizeof(GPUVertex)),
                 opaqueOwnerVertices.data(),
                 GL_STREAM_DRAW);
-            for (int sidePass = 1; sidePass <= 2; ++sidePass)
+            // A park viewport without any relevant authored walls uses
+            // its original single owner pass. Avoid doubling unrelated
+            // roof/floor/decal submissions in such scenes.
+            const int firstSidePass = hasDirectionalWallOwner ? 1 : 0;
+            const int lastSidePass = hasDirectionalWallOwner ? 2 : 0;
+            for (int sidePass = firstSidePass; sidePass <= lastSidePass; ++sidePass)
             {
                 glCall(glUniform1i, Uniform(_program, "uOwnerSidePass"), sidePass);
                 for (const auto key : regionDraws)
@@ -2025,7 +2055,7 @@ void main() {
                 "FP_GL_RENDER_STAGES totalUs=%lld opaqueUs=%lld transparencyUs=%lld"
                 " finishUs=%lld transparencySurfaces=%zu tiles=%zu peels=%zu coverageWaitUs=%lld"
                 " streamedOpaque=%zu staticRegions=%zu"
-                " ownerReplayCpuUs=%lld ownerDraws=%zu ownerVertices=%zu",
+                " ownerReplayCpuUs=%lld ownerDraws=%zu ownerVertices=%zu sideWallReplay=%d",
                 static_cast<long long>(elapsed(renderStarted, renderDone)),
                 static_cast<long long>(elapsed(renderStarted, opaqueDone)),
                 static_cast<long long>(elapsed(opaqueDone, transparencyDone)),
@@ -2034,7 +2064,8 @@ void main() {
                 static_cast<long long>(coverageWaitUs),
                 streamedOpaque.size(), scene.staticRegions.size(),
                 static_cast<long long>(elapsed(ownerReplayBegin, ownerReplayEnd)),
-                opaqueOwnerDrawCalls, opaqueOwnerSubmittedVertices);
+                opaqueOwnerDrawCalls, opaqueOwnerSubmittedVertices,
+                hasDirectionalWallOwner ? 1 : 0);
         }
     }
 } // namespace OpenRCT2::Ui
