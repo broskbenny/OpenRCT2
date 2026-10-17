@@ -148,7 +148,7 @@ void main() {
     if (uOwnerSidePass != 0) {
         bool orientedOwner =
             (fFlags & 4) != 0 && (fFlags & 64) == 0
-            && fOutwardNormal.z == 17.0;
+            && fOutwardNormal.z == 18.0;
         if (!orientedOwner) {
             if (uOwnerSidePass == 1) discard;
         } else {
@@ -231,7 +231,8 @@ void main() {
     // retain their true normal and never use this path. Thus the GPU vertex
     // remains its original size, with no new attribute or bandwidth penalty.
     if ((fFlags & 4) != 0 && (fFlags & 64) == 0
-        && fOutwardNormal.z == 17.0) {
+        && (fOutwardNormal.z == 17.0
+            || fOutwardNormal.z == 18.0)) {
         vec3 axis =
             abs(fOutwardNormal.x) == 1.0 ? vec3(1.0, 0.0, 0.0)
             : abs(fOutwardNormal.x) == 2.0 ? vec3(0.0, 1.0, 0.0)
@@ -1033,9 +1034,18 @@ void main() {
                             u[0] * v[1] - u[1] * v[0],
                         };
                         if (std::abs(cross[axis]) > 0.000001f)
+                            // Directional replay only applies to authored
+                            // wall planes. Generic coplanar owners (floors,
+                            // roofs, decals, entrances) retain their prior
+                            // native paint-order semantics. Both kinds still
+                            // share the exact analytic physical depth.
+                            const bool authoredWall =
+                                surface.diagnosticSemanticRole
+                                    == static_cast<uint8_t>(
+                                        FirstPersonPaintSemanticRole::wall);
                             encodedOutwardNormal = {
                                 std::copysign(float(axis + 1), cross[axis]),
-                                position, 17.0f
+                                position, authoredWall ? 18.0f : 17.0f
                             };
                         break;
                     }
