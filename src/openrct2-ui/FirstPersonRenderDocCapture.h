@@ -66,8 +66,25 @@ inline void InitialiseAtStartup()
     if (!module) return;
     auto getApi = reinterpret_cast<pRENDERDOC_GetAPI>(
         GetProcAddress(module, "RENDERDOC_GetAPI"));
-    if (!getApi || getApi(eRENDERDOC_API_Version_1_1_2,
-        reinterpret_cast<void**>(&state.api)) != 1 || !state.api)
+    if (!getApi)
+    {
+        state.failure = "renderdoc-api-export-missing";
+        return;
+    }
+    // RenderDoc installs graphics/API hooks. Keep their owning module resident
+    // for the entire process; otherwise those hooks may target unloaded code,
+    // especially on Windows 7 during process shutdown. This function and both
+    // flags are available on Windows 7 without KB2533623.
+    HMODULE pinnedModule = nullptr;
+    if (!GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            reinterpret_cast<LPCWSTR>(getApi), &pinnedModule))
+    {
+        state.failure = "renderdoc.dll-pin-failed-win32-" + std::to_string(GetLastError());
+        return;
+    }
+    if (getApi(eRENDERDOC_API_Version_1_1_2,
+            reinterpret_cast<void**>(&state.api)) != 1 || !state.api)
     {
         state.failure = "renderdoc-api-unavailable";
         return;

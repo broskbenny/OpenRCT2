@@ -19,6 +19,9 @@ class RenderDocClickCaptureTests(unittest.TestCase):
         self.assertIn("LOAD_WITH_ALTERED_SEARCH_PATH", api)
         self.assertNotIn("LOAD_LIBRARY_SEARCH_DEFAULT_DIRS", api)
         self.assertIn("renderdoc.dll-load-failed-win32-", api)
+        self.assertIn("GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN", api)
+        self.assertIn("renderdoc.dll-pin-failed-win32-", api)
+        self.assertLess(api.index("GET_MODULE_HANDLE_EX_FLAG_PIN"), api.index("getApi(eRENDERDOC_API_Version_1_1_2"))
         for x in ("LoadLibraryExW(", "StartFrameCapture(nullptr, nullptr)", 
                   "EndFrameCapture(nullptr, nullptr)", "status=saved"):
             self.assertIn(x,api)
