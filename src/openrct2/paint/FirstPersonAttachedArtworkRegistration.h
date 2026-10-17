@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <optional>
+#include <algorithm>
 
 namespace OpenRCT2::Paint
 {
@@ -34,6 +35,59 @@ namespace OpenRCT2::Paint
         float centerS{};
         float centerT{};
     };
+
+    // Verify that the reprojected glyph really lies on a reconstructed
+    // surface, not merely on the infinite extension of one tiny hull quad.
+    // Barycentric membership follows the two triangles actually emitted to
+    // OpenGL, so adjacent 4-unit patches can jointly support one wider glyph.
+    [[nodiscard]] inline bool FirstPersonAttachedArtworkPointOnFace(
+        const FirstPersonAttachedArtworkPoint3& point,
+        const std::array<FirstPersonAttachedArtworkPoint3, 4>& face,
+        float planeTolerance = 0.125f)
+    {
+        const auto delta = [](const auto& a, const auto& b) {
+            return FirstPersonAttachedArtworkPoint3{
+                a.x - b.x, a.y - b.y, a.z - b.z
+            };
+        };
+        const auto dot = [](const auto& a, const auto& b) {
+            return a.x * b.x + a.y * b.y + a.z * b.z;
+        };
+        const auto cross = [](const auto& a, const auto& b) {
+            return FirstPersonAttachedArtworkPoint3{
+                a.y * b.z - a.z * b.y,
+                a.z * b.x - a.x * b.z,
+                a.x * b.y - a.y * b.x
+            };
+        };
+        const auto normal = cross(delta(face[1], face[0]),
+                                  delta(face[3], face[0]));
+        const float normalSquared = dot(normal, normal);
+        if (!(normalSquared > 1.0e-5f))
+            return false;
+        const auto fromFace = delta(point, face[0]);
+        if (dot(normal, fromFace) * dot(normal, fromFace)
+                > planeTolerance * planeTolerance * normalSquared)
+            return false;
+
+        const auto inTriangle = [&](const auto& a, const auto& b, const auto& c) {
+            const auto ab = delta(b, a);
+            const auto ac = delta(c, a);
+            const auto ap = delta(point, a);
+            const float aa = dot(ab, ab);
+            const float bb = dot(ac, ac);
+            const float abac = dot(ab, ac);
+            const float det = aa * bb - abac * abac;
+            if (!(det > 1.0e-6f))
+                return false;
+            const float u = (dot(ap, ab) * bb - dot(ap, ac) * abac) / det;
+            const float v = (dot(ap, ac) * aa - dot(ap, ab) * abac) / det;
+            constexpr float eps = 0.01f;
+            return u >= -eps && v >= -eps && u + v <= 1.0f + eps;
+        };
+        return inTriangle(face[0], face[1], face[2])
+            || inTriangle(face[0], face[2], face[3]);
+    }
 
     [[nodiscard]] inline std::optional<FirstPersonAttachedArtworkPlacement>
     ReprojectFirstPersonAttachedArtwork(
