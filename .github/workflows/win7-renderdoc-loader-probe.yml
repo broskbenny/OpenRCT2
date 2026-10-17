@@ -1,0 +1,42 @@
+name: Windows 7 native RenderDoc loader probe
+on:
+  push:
+    branches:
+      - first-person/renderdoc-click-capture
+    paths:
+      - scripts/win7-renderdoc-loader-probe.cpp
+      - .github/workflows/win7-renderdoc-loader-probe.yml
+permissions:
+  contents: write
+jobs:
+  compile-loader-probe:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: first-person/renderdoc-click-capture
+      - name: Compile only the standalone Win7-compatible native probe
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+          cl /nologo /W4 /O2 /MT /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 /Fe:win7-loader-probe.exe scripts\win7-renderdoc-loader-probe.cpp /link /SUBSYSTEM:CONSOLE,6.01 /MACHINE:X64 version.lib
+          if errorlevel 1 exit /b 1
+      - name: Native loader smoke test using pinned RenderDoc DLL
+        shell: cmd
+        run: |
+          win7-loader-probe.exe "%CD%\third_party\renderdoc\windows-x64\renderdoc.dll"
+          if errorlevel 1 exit /b 1
+      - name: Commit only diagnostic native executable to experimental branch
+        shell: bash
+        run: |
+          mkdir -p tools/diagnostics
+          cp win7-loader-probe.exe tools/diagnostics/win7-loader-probe.exe
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f tools/diagnostics/win7-loader-probe.exe
+          if ! git diff --cached --quiet; then
+            git commit -m "Vendor isolated Windows 7 native RenderDoc loader probe"
+            git push origin HEAD:first-person/renderdoc-click-capture
+          fi
