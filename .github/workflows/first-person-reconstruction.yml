@@ -99,6 +99,9 @@ jobs:
       - name: Verify and stage portable RenderDoc runtime
         shell: pwsh
         run: ./scripts/stage-first-person-renderdoc.ps1 -OutputDirectory bin
+      - name: Probe RenderDoc DLL load and API before compilation
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File test\first-person\probe_renderdoc_windows.ps1 -DllPath bin\renderdoc.dll
       - name: Compile and link the production renderer and application
         shell: cmd
         run: scripts\vstool.cmd msbuild src\openrct2-win\openrct2-win.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /m:1 /p:BuildInParallel=false /p:CL_MPCount=1 /verbosity:minimal
