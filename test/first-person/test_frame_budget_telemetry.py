@@ -43,10 +43,17 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
         self.assertIn("seenIt->second.insert(", paint)
         self.assertNotIn("const bool duplicate =\n                                            std::any_of(",paint)
 
-    def test_experimental_analytic_owner_depth_is_disabled(self):
+    def test_axis_aligned_owner_depth_preserves_gpu_vertex_stride_and_exterior_normals(self):
         gl = (ROOT / "src/openrct2-ui/drawing/engines/opengl/FirstPersonGLRenderer.cpp").read_text(encoding="utf-8")
-        self.assertNotIn("flat in vec4 fPlane", gl)
-        self.assertNotIn("uViewport", gl)
+        self.assertNotIn("layout(location=12) in vec4 aOwnerPlane;", gl)
+        self.assertNotIn("float ownerPlane[4];", gl)
+        self.assertIn("fOutwardNormal.z == 17.0", gl)
+        self.assertIn("encodedOutwardNormal", gl)
+        self.assertIn("!surface.exteriorOnly", gl)
+        self.assertIn("(fFlags & 64) == 0", gl)
+        self.assertIn("gl_FragCoord.xy - uViewport.xy", gl)
+        self.assertIn("std::all_of(surface.triangles.begin()", gl)
+        self.assertIn("planeDepth > 0.0", gl)
         self.assertIn("GL_LEQUAL", gl)
         self.assertIn("surface.nativePaintOrdinal", gl)
 
