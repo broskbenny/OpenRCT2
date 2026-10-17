@@ -184,6 +184,13 @@ int main() {
             )
             subprocess.run([str(exe)], check=True, capture_output=True)
 
+    def test_inspector_pick_distinguishes_unregistered_sign_groups(self):
+        self.assertIn("gFirstPersonInspectorPickRequested", PAINT)
+        self.assertIn("pickedSignGroups", PAINT)
+        self.assertIn("FP_SIGN_GROUP group=%llu glyphs=%zu worldMapped=%zu", PAINT)
+        # An object with zero detected native glyphs must be observable too.
+        self.assertIn("FP_SIGN_ATTACHMENT attempted=%zu", PAINT)
+
     def test_render_path_never_reorients_successfully_attached_text(self):
         self.assertIn("AttachFirstPersonLargeTextToWorld(", PAINT)
         self.assertIn("ReprojectFirstPersonAttachedArtwork(", PAINT)
