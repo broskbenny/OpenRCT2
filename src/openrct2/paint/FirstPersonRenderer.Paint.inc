@@ -222,6 +222,7 @@
             const auto frame = _terrainCache.frame;
             size_t nativeSignGlyphCount = 0;
             size_t worldAttachedSignGlyphCount = 0;
+            int64_t signAttachmentCpuUs = 0;
             const uint32_t sourceGeneration = getGameState().currentTicks;
             constexpr uint64_t kSemanticProbeInterval = 240;
             // Spread synchronous native art captures over more frames.
@@ -1463,9 +1464,13 @@
                                     && !geometry->second.dirty
                                     && geometry->second.lastSeen == frame)
                                 {
+                                    const auto signStart = PaintClock::now();
                                     worldAttached =
                                         AttachFirstPersonLargeTextToWorld(
                                             surface, geometry->second, rotation);
+                                    signAttachmentCpuUs +=
+                                        std::chrono::duration_cast<std::chrono::microseconds>(
+                                            PaintClock::now() - signStart).count();
                                     if (worldAttached)
                                         ++worldAttachedSignGlyphCount;
                                 }
@@ -1531,12 +1536,17 @@
                 }
             }
 
-            if (nativeSignGlyphCount != 0 && frame % 240 == 0)
+            // The existing one-shot inspector pick is a useful low-noise
+            // way to report sign registration even if the user stops moving
+            // before the next periodic performance telemetry window.
+            if (nativeSignGlyphCount != 0
+                && (gFirstPersonInspectorPickRequested || frame % 240 == 0))
             {
                 Console::WriteLine(
-                    "FP_SIGN_ATTACHMENT attempted=%zu worldMapped=%zu fallback=%zu",
+                    "FP_SIGN_ATTACHMENT attempted=%zu worldMapped=%zu fallback=%zu cpuUs=%lld",
                     nativeSignGlyphCount, worldAttachedSignGlyphCount,
-                    nativeSignGlyphCount - worldAttachedSignGlyphCount);
+                    nativeSignGlyphCount - worldAttachedSignGlyphCount,
+                    static_cast<long long>(signAttachmentCpuUs));
             }
 
             // Cache entries can have been painted in different presentation
