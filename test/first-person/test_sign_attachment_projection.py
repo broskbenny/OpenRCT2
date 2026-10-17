@@ -6,6 +6,9 @@ The in-game projector is compiled by the separate Windows Release job.
 """
 
 from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -108,9 +111,69 @@ class NativeSignAttachedTextProjectionTest(unittest.TestCase):
                 for a, b in zip(world_text_centers, world_text_centers[1:])
             ), f"text orientation reversed at rotation {rotation}")
 
+    def test_native_compiled_helper_accepts_cross_patch_text_and_rejects_unobserved(self):
+        # A glyph can extend across two perfectly coplanar 4-unit hull
+        # patches. It must not be restricted to a single tiny parent face.
+        # Conversely, an infinite extrapolated plane is NOT body support.
+        compiler = shutil.which("c++")
+        self.assertIsNotNone(compiler, "C++ compiler required for native glyph contract")
+        code = r"""
+#include <array>
+#include <cassert>
+#include "src/openrct2/paint/FirstPersonAttachedArtworkRegistration.h"
+using namespace OpenRCT2::Paint;
+int main() {
+    const std::array<FirstPersonAttachedArtworkPoint3, 4> small{{
+        {0,0,0}, {4,0,0}, {4,0,4}, {0,0,4}
+    }};
+    const std::array<FirstPersonAttachedArtworkPoint3, 4> neighbour{{
+        {4,0,0}, {8,0,0}, {8,0,4}, {4,0,4}
+    }};
+    const std::array<FirstPersonAttachedArtworkPoint2, 3> view{{
+        {0,0}, {4,0}, {0,4}
+    }};
+    const auto glyph = ReprojectFirstPersonAttachedArtwork(
+        small, view, 2.0f, 1.0f, 4.0f, 2.0f);
+    assert(glyph.has_value());
+    bool crossesSeam = false;
+    for (const float x : {1.0f/6.0f, 0.5f, 5.0f/6.0f})
+    for (const float y : {1.0f/6.0f, 0.5f, 5.0f/6.0f}) {
+        const auto& p = glyph->corners[0];
+        const auto& q = glyph->corners[1];
+        const auto& r = glyph->corners[3];
+        const FirstPersonAttachedArtworkPoint3 sample{
+            p.x + x*(q.x-p.x) + y*(r.x-p.x),
+            p.y + x*(q.y-p.y) + y*(r.y-p.y),
+            p.z + x*(q.z-p.z) + y*(r.z-p.z)
+        };
+        const bool first = FirstPersonAttachedArtworkPointOnFace(sample, small);
+        const bool second = FirstPersonAttachedArtworkPointOnFace(sample, neighbour);
+        assert(first || second);
+        crossesSeam |= second && !first;
+    }
+    assert(crossesSeam);
+    assert(!FirstPersonAttachedArtworkPointOnFace({9,0,2}, small));
+    assert(!FirstPersonAttachedArtworkPointOnFace({9,0,2}, neighbour));
+    assert(!FirstPersonAttachedArtworkPointOnFace({2,1,2}, small));
+    assert(!FirstPersonAttachedArtworkPointOnFace({2,0,2}, neighbour));
+}
+"""
+        with tempfile.TemporaryDirectory(prefix="fp-native-sign-") as tmp:
+            src = Path(tmp) / "glyph_test.cpp"
+            exe = Path(tmp) / "glyph_test"
+            src.write_text(code, encoding="utf-8")
+            subprocess.run(
+                [compiler, "-std=c++20", "-I", str(ROOT), str(src),
+                 "-o", str(exe)],
+                check=True, capture_output=True, text=True
+            )
+            subprocess.run([str(exe)], check=True, capture_output=True)
+
     def test_render_path_never_reorients_successfully_attached_text(self):
         self.assertIn("AttachFirstPersonLargeTextToWorld(", PAINT)
         self.assertIn("ReprojectFirstPersonAttachedArtwork(", PAINT)
+        self.assertIn("FirstPersonAttachedArtworkPointOnFace(", PAINT)
+        self.assertIn("if (!glyphSupported())", PAINT)
         self.assertIn("if (!worldAttached)", PAINT)
         self.assertIn("glyph.viewFacing = false;", PAINT)
         self.assertIn("glyph.exteriorOnly = true;", PAINT)
