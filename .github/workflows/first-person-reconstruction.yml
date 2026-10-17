@@ -62,8 +62,31 @@ jobs:
       - name: Exercise exact production small-scenery material bake
         run: python test/first-person/verify_material_bake.py --sanitize
 
+  vendor-renderdoc:
+    name: Bundle RenderDoc for Windows 7 build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || github.sha }}
+      - name: Commit pinned official AMD64 DLL and license
+        if: github.event_name == 'push' && github.ref == 'refs/heads/first-person/renderdoc-click-capture'
+        run: |
+          python3 scripts/vendor_first_person_renderdoc.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f third_party/renderdoc/windows-x64/renderdoc.dll third_party/renderdoc/windows-x64/renderdoc-LICENSE.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Vendor RenderDoc AMD64 DLL for Win7 offline builds"
+            git push origin HEAD:refs/heads/first-person/renderdoc-click-capture
+          fi
+
   windows-release:
     name: First-person Windows Release x64
+    needs: vendor-renderdoc
     runs-on: windows-2025
     timeout-minutes: 45
     env:
@@ -71,6 +94,8 @@ jobs:
       OPENRCT2_CL_ADDITIONALOPTIONS: /D_SILENCE_CXX20_U8PATH_DEPRECATION_WARNING /wd4267 /U__ENABLE_DISCORD__
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || github.sha }}
       - name: Verify and stage portable RenderDoc runtime
         shell: pwsh
         run: ./scripts/stage-first-person-renderdoc.ps1 -OutputDirectory bin
