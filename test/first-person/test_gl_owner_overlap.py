@@ -292,6 +292,18 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         self.assertIn("std::copysign(float(axis + 1), cross[axis])", renderer)
         self.assertIn("uOwnerSidePass", renderer)
 
+    def test_gpu_owner_replay_is_single_pass_without_semantic_walls(self):
+        shader_source = RENDERER.read_text(encoding="utf-8")
+        header = (
+            ROOT / "src/openrct2-ui/drawing/engines/opengl/FirstPersonGLRenderer.h"
+        ).read_text(encoding="utf-8")
+        self.assertIn("bool hasDirectionalWallOwner = streamedDirectionalWallOwner;", shader_source)
+        self.assertIn("const int firstSidePass = hasDirectionalWallOwner ? 1 : 0;", shader_source)
+        self.assertIn("const int lastSidePass = hasDirectionalWallOwner ? 2 : 0;", shader_source)
+        self.assertIn("bool hasDirectionalWallOwner = false;", header)
+        self.assertIn("FirstPersonPaintSemanticRole::wall", shader_source)
+        self.assertIn("authoredWall ? 18.0f : 17.0f", shader_source)
+
     def test_regular_native_owners_do_not_change_material_order_by_view_side(self):
         # Directional replay is restricted to authored wall planes. Generic
         # coplanar floors, roofs, decals retain native paint priority.
