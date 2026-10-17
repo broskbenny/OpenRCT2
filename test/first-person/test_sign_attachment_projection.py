@@ -110,6 +110,7 @@ class NativeSignAttachedTextProjectionTest(unittest.TestCase):
 
     def test_render_path_never_reorients_successfully_attached_text(self):
         self.assertIn("AttachFirstPersonLargeTextToWorld(", PAINT)
+        self.assertIn("ReprojectFirstPersonAttachedArtwork(", PAINT)
         self.assertIn("if (!worldAttached)", PAINT)
         self.assertIn("glyph.viewFacing = false;", PAINT)
         self.assertIn("glyph.exteriorOnly = true;", PAINT)
