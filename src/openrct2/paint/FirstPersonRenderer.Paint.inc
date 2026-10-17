@@ -164,6 +164,8 @@
             const auto& opt = scene.options;
             const auto basis = GetFirstPersonBasis(opt.camera);
             const auto frame = _terrainCache.frame;
+            size_t nativeSignGlyphCount = 0;
+            size_t worldAttachedSignGlyphCount = 0;
             const uint32_t sourceGeneration = getGameState().currentTicks;
             constexpr uint64_t kSemanticProbeInterval = 240;
             // Spread synchronous native art captures over more frames.
@@ -1397,6 +1399,7 @@
                             if (surface.diagnosticReconstructionKind == 4
                                 && surface.reconstructionGroup != 0)
                             {
+                                ++nativeSignGlyphCount;
                                 const auto geometry =
                                     _largeSceneryGeometryCache.find(
                                         surface.reconstructionGroup);
@@ -1407,6 +1410,8 @@
                                     worldAttached =
                                         AttachFirstPersonLargeTextToWorld(
                                             surface, geometry->second, rotation);
+                                    if (worldAttached)
+                                        ++worldAttachedSignGlyphCount;
                                 }
                             }
                             if (!worldAttached)
@@ -1468,6 +1473,14 @@
                             scene.surfaces.emplace_back(std::move(surface));
                     }
                 }
+            }
+
+            if (nativeSignGlyphCount != 0 && frame % 240 == 0)
+            {
+                Console::WriteLine(
+                    "FP_SIGN_ATTACHMENT attempted=%zu worldMapped=%zu fallback=%zu",
+                    nativeSignGlyphCount, worldAttachedSignGlyphCount,
+                    nativeSignGlyphCount - worldAttachedSignGlyphCount);
             }
 
             // Cache entries can have been painted in different presentation
