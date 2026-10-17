@@ -106,7 +106,7 @@ def quad_x(x, y0, y1, z0, z1, colour, outward_sign):
     winding = np.cross(edge_u, edge_v)[0]
     assert winding * outward_sign > 0
     vertices["normal"][:] = (
-        math.copysign(1.0, winding), x, 17.0)
+        math.copysign(1.0, winding), x, 18.0)
     return vertices
 
 
@@ -291,6 +291,21 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         renderer = (ROOT / "src/openrct2-ui/drawing/engines/opengl/FirstPersonGLRenderer.cpp").read_text(encoding="utf-8")
         self.assertIn("std::copysign(float(axis + 1), cross[axis])", renderer)
         self.assertIn("uOwnerSidePass", renderer)
+
+    def test_regular_native_owners_do_not_change_material_order_by_view_side(self):
+        # Directional replay is restricted to authored wall planes. Generic
+        # coplanar floors, roofs, decals retain native paint priority.
+        left = quad_x(2752, 4448, 4480, 112, 128, 9, -1)
+        right = quad_x(2752, 4448, 4480, 112, 128, 6, 1)
+        left["normal"][:, 2] = 17.0
+        right["normal"][:, 2] = 17.0
+        for side in (-1, 1):
+            eye = (2752.0 + 60 * side, 4464.0, 124.0)
+            pixels = self.render_overlap(
+                0, eye, surfaces=(right, left), side_passes=(1, 2),
+                forward_override=(-float(side), 0.0, 0.0),
+                right_override=(0.0, -float(side), 0.0))
+            self.assertEqual(int(pixels[HEIGHT // 2, WIDTH // 2]), 9)
 
     def test_actual_opposite_tile_sides_ignore_wrong_native_ordinal(self):
         # The two clicked pairs lie on x=2752 and x=2976, respectively.
