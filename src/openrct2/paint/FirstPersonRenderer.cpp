@@ -6,6 +6,7 @@
 #include "FirstPersonSpriteSnapshot.h"
 #include "FirstPersonPacketBuildProgress.h"
 #include "FirstPersonAssetReconstruction.h"
+#include "FirstPersonAttachedArtworkRegistration.h"
 #include "FirstPersonLargeSceneryReconstruction.h"
 #include "FirstPersonMaterialInference.h"
 #include "FirstPersonTerrainEdgeMaterial.h"
