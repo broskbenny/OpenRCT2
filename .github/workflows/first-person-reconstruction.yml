@@ -71,6 +71,9 @@ jobs:
       OPENRCT2_CL_ADDITIONALOPTIONS: /D_SILENCE_CXX20_U8PATH_DEPRECATION_WARNING /wd4267 /U__ENABLE_DISCORD__
     steps:
       - uses: actions/checkout@v4
+      - name: Verify and stage portable RenderDoc runtime
+        shell: pwsh
+        run: ./scripts/stage-first-person-renderdoc.ps1 -OutputDirectory bin
       - name: Compile and link the production renderer and application
         shell: cmd
         run: scripts\vstool.cmd msbuild src\openrct2-win\openrct2-win.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /m:1 /p:BuildInParallel=false /p:CL_MPCount=1 /verbosity:minimal

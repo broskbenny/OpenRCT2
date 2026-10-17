@@ -20,9 +20,39 @@ try {
     try {
         $dlls = @($archive.Entries | Where-Object { $_.Name -ieq 'renderdoc.dll' })
         $licenses = @($archive.Entries | Where-Object { $_.Name -ieq 'LICENSE.md' })
-        if ($dlls.Count -ne 1) { throw "Portable ZIP has $($dlls.Count) renderdoc DLL entries" }
+        if ($dlls.Count -lt 1) { throw "Portable ZIP has no renderdoc.dll" }
         if ($licenses.Count -lt 1) { throw "Portable ZIP contains no license" }
-        [IO.Compression.ZipFileExtensions]::ExtractToFile($dlls[0], "$target.partial", $true)
+        # The 64-bit bundle includes an additional 32-bit renderdoc.dll.
+        # Identify the correct binary by the actual PE/COFF architecture.
+        $found64 = 0
+        foreach ($entry in $dlls) {
+            $probe = Join-Path $OutputDirectory ("rdoc-" + [guid]::NewGuid().ToString() + ".probe")
+            try {
+                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $probe, $true)
+                $stream = [IO.File]::OpenRead($probe)
+                try {
+                    $reader = [IO.BinaryReader]::new($stream)
+                    $stream.Position = 0x3c
+                    $peOffset = $reader.ReadInt32()
+                    if ($peOffset -le 0 -or $peOffset -gt ($stream.Length - 6)) {
+                        throw "Invalid PE header: $($entry.FullName)"
+                    }
+                    $stream.Position = $peOffset
+                    if ($reader.ReadUInt32() -ne 0x4550) {
+                        throw "Invalid PE signature: $($entry.FullName)"
+                    }
+                    $machine = $reader.ReadUInt16()
+                    Write-Host ("RenderDoc candidate {0}: PE machine {1:X4}" -f $entry.FullName, $machine)
+                    if ($machine -eq 0x8664) {
+                        $found64++
+                        Copy-Item $probe "$target.partial" -Force
+                    }
+                }
+                finally { $stream.Dispose() }
+            }
+            finally { Remove-Item $probe -Force -ErrorAction SilentlyContinue }
+        }
+        if ($found64 -ne 1) { throw "Expected exactly one AMD64 DLL, found $found64" }
         [IO.Compression.ZipFileExtensions]::ExtractToFile($licenses[0], $licenseTarget, $true)
         Move-Item "$target.partial" $target -Force
         Write-Host "RenderDoc staged: $target"
