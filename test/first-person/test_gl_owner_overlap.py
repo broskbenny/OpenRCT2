@@ -352,6 +352,23 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         self.assertEqual(int(pixels[HEIGHT//2 - 7, WIDTH//2]), 9)
         self.assertEqual(int(pixels[HEIGHT//2 + 6, WIDTH//2]), 6)
 
+    def test_far_camera_facing_wall_cannot_overwrite_nearer_rear_face(self):
+        # Physical occlusion must dominate directional material priority.
+        # An authored rear-facing plane 60 units from the camera occludes a
+        # front-facing panel TWO world units farther away, irrespective of
+        # painter order or which side pass draws later.
+        near = quad_x(2752.0, 4448, 4480, 112, 128, 9, -1)
+        far = quad_x(2750.0, 4448, 4480, 112, 128, 6, +1)
+        for order in ((near, far), (far, near)):
+            with self.subTest(first=int(order[0]["paintOrdinal"][0])):
+                pixels = self.render_overlap(
+                    0, (2812.0, 4464.0, 120.0),
+                    surfaces=order, side_passes=(1, 2),
+                    forward_override=(-1.0, 0.0, 0.0),
+                    right_override=(0.0, -1.0, 0.0))
+                self.assertEqual(
+                    int(pixels[HEIGHT // 2, WIDTH // 2]), 9)
+
     def test_cutout_front_material_reveals_back_material_without_holes(self):
         # Opposing wall face on each side of x=2752, using actual native
         # indexed artwork alpha=0 semantics, not synthetic solid colours.
