@@ -293,6 +293,21 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
                         self.assertEqual(
                             int(pixels[HEIGHT // 2, WIDTH // 2]), expected)
 
+    def test_actual_mismatched_wall_heights_preserve_uncovered_sections(self):
+        # Exact clicked wallcf16 (z120..136) vs wallmm17 (z112..128).
+        # Rear-facing material must remain visible below the front plane;
+        # only the overlapping z120..128 band uses directional ownership.
+        left = quad_x(2752, 4448, 4480, 112, 128, 9, -1)
+        right = quad_x(2752, 4448, 4480, 120, 136, 6, +1)
+        pixels = self.render_overlap(
+            0, (2812.0, 4464.0, 124.0),
+            surfaces=(right, left), side_passes=(1, 2),
+            forward_override=(-1.0, 0.0, 0.0),
+            right_override=(0.0, -1.0, 0.0))
+        self.assertEqual(int(pixels[HEIGHT//2, WIDTH//2]), 6)
+        self.assertEqual(int(pixels[HEIGHT//2 - 7, WIDTH//2]), 9)
+        self.assertEqual(int(pixels[HEIGHT//2 + 6, WIDTH//2]), 6)
+
     def test_cutout_front_material_reveals_back_material_without_holes(self):
         # Opposing wall face on each side of x=2752, using actual native
         # indexed artwork alpha=0 semantics, not synthetic solid colours.
