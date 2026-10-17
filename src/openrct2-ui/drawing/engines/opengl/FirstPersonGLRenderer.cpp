@@ -14,6 +14,7 @@
 #include <openrct2/core/Console.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -94,6 +95,10 @@ uniform bool uPeeling;
 uniform int uPeelStage;
 uniform vec3 uEye;
 uniform vec3 uForward;
+uniform vec3 uRight;
+uniform vec3 uUp;
+uniform vec2 uFocal;
+uniform vec4 uViewport;
 uniform vec2 uNearFar;
 in vec2 fUV;
 in vec3 fWorld;
@@ -188,6 +193,35 @@ void main() {
     // Logarithmic physical depth leaves usable precision at the far end of
     // a complete RCT2 park while allowing the passenger near geometry.
     float depth = max(0.0, dot(fWorld - uEye, uForward));
+    // Only exact world-axis-aligned, world-fixed native artwork owners have
+    // a canonical plane. Two triangulations of the same plane can interpolate
+    // fWorld differently at one pixel, causing a lower native ordinal to
+    // win a GL_LEQUAL depth fight. Intersect the current pixel's camera ray
+    // with their SHARED plane instead. Non-owners and nonplanar surfaces keep
+    // their original physical depth, with no positional offsets or biases.
+    // The native-owner-only plane is tagged in the unused outward-normal
+    // attribute: (axis 1..3, coordinate, marker 17). Physical exterior faces
+    // retain their true normal and never use this path. Thus the GPU vertex
+    // remains its original size, with no new attribute or bandwidth penalty.
+    if ((fFlags & 4) != 0 && (fFlags & 64) == 0
+        && fOutwardNormal.z == 17.0) {
+        vec3 axis =
+            fOutwardNormal.x == 1.0 ? vec3(1.0, 0.0, 0.0)
+            : fOutwardNormal.x == 2.0 ? vec3(0.0, 1.0, 0.0)
+            : vec3(0.0, 0.0, 1.0);
+        vec2 ndc = 2.0 * (gl_FragCoord.xy - uViewport.xy)
+            / uViewport.zw - vec2(1.0);
+        vec3 ray = uForward
+            + (ndc.x / uFocal.x) * uRight
+            + (ndc.y / uFocal.y) * uUp;
+        float denominator = dot(axis, ray);
+        if (abs(denominator) > 0.000001) {
+            float planeDepth =
+                (fOutwardNormal.y - dot(axis, uEye)) / denominator;
+            if (planeDepth > 0.0 && planeDepth <= uNearFar.y)
+                depth = planeDepth;
+        }
+    }
     float logarithmic = log2(1.0 + depth)/log2(1.0 + uNearFar.y);
     gl_FragDepth = logarithmic;
     if ((fFlags & 4) != 0 && (fFlags & 1) == 0) {
@@ -736,6 +770,9 @@ void main() {
         const float foc = 1.0f / std::tan(halfFov);
         glCall(glUniform2f, Uniform(_program, "uFocal"), foc, foc * float(width) / float(height));
         glCall(glUniform2f, Uniform(_program, "uNearFar"), view.nearClip, view.farClip);
+        glCall(glUniform4f, Uniform(_program, "uViewport"),
+            float(left), float(screenHeight - top - height),
+            float(width), float(height));
         OpenGLAPI::SetTexture(0, GL_TEXTURE_2D_ARRAY, textures.GetAtlasesTexture());
         OpenGLAPI::SetTexture(1, GL_TEXTURE_2D, textures.GetPaletteTexture());
         glCall(glUniform1i, Uniform(_program, "uSprites"), 0);
@@ -923,6 +960,43 @@ void main() {
                 count=1;
                 palettes[0]=PaletteY(static_cast<Drawing::FilterPaletteID>(image.GetRemap()));
             }
+            // Restrict the canonical-depth path to exact axis-aligned quads.
+            // For a native wall the constant world coordinate is authoritative
+            // across adjacent tiles, unlike perspective-interpolated fWorld.
+            // Slopes, curved scenery, terrain, ordinary geometry and sprites
+            // retain their existing shader depth without approximation.
+            std::array<float, 3> encodedOutwardNormal{
+                surface.outwardNormal.x,
+                surface.outwardNormal.y,
+                surface.outwardNormal.z,
+            };
+            // Only native, non-exterior owners can reuse this field. Exterior
+            // occupancy boundaries still need their world outward normals for
+            // true front/back visibility; all other faces retain their data.
+            if (!surface.exteriorOnly
+                && (forceCoplanarOwner
+                    || (!suppressCoplanarOwner && surface.coplanarOwner)))
+            {
+                const auto coordinate = [](const Paint::FirstPersonVec3& point, int axis) {
+                    return axis == 0 ? point.x : axis == 1 ? point.y : point.z;
+                };
+                for (int axis = 0; axis < 3; ++axis)
+                {
+                    const float position = coordinate(surface.triangles[0].world, axis);
+                    if (!std::isfinite(position))
+                        continue;
+                    if (std::all_of(surface.triangles.begin(), surface.triangles.end(),
+                        [&](const auto& vertex) {
+                            return coordinate(vertex.world, axis) == position;
+                        }))
+                    {
+                        encodedOutwardNormal = {
+                            float(axis + 1), position, 17.0f
+                        };
+                        break;
+                    }
+                }
+            }
             for(const auto& p:surface.triangles)
                 vertices.push_back({
                     {p.world.x,p.world.y,p.world.z},{p.u,p.v},
@@ -948,9 +1022,9 @@ void main() {
                     uint32_t(std::min<uint64_t>(
                         surface.nativePaintOrdinal,
                         0x00ffffffull)),
-                    {surface.outwardNormal.x,
-                     surface.outwardNormal.y,
-                     surface.outwardNormal.z}});
+                    {encodedOutwardNormal[0],
+                     encodedOutwardNormal[1],
+                     encodedOutwardNormal[2]}});
             return true;
         };
         std::vector<GPUVertex> opaqueOrdinaryVertices;
