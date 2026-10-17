@@ -93,6 +93,7 @@ uniform usampler2D uPreviousLayer;
 uniform sampler2D uSelectedPhysicalDepth;
 uniform bool uPeeling;
 uniform int uPeelStage;
+uniform int uOwnerSidePass;
 uniform vec3 uEye;
 uniform vec3 uForward;
 uniform vec3 uRight;
@@ -137,6 +138,32 @@ void main() {
     if ((fFlags & 64) != 0
         && dot(fOutwardNormal, uEye - fWorld) <= 0.0)
         discard;
+
+    // Opposite authored wall sides can occupy the exact same plane. Native
+    // paint ordinal does not encode which side of the wall the camera sees.
+    // Replay rear-facing material first and front-facing material second.
+    // A lone wall still renders from either side, and physical depth testing
+    // continues to reject genuinely farther geometry. Other owner surfaces
+    // need only the second pass.
+    if (uOwnerSidePass != 0) {
+        bool orientedOwner =
+            (fFlags & 4) != 0 && (fFlags & 64) == 0
+            && fOutwardNormal.z == 17.0;
+        if (!orientedOwner) {
+            if (uOwnerSidePass == 1) discard;
+        } else {
+            float axis = abs(fOutwardNormal.x);
+            vec3 normal =
+                axis == 1.0 ? vec3(1.0, 0.0, 0.0)
+                : axis == 2.0 ? vec3(0.0, 1.0, 0.0)
+                : vec3(0.0, 0.0, 1.0);
+            normal *= sign(fOutwardNormal.x);
+            bool cameraFacing = dot(normal, uEye - fWorld) > 0.0;
+            if ((uOwnerSidePass == 1 && cameraFacing)
+                || (uOwnerSidePass == 2 && !cameraFacing))
+                discard;
+        }
+    }
 
     uint col = 0u;
     if ((fFlags & 16) != 0) {
@@ -206,8 +233,8 @@ void main() {
     if ((fFlags & 4) != 0 && (fFlags & 64) == 0
         && fOutwardNormal.z == 17.0) {
         vec3 axis =
-            fOutwardNormal.x == 1.0 ? vec3(1.0, 0.0, 0.0)
-            : fOutwardNormal.x == 2.0 ? vec3(0.0, 1.0, 0.0)
+            abs(fOutwardNormal.x) == 1.0 ? vec3(1.0, 0.0, 0.0)
+            : abs(fOutwardNormal.x) == 2.0 ? vec3(0.0, 1.0, 0.0)
             : vec3(0.0, 0.0, 1.0);
         vec2 ndc = 2.0 * (gl_FragCoord.xy - uViewport.xy)
             / uViewport.zw - vec2(1.0);
@@ -782,6 +809,7 @@ void main() {
         glCall(glUniform1i, Uniform(_program, "uPreviousLayer"), 4);
         glCall(glUniform1i, Uniform(_program, "uSelectedPhysicalDepth"), 5);
         glCall(glUniform1i, Uniform(_program, "uPeeling"), 0);
+        glCall(glUniform1i, Uniform(_program, "uOwnerSidePass"), 0);
         glCall(glUniform1i, Uniform(_program, "uPeelStage"), 0);
 
         // Stable fixed world geometry belongs to resident GPU regions. Camera-
@@ -990,9 +1018,25 @@ void main() {
                             return coordinate(vertex.world, axis) == position;
                         }))
                     {
-                        encodedOutwardNormal = {
-                            float(axis + 1), position, 17.0f
+                        // Record winding as well as the canonical plane.
+                        // Its sign is semantic wall sidedness, NOT a depth
+                        // offset: reverse faces from adjacent tiles carry
+                        // opposite signs even with identical coordinates.
+                        const auto& a = surface.triangles[0].world;
+                        const auto& b = surface.triangles[1].world;
+                        const auto& c = surface.triangles[2].world;
+                        const float u[3]{ b.x - a.x, b.y - a.y, b.z - a.z };
+                        const float v[3]{ c.x - a.x, c.y - a.y, c.z - a.z };
+                        const float cross[3]{
+                            u[1] * v[2] - u[2] * v[1],
+                            u[2] * v[0] - u[0] * v[2],
+                            u[0] * v[1] - u[1] * v[0],
                         };
+                        if (std::abs(cross[axis]) > 0.000001f)
+                            encodedOutwardNormal = {
+                                std::copysign(float(axis + 1), cross[axis]),
+                                position, 17.0f
+                            };
                         break;
                     }
                 }
@@ -1337,23 +1381,13 @@ void main() {
                 2,GL_TEXTURE_2D,
                 _opaqueSnapshot->GetDepthTexture());
 
-            for (const auto key : regionDraws)
-            {
-                const auto& region =
-                    _staticOpaqueRegions.at(key);
-                if (region.ownerCount <= 0)
-                    continue;
-                glCall(
-                    glBindVertexArray,region.vao);
-                glCall(
-                    glDrawArrays,GL_TRIANGLES,
-                    region.ordinaryCount,
-                    region.ownerCount);
-            }
-
+            // Draw every region's rear-facing owners before any front-facing
+            // owners, including across region boundaries. Drawing each region
+            // once in isolation would reintroduce inter-region paint fighting.
+            // The side test is performed per fragment and does not require
+            // view-dependent re-upload of resident geometry.
             glCall(glBindVertexArray,_vao);
-            glCall(
-                glBindBuffer,GL_ARRAY_BUFFER,_vbo);
+            glCall(glBindBuffer,GL_ARRAY_BUFFER,_vbo);
             glCall(
                 glBufferData,GL_ARRAY_BUFFER,
                 GLsizeiptr(
@@ -1361,13 +1395,26 @@ void main() {
                         * sizeof(GPUVertex)),
                 opaqueOwnerVertices.data(),
                 GL_STREAM_DRAW);
-            if (!opaqueOwnerVertices.empty())
+            for (int sidePass = 1; sidePass <= 2; ++sidePass)
             {
-                glCall(
-                    glDrawArrays,GL_TRIANGLES,0,
-                    GLsizei(
-                        opaqueOwnerVertices.size()));
+                glCall(glUniform1i, Uniform(_program, "uOwnerSidePass"), sidePass);
+                for (const auto key : regionDraws)
+                {
+                    const auto& region = _staticOpaqueRegions.at(key);
+                    if (region.ownerCount <= 0)
+                        continue;
+                    glCall(glBindVertexArray, region.vao);
+                    glCall(glDrawArrays, GL_TRIANGLES,
+                        region.ordinaryCount, region.ownerCount);
+                }
+                if (!opaqueOwnerVertices.empty())
+                {
+                    glCall(glBindVertexArray, _vao);
+                    glCall(glDrawArrays, GL_TRIANGLES, 0,
+                        GLsizei(opaqueOwnerVertices.size()));
+                }
             }
+            glCall(glUniform1i, Uniform(_program, "uOwnerSidePass"), 0);
 
             // Owner replay deliberately used the pre-owner snapshot so equal
             // depth could be resolved without owners competing with
