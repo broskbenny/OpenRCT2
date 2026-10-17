@@ -1,0 +1,29 @@
+name: Vendor RenderDoc Windows 7 compatibility candidates
+on:
+  push:
+    branches:
+      - first-person/renderdoc-click-capture
+    paths:
+      - scripts/vendor_renderdoc_win7_candidates.py
+      - .github/workflows/renderdoc-win7-compatibility.yml
+permissions:
+  contents: write
+jobs:
+  vendor-win7-candidates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: first-person/renderdoc-click-capture
+      - name: Download and validate official AMD64 runtime candidates
+        run: python3 scripts/vendor_renderdoc_win7_candidates.py
+      - name: Commit candidates to the experimental branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f third_party/renderdoc/compatibility/windows-x64/
+          if ! git diff --cached --quiet; then
+            git commit -m "Stage official RenderDoc 1.45 1.32 and 1.20 for Win7 loader diagnosis"
+            git push origin HEAD:first-person/renderdoc-click-capture
+          fi
