@@ -1,3 +1,156 @@
+        // Native 3D-text glyphs are authored as attached sprites. They carry
+        // exact glyph pixels/offsets but not a 3D frame: placing them with
+        // AppendLayer's camera-facing axis makes the letters stand perpendicular
+        // to the actual reconstructed sign. Recover that missing frame from the
+        // observed native projection of the finished, world-fixed body instead.
+        //
+        // Failure to establish a unique physically visible panel retains the
+        // original attached sprite; never fabricate geometry from a screen
+        // offset or replace the lettering with synthetic text.
+        [[nodiscard]] bool AttachFirstPersonLargeTextToWorld(
+            FirstPersonSurface& glyph,
+            const LargeSceneryGeometryCacheEntry& body,
+            uint8_t sourceRotation)
+        {
+            if (glyph.diagnosticReconstructionKind != 4
+                || !glyph.viewFacing || sourceRotation >= 4
+                || body.dirty || body.surfaces.empty()
+                || glyph.billboardWidth <= 0.0f
+                || glyph.billboardHeight <= 0.0f)
+                return false;
+
+            const auto& origin = glyph.billboardAnchor;
+            const auto anchorPixel = Translate3DTo2DWithZ(
+                sourceRotation,
+                { int32_t(std::lround(origin.x)),
+                  int32_t(std::lround(origin.y)),
+                  int32_t(std::lround(origin.z)) });
+            const float left =
+                float(anchorPixel.x) + glyph.billboardLeft;
+            const float top =
+                float(anchorPixel.y) + glyph.billboardTop;
+            const std::array<std::array<float, 2>, 4> textScreen{ {
+                { left, top },
+                { left + glyph.billboardWidth, top },
+                { left + glyph.billboardWidth,
+                  top + glyph.billboardHeight },
+                { left, top + glyph.billboardHeight }
+            } };
+
+            float bestDepth =
+                -std::numeric_limits<float>::infinity();
+            float bestArea = 0.0f;
+            std::array<FirstPersonVec3, 4> bestWorld{};
+            FirstPersonVec3 bestNormal{};
+            bool found = false;
+            const auto project = [&](FirstPersonVec3 p) {
+                const auto xy = Translate3DTo2DWithZ(
+                    sourceRotation,
+                    { int32_t(std::lround(p.x)),
+                      int32_t(std::lround(p.y)),
+                      int32_t(std::lround(p.z)) });
+                return std::array<float, 2>{
+                    float(xy.x), float(xy.y)
+                };
+            };
+
+            // Find the actual world-space carrier face in this reconstruction,
+            // not the nominal sprite sorting box. Face 0/1/2/5 is the already
+            // published quad; we never modify the structural mesh itself.
+            for (const auto& panel : body.surfaces)
+            {
+                if (panel.triangles.size() != 6)
+                    continue;
+                const auto p0 = panel.triangles[0].world;
+                const auto p1 = panel.triangles[1].world;
+                const auto p2 = panel.triangles[2].world;
+                const auto p3 = panel.triangles[5].world;
+                const auto u = Sub(p1, p0);
+                const auto v = Sub(p3, p0);
+                // Only stable planar parallelograms. Warped or degenerate
+                // reconstruction is not an authoritative text plane.
+                const auto error = Sub(Add(p1, v), p2);
+                if (FpDot(error, error) > 0.25f)
+                    continue;
+                const FirstPersonVec3 cross{
+                    u.y * v.z - u.z * v.y,
+                    u.z * v.x - u.x * v.z,
+                    u.x * v.y - u.y * v.x
+                };
+                const float length = std::sqrt(FpDot(cross, cross));
+                if (length < 0.01f
+                    || std::abs(cross.z) > 0.25f * length)
+                    continue;
+                const auto normal = Mul(cross, 1.0f / length);
+                if (!FirstPersonSurfaceVisibleFromNativeView(
+                        normal, sourceRotation))
+                    continue;
+
+                const auto p0s = project(p0);
+                const auto p1s = project(p1);
+                const auto p3s = project(p3);
+                const float ux = p1s[0] - p0s[0];
+                const float uy = p1s[1] - p0s[1];
+                const float vx = p3s[0] - p0s[0];
+                const float vy = p3s[1] - p0s[1];
+                const float determinant = ux * vy - uy * vx;
+                if (std::abs(determinant) < 0.5f)
+                    continue;
+                const auto inverse = [&](float x, float y,
+                                         float& s, float& t) {
+                    const float dx = x - p0s[0];
+                    const float dy = y - p0s[1];
+                    s = (dx * vy - dy * vx) / determinant;
+                    t = (ux * dy - uy * dx) / determinant;
+                };
+                float cs = 0.0f, ct = 0.0f;
+                inverse(left + 0.5f * glyph.billboardWidth,
+                        top + 0.5f * glyph.billboardHeight,
+                        cs, ct);
+                if (cs < -0.05f || cs > 1.05f
+                    || ct < -0.05f || ct > 1.05f)
+                    continue;
+                std::array<FirstPersonVec3, 4> world{};
+                for (size_t i = 0; i < 4; ++i)
+                {
+                    float a = 0.0f, b = 0.0f;
+                    inverse(textScreen[i][0], textScreen[i][1], a, b);
+                    world[i] = Add(p0, Add(Mul(u, a), Mul(v, b)));
+                }
+                const auto midpoint =
+                    Add(p0, Add(Mul(u, cs), Mul(v, ct)));
+                const float depth = FirstPersonIsoDepth(
+                    sourceRotation,
+                    { int32_t(std::lround(midpoint.x)),
+                      int32_t(std::lround(midpoint.y)),
+                      int32_t(std::lround(midpoint.z)) });
+                const float area = std::abs(determinant);
+                if (found && (depth < bestDepth - 0.001f
+                    || (std::abs(depth - bestDepth) <= 0.001f
+                        && area <= bestArea)))
+                    continue;
+                bestDepth = depth;
+                bestArea = area;
+                bestWorld = world;
+                bestNormal = normal;
+                found = true;
+            }
+            if (!found)
+                return false;
+
+            // Preserve the exact original glyph UVs, palette and animation.
+            // Only its world-space vertices and facing policy change.
+            constexpr std::array<size_t, 6> corners{ 0, 1, 2, 0, 2, 3 };
+            for (size_t i = 0; i < corners.size(); ++i)
+                glyph.triangles[i].world = bestWorld[corners[i]];
+            glyph.viewFacing = false;
+            glyph.exteriorOnly = true;
+            glyph.outwardNormal = bestNormal;
+            glyph.coplanarOwner = true;
+            glyph.gpuRegion = 0; // Native text stays streamed/dynamic.
+            return true;
+        }
+
         // Reconstructing original scenery sprites is relatively expensive: the
         // native painter handles track, supports, multi-tile scenery, animation
         // frames, glass and object remapping. Run it ONLY for tiles whose
@@ -11,6 +164,8 @@
             const auto& opt = scene.options;
             const auto basis = GetFirstPersonBasis(opt.camera);
             const auto frame = _terrainCache.frame;
+            size_t nativeSignGlyphCount = 0;
+            size_t worldAttachedSignGlyphCount = 0;
             const uint32_t sourceGeneration = getGameState().currentTicks;
             constexpr uint64_t kSemanticProbeInterval = 240;
             // Spread synchronous native art captures over more frames.
@@ -1236,7 +1391,31 @@
                                 continue;
 
                             auto surface = staticSurface;
-                            ReorientBillboard(surface, opt.camera.position, basis.right);
+                            // Glyphs from the native large-scenery 3D-text
+                            // painter share the reconstructed body's group.
+                            // Inverse-project their original raster corners
+                            // onto a certified visible physical face.
+                            bool worldAttached = false;
+                            if (surface.diagnosticReconstructionKind == 4
+                                && surface.reconstructionGroup != 0)
+                            {
+                                ++nativeSignGlyphCount;
+                                const auto geometry =
+                                    _largeSceneryGeometryCache.find(
+                                        surface.reconstructionGroup);
+                                if (geometry != _largeSceneryGeometryCache.end()
+                                    && !geometry->second.dirty
+                                    && geometry->second.lastSeen == frame)
+                                {
+                                    worldAttached =
+                                        AttachFirstPersonLargeTextToWorld(
+                                            surface, geometry->second, rotation);
+                                    if (worldAttached)
+                                        ++worldAttachedSignGlyphCount;
+                                }
+                            }
+                            if (!worldAttached)
+                                ReorientBillboard(surface, opt.camera.position, basis.right);
                             if (SurfaceMayBeVisible(surface, worldFrustum))
                                 scene.surfaces.emplace_back(std::move(surface));
                         }
@@ -1294,6 +1473,14 @@
                             scene.surfaces.emplace_back(std::move(surface));
                     }
                 }
+            }
+
+            if (nativeSignGlyphCount != 0 && frame % 240 == 0)
+            {
+                Console::WriteLine(
+                    "FP_SIGN_ATTACHMENT attempted=%zu worldMapped=%zu fallback=%zu",
+                    nativeSignGlyphCount, worldAttachedSignGlyphCount,
+                    nativeSignGlyphCount - worldAttachedSignGlyphCount);
             }
 
             // Cache entries can have been painted in different presentation
