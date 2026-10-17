@@ -1344,6 +1344,9 @@ void main() {
             }
         }
 
+        size_t opaqueOwnerDrawCalls = 0;
+        size_t opaqueOwnerSubmittedVertices = 0;
+        const auto ownerReplayBegin = FrameClock::now();
         if (haveOpaqueOwners)
         {
             auto& front = output.GetFinalFramebuffer();
@@ -1416,12 +1419,16 @@ void main() {
                     glCall(glBindVertexArray, region.vao);
                     glCall(glDrawArrays, GL_TRIANGLES,
                         region.ordinaryCount, region.ownerCount);
+                    ++opaqueOwnerDrawCalls;
+                    opaqueOwnerSubmittedVertices += size_t(region.ownerCount);
                 }
                 if (!opaqueOwnerVertices.empty())
                 {
                     glCall(glBindVertexArray, _vao);
                     glCall(glDrawArrays, GL_TRIANGLES, 0,
                         GLsizei(opaqueOwnerVertices.size()));
+                    ++opaqueOwnerDrawCalls;
+                    opaqueOwnerSubmittedVertices += opaqueOwnerVertices.size();
                 }
             }
             glCall(glUniform1i, Uniform(_program, "uOwnerSidePass"), 0);
@@ -1451,6 +1458,7 @@ void main() {
                 clipWidth,clipHeight);
         }
 
+        const auto ownerReplayEnd = FrameClock::now();
         const auto opaqueDone = FrameClock::now();
         if (!streamedTransparent.empty())
         {
@@ -2016,14 +2024,17 @@ void main() {
             Console::WriteLine(
                 "FP_GL_RENDER_STAGES totalUs=%lld opaqueUs=%lld transparencyUs=%lld"
                 " finishUs=%lld transparencySurfaces=%zu tiles=%zu peels=%zu coverageWaitUs=%lld"
-                " streamedOpaque=%zu staticRegions=%zu",
+                " streamedOpaque=%zu staticRegions=%zu"
+                " ownerReplayCpuUs=%lld ownerDraws=%zu ownerVertices=%zu",
                 static_cast<long long>(elapsed(renderStarted, renderDone)),
                 static_cast<long long>(elapsed(renderStarted, opaqueDone)),
                 static_cast<long long>(elapsed(opaqueDone, transparencyDone)),
                 static_cast<long long>(elapsed(transparencyDone, renderDone)),
                 streamedTransparent.size(), activeTransparencyTiles, executedPeels,
                 static_cast<long long>(coverageWaitUs),
-                streamedOpaque.size(), scene.staticRegions.size());
+                streamedOpaque.size(), scene.staticRegions.size(),
+                static_cast<long long>(elapsed(ownerReplayBegin, ownerReplayEnd)),
+                opaqueOwnerDrawCalls, opaqueOwnerSubmittedVertices);
         }
     }
 } // namespace OpenRCT2::Ui
