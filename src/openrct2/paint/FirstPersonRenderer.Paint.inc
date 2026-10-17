@@ -223,6 +223,10 @@
             size_t nativeSignGlyphCount = 0;
             size_t worldAttachedSignGlyphCount = 0;
             int64_t signAttachmentCpuUs = 0;
+            // Populated only for an explicit inspector pick; no per-frame
+            // allocations or per-glyph console noise during ordinary play.
+            std::unordered_map<uint64_t, std::pair<size_t, size_t>>
+                pickedSignGroups;
             const uint32_t sourceGeneration = getGameState().currentTicks;
             constexpr uint64_t kSemanticProbeInterval = 240;
             // Spread synchronous native art captures over more frames.
@@ -1457,6 +1461,9 @@
                                 && surface.reconstructionGroup != 0)
                             {
                                 ++nativeSignGlyphCount;
+                                if (gFirstPersonInspectorPickRequested)
+                                    ++pickedSignGroups[
+                                        surface.reconstructionGroup].first;
                                 const auto geometry =
                                     _largeSceneryGeometryCache.find(
                                         surface.reconstructionGroup);
@@ -1472,7 +1479,12 @@
                                         std::chrono::duration_cast<std::chrono::microseconds>(
                                             PaintClock::now() - signStart).count();
                                     if (worldAttached)
+                                    {
                                         ++worldAttachedSignGlyphCount;
+                                        if (gFirstPersonInspectorPickRequested)
+                                            ++pickedSignGroups[
+                                                surface.reconstructionGroup].second;
+                                    }
                                 }
                             }
                             if (!worldAttached)
@@ -1539,14 +1551,24 @@
             // The existing one-shot inspector pick is a useful low-noise
             // way to report sign registration even if the user stops moving
             // before the next periodic performance telemetry window.
-            if (nativeSignGlyphCount != 0
-                && (gFirstPersonInspectorPickRequested || frame % 240 == 0))
+            if (gFirstPersonInspectorPickRequested
+                || (nativeSignGlyphCount != 0 && frame % 240 == 0))
             {
                 Console::WriteLine(
                     "FP_SIGN_ATTACHMENT attempted=%zu worldMapped=%zu fallback=%zu cpuUs=%lld",
                     nativeSignGlyphCount, worldAttachedSignGlyphCount,
                     nativeSignGlyphCount - worldAttachedSignGlyphCount,
                     static_cast<long long>(signAttachmentCpuUs));
+                if (gFirstPersonInspectorPickRequested)
+                {
+                    for (const auto& [group, counts] : pickedSignGroups)
+                    {
+                        Console::WriteLine(
+                            "FP_SIGN_GROUP group=%llu glyphs=%zu worldMapped=%zu",
+                            static_cast<unsigned long long>(group),
+                            counts.first, counts.second);
+                    }
+                }
             }
 
             // Cache entries can have been painted in different presentation
