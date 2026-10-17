@@ -4,10 +4,10 @@
 param(
     [Parameter(Mandatory=$true)][string]$DllPath,
     [switch]$SkipApi,
-    [switch]$NoPin
+    [switch]$NoPin,
+    [string]$ExpectedSha256 = '809da38e3867d9fd09cc5c30dd5310500dee75e999166d7a14ad1ef6e9eca65d'
 )
 $ErrorActionPreference = 'Stop'
-$ExpectedSha256 = '809da38e3867d9fd09cc5c30dd5310500dee75e999166d7a14ad1ef6e9eca65d'
 
 function ProbeMarker([string]$Message) {
     [Console]::Out.WriteLine("FP_RENDERDOC_PROBE " + $Message)
