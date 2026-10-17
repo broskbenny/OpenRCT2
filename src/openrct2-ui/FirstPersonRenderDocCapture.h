@@ -55,9 +55,12 @@ inline void InitialiseAtStartup()
         {
             auto dll = std::filesystem::path(std::wstring(executable, n))
                 .parent_path() / L"renderdoc.dll";
-            module = LoadLibraryExW(dll.c_str(), nullptr,
-                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-            if (!module) state.failure = "renderdoc.dll-load-failed";
+            // LOAD_LIBRARY_SEARCH_* requires KB2533623 on Windows 7.
+            // LOAD_WITH_ALTERED_SEARCH_PATH works on unpatched Windows 7
+            // and resolves dependencies relative to this absolute DLL path.
+            module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+            if (!module)
+                state.failure = "renderdoc.dll-load-failed-win32-" + std::to_string(GetLastError());
         }
     }
     if (!module) return;

@@ -16,6 +16,9 @@ class RenderDocClickCaptureTests(unittest.TestCase):
         code=read("src/openrct2-win/openrct2-win.cpp")
         self.assertIn("FirstPersonRenderDocCapture::InitialiseAtStartup();",code)
         api=read("src/openrct2-ui/FirstPersonRenderDocCapture.h")
+        self.assertIn("LOAD_WITH_ALTERED_SEARCH_PATH", api)
+        self.assertNotIn("LOAD_LIBRARY_SEARCH_DEFAULT_DIRS", api)
+        self.assertIn("renderdoc.dll-load-failed-win32-", api)
         for x in ("LoadLibraryExW(", "StartFrameCapture(nullptr, nullptr)", 
                   "EndFrameCapture(nullptr, nullptr)", "status=saved"):
             self.assertIn(x,api)
