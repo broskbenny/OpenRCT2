@@ -156,6 +156,21 @@ int main() {
     assert(!FirstPersonAttachedArtworkPointOnFace({9,0,2}, neighbour));
     assert(!FirstPersonAttachedArtworkPointOnFace({2,1,2}, small));
     assert(!FirstPersonAttachedArtworkPointOnFace({2,0,2}, neighbour));
+    // A warped, non-parallelogram face needs piecewise mapping rather
+    // than pretending a single affine 3D sheet exists.
+    auto warped = small;
+    warped[2].y = 1.0f;
+    assert(!ReprojectFirstPersonAttachedArtwork(
+        warped, view, 1.0f, 1.0f, 2.0f, 2.0f));
+    // A degenerate native projection cannot locate a 3D plane.
+    auto degenerate = view;
+    degenerate[2] = degenerate[1];
+    assert(!ReprojectFirstPersonAttachedArtwork(
+        small, degenerate, 1.0f, 1.0f, 2.0f, 2.0f));
+    // An unobserved glyph outside the carrier is not evidence to
+    // extrapolate arbitrarily far beyond the physical sign.
+    assert(!ReprojectFirstPersonAttachedArtwork(
+        small, view, 30.0f, 30.0f, 2.0f, 2.0f));
 }
 """
         with tempfile.TemporaryDirectory(prefix="fp-native-sign-") as tmp:
