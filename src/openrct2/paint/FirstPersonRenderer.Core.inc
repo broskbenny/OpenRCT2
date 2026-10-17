@@ -1387,7 +1387,25 @@
                         scene, anchor, basis, isoAnchor,
                         colourImage, position, maskImage);
                     if (scene.surfaces.size() > surfaceStart)
-                        ApplyImmutablePaintSnapshot(scene.surfaces.back(), a->FirstPersonSnapshot);
+                    {
+                        auto& attached = scene.surfaces.back();
+                        ApplyImmutablePaintSnapshot(attached, a->FirstPersonSnapshot);
+                        // Native 3D text is attached glyph artwork, not part of
+                        // the reconstructed sign body. Preserve its provenance
+                        // so presentation can place it on a fixed sign plane.
+                        if (ps.Element != nullptr
+                            && ps.Element->getType() == TileElementType::largeScenery)
+                        {
+                            const auto* large = ps.Element->asLargeScenery();
+                            const auto* entry = large != nullptr ? large->getEntry() : nullptr;
+                            if (entry != nullptr
+                                && entry->flags.has(LargeSceneryFlag::is3DText))
+                            {
+                                attached.diagnosticReconstructionKind = 4;
+                                attached.diagnosticSourceRotation = rotation;
+                            }
+                        }
+                    }
                 }
                 // Attached entries do not carry independent semantic/physical
                 // ownership; they are pixel layers of this PaintStruct.
