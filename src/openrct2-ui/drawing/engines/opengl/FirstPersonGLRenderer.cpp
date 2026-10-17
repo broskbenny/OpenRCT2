@@ -1034,6 +1034,7 @@ void main() {
                             u[0] * v[1] - u[1] * v[0],
                         };
                         if (std::abs(cross[axis]) > 0.000001f)
+                        {
                             // Directional replay only applies to authored
                             // wall planes. Generic coplanar owners (floors,
                             // roofs, decals, entrances) retain their prior
@@ -1047,6 +1048,7 @@ void main() {
                                 std::copysign(float(axis + 1), cross[axis]),
                                 position, authoredWall ? 18.0f : 17.0f
                             };
+                        }
                         break;
                     }
                 }
