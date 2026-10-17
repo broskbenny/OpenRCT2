@@ -93,6 +93,7 @@ uniform usampler2D uPreviousLayer;
 uniform sampler2D uSelectedPhysicalDepth;
 uniform bool uPeeling;
 uniform int uPeelStage;
+uniform int uOwnerSidePass;
 uniform vec3 uEye;
 uniform vec3 uForward;
 uniform vec3 uRight;
@@ -137,6 +138,32 @@ void main() {
     if ((fFlags & 64) != 0
         && dot(fOutwardNormal, uEye - fWorld) <= 0.0)
         discard;
+
+    // Opposite authored wall sides can occupy the exact same plane. Native
+    // paint ordinal does not encode which side of the wall the camera sees.
+    // Replay rear-facing material first and front-facing material second.
+    // A lone wall still renders from either side, and physical depth testing
+    // continues to reject genuinely farther geometry. Other owner surfaces
+    // need only the second pass.
+    if (uOwnerSidePass != 0) {
+        bool orientedOwner =
+            (fFlags & 4) != 0 && (fFlags & 64) == 0
+            && fOutwardNormal.z == 18.0;
+        if (!orientedOwner) {
+            if (uOwnerSidePass == 1) discard;
+        } else {
+            float axis = abs(fOutwardNormal.x);
+            vec3 normal =
+                axis == 1.0 ? vec3(1.0, 0.0, 0.0)
+                : axis == 2.0 ? vec3(0.0, 1.0, 0.0)
+                : vec3(0.0, 0.0, 1.0);
+            normal *= sign(fOutwardNormal.x);
+            bool cameraFacing = dot(normal, uEye - fWorld) > 0.0;
+            if ((uOwnerSidePass == 1 && cameraFacing)
+                || (uOwnerSidePass == 2 && !cameraFacing))
+                discard;
+        }
+    }
 
     uint col = 0u;
     if ((fFlags & 16) != 0) {
@@ -204,10 +231,11 @@ void main() {
     // retain their true normal and never use this path. Thus the GPU vertex
     // remains its original size, with no new attribute or bandwidth penalty.
     if ((fFlags & 4) != 0 && (fFlags & 64) == 0
-        && fOutwardNormal.z == 17.0) {
+        && (fOutwardNormal.z == 17.0
+            || fOutwardNormal.z == 18.0)) {
         vec3 axis =
-            fOutwardNormal.x == 1.0 ? vec3(1.0, 0.0, 0.0)
-            : fOutwardNormal.x == 2.0 ? vec3(0.0, 1.0, 0.0)
+            abs(fOutwardNormal.x) == 1.0 ? vec3(1.0, 0.0, 0.0)
+            : abs(fOutwardNormal.x) == 2.0 ? vec3(0.0, 1.0, 0.0)
             : vec3(0.0, 0.0, 1.0);
         vec2 ndc = 2.0 * (gl_FragCoord.xy - uViewport.xy)
             / uViewport.zw - vec2(1.0);
@@ -782,6 +810,7 @@ void main() {
         glCall(glUniform1i, Uniform(_program, "uPreviousLayer"), 4);
         glCall(glUniform1i, Uniform(_program, "uSelectedPhysicalDepth"), 5);
         glCall(glUniform1i, Uniform(_program, "uPeeling"), 0);
+        glCall(glUniform1i, Uniform(_program, "uOwnerSidePass"), 0);
         glCall(glUniform1i, Uniform(_program, "uPeelStage"), 0);
 
         // Stable fixed world geometry belongs to resident GPU regions. Camera-
@@ -990,9 +1019,34 @@ void main() {
                             return coordinate(vertex.world, axis) == position;
                         }))
                     {
-                        encodedOutwardNormal = {
-                            float(axis + 1), position, 17.0f
+                        // Record winding as well as the canonical plane.
+                        // Its sign is semantic wall sidedness, NOT a depth
+                        // offset: reverse faces from adjacent tiles carry
+                        // opposite signs even with identical coordinates.
+                        const auto& a = surface.triangles[0].world;
+                        const auto& b = surface.triangles[1].world;
+                        const auto& c = surface.triangles[2].world;
+                        const float u[3]{ b.x - a.x, b.y - a.y, b.z - a.z };
+                        const float v[3]{ c.x - a.x, c.y - a.y, c.z - a.z };
+                        const float cross[3]{
+                            u[1] * v[2] - u[2] * v[1],
+                            u[2] * v[0] - u[0] * v[2],
+                            u[0] * v[1] - u[1] * v[0],
                         };
+                        if (std::abs(cross[axis]) > 0.000001f)
+                            // Directional replay only applies to authored
+                            // wall planes. Generic coplanar owners (floors,
+                            // roofs, decals, entrances) retain their prior
+                            // native paint-order semantics. Both kinds still
+                            // share the exact analytic physical depth.
+                            const bool authoredWall =
+                                surface.diagnosticSemanticRole
+                                    == static_cast<uint8_t>(
+                                        FirstPersonPaintSemanticRole::wall);
+                            encodedOutwardNormal = {
+                                std::copysign(float(axis + 1), cross[axis]),
+                                position, authoredWall ? 18.0f : 17.0f
+                            };
                         break;
                     }
                 }
@@ -1059,10 +1113,18 @@ void main() {
                     : second->nativePaintOrdinal;
                 return ao < bo;
             });
+        bool streamedDirectionalWallOwner = false;
         for (const auto* surface : streamedOwners)
-            appendVertices(
-                opaqueOwnerVertices, *surface,
-                true, false);
+        {
+            if (appendVertices(
+                    opaqueOwnerVertices, *surface,
+                    true, false)
+                && !surface->exteriorOnly
+                && surface->diagnosticSemanticRole
+                    == static_cast<uint8_t>(
+                        FirstPersonPaintSemanticRole::wall))
+                streamedDirectionalWallOwner = true;
+        }
         std::vector<uint64_t> regionDraws;
         regionDraws.reserve(scene.staticRegions.size());
         // CPU packing/drawing cached content does not consume the next upload
@@ -1209,6 +1271,11 @@ void main() {
                         if (!appendVertices(
                                 packed, surface, true, false))
                             break;
+                        if (!surface.exteriorOnly
+                            && surface.diagnosticSemanticRole
+                                == static_cast<uint8_t>(
+                                    FirstPersonPaintSemanticRole::wall))
+                            pending.buffer.hasDirectionalWallOwner = true;
                         if (++pending.nextOwner
                             == pending.owners.begin()
                                    ->second.size())
@@ -1290,6 +1357,21 @@ void main() {
             }
         }
 
+        bool hasDirectionalWallOwner = streamedDirectionalWallOwner;
+        if (!hasDirectionalWallOwner)
+        {
+            for (const auto key : regionDraws)
+            {
+                if (_staticOpaqueRegions.at(key).hasDirectionalWallOwner)
+                {
+                    hasDirectionalWallOwner = true;
+                    break;
+                }
+            }
+        }
+        size_t opaqueOwnerDrawCalls = 0;
+        size_t opaqueOwnerSubmittedVertices = 0;
+        const auto ownerReplayBegin = FrameClock::now();
         if (haveOpaqueOwners)
         {
             auto& front = output.GetFinalFramebuffer();
@@ -1337,23 +1419,13 @@ void main() {
                 2,GL_TEXTURE_2D,
                 _opaqueSnapshot->GetDepthTexture());
 
-            for (const auto key : regionDraws)
-            {
-                const auto& region =
-                    _staticOpaqueRegions.at(key);
-                if (region.ownerCount <= 0)
-                    continue;
-                glCall(
-                    glBindVertexArray,region.vao);
-                glCall(
-                    glDrawArrays,GL_TRIANGLES,
-                    region.ordinaryCount,
-                    region.ownerCount);
-            }
-
+            // Draw every region's rear-facing owners before any front-facing
+            // owners, including across region boundaries. Drawing each region
+            // once in isolation would reintroduce inter-region paint fighting.
+            // The side test is performed per fragment and does not require
+            // view-dependent re-upload of resident geometry.
             glCall(glBindVertexArray,_vao);
-            glCall(
-                glBindBuffer,GL_ARRAY_BUFFER,_vbo);
+            glCall(glBindBuffer,GL_ARRAY_BUFFER,_vbo);
             glCall(
                 glBufferData,GL_ARRAY_BUFFER,
                 GLsizeiptr(
@@ -1361,13 +1433,35 @@ void main() {
                         * sizeof(GPUVertex)),
                 opaqueOwnerVertices.data(),
                 GL_STREAM_DRAW);
-            if (!opaqueOwnerVertices.empty())
+            // A park viewport without any relevant authored walls uses
+            // its original single owner pass. Avoid doubling unrelated
+            // roof/floor/decal submissions in such scenes.
+            const int firstSidePass = hasDirectionalWallOwner ? 1 : 0;
+            const int lastSidePass = hasDirectionalWallOwner ? 2 : 0;
+            for (int sidePass = firstSidePass; sidePass <= lastSidePass; ++sidePass)
             {
-                glCall(
-                    glDrawArrays,GL_TRIANGLES,0,
-                    GLsizei(
-                        opaqueOwnerVertices.size()));
+                glCall(glUniform1i, Uniform(_program, "uOwnerSidePass"), sidePass);
+                for (const auto key : regionDraws)
+                {
+                    const auto& region = _staticOpaqueRegions.at(key);
+                    if (region.ownerCount <= 0)
+                        continue;
+                    glCall(glBindVertexArray, region.vao);
+                    glCall(glDrawArrays, GL_TRIANGLES,
+                        region.ordinaryCount, region.ownerCount);
+                    ++opaqueOwnerDrawCalls;
+                    opaqueOwnerSubmittedVertices += size_t(region.ownerCount);
+                }
+                if (!opaqueOwnerVertices.empty())
+                {
+                    glCall(glBindVertexArray, _vao);
+                    glCall(glDrawArrays, GL_TRIANGLES, 0,
+                        GLsizei(opaqueOwnerVertices.size()));
+                    ++opaqueOwnerDrawCalls;
+                    opaqueOwnerSubmittedVertices += opaqueOwnerVertices.size();
+                }
             }
+            glCall(glUniform1i, Uniform(_program, "uOwnerSidePass"), 0);
 
             // Owner replay deliberately used the pre-owner snapshot so equal
             // depth could be resolved without owners competing with
@@ -1394,6 +1488,7 @@ void main() {
                 clipWidth,clipHeight);
         }
 
+        const auto ownerReplayEnd = FrameClock::now();
         const auto opaqueDone = FrameClock::now();
         if (!streamedTransparent.empty())
         {
@@ -1959,14 +2054,18 @@ void main() {
             Console::WriteLine(
                 "FP_GL_RENDER_STAGES totalUs=%lld opaqueUs=%lld transparencyUs=%lld"
                 " finishUs=%lld transparencySurfaces=%zu tiles=%zu peels=%zu coverageWaitUs=%lld"
-                " streamedOpaque=%zu staticRegions=%zu",
+                " streamedOpaque=%zu staticRegions=%zu"
+                " ownerReplayCpuUs=%lld ownerDraws=%zu ownerVertices=%zu sideWallReplay=%d",
                 static_cast<long long>(elapsed(renderStarted, renderDone)),
                 static_cast<long long>(elapsed(renderStarted, opaqueDone)),
                 static_cast<long long>(elapsed(opaqueDone, transparencyDone)),
                 static_cast<long long>(elapsed(transparencyDone, renderDone)),
                 streamedTransparent.size(), activeTransparencyTiles, executedPeels,
                 static_cast<long long>(coverageWaitUs),
-                streamedOpaque.size(), scene.staticRegions.size());
+                streamedOpaque.size(), scene.staticRegions.size(),
+                static_cast<long long>(elapsed(ownerReplayBegin, ownerReplayEnd)),
+                opaqueOwnerDrawCalls, opaqueOwnerSubmittedVertices,
+                hasDirectionalWallOwner ? 1 : 0);
         }
     }
 } // namespace OpenRCT2::Ui

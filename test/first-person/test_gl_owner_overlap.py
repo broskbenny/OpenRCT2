@@ -74,6 +74,42 @@ def quad(z0, z1, colour, opposite_diagonal, y=4544.0):
     return vertices
 
 
+def quad_x(x, y0, y1, z0, z1, colour, outward_sign):
+    """Opposite authored semantic wall sides at one EXACT physical plane."""
+    if outward_sign > 0:
+        points = [
+            (x, y0, z0), (x, y1, z0), (x, y1, z1),
+            (x, y0, z0), (x, y1, z1), (x, y0, z1),
+        ]
+    else:
+        points = [
+            (x, y1, z0), (x, y0, z0), (x, y0, z1),
+            (x, y1, z0), (x, y0, z1), (x, y1, z1),
+        ]
+    vertices = np.zeros(6, dtype=VERTEX_FORMAT)
+    vertices["world"] = points
+    vertices["uv"] = [
+        ((p[1] - y0) * 2.0 / (y1 - y0),
+         (p[2] - z0) * 2.0 / (z1 - z0))
+        for p in points
+    ]
+    vertices["flags"] = 4
+    vertices["size"][:] = (2.0, 2.0)
+    vertices["atlas"][:] = (0.0, 0.0, 2.0, 2.0)
+    vertices["atlasLayer"] = 0 if colour == 6 else 1
+    vertices["maskLayer"] = -1
+    vertices["paintOrdinal"] = colour
+    # Use the identical edge-cross-product rule as the C++ GPU packer,
+    # instead of feeding the expected facing sign straight into the shader.
+    edge_u = vertices["world"][1] - vertices["world"][0]
+    edge_v = vertices["world"][2] - vertices["world"][0]
+    winding = np.cross(edge_u, edge_v)[0]
+    assert winding * outward_sign > 0
+    vertices["normal"][:] = (
+        math.copysign(1.0, winding), x, 18.0)
+    return vertices
+
+
 class ProductionGLOwnerOverlapTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -111,7 +147,8 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.ctx.release()
 
-    def render_overlap(self, yaw, eye, surfaces=None):
+    def render_overlap(self, yaw, eye, surfaces=None, side_passes=(0,),
+                       forward_override=None, right_override=None):
         ctx, program = self.ctx, self.shader
         self.target.use()
         ctx.viewport = (0, 0, WIDTH, HEIGHT)
@@ -135,8 +172,8 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
             ("uSelectedPhysicalDepth", 5)):
             if name in program:
                 program[name].value = location
-        forward = (math.sin(yaw), math.cos(yaw), 0)
-        right = (math.cos(yaw), -math.sin(yaw), 0)
+        forward = forward_override or (math.sin(yaw), math.cos(yaw), 0)
+        right = right_override or (math.cos(yaw), -math.sin(yaw), 0)
         for name, value in (
             ("uEye", eye),
             ("uForward", forward), ("uRight", right),
@@ -150,13 +187,18 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         # units overlap the primary wall, whose greater ordinal must win.
         if surfaces is None:
             surfaces = (quad(112, 128, 6, True), quad(120, 136, 9, False))
-        for vertices in surfaces:
-            buf = ctx.buffer(vertices.tobytes())
-            vao = ctx.vertex_array(
-                program, [(buf, FORMAT, *ATTRIBUTES)])
-            vao.render(mode=moderngl.TRIANGLES)
-            vao.release()
-            buf.release()
+        for side_pass in side_passes:
+            if "uOwnerSidePass" in program:
+                program["uOwnerSidePass"].value = side_pass
+            for vertices in surfaces:
+                buf = ctx.buffer(vertices.tobytes())
+                vao = ctx.vertex_array(
+                    program, [(buf, FORMAT, *ATTRIBUTES)])
+                vao.render(mode=moderngl.TRIANGLES)
+                vao.release()
+                buf.release()
+        if "uOwnerSidePass" in program:
+            program["uOwnerSidePass"].value = 0
         return np.frombuffer(self.colour.read(), dtype=np.uint32).reshape(HEIGHT, WIDTH)
 
     def test_production_vertex_shader_preserves_owner_flags_and_palette(self):
@@ -227,6 +269,158 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         vao.release()
         buf.release()
         program.release()
+
+    def test_logged_wall_vertices_encode_actual_opposite_native_faces(self):
+        # The 2026-10-17 pick recorded these exact first triangles.
+        # wallbr32 from (2944,4064), x2976, is outward -X; wallcf16
+        # from (2752,4448), x2752, is outward +X.
+        wallbr32 = np.array([
+            (2976, 4096, 112), (2976, 4064, 112),
+            (2976, 4064, 144)], dtype=np.float32)
+        wallcf16 = np.array([
+            (2752, 4448, 120), (2752, 4480, 120),
+            (2752, 4480, 136)], dtype=np.float32)
+        for points, expected_sign in (
+            (wallbr32, -1), (wallcf16, 1)
+        ):
+            winding = np.cross(points[1] - points[0],
+                               points[2] - points[0])
+            self.assertEqual(int(np.sign(winding[0])), expected_sign)
+            self.assertEqual(float(winding[1]), 0.0)
+            self.assertEqual(float(winding[2]), 0.0)
+        renderer = (ROOT / "src/openrct2-ui/drawing/engines/opengl/FirstPersonGLRenderer.cpp").read_text(encoding="utf-8")
+        self.assertIn("std::copysign(float(axis + 1), cross[axis])", renderer)
+        self.assertIn("uOwnerSidePass", renderer)
+
+    def test_gpu_owner_replay_is_single_pass_without_semantic_walls(self):
+        shader_source = RENDERER.read_text(encoding="utf-8")
+        header = (
+            ROOT / "src/openrct2-ui/drawing/engines/opengl/FirstPersonGLRenderer.h"
+        ).read_text(encoding="utf-8")
+        self.assertIn("bool hasDirectionalWallOwner = streamedDirectionalWallOwner;", shader_source)
+        self.assertIn("const int firstSidePass = hasDirectionalWallOwner ? 1 : 0;", shader_source)
+        self.assertIn("const int lastSidePass = hasDirectionalWallOwner ? 2 : 0;", shader_source)
+        self.assertIn("bool hasDirectionalWallOwner = false;", header)
+        self.assertIn("FirstPersonPaintSemanticRole::wall", shader_source)
+        self.assertIn("authoredWall ? 18.0f : 17.0f", shader_source)
+
+    def test_regular_native_owners_do_not_change_material_order_by_view_side(self):
+        # Directional replay is restricted to authored wall planes. Generic
+        # coplanar floors, roofs, decals retain native paint priority.
+        left = quad_x(2752, 4448, 4480, 112, 128, 9, -1)
+        right = quad_x(2752, 4448, 4480, 112, 128, 6, 1)
+        left["normal"][:, 2] = 17.0
+        right["normal"][:, 2] = 17.0
+        for side in (-1, 1):
+            eye = (2752.0 + 60 * side, 4464.0, 124.0)
+            pixels = self.render_overlap(
+                0, eye, surfaces=(right, left), side_passes=(1, 2),
+                forward_override=(-float(side), 0.0, 0.0),
+                right_override=(0.0, -float(side), 0.0))
+            self.assertEqual(int(pixels[HEIGHT // 2, WIDTH // 2]), 9)
+
+    def test_actual_opposite_tile_sides_ignore_wrong_native_ordinal(self):
+        # The two clicked pairs lie on x=2752 and x=2976, respectively.
+        # Native paint order is the OPPOSITE of viewing side in one case.
+        # Neither side may disappear; the front-facing authored material
+        # must replace the rear-facing one at identical physical depth.
+        cases = (
+            # wallcf16 vs wallmm17, selected at x=2752:
+            (2752.0, 4448.0, 4480.0, 120.0, 128.0,
+             9, 6, 9),
+            # wallbr32 vs wallbr8, selected at x=2976:
+            (2976.0, 4064.0, 4096.0, 112.0, 120.0,
+             9, 6, 6),
+        )
+        for x, y0, y1, z0, z1, left_colour, right_colour, _ in cases:
+            left = quad_x(x, y0, y1, z0, z1, left_colour, -1)
+            right = quad_x(x, y0, y1, z0, z1, right_colour, +1)
+            for side in (-1, 1):
+                eye = (x + 60.0 * side, (y0 + y1) / 2.0, (z0 + z1) / 2.0)
+                forward = (-float(side), 0.0, 0.0)
+                right_axis = (0.0, -float(side), 0.0)
+                expected = right_colour if side == 1 else left_colour
+                for draw_order in ((left, right), (right, left)):
+                    with self.subTest(x=x, side=side,
+                                      first=draw_order[0]["paintOrdinal"][0]):
+                        pixels = self.render_overlap(
+                            0, eye, surfaces=draw_order, side_passes=(1, 2),
+                            forward_override=forward, right_override=right_axis)
+                        self.assertEqual(
+                            int(pixels[HEIGHT // 2, WIDTH // 2]), expected)
+
+    def test_actual_mismatched_wall_heights_preserve_uncovered_sections(self):
+        # Exact clicked wallcf16 (z120..136) vs wallmm17 (z112..128).
+        # Rear-facing material must remain visible below the front plane;
+        # only the overlapping z120..128 band uses directional ownership.
+        left = quad_x(2752, 4448, 4480, 112, 128, 9, -1)
+        right = quad_x(2752, 4448, 4480, 120, 136, 6, +1)
+        pixels = self.render_overlap(
+            0, (2812.0, 4464.0, 124.0),
+            surfaces=(right, left), side_passes=(1, 2),
+            forward_override=(-1.0, 0.0, 0.0),
+            right_override=(0.0, -1.0, 0.0))
+        self.assertEqual(int(pixels[HEIGHT//2, WIDTH//2]), 6)
+        self.assertEqual(int(pixels[HEIGHT//2 - 7, WIDTH//2]), 9)
+        self.assertEqual(int(pixels[HEIGHT//2 + 6, WIDTH//2]), 6)
+
+    def test_directional_ownership_also_handles_y_aligned_wall_planes(self):
+        # The rule is a property of reconstructed planar wall normals, not
+        # the two specific x-aligned tile edges in the picked park.
+        positive = quad(112, 128, 9, False)  # winding +Y
+        negative = quad(112, 128, 6, True)  # winding -Y
+        positive["normal"][:] = (2.0, 4544.0, 18.0)
+        negative["normal"][:] = (-2.0, 4544.0, 18.0)
+        for side in (-1, 1):
+            eye = (2640.0, 4544.0 + 60.0 * side, 120.0)
+            forward = (0.0, -float(side), 0.0)
+            right = (-float(side), 0.0, 0.0)
+            expected = 9 if side > 0 else 6
+            for layers in ((positive, negative), (negative, positive)):
+                with self.subTest(side=side,
+                                  first=int(layers[0]["paintOrdinal"][0])):
+                    pixels = self.render_overlap(
+                        0, eye, surfaces=layers, side_passes=(1, 2),
+                        forward_override=forward, right_override=right)
+                    self.assertEqual(
+                        int(pixels[HEIGHT//2, WIDTH//2]), expected)
+
+    def test_far_camera_facing_wall_cannot_overwrite_nearer_rear_face(self):
+        # Physical occlusion must dominate directional material priority.
+        # An authored rear-facing plane 60 units from the camera occludes a
+        # front-facing panel TWO world units farther away, irrespective of
+        # painter order or which side pass draws later.
+        near = quad_x(2752.0, 4448, 4480, 112, 128, 9, -1)
+        far = quad_x(2750.0, 4448, 4480, 112, 128, 6, +1)
+        for order in ((near, far), (far, near)):
+            with self.subTest(first=int(order[0]["paintOrdinal"][0])):
+                pixels = self.render_overlap(
+                    0, (2812.0, 4464.0, 120.0),
+                    surfaces=order, side_passes=(1, 2),
+                    forward_override=(-1.0, 0.0, 0.0),
+                    right_override=(0.0, -1.0, 0.0))
+                self.assertEqual(
+                    int(pixels[HEIGHT // 2, WIDTH // 2]), 9)
+
+    def test_cutout_front_material_reveals_back_material_without_holes(self):
+        # Opposing wall face on each side of x=2752, using actual native
+        # indexed artwork alpha=0 semantics, not synthetic solid colours.
+        # Front railing cutouts must reveal the opaque rear wall rather than
+        # become holes or invert the entire material's ownership.
+        right = quad_x(2752, 4448, 4480, 112, 144, 6, 1)
+        left = quad_x(2752, 4448, 4480, 112, 144, 9, -1)
+        self.sprites.write(bytes([6, 0, 6, 0] + [9] * 4))
+        try:
+            pixels = self.render_overlap(
+                0, (2812.0, 4464.0, 128.0),
+                surfaces=(right, left),
+                side_passes=(1, 2),
+                forward_override=(-1.0, 0.0, 0.0),
+                right_override=(0.0, -1.0, 0.0))
+            self.assertGreater(np.count_nonzero(pixels == 6), 20)
+            self.assertGreater(np.count_nonzero(pixels == 9), 20)
+        finally:
+            self.sprites.write(bytes([6] * 4 + [9] * 4))
 
     def test_true_nearer_wall_beats_later_native_ordinal(self):
         # Native paint order decides ties only. A later ordinal at an
