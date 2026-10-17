@@ -88,6 +88,11 @@ def quad_x(x, y0, y1, z0, z1, colour, outward_sign):
         ]
     vertices = np.zeros(6, dtype=VERTEX_FORMAT)
     vertices["world"] = points
+    vertices["uv"] = [
+        ((p[1] - y0) * 2.0 / (y1 - y0),
+         (p[2] - z0) * 2.0 / (z1 - z0))
+        for p in points
+    ]
     vertices["flags"] = 4
     vertices["size"][:] = (2.0, 2.0)
     vertices["atlas"][:] = (0.0, 0.0, 2.0, 2.0)
@@ -287,6 +292,26 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
                             forward_override=forward, right_override=right_axis)
                         self.assertEqual(
                             int(pixels[HEIGHT // 2, WIDTH // 2]), expected)
+
+    def test_cutout_front_material_reveals_back_material_without_holes(self):
+        # Opposing wall face on each side of x=2752, using actual native
+        # indexed artwork alpha=0 semantics, not synthetic solid colours.
+        # Front railing cutouts must reveal the opaque rear wall rather than
+        # become holes or invert the entire material's ownership.
+        right = quad_x(2752, 4448, 4480, 112, 144, 6, 1)
+        left = quad_x(2752, 4448, 4480, 112, 144, 9, -1)
+        self.sprites.write(bytes([6, 0, 6, 0] + [9] * 4))
+        try:
+            pixels = self.render_overlap(
+                0, (2812.0, 4464.0, 128.0),
+                surfaces=(right, left),
+                side_passes=(1, 2),
+                forward_override=(-1.0, 0.0, 0.0),
+                right_override=(0.0, -1.0, 0.0))
+            self.assertGreater(np.count_nonzero(pixels == 6), 20)
+            self.assertGreater(np.count_nonzero(pixels == 9), 20)
+        finally:
+            self.sprites.write(bytes([6] * 4 + [9] * 4))
 
     def test_true_nearer_wall_beats_later_native_ordinal(self):
         # Native paint order decides ties only. A later ordinal at an
