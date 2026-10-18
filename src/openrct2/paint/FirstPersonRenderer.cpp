@@ -1606,6 +1606,8 @@ namespace OpenRCT2::Paint
         // next first-person scene happens to reach each lazy reset path.
         _terrainRegionPackets.clear();
         _terrainRegionEpoch = _sceneEpoch;
+        _localSceneryPackets.clear();
+        _localSceneryEpoch = _sceneEpoch;
         _structuralTileIndex.clear();
         _structuralIndexEpoch = _sceneEpoch;
         _largeScenerySourceAssets.clear();
@@ -1642,7 +1644,8 @@ namespace OpenRCT2::Paint
             && _staticPaintCache.empty() && _trackTrajectoryCache.empty()
             && _largeSceneryGeometryCache.empty()
             && _parkEntranceGeometryCache.empty()
-            && _staticRegionPackets.empty()) return;
+            && _staticRegionPackets.empty()
+            && _localSceneryPackets.empty()) return;
         const auto floorTile = [](int32_t x) {return int32_t(std::floor(float(x)/kCoordsXYStep));};
         const auto x0 = floorTile(std::min(low.x,high.x));
         const auto y0 = floorTile(std::min(low.y,high.y));
@@ -1750,6 +1753,8 @@ namespace OpenRCT2::Paint
             // native invalidation should therefore cost O(invalidated tiles),
             // not O(every terrain/static tile first person has ever cached).
             const uint64_t key = TerrainKey(tx, ty);
+            MarkTerrainRegionDirtyForTile(tx, ty);
+            MarkLocalSceneryDirtyForTile(tx, ty);
             if (auto terrain = _terrainCache.entries.find(key);
                 terrain != _terrainCache.entries.end())
             {
