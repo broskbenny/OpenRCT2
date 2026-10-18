@@ -799,6 +799,7 @@
             std::unordered_set<uint64_t> waitingTiles;
             bool submitted = false;
             bool ready = false;
+            uint8_t stage = 0;
         };
         static std::unordered_map<uint64_t, std::shared_ptr<SmallSceneryJob>> _smallSceneryJobs;
         // A reconstruction outcome belongs to the asset, not every tile
@@ -824,7 +825,9 @@
             const SmallSceneryEntry& entry, CoordsXY tile,
             uint8_t rotation, bool fromNativePainter)
         {
-            const auto stage = FirstPersonSmallSceneryWitherStage(entry, job->element);
+            // The source stage is captured before normalising a shared asset's
+            // orientation, so painter and prewarm request the same four views.
+            const auto stage = job->stage;
             if (!job->submitted)
             {
                 for (uint8_t view = 0; view < 4; ++view)
@@ -959,6 +962,7 @@
                 job->entry.frame_offsets = nullptr;
                 job->entry.FrameOffsetCount = 0;
                 job->element = small;
+                job->stage = FirstPersonSmallSceneryWitherStage(*entry, small);
                 if (FirstPersonSmallSceneryCanShareRotatedAsset(*entry, small))
                     job->element.setDirection(0);
                 it = _smallSceneryJobs.emplace(key, std::move(job)).first;
@@ -998,6 +1002,7 @@
                 job->entry.frame_offsets = nullptr;
                 job->entry.FrameOffsetCount = 0;
                 job->element = *small;
+                job->stage = stage;
                 if (sharedRotation)
                     job->element.setDirection(0);
                 it = _smallSceneryJobs.emplace(key, std::move(job)).first;
