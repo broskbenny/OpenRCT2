@@ -4877,16 +4877,27 @@
             std::vector<LargeSceneryTile> tiles;
             std::vector<std::pair<CoordsXY, uint64_t>> tileSignatures;
             ReconstructionGroupInfo group{};
-            FirstPersonSpriteSnapshot sprites;
+            std::shared_ptr<FirstPersonSpriteSnapshot> sprites;
             size_t nextImage = 0;
             bool submitted = false;
             int32_t minX{}, minY{}, maxX{}, maxY{};
         };
         static std::unordered_map<uint64_t, std::shared_ptr<LargeSceneryJob>> _largeSceneryJobs;
+        // Sprite pixels belong to the art asset, not its map placement.
+        // Snapshot bytes are shared across instances and worker jobs; only
+        // transforms, colours, sign text and output geometry are per-instance.
+        static std::unordered_map<ImageIndex, std::shared_ptr<FirstPersonSpriteSnapshot>>
+            _largeScenerySourceAssets;
+        static uint64_t _largeScenerySourceEpoch = 0;
 
         void QueueLargeSceneryGeometry(const LargeSceneryElement& large,
             const LargeSceneryEntry& entry, const ReconstructionGroupInfo& group, uint64_t frame)
         {
+            if (_largeScenerySourceEpoch != _sceneEpoch)
+            {
+                _largeScenerySourceAssets.clear();
+                _largeScenerySourceEpoch = _sceneEpoch;
+            }
             if (!_snapshotBudget.available() || !_reconstructionWorker.hasCapacity()) return;
             if (!_largeSceneryJobs.contains(group.key) && _largeSceneryJobs.size() >= 8) return;
             auto& slot = _largeSceneryJobs[group.key];
@@ -4899,6 +4910,9 @@
                 slot->tiles.assign(entry.tiles.begin(), entry.tiles.end());
                 slot->element = large;
                 slot->group = group;
+                auto [asset, inserted] = _largeScenerySourceAssets.try_emplace(
+                    entry.image, std::make_shared<FirstPersonSpriteSnapshot>());
+                slot->sprites = asset->second;
                 slot->minX = slot->maxX = int32_t(group.anchor.x) / kCoordsXYStep;
                 slot->minY = slot->maxY = int32_t(group.anchor.y) / kCoordsXYStep;
                 for (const auto& tile : slot->tiles)
@@ -4916,7 +4930,7 @@
             if (job->submitted) return;
             while (job->nextImage < job->tiles.size() * 4)
             {
-                if (!job->sprites.capture(entry.image + 4 + uint32_t(job->nextImage), _snapshotBudget)) return;
+                if (!job->sprites->capture(entry.image + 4 + uint32_t(job->nextImage), _snapshotBudget)) return;
                 ++job->nextImage;
             }
             if (!LargeSceneryInstanceComplete(entry, group, large.getDirection() & 3u))
@@ -4930,7 +4944,7 @@
                 metadata.tiles = job->tiles;
                 const auto model = BuildLargeSceneryAssetModel(metadata);
                 auto result = BuildLargeSceneryInstanceGeometry(job->element, metadata,
-                    model, job->group, job->group.key, frame, job->sprites, epoch);
+                    model, job->group, job->group.key, frame, *job->sprites, epoch);
                 return [job, result = std::move(result)]() mutable {
                     const auto pending = _largeSceneryJobs.find(job->group.key);
                     if (pending == _largeSceneryJobs.end() || pending->second != job) return;
