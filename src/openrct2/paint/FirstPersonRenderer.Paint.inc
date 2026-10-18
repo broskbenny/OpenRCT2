@@ -1601,6 +1601,9 @@
             // scenery's 32x32 packets, so ground cannot wait for the
             // source-capture/reconstruction pipeline.
             SubmitVisibleTerrainRegions(scene, worldFrustum);
+            // Safe ungrouped scenery is independently replaceable; grouped
+            // objects and cross-object occupancy stay in coherent 32x32 packets.
+            SubmitVisibleLocalSceneryRegions(scene, worldFrustum);
             SubmitVisibleStaticRegions(scene, worldFrustum, frame);
             const auto finished = PaintClock::now();
             // These are counts of tiles with native observations, not a claim
