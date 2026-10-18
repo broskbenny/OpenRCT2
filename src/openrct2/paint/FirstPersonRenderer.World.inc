@@ -1083,11 +1083,166 @@
             VisitFirstPersonRegions(frustum,0,0,map.x,map.y,visit,bounds);
         }
 
+        // Terrain publication is deliberately independent of source-art
+        // captures, reconstruction workers and 32x32 scenery packets.
+        // A terrain edit dirties one 8x8 cell; unmodified GPU cells remain
+        // resident and continue rendering while replacements are assembled.
+        struct FirstPersonTerrainRegionPacket
+        {
+            std::shared_ptr<const std::vector<FirstPersonSurface>> surfaces;
+            std::vector<ImageIndex> textureDependencies;
+            FirstPersonVec3 center{};
+            float radius = 0.0f;
+            uint64_t generation = 0;
+            size_t vertexCount = 0;
+            bool dirty = true;
+        };
+        static std::unordered_map<uint64_t, FirstPersonTerrainRegionPacket>
+            _terrainRegionPackets;
+        static uint64_t _terrainRegionEpoch = 0;
+
+        void MarkTerrainRegionDirtyForTile(int32_t tx, int32_t ty)
+        {
+            _terrainRegionPackets[FirstPersonTerrainRegionKey(tx, ty)].dirty = true;
+        }
+
+        void SubmitVisibleTerrainRegions(
+            FirstPersonScene& scene, const FirstPersonFrustum& frustum)
+        {
+            std::unordered_set<uint64_t> visible;
+            visible.reserve(scene.visibleTiles.size() / 32 + 1);
+            for (const auto tile : scene.visibleTiles)
+                visible.insert(FirstPersonTerrainRegionKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+
+            struct Candidate
+            {
+                uint64_t key;
+                float distanceSquared;
+            };
+            std::vector<Candidate> rebuild;
+            rebuild.reserve(visible.size());
+            for (const auto key : visible)
+            {
+                auto& region = _terrainRegionPackets[key];
+                if (!region.dirty)
+                    continue;
+                const int32_t rx = int32_t(uint32_t((key & ~(1ull << 63)) >> 32)) - 1;
+                const int32_t ry = int32_t(uint32_t(key)) - 1;
+                const float dx = float(rx * 8 * kCoordsXYStep + 4 * kCoordsXYStep) - frustum.eye.x;
+                const float dy = float(ry * 8 * kCoordsXYStep + 4 * kCoordsXYStep) - frustum.eye.y;
+                rebuild.push_back({ key, dx * dx + dy * dy });
+            }
+            std::sort(rebuild.begin(), rebuild.end(), [](const auto& a, const auto& b) {
+                return a.distanceSquared < b.distanceSquared
+                    || (a.distanceSquared == b.distanceSquared && a.key < b.key);
+            });
+            FirstPersonFrameBudget budget(128, std::chrono::microseconds(3000));
+            for (const auto& candidate : rebuild)
+            {
+                if (!budget.take())
+                    break;
+                const auto key = candidate.key;
+                const int32_t rx = int32_t(uint32_t((key & ~(1ull << 63)) >> 32)) - 1;
+                const int32_t ry = int32_t(uint32_t(key)) - 1;
+                std::vector<FirstPersonSurface> surfaces;
+                surfaces.reserve(80);
+                std::vector<ImageIndex> dependencies;
+                FirstPersonVec3 low{}, high{};
+                bool haveBounds = false;
+                const auto add = [&](const FirstPersonSurface& surface) {
+                    if (!IsResidentStaticSurface(surface) || surface.gpuRegion != key)
+                        return;
+                    surfaces.push_back(surface);
+                    if (surface.image.HasValue()
+                        && (!surface.hasImmutablePixelData() || surface.physicalCoverage))
+                        dependencies.push_back(surface.image.GetIndex());
+                    if (surface.mask.HasValue())
+                        dependencies.push_back(surface.mask.GetIndex());
+                    for (const auto& vertex : surface.triangles)
+                    {
+                        const auto& p = vertex.world;
+                        if (!haveBounds)
+                        {
+                            low = high = p;
+                            haveBounds = true;
+                        }
+                        else
+                        {
+                            low.x = std::min(low.x, p.x); low.y = std::min(low.y, p.y);
+                            low.z = std::min(low.z, p.z); high.x = std::max(high.x, p.x);
+                            high.y = std::max(high.y, p.y); high.z = std::max(high.z, p.z);
+                        }
+                    }
+                };
+                for (int32_t ty = ry * 8; ty < (ry + 1) * 8; ++ty)
+                for (int32_t tx = rx * 8; tx < (rx + 1) * 8; ++tx)
+                {
+                    const auto found = _terrainCache.entries.find(TerrainKey(tx, ty));
+                    if (found == _terrainCache.entries.end() || found->second.dirty)
+                        continue;
+                    const auto& terrain = found->second;
+                    if (!terrain.verticalOpening)
+                        add(terrain.ground);
+                    for (const auto& surface : terrain.water)
+                        add(surface);
+                    for (const auto& surface : terrain.waterOverlay)
+                        add(surface);
+                }
+                // Publishing a wholly empty cell must not suppress a prior
+                // valid cell while source geometry is temporarily unavailable.
+                if (!haveBounds)
+                    continue;
+                std::sort(dependencies.begin(), dependencies.end());
+                dependencies.erase(std::unique(dependencies.begin(), dependencies.end()),
+                    dependencies.end());
+                auto& region = _terrainRegionPackets[key];
+                region.center = {
+                    (low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f,
+                    (low.z + high.z) * 0.5f
+                };
+                const float dx = (high.x - low.x) * 0.5f;
+                const float dy = (high.y - low.y) * 0.5f;
+                const float dz = (high.z - low.z) * 0.5f;
+                region.radius = std::sqrt(dx * dx + dy * dy + dz * dz);
+                region.vertexCount = surfaces.size() * 6;
+                region.textureDependencies = std::move(dependencies);
+                region.surfaces = std::make_shared<const std::vector<FirstPersonSurface>>(std::move(surfaces));
+                ++region.generation;
+                region.dirty = false;
+            }
+
+            // Terrain goes first: the existing GL region uploader therefore
+            // admits ground before reconstructed scenery without a new GPU path.
+            // Draw last-known-good terrain even if its replacement is pending.
+            for (const auto key : visible)
+            {
+                const auto found = _terrainRegionPackets.find(key);
+                if (found == _terrainRegionPackets.end())
+                    continue;
+                const auto& region = found->second;
+                if (!region.surfaces || region.surfaces->empty()
+                    || !frustum.visible(region.center, region.radius))
+                    continue;
+                scene.staticRegions.push_back({
+                    key, _sceneEpoch, region.generation,
+                    region.center, region.radius,
+                    region.surfaces.get(), &region.textureDependencies,
+                    region.surfaces, region.generation, region.vertexCount
+                });
+            }
+        }
+
         void CollectTerrain(FirstPersonScene& scene)
         {
             PROFILED_FUNCTION();
             const auto& opt = scene.options;
             const auto frame = ++_terrainCache.frame;
+            if (_terrainRegionEpoch != _sceneEpoch)
+            {
+                _terrainRegionPackets.clear();
+                _terrainRegionEpoch = _sceneEpoch;
+            }
             const auto& view = scene.resolvedView;
             const auto frustum = FirstPersonFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
@@ -1122,7 +1277,7 @@
                         if (cache.verticalOpening != verticalOpening)
                         {
                             cache.verticalOpening = verticalOpening;
-                            MarkStaticRegionDirtyForTile(tx, ty);
+                            MarkTerrainRegionDirtyForTile(tx, ty);
                         }
                     }
 
@@ -1196,7 +1351,7 @@
                     if (FirstPersonTerrainRevalidationNeedsRegionRebuild(
                             wasDirty, terrainChanged))
                     {
-                        MarkStaticRegionDirtyForTile(tx, ty);
+                        MarkTerrainRegionDirtyForTile(tx, ty);
                     }
                     if (terrainChanged)
                     {
@@ -1236,7 +1391,7 @@
                         cache.ground = {};
                         cache.ground.image = image;
                         cache.ground.physicalCoverage = true;
-                        cache.ground.gpuRegion = FirstPersonGpuRegionKey(tx,ty);
+                        cache.ground.gpuRegion = FirstPersonTerrainRegionKey(tx,ty);
 
                         // Native terrain coverage is a diamond/warped raster,
                         // not an authored transparent cut-out. Its zero border
@@ -1466,7 +1621,7 @@
                                     surface.physicalCoverage =
                                         physicalCoverage;
                                     surface.gpuRegion =
-                                        FirstPersonGpuRegionKey(tx, ty);
+                                        FirstPersonTerrainRegionKey(tx, ty);
                                     if (polygon.count == 3)
                                     {
                                         surface.triangles = {
@@ -3988,18 +4143,6 @@
                 const int32_t ty = y0 + int32_t(index / 32);
                 const int32_t tx = x0 + int32_t(index % 32);
                 const auto tileKey = TerrainKey(tx, ty);
-                if (const auto terrainIt = _terrainCache.entries.find(tileKey);
-                    terrainIt != _terrainCache.entries.end() && !terrainIt->second.dirty)
-                {
-                    const auto& terrain = terrainIt->second;
-                    if (!terrain.verticalOpening)
-                        addSurface(terrain.ground);
-                    for (const auto& waterSurface : terrain.water)
-                        addSurface(waterSurface);
-                    for (const auto& overlaySurface : terrain.waterOverlay)
-                        addSurface(overlaySurface);
-                }
-
                 if (auto supportIt =
                         _staticPaintCache.find(tileKey);
                     supportIt != _staticPaintCache.end()
