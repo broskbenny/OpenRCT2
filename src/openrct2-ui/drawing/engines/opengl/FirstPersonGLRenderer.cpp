@@ -307,6 +307,14 @@ void main() {
             if (logarithmic == previousDepth && ordinal <= previousOrdinal) discard;
         }
 
+        if (uPeelStage == 3) {
+            // Provably one transparent layer per pixel: physical depth is
+            // the only selector. Emit the identical palette/ordinal token
+            // as stage two without a separate depth-selection render pass.
+            gl_FragDepth = logarithmic;
+            oIndex = (ordinal << 8u) | (row + 1u);
+            return;
+        }
         if (uPeelStage == 1) {
             // Stage one chooses the farthest REMAINING physical layer only.
             gl_FragDepth = logarithmic;
@@ -685,6 +693,7 @@ void main() {
         const int32_t clipHeight = clip.getHeight();
         int64_t coverageWaitUs = 0;
         size_t executedPeels = 0;
+        size_t singleLayerTiles = 0;
         size_t activeTransparencyTiles = 0;
         const auto pollPeelCoverageQueries =
             [&](uint64_t token) {
@@ -1839,6 +1848,48 @@ void main() {
                     std::min(
                         tile.candidates.size(),
                         conservativeLayerLimit(tile));
+
+                if (logicalPasses == 1)
+                {
+                    // The conservative rectangle bound proves that no pixel
+                    // in this tile can contain two DIFFERENT source surfaces.
+                    // The direct pass uses physical depth in the same way as
+                    // stage one and emits the exact encoded palette token
+                    // from stage two; no second geometry pass is necessary.
+                    auto& logicalLayer = *_peelLayers[0];
+                    logicalLayer.Bind();
+                    glCall(glViewport, left, viewportBottom, width, height);
+                    setTileScissor(tile);
+                    const GLuint emptyToken[4] = { 0, 0, 0, 0 };
+                    const GLfloat initialDepth[1] = { 0.0f };
+                    glCall(glClearBufferuiv, GL_COLOR, 0, emptyToken);
+                    glCall(glClearBufferfv, GL_DEPTH, 0, initialDepth);
+                    glCall(glDepthMask, GL_TRUE);
+                    glCall(glEnable, GL_DEPTH_TEST);
+                    glCall(glDepthFunc, GL_GREATER);
+                    glCall(glUseProgram, _program);
+                    glCall(glUniform1i, Uniform(_program, "uPeeling"), 0);
+                    glCall(glUniform1i, Uniform(_program, "uPeelStage"), 3);
+                    OpenGLAPI::SetTexture(0, GL_TEXTURE_2D_ARRAY,
+                        textures.GetAtlasesTexture());
+                    OpenGLAPI::SetTexture(1, GL_TEXTURE_2D,
+                        textures.GetPaletteTexture());
+                    OpenGLAPI::SetTexture(2, GL_TEXTURE_2D,
+                        _opaqueSnapshot->GetDepthTexture());
+                    OpenGLAPI::SetTexture(3, GL_TEXTURE_2D,
+                        _opaqueSnapshot->GetDepthTexture());
+                    OpenGLAPI::SetTexture(4, GL_TEXTURE_2D,
+                        _opaqueSnapshot->GetTexture());
+                    OpenGLAPI::SetTexture(5, GL_TEXTURE_2D,
+                        _opaqueSnapshot->GetDepthTexture());
+                    glCall(glDrawElements, GL_TRIANGLES, range.count,
+                        GL_UNSIGNED_INT, indexOffset);
+                    composeLayer(logicalLayer, tile);
+                    ++executedPeels;
+                    ++singleLayerTiles;
+                    continue;
+                }
+
                 constexpr size_t kCoverageProbeThreshold = 8;
                 const bool probeExhaustion =
                     logicalPasses > kCoverageProbeThreshold;
@@ -2001,7 +2052,7 @@ void main() {
             };
             Console::WriteLine(
                 "FP_GL_RENDER_STAGES totalUs=%lld opaqueUs=%lld transparencyUs=%lld"
-                " finishUs=%lld transparencySurfaces=%zu tiles=%zu peels=%zu coverageWaitUs=%lld"
+                " finishUs=%lld transparencySurfaces=%zu tiles=%zu peels=%zu singleLayerTiles=%zu coverageWaitUs=%lld"
                 " streamedOpaque=%zu staticRegions=%zu"
                 " ownerReplayCpuUs=%lld ownerDraws=%zu ownerVertices=%zu sideWallReplay=%d",
                 static_cast<long long>(elapsed(renderStarted, renderDone)),
@@ -2009,7 +2060,7 @@ void main() {
                 static_cast<long long>(elapsed(opaqueDone, transparencyDone)),
                 static_cast<long long>(elapsed(transparencyDone, renderDone)),
                 streamedTransparent.size(), activeTransparencyTiles, executedPeels,
-                static_cast<long long>(coverageWaitUs),
+                singleLayerTiles, static_cast<long long>(coverageWaitUs),
                 streamedOpaque.size(), scene.staticRegions.size(),
                 static_cast<long long>(elapsed(ownerReplayBegin, ownerReplayEnd)),
                 opaqueOwnerDrawCalls, opaqueOwnerSubmittedVertices,
