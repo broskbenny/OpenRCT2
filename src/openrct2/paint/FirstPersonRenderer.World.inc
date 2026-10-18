@@ -1249,6 +1249,208 @@
             cursor = start + examined;
         }
 
+        // Only source-tile geometry without cross-object ownership or
+        // occupancy-interface obligations may leave the coherent 32x32
+        // packet. Grouped rail/building geometry and reconstructed boundaries
+        // remain in that packet and retain its exact relationship resolver.
+        [[nodiscard]] bool FirstPersonIndependentLocalScenery(
+            const FirstPersonSurface& surface)
+        {
+            return IsResidentStaticSurface(surface)
+                && surface.reconstructionGroup == 0
+                && !surface.reconstructedOccupancyBoundary
+                && !surface.coplanarOwner
+                && !surface.artworkCarrier
+                && !surface.exteriorOnly;
+        }
+
+        struct FirstPersonLocalSceneryPacket
+        {
+            std::shared_ptr<const std::vector<FirstPersonSurface>> surfaces;
+            std::vector<ImageIndex> textureDependencies;
+            FirstPersonVec3 center{};
+            float radius = 0.0f;
+            uint64_t generation = 0;
+            size_t vertexCount = 0;
+            bool dirty = true;
+        };
+        static std::unordered_map<uint64_t, FirstPersonLocalSceneryPacket>
+            _localSceneryPackets;
+        static uint64_t _localSceneryEpoch = 0;
+
+        void MarkLocalSceneryDirtyForTile(int32_t tx, int32_t ty)
+        {
+            _localSceneryPackets[FirstPersonLocalSceneryRegionKey(tx, ty)].dirty = true;
+        }
+
+        void SubmitVisibleLocalSceneryRegions(
+            FirstPersonScene& scene, const FirstPersonFrustum& frustum)
+        {
+            if (_localSceneryEpoch != _sceneEpoch)
+            {
+                _localSceneryPackets.clear();
+                _localSceneryEpoch = _sceneEpoch;
+            }
+            std::unordered_set<uint64_t> visible;
+            visible.reserve(scene.visibleTiles.size() / 32 + 1);
+            for (const auto tile : scene.visibleTiles)
+                visible.insert(FirstPersonLocalSceneryRegionKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+
+            // A completed cell survives a camera turn even when source-tile
+            // admission omitted its original seed tile on this frame.
+            for (const auto& [key, packet] : _localSceneryPackets)
+            {
+                if (packet.surfaces && !packet.surfaces->empty()
+                    && frustum.visible(packet.center, packet.radius))
+                    visible.insert(key);
+            }
+
+            std::vector<std::pair<float, uint64_t>> rebuild;
+            rebuild.reserve(visible.size());
+            for (const auto key : visible)
+            {
+                auto& packet = _localSceneryPackets[key];
+                if (!packet.dirty)
+                    continue;
+                const int32_t rx = int32_t(uint32_t((key >> 32) & 0x3fffffffu)) - 1;
+                const int32_t ry = int32_t(uint32_t(key)) - 1;
+                const float dx = float(rx * 8 * kCoordsXYStep + 4 * kCoordsXYStep) - frustum.eye.x;
+                const float dy = float(ry * 8 * kCoordsXYStep + 4 * kCoordsXYStep) - frustum.eye.y;
+                rebuild.emplace_back(dx * dx + dy * dy, key);
+            }
+            std::sort(rebuild.begin(), rebuild.end());
+            FirstPersonFrameBudget budget(4, std::chrono::microseconds(1200));
+            for (const auto& [distance, key] : rebuild)
+            {
+                (void)distance;
+                if (!budget.take())
+                    break;
+                const int32_t rx = int32_t(uint32_t((key >> 32) & 0x3fffffffu)) - 1;
+                const int32_t ry = int32_t(uint32_t(key)) - 1;
+                std::vector<FirstPersonSurface> surfaces;
+                surfaces.reserve(64);
+                std::vector<ImageIndex> dependencies;
+                FirstPersonVec3 low{}, high{};
+                bool haveBounds = false;
+
+                const auto add = [&](const FirstPersonSurface& source,
+                                     uint64_t owningRegion) {
+                    if (!FirstPersonIndependentLocalScenery(source)
+                        || source.gpuRegion != owningRegion)
+                        return;
+                    auto surface = source;
+                    surface.gpuRegion = key;
+                    if (surface.image.HasValue()
+                        && (!surface.hasImmutablePixelData()
+                            || surface.physicalCoverage))
+                        dependencies.push_back(surface.image.GetIndex());
+                    if (surface.mask.HasValue())
+                        dependencies.push_back(surface.mask.GetIndex());
+                    FirstPersonVec3 a{}, b{};
+                    if (surface.hasSemanticBounds)
+                    {
+                        const auto& centre = surface.semanticCenter;
+                        const float radius = surface.semanticRadius;
+                        a = {centre.x - radius, centre.y - radius, centre.z - radius};
+                        b = {centre.x + radius, centre.y + radius, centre.z + radius};
+                    }
+                    else
+                    {
+                        a = b = surface.triangles[0].world;
+                        for (const auto& vertex : surface.triangles)
+                        {
+                            const auto& p = vertex.world;
+                            a.x = std::min(a.x, p.x); a.y = std::min(a.y, p.y);
+                            a.z = std::min(a.z, p.z);
+                            b.x = std::max(b.x, p.x); b.y = std::max(b.y, p.y);
+                            b.z = std::max(b.z, p.z);
+                        }
+                    }
+                    if (!haveBounds)
+                    {
+                        low = a; high = b; haveBounds = true;
+                    }
+                    else
+                    {
+                        low.x = std::min(low.x, a.x); low.y = std::min(low.y, a.y);
+                        low.z = std::min(low.z, a.z);
+                        high.x = std::max(high.x, b.x); high.y = std::max(high.y, b.y);
+                        high.z = std::max(high.z, b.z);
+                    }
+                    surfaces.emplace_back(std::move(surface));
+                };
+
+                for (int32_t ty = ry * 8; ty < (ry + 1) * 8; ++ty)
+                for (int32_t tx = rx * 8; tx < (rx + 1) * 8; ++tx)
+                {
+                    const auto it = _staticPaintCache.find(TerrainKey(tx, ty));
+                    if (it == _staticPaintCache.end()
+                        || !it->second.valid || it->second.dirty)
+                        continue;
+                    const auto& cached = it->second;
+                    const uint64_t owningRegion = FirstPersonGpuRegionKey(tx, ty);
+                    for (const auto& source : cached.semanticResidentSurfaces)
+                        add(source, owningRegion);
+                    if (cached.animated)
+                        continue;
+                    for (const auto& source : cached.cameraIndependentResidentSurfaces)
+                        add(source, owningRegion);
+                    const uint8_t rotation = cached.selectedRotation;
+                    if (rotation < cached.rotations.size()
+                        && cached.rotations[rotation].valid)
+                        for (const auto& source :
+                             cached.rotations[rotation].residentSurfaces)
+                            add(source, owningRegion);
+                }
+                std::sort(dependencies.begin(), dependencies.end());
+                dependencies.erase(
+                    std::unique(dependencies.begin(), dependencies.end()),
+                    dependencies.end());
+                auto& packet = _localSceneryPackets[key];
+                packet.vertexCount = surfaces.size() * 6;
+                packet.surfaces =
+                    std::make_shared<const std::vector<FirstPersonSurface>>(
+                        std::move(surfaces));
+                packet.textureDependencies = std::move(dependencies);
+                if (haveBounds)
+                {
+                    packet.center = {
+                        (low.x + high.x) * 0.5f,
+                        (low.y + high.y) * 0.5f,
+                        (low.z + high.z) * 0.5f
+                    };
+                    const float dx = (high.x - low.x) * 0.5f;
+                    const float dy = (high.y - low.y) * 0.5f;
+                    const float dz = (high.z - low.z) * 0.5f;
+                    packet.radius = std::sqrt(dx * dx + dy * dy + dz * dz) + 2.0f;
+                }
+                else
+                {
+                    packet.radius = 0.0f;
+                }
+                ++packet.generation;
+                packet.dirty = false;
+            }
+
+            for (const auto key : visible)
+            {
+                const auto it = _localSceneryPackets.find(key);
+                if (it == _localSceneryPackets.end())
+                    continue;
+                const auto& packet = it->second;
+                if (!packet.surfaces || packet.surfaces->empty()
+                    || !frustum.visible(packet.center, packet.radius))
+                    continue;
+                scene.staticRegions.push_back({
+                    key, _sceneEpoch, packet.generation,
+                    packet.center, packet.radius,
+                    packet.surfaces.get(), &packet.textureDependencies,
+                    packet.surfaces, packet.generation, packet.vertexCount
+                });
+            }
+        }
+
         // Terrain publication is deliberately independent of source-art
         // captures, reconstruction workers and 32x32 scenery packets.
         // A terrain edit dirties one 8x8 cell; unmodified GPU cells remain
@@ -4245,8 +4447,12 @@
             const int32_t x1 = x0 + 32;
             const int32_t y1 = y0 + 32;
 
-            auto addSurface = [&](const FirstPersonSurface& surface) {
+            auto addSurface = [&](const FirstPersonSurface& surface, bool tileSource = false) {
                 if (!IsResidentStaticSurface(surface) || surface.gpuRegion != regionKey)
+                    return;
+                // Tile-local owner-free geometry is published independently.
+                // Never split reconstructed interfaces or grouped geometry.
+                if (tileSource && FirstPersonIndependentLocalScenery(surface))
                     return;
                 packet.surfaces.push_back(surface);
                 // Every opaque surface is uploaded exactly once. Coplanar
@@ -4344,11 +4550,11 @@
                             auto presented = surface;
                             (void)PreserveParkEntranceSemanticSignPlane(
                                 presented, frame);
-                            addSurface(presented);
+                            addSurface(presented, true);
                         }
                         else
                         {
-                            addSurface(surface);
+                            addSurface(surface, true);
                         }
                     }
                 }
@@ -4360,7 +4566,7 @@
                 auto& cached = cacheIt->second;
                 for (const auto& surface :
                      cached.cameraIndependentResidentSurfaces)
-                    addSurface(surface);
+                    addSurface(surface, true);
 
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
@@ -4411,7 +4617,7 @@
                         }
                         if (selected != rotation)
                             continue;
-                        addSurface(surface);
+                        addSurface(surface, true);
                     }
                 }
             }
