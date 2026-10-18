@@ -664,6 +664,9 @@
 
             _snapshotBudget = FirstPersonFrameBudget(64, std::chrono::microseconds(1500));
             UpdateLargeSceneryReconstructions(scene, frame);
+            // Authoritative placement discovery does not depend on a native
+            // painter having observed each large-scenery tile first.
+            UpdateAuthoritativeLargeScenery(scene, frame);
             UpdateParkEntranceReconstructions(scene, frame);
             const auto reconstructionPrepDone = PaintClock::now();
 
