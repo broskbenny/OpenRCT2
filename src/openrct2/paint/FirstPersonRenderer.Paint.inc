@@ -1594,6 +1594,10 @@
             }
 
             const auto assemblyDone = PaintClock::now();
+            // Terrain's independent 8x8 resident cells are admitted before
+            // scenery's 32x32 packets, so ground cannot wait for the
+            // source-capture/reconstruction pipeline.
+            SubmitVisibleTerrainRegions(scene, worldFrustum);
             SubmitVisibleStaticRegions(scene, worldFrustum, frame);
             const auto finished = PaintClock::now();
             // These are counts of tiles with native observations, not a claim
