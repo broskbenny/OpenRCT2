@@ -1601,6 +1601,15 @@ namespace OpenRCT2::Paint
         _terrainCache.entries.clear();
         _terrainCache.materials.clear();
         _terrainCache.frame = 0;
+        // Release independent terrain, structural and shared-art caches on
+        // park teardown instead of retaining the previous park until the
+        // next first-person scene happens to reach each lazy reset path.
+        _terrainRegionPackets.clear();
+        _terrainRegionEpoch = _sceneEpoch;
+        _structuralTileIndex.clear();
+        _structuralIndexEpoch = _sceneEpoch;
+        _largeScenerySourceAssets.clear();
+        _largeScenerySourceEpoch = _sceneEpoch;
         _regionBounds.clear();
         _staticPaintCache.clear();
         _reconstructionRotations.clear();
