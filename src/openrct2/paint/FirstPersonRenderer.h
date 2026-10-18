@@ -142,6 +142,15 @@ namespace OpenRCT2::Paint
     {
         return (uint64_t(uint32_t(tileX / 32 + 1)) << 32) | uint32_t(tileY / 32 + 1);
     }
+    // Terrain has its own 8x8 GPU residency units, independent of the
+    // 32x32 reconstructed-scenery packets. The high bit keeps key spaces
+    // disjoint while retaining the existing immutable-region upload path.
+    [[nodiscard]] constexpr uint64_t FirstPersonTerrainRegionKey(int32_t tileX, int32_t tileY)
+    {
+        return (1ull << 63)
+            | (uint64_t(uint32_t(tileX / 8 + 1)) << 32)
+            | uint32_t(tileY / 8 + 1);
+    }
     struct FirstPersonSurface
     {
         ImageId image{};
