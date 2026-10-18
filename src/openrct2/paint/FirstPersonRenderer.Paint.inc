@@ -1603,40 +1603,75 @@
             if (finished - lastSourceCoverageReport >= std::chrono::seconds(5))
             {
                 lastSourceCoverageReport = finished;
+                size_t objectTiles = 0;
                 size_t coldTiles = 0;
                 size_t dirtyTiles = 0;
                 size_t observedTiles = 0;
+                size_t coldObjectTiles = 0;
+                size_t dirtyObjectTiles = 0;
+                size_t observedObjectTiles = 0;
                 size_t semanticObservedTiles = 0;
-                size_t preferredViewPending = 0;
+                size_t objectViewPending = 0;
                 for (const auto tile : scene.visibleTiles)
                 {
+                    // Terrain-only tiles are not missing game objects. Count
+                    // tiles carrying a path, track, scenery or other element
+                    // separately (this is NOT a count of unique objects).
+                    bool hasObject = false;
+                    if (auto* element = MapGetFirstElementAt(tile); element != nullptr)
+                    {
+                        do
+                        {
+                            if (element->getType() != TileElementType::surface)
+                            {
+                                hasObject = true;
+                                break;
+                            }
+                        } while (!(element++)->isLastForTile());
+                    }
+                    if (hasObject)
+                        ++objectTiles;
                     const auto found = _staticPaintCache.find(
                         TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
                     if (found == _staticPaintCache.end() || !found->second.valid)
                     {
                         ++coldTiles;
+                        if (hasObject)
+                            ++coldObjectTiles;
                         continue;
                     }
                     const auto& cached = found->second;
                     if (cached.dirty)
                     {
                         ++dirtyTiles;
+                        if (hasObject)
+                            ++dirtyObjectTiles;
                         continue;
                     }
                     ++observedTiles;
+                    if (hasObject)
+                        ++observedObjectTiles;
                     if (std::any_of(cached.rotations.begin(), cached.rotations.end(),
                             [](const auto& rotation) { return rotation.semanticValid; }))
                         ++semanticObservedTiles;
-                    if (cached.requestedRotation < cached.rotations.size()
-                        && !cached.rotations[cached.requestedRotation].valid)
-                        ++preferredViewPending;
+                    if (hasObject)
+                    {
+                        const auto previous = cached.hasSelectedRotation
+                            ? std::optional<uint8_t>{ cached.selectedRotation }
+                            : std::nullopt;
+                        const auto desired = PaintRotationForTile(opt.camera, tile, previous);
+                        if (!cached.rotations[desired].valid)
+                            ++objectViewPending;
+                    }
                 }
                 Console::WriteLine(
-                    "FP_SOURCE_COVERAGE visibleTiles=%zu coldTiles=%zu dirtyTiles=%zu"
-                    " observedTiles=%zu semanticObservedTiles=%zu preferredViewPending=%zu"
-                    " presentedRegions=%zu",
-                    scene.visibleTiles.size(), coldTiles, dirtyTiles,
-                    observedTiles, semanticObservedTiles, preferredViewPending,
+                    "FP_SOURCE_COVERAGE visibleTiles=%zu objectTiles=%zu"
+                    " coldTiles=%zu dirtyTiles=%zu observedTiles=%zu"
+                    " coldObjectTiles=%zu dirtyObjectTiles=%zu observedObjectTiles=%zu"
+                    " semanticObservedTiles=%zu objectViewPending=%zu presentedRegions=%zu",
+                    scene.visibleTiles.size(), objectTiles, coldTiles, dirtyTiles,
+                    observedTiles, coldObjectTiles, dirtyObjectTiles,
+                    observedObjectTiles, semanticObservedTiles, objectViewPending,
                     scene.staticRegions.size());
             }
             const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
