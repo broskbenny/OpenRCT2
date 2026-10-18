@@ -1553,6 +1553,10 @@ namespace OpenRCT2::Paint
         CollectTerrain(scene);
         _snapshotBudget = FirstPersonFrameBudget(16, std::chrono::microseconds(1000));
         CollectTrackTrajectories(scene);
+        // Asset prewarming uses the same immutable worker snapshot path as
+        // native painting, but does not consume native paint capture slots.
+        _snapshotBudget = FirstPersonFrameBudget(32, std::chrono::microseconds(700));
+        PrewarmVisibleSmallSceneryAssets(scene);
     }
 
     FirstPersonScene CollectFirstPersonScene(
