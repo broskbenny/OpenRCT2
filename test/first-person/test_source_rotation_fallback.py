@@ -15,11 +15,17 @@ class SourceViewFallbackTest(unittest.TestCase):
         paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(encoding="utf-8")
         self.assertIn("selected = FirstPersonAvailableSourceRotation(\n                                cached, captured);", world)
         self.assertIn("selected = FirstPersonAvailableSourceRotation(\n                                    cached, group->second.selectedRotation);", paint)
-        self.assertIn("FP_SOURCE_COVERAGE visibleTiles=%zu coldTiles=%zu", paint)
+        self.assertIn("FP_SOURCE_COVERAGE visibleTiles=%zu objectTiles=%zu", paint)
+        for field in (
+            "coldTiles", "dirtyTiles", "observedTiles",
+            "coldObjectTiles", "dirtyObjectTiles", "observedObjectTiles",
+            "semanticObservedTiles", "objectViewPending", "presentedRegions"
+        ):
+            self.assertIn(f"{field}=%zu", paint)
         self.assertIn("nativeCapturesRemaining = 2;", paint)
 
     def test_actual_cpp_rotation_policy(self):
-        compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
+        compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++") or shutil.which("cl")
         if not compiler:
             self.skipTest("C++ compiler not available")
 
@@ -65,10 +71,15 @@ int main()
 """
         with tempfile.TemporaryDirectory() as folder:
             cpp = Path(folder) / "source_rotation.cpp"
-            exe = Path(folder) / "source_rotation"
+            is_msvc = Path(compiler).stem.lower() == "cl"
+            exe = Path(folder) / ("source_rotation.exe" if is_msvc else "source_rotation")
             cpp.write_text(source, encoding="utf-8")
-            built = subprocess.run(
-                [compiler, "-std=c++20", "-O0", str(cpp), "-o", str(exe)],
+            args = (
+                [compiler, "/nologo", "/std:c++20", "/EHsc", str(cpp), "/Fe:" + str(exe)]
+                if is_msvc else
+                [compiler, "-std=c++20", "-O0", str(cpp), "-o", str(exe)]
+            )
+            built = subprocess.run(args, cwd=folder,
                 capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stderr)
             result = subprocess.run([str(exe)], capture_output=True, text=True)
