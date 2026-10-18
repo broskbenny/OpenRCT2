@@ -6099,11 +6099,16 @@
             }
         }
 
+        // Implemented in World.inc: local scenery invalidates only its
+        // corresponding 8x8 packet, not unrelated neighbouring cells.
+        void MarkLocalSceneryDirtyForTile(int32_t tileX, int32_t tileY);
+
         void MarkStaticRegionDirtyForTile(int32_t tileX, int32_t tileY)
         {
             const uint64_t regionKey =
                 FirstPersonGpuRegionKey(tileX, tileY);
             MarkStaticRegionPacketDirty(regionKey);
+            MarkLocalSceneryDirtyForTile(tileX, tileY);
 
             const int32_t localX =
                 ((tileX % 32) + 32) % 32;
