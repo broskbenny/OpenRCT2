@@ -723,50 +723,6 @@ void main() {
                 }
                 return _peelCoverageQueries.size();
             };
-        const auto waitForPeelCoverageQuery =
-            [&](uint64_t token) {
-                size_t slot = _peelCoverageQueries.size();
-                // Prefer a probe from this tile: a zero result then proves
-                // that every later exact peel layer is empty.
-                for (size_t i = 0;
-                     i < _peelCoverageQueries.size(); ++i)
-                {
-                    if (_peelCoveragePending[i]
-                        && _peelCoverageTokens[i] == token)
-                    {
-                        slot = i;
-                        break;
-                    }
-                }
-                if (slot == _peelCoverageQueries.size())
-                {
-                    for (size_t i = 0;
-                         i < _peelCoverageQueries.size(); ++i)
-                    {
-                        if (_peelCoveragePending[i])
-                        {
-                            slot = i;
-                            break;
-                        }
-                    }
-                }
-                if (slot == _peelCoverageQueries.size())
-                    return false;
-
-                GLuint anySamples = 1;
-                const auto waitedAt = FrameClock::now();
-                glCall(
-                    glGetQueryObjectuiv,
-                    _peelCoverageQueries[slot],
-                    GL_QUERY_RESULT, &anySamples);
-                coverageWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(
-                    FrameClock::now() - waitedAt).count();
-                const bool exhausted =
-                    _peelCoverageTokens[slot] == token
-                    && anySamples == 0;
-                _peelCoveragePending[slot] = false;
-                return exhausted;
-            };
         // Retire completed probes from earlier tiles/frames without waiting.
         (void)pollPeelCoverageQueries(0);
 
@@ -1906,20 +1862,10 @@ void main() {
 
                         coverageSlot =
                             findFreePeelCoverageQuery();
-                        if (coverageSlot
-                            == _peelCoverageQueries.size())
-                        {
-                            // Do not blindly queue the rest of a pathological
-                            // exact stack after all probes are in flight. A
-                            // small bounded pipeline keeps GPU work ahead of
-                            // the CPU, then waits for one real coverage result.
-                            // This changes scheduling only, never layer output.
-                            if (waitForPeelCoverageQuery(
-                                    coverageToken))
-                                break;
-                            coverageSlot =
-                                findFreePeelCoverageQuery();
-                        }
+                        // Saturated probes are never a reason to stall
+                        // the render thread. The remaining conservative
+                        // layers must still execute to preserve every palette
+                        // filter when no query slot is available.
                     }
 
                     auto& physicalLayer = *_peelDepthLayers[size_t(pass&1)];
