@@ -1213,6 +1213,42 @@
             }
         }
 
+        // Small scenery can be prepared from authoritative map elements
+        // before the native painter produces a PaintStruct for each placement.
+        // Work is asset-keyed, so repeated bins, lamps and trees reuse one
+        // worker result. This prewarms only; existing paint/cache ownership
+        // remains authoritative for the world placement.
+        void PrewarmVisibleSmallSceneryAssets(const FirstPersonScene& scene)
+        {
+            const size_t count = scene.visibleTiles.size();
+            if (count == 0)
+                return;
+            static size_t cursor = 0;
+            const size_t start = cursor % count;
+            FirstPersonFrameBudget scanBudget(
+                96, std::chrono::microseconds(700));
+            size_t examined = 0;
+            while (examined < count && scanBudget.take())
+            {
+                const auto tile = scene.visibleTiles[
+                    (start + examined++) % count];
+                auto* element = MapGetFirstElementAt(tile);
+                if (element == nullptr)
+                    continue;
+                do
+                {
+                    if (element->getType() != TileElementType::smallScenery
+                        || element->isGhost() || element->isInvisible())
+                        continue;
+                    auto* small = element->asSmallScenery();
+                    if (small == nullptr)
+                        continue;
+                    PrewarmFirstPersonSmallSceneryAsset(tile, *small);
+                } while (!(element++)->isLastForTile());
+            }
+            cursor = start + examined;
+        }
+
         // Terrain publication is deliberately independent of source-art
         // captures, reconstruction workers and 32x32 scenery packets.
         // A terrain edit dirties one 8x8 cell; unmodified GPU cells remain
