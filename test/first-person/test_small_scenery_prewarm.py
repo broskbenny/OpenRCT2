@@ -32,6 +32,19 @@ class SmallSceneryPrewarmTest(unittest.TestCase):
         self.assertLess(main.index("PrewarmVisibleSmallSceneryAssets(scene);"),
                         main.index("void ClearFirstPersonSceneCache()"))
 
+    def test_large_scenery_worker_model_reuse_is_epoch_scoped(self):
+        core = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text(encoding="utf-8")
+        worker = (ROOT / "src/openrct2/paint/FirstPersonAsync.h").read_text(encoding="utf-8")
+        self.assertIn("static thread_local uint64_t modelEpoch = 0;", core)
+        self.assertIn("std::unordered_map<ImageIndex, LargeSceneryAssetModel>", core)
+        self.assertIn("if (modelEpoch != epoch)", core)
+        self.assertIn("assetModels.clear();", core)
+        self.assertIn("assetModels.try_emplace(metadata.image)", core)
+        self.assertIn("if (inserted)\n                    modelIt->second = BuildLargeSceneryAssetModel(metadata);", core)
+        self.assertIn("const auto& model = modelIt->second;", core)
+        self.assertIn("std::thread _worker;", worker)
+        self.assertIn("++_epoch;", worker)
+
     def test_compiled_asset_key_is_shared_only_when_allowed(self):
         compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++") or shutil.which("cl")
         if not compiler:
