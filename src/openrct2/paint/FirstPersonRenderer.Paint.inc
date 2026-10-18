@@ -207,24 +207,6 @@
             return true;
         }
 
-        // Native terrain paint is not the principal source of ground meshes:
-        // those are built directly by the terrain cache. Prioritize tiles
-        // containing non-surface elements (paths, rides, scenery, etc.) when
-        // allocating the scarce native-paint snapshots. Keep regular all-tile
-        // passes for terrain-edge/tunnel semantics and unusual surface art.
-        [[nodiscard]] bool FirstPersonTileHasNonSurfaceElement(CoordsXY tile)
-        {
-            auto* element = MapGetFirstElementAt(tile);
-            if (element == nullptr)
-                return false;
-            do
-            {
-                if (element->getType() != TileElementType::surface)
-                    return true;
-            } while (!(element++)->isLastForTile());
-            return false;
-        }
-
         // Reconstructing original scenery sprites is relatively expensive: the
         // native painter handles track, supports, multi-tile scenery, animation
         // frames, glass and object remapping. Run it ONLY for tiles whose
@@ -269,18 +251,11 @@
                 256, std::chrono::microseconds(1200));
             static size_t captureCursor = 0;
             const size_t captureStart = scene.visibleTiles.empty() ? 0 : captureCursor % scene.visibleTiles.size();
-            // Three of four frames focus source captures on object-bearing
-            // tiles. Every fourth frame retains the original all-tile scan:
-            // ground is rendered separately, but terrain semantics must never
-            // be permanently excluded.
-            const bool objectPriorityPass = (frame & 3u) != 0u;
             size_t captureExamined = 0;
             while (captureExamined < scene.visibleTiles.size()
                    && nativeCapturesRemaining != 0 && captureScanBudget.take())
             {
                 const auto tile = scene.visibleTiles[(captureStart + captureExamined++) % scene.visibleTiles.size()];
-                if (objectPriorityPass && !FirstPersonTileHasNonSurfaceElement(tile))
-                    continue;
                 const int32_t tx = tile.x / kCoordsXYStep;
                 const int32_t ty = tile.y / kCoordsXYStep;
                 const auto key = TerrainKey(tx, ty);
@@ -1642,7 +1617,18 @@
                     // Terrain-only tiles are not missing game objects. Count
                     // tiles carrying a path, track, scenery or other element
                     // separately (this is NOT a count of unique objects).
-                    const bool hasObject = FirstPersonTileHasNonSurfaceElement(tile);
+                    bool hasObject = false;
+                    if (auto* element = MapGetFirstElementAt(tile); element != nullptr)
+                    {
+                        do
+                        {
+                            if (element->getType() != TileElementType::surface)
+                            {
+                                hasObject = true;
+                                break;
+                            }
+                        } while (!(element++)->isLastForTile());
+                    }
                     if (hasObject)
                         ++objectTiles;
                     const auto found = _staticPaintCache.find(
