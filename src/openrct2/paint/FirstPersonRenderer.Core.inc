@@ -4942,7 +4942,21 @@
             job->submitted = _reconstructionWorker.submit([job, frame, epoch]() {
                 auto metadata = job->entry;
                 metadata.tiles = job->tiles;
-                const auto model = BuildLargeSceneryAssetModel(metadata);
+                // One reconstruction worker owns this cache; its epoch
+                // changes whenever a park/object reset cancels old jobs.
+                // Occupancy is intrinsic to the asset, not its placement.
+                static thread_local uint64_t modelEpoch = 0;
+                static thread_local std::unordered_map<ImageIndex, LargeSceneryAssetModel>
+                    assetModels;
+                if (modelEpoch != epoch)
+                {
+                    assetModels.clear();
+                    modelEpoch = epoch;
+                }
+                auto [modelIt, inserted] = assetModels.try_emplace(metadata.image);
+                if (inserted)
+                    modelIt->second = BuildLargeSceneryAssetModel(metadata);
+                const auto& model = modelIt->second;
                 auto result = BuildLargeSceneryInstanceGeometry(job->element, metadata,
                     model, job->group, job->group.key, frame, *job->sprites, epoch);
                 return [job, result = std::move(result)]() mutable {
