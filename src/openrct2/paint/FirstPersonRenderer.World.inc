@@ -1083,6 +1083,136 @@
             VisitFirstPersonRegions(frustum,0,0,map.x,map.y,visit,bounds);
         }
 
+        // Discover large-scenery structure from authoritative tile elements,
+        // not from the native-paint cache. Source snapshots are only required
+        // for reconstructing appearance; they are not required to know that
+        // an object exists, where its tiles are or which asset it uses.
+        struct FirstPersonStructuralTileIndex
+        {
+            uint64_t signature = 0;
+            std::vector<ReconstructionGroupInfo> largeScenery;
+        };
+        static std::unordered_map<uint64_t, FirstPersonStructuralTileIndex>
+            _structuralTileIndex;
+        static uint64_t _structuralIndexEpoch = 0;
+
+        void UpdateAuthoritativeLargeScenery(FirstPersonScene& scene, uint64_t frame)
+        {
+            if (!_largeSceneryGeometryEnabled)
+                return;
+            if (_structuralIndexEpoch != _sceneEpoch)
+            {
+                _structuralTileIndex.clear();
+                _structuralIndexEpoch = _sceneEpoch;
+            }
+            // A bounded scan fills durable per-tile structural indices. The
+            // index is refreshed only when the visibility layer observes a
+            // different authoritative TileElement signature.
+            FirstPersonFrameBudget scanBudget(
+                256, std::chrono::microseconds(1000));
+            static size_t cursor = 0;
+            const size_t count = scene.visibleTiles.size();
+            const size_t start = count == 0 ? 0 : cursor % count;
+            size_t examined = 0;
+            while (examined < count && scanBudget.take())
+            {
+                const auto tile = scene.visibleTiles[(start + examined++) % count];
+                const auto key = TerrainKey(tile.x / kCoordsXYStep,
+                    tile.y / kCoordsXYStep);
+                const auto paint = _staticPaintCache.find(key);
+                if (paint == _staticPaintCache.end()
+                    || !paint->second.visibilityBoundValid
+                    || paint->second.visibilityDirty)
+                    continue;
+                const uint64_t signature = paint->second.visibilitySignature;
+                const auto existing = _structuralTileIndex.find(key);
+                if (existing != _structuralTileIndex.end()
+                    && existing->second.signature == signature)
+                    continue;
+
+                FirstPersonStructuralTileIndex indexed{};
+                indexed.signature = signature;
+                auto* element = MapGetFirstElementAt(tile);
+                if (element != nullptr)
+                {
+                    do
+                    {
+                        if (element->getType() != TileElementType::largeScenery
+                            || element->isGhost() || element->isInvisible())
+                            continue;
+                        if (const auto group = GetReconstructionGroup(tile, element);
+                            group.has_value())
+                            indexed.largeScenery.push_back(*group);
+                    } while (!(element++)->isLastForTile());
+                }
+                _structuralTileIndex[key] = std::move(indexed);
+            }
+            cursor += examined;
+
+            std::unordered_set<uint64_t> seen;
+            seen.reserve(scene.visibleTiles.size() / 4 + 1);
+            for (const auto tile : scene.visibleTiles)
+            {
+                const auto key = TerrainKey(tile.x / kCoordsXYStep,
+                    tile.y / kCoordsXYStep);
+                const auto index = _structuralTileIndex.find(key);
+                if (index == _structuralTileIndex.end())
+                    continue;
+                const auto paint = _staticPaintCache.find(key);
+                if (paint == _staticPaintCache.end()
+                    || paint->second.visibilityDirty
+                    || paint->second.visibilitySignature != index->second.signature)
+                    continue;
+                for (const auto& group : index->second.largeScenery)
+                {
+                    if (!seen.insert(group.key).second)
+                        continue;
+                    const auto ready = _largeSceneryGeometryCache.find(group.key);
+                    if (ready != _largeSceneryGeometryCache.end()
+                        && !ready->second.dirty)
+                    {
+                        ready->second.lastSeen = frame;
+                        ActivateLargeSceneryRegions(ready->second);
+                        continue;
+                    }
+
+                    // Admission and validation mirror the established worker
+                    // path, but discovery does not wait for native painting.
+                    auto* element = MapGetFirstElementAt(group.sourceTile);
+                    LargeSceneryElement* large = nullptr;
+                    if (element != nullptr)
+                    {
+                        do
+                        {
+                            if (element->getType() != TileElementType::largeScenery
+                                || element->isGhost() || element->isInvisible())
+                                continue;
+                            const auto current = GetReconstructionGroup(
+                                group.sourceTile, element);
+                            if (current.has_value() && current->key == group.key)
+                            {
+                                large = element->asLargeScenery();
+                                break;
+                            }
+                        } while (!(element++)->isLastForTile());
+                    }
+                    const auto* entry =
+                        large != nullptr ? large->getEntry() : nullptr;
+                    if (large == nullptr || entry == nullptr
+                        || !LargeSceneryAssetEligible(*entry)
+                        || !LargeSceneryInstanceMetadataMatches(*large, *entry)
+                        || !LargeSceneryInstanceComplete(
+                            *entry, group, large->getDirection() & 3u))
+                        continue;
+                    const uint32_t bodyFirst = entry->image + 4;
+                    _pendingLargeSceneryBodies[group.key] = {
+                        bodyFirst, bodyFirst + uint32_t(entry->tiles.size() * 4)
+                    };
+                    QueueLargeSceneryGeometry(*large, *entry, group, frame);
+                }
+            }
+        }
+
         // Terrain publication is deliberately independent of source-art
         // captures, reconstruction workers and 32x32 scenery packets.
         // A terrain edit dirties one 8x8 cell; unmodified GPU cells remain
