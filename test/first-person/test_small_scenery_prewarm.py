@@ -45,6 +45,19 @@ class SmallSceneryPrewarmTest(unittest.TestCase):
         self.assertIn("std::thread _worker;", worker)
         self.assertIn("++_epoch;", worker)
 
+    def test_park_teardown_releases_shared_and_independent_geometry(self):
+        main = MAIN.read_text(encoding="utf-8")
+        clear = main[main.index("void ClearFirstPersonSceneCache()"):
+                     main.index("void InvalidateFirstPersonSceneRegion(")]
+        for cache in ("_terrainRegionPackets", "_structuralTileIndex",
+                      "_largeScenerySourceAssets"):
+            self.assertIn(cache + ".clear();", clear)
+        for epoch in ("_terrainRegionEpoch", "_structuralIndexEpoch",
+                      "_largeScenerySourceEpoch"):
+            self.assertIn(epoch + " = _sceneEpoch;", clear)
+        self.assertLess(clear.index("ResetFirstPersonPresentationCache();"),
+                        clear.index("_largeScenerySourceAssets.clear();"))
+
     def test_compiled_asset_key_is_shared_only_when_allowed(self):
         compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++") or shutil.which("cl")
         if not compiler:
