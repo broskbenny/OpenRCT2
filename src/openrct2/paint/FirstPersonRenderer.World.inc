@@ -1271,6 +1271,7 @@
             FirstPersonVec3 center{};
             float radius = 0.0f;
             uint64_t generation = 0;
+            uint64_t fingerprint = 0;
             size_t vertexCount = 0;
             bool dirty = true;
         };
@@ -1425,6 +1426,18 @@
                     std::unique(dependencies.begin(), dependencies.end()),
                     dependencies.end());
                 auto& packet = _localSceneryPackets[key];
+                const uint64_t fingerprint =
+                    ResidentStaticSurfaceFingerprint(surfaces);
+                if (packet.surfaces
+                    && packet.fingerprint == fingerprint
+                    && packet.textureDependencies == dependencies)
+                {
+                    // This invalidation did not change GPU geometry. Keep
+                    // the resident generation and avoid a redundant upload.
+                    packet.dirty = false;
+                    continue;
+                }
+                packet.fingerprint = fingerprint;
                 packet.vertexCount = surfaces.size() * 6;
                 packet.surfaces =
                     std::make_shared<const std::vector<FirstPersonSurface>>(
