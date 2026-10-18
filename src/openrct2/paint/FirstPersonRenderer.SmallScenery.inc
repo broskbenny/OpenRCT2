@@ -931,7 +931,7 @@
                     _reconstructionRepaints.enqueue(std::move(job->waitingTiles));
                 });
                 if (!job->submitted && fromNativePainter)
-                RequestFirstPersonNativeSceneryRetry(tile, rotation);
+                    RequestFirstPersonNativeSceneryRetry(tile, rotation);
             }
 
         }
