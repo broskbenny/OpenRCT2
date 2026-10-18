@@ -1446,7 +1446,8 @@
                                 const auto group = _reconstructionRotations.find(staticSurface.reconstructionGroup);
                                 if (group == _reconstructionRotations.end() || !group->second.hasSelectedRotation)
                                     continue;
-                                selected = group->second.selectedRotation;
+                                selected = FirstPersonAvailableSourceRotation(
+                                    cached, group->second.selectedRotation);
                             }
                             if (selected != rotation)
                                 continue;
@@ -1595,6 +1596,49 @@
             const auto assemblyDone = PaintClock::now();
             SubmitVisibleStaticRegions(scene, worldFrustum, frame);
             const auto finished = PaintClock::now();
+            // These are counts of tiles with native observations, not a claim
+            // about how many game objects exist. Sample outside the frame's
+            // hot path so slow-frame diagnostics cannot misstate typical progress.
+            static auto lastSourceCoverageReport = PaintClock::time_point{};
+            if (finished - lastSourceCoverageReport >= std::chrono::seconds(5))
+            {
+                lastSourceCoverageReport = finished;
+                size_t coldTiles = 0;
+                size_t dirtyTiles = 0;
+                size_t observedTiles = 0;
+                size_t semanticObservedTiles = 0;
+                size_t preferredViewPending = 0;
+                for (const auto tile : scene.visibleTiles)
+                {
+                    const auto found = _staticPaintCache.find(
+                        TerrainKey(tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+                    if (found == _staticPaintCache.end() || !found->second.valid)
+                    {
+                        ++coldTiles;
+                        continue;
+                    }
+                    const auto& cached = found->second;
+                    if (cached.dirty)
+                    {
+                        ++dirtyTiles;
+                        continue;
+                    }
+                    ++observedTiles;
+                    if (std::any_of(cached.rotations.begin(), cached.rotations.end(),
+                            [](const auto& rotation) { return rotation.semanticValid; }))
+                        ++semanticObservedTiles;
+                    if (cached.requestedRotation < cached.rotations.size()
+                        && !cached.rotations[cached.requestedRotation].valid)
+                        ++preferredViewPending;
+                }
+                Console::WriteLine(
+                    "FP_SOURCE_COVERAGE visibleTiles=%zu coldTiles=%zu dirtyTiles=%zu"
+                    " observedTiles=%zu semanticObservedTiles=%zu preferredViewPending=%zu"
+                    " presentedRegions=%zu",
+                    scene.visibleTiles.size(), coldTiles, dirtyTiles,
+                    observedTiles, semanticObservedTiles, preferredViewPending,
+                    scene.staticRegions.size());
+            }
             const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
                 finished - started).count();
             // Report the WORST stage breakdown in each window, not merely
