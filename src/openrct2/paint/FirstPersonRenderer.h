@@ -151,6 +151,15 @@ namespace OpenRCT2::Paint
             | (uint64_t(uint32_t(tileX / 8 + 1)) << 32)
             | uint32_t(tileY / 8 + 1);
     }
+    // Safe tile-local static scenery uses independent 8x8 GPU packets.
+    // 0b01 in the top bits distinguishes these keys from both regular
+    // 32x32 scenery (0b00) and independent terrain (0b10).
+    [[nodiscard]] constexpr uint64_t FirstPersonLocalSceneryRegionKey(int32_t tileX, int32_t tileY)
+    {
+        return (1ull << 62)
+            | (uint64_t(uint32_t(tileX / 8 + 1)) << 32)
+            | uint32_t(tileY / 8 + 1);
+    }
     struct FirstPersonSurface
     {
         ImageId image{};
