@@ -1333,6 +1333,7 @@
                 std::vector<ImageIndex> dependencies;
                 FirstPersonVec3 low{}, high{};
                 bool haveBounds = false;
+                bool waitingForSourceRevalidation = false;
 
                 const auto add = [&](const FirstPersonSurface& source,
                                      uint64_t owningRegion) {
@@ -1385,8 +1386,14 @@
                 for (int32_t tx = rx * 8; tx < (rx + 1) * 8; ++tx)
                 {
                     const auto it = _staticPaintCache.find(TerrainKey(tx, ty));
-                    if (it == _staticPaintCache.end()
-                        || !it->second.valid || it->second.dirty)
+                    if (it == _staticPaintCache.end())
+                        continue;
+                    if (it->second.dirty)
+                    {
+                        waitingForSourceRevalidation = true;
+                        continue;
+                    }
+                    if (!it->second.valid)
                         continue;
                     const auto& cached = it->second;
                     const uint64_t owningRegion = FirstPersonGpuRegionKey(tx, ty);
@@ -1403,6 +1410,16 @@
                              cached.rotations[rotation].residentSurfaces)
                             add(source, owningRegion);
                 }
+                // On a warm cell, never replace last-known-good geometry
+                // with an incomplete snapshot while native source painting is
+                // revalidating an edited tile. A cold cell may still publish
+                // whatever ready structural scenery is already available.
+                const auto current = _localSceneryPackets.find(key);
+                if (waitingForSourceRevalidation
+                    && current != _localSceneryPackets.end()
+                    && current->second.surfaces
+                    && !current->second.surfaces->empty())
+                    continue;
                 std::sort(dependencies.begin(), dependencies.end());
                 dependencies.erase(
                     std::unique(dependencies.begin(), dependencies.end()),
