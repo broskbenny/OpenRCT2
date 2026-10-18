@@ -1150,6 +1150,7 @@
                 std::vector<ImageIndex> dependencies;
                 FirstPersonVec3 low{}, high{};
                 bool haveBounds = false;
+                bool haveKnownTerrain = false;
                 const auto add = [&](const FirstPersonSurface& surface) {
                     if (!IsResidentStaticSurface(surface) || surface.gpuRegion != key)
                         return;
@@ -1182,6 +1183,7 @@
                     if (found == _terrainCache.entries.end() || found->second.dirty)
                         continue;
                     const auto& terrain = found->second;
+                    haveKnownTerrain = true;
                     if (!terrain.verticalOpening)
                         add(terrain.ground);
                     for (const auto& surface : terrain.water)
@@ -1189,22 +1191,31 @@
                     for (const auto& surface : terrain.waterOverlay)
                         add(surface);
                 }
-                // Publishing a wholly empty cell must not suppress a prior
-                // valid cell while source geometry is temporarily unavailable.
-                if (!haveBounds)
+                // No authoritative tile data: keep the previous publication.
+                // Known terrain can legitimately be empty (for example an
+                // entirely opened tunnel cell); publish that empty generation
+                // to retire the obsolete ground from scene submission.
+                if (!haveKnownTerrain)
                     continue;
                 std::sort(dependencies.begin(), dependencies.end());
                 dependencies.erase(std::unique(dependencies.begin(), dependencies.end()),
                     dependencies.end());
                 auto& region = _terrainRegionPackets[key];
-                region.center = {
-                    (low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f,
-                    (low.z + high.z) * 0.5f
-                };
-                const float dx = (high.x - low.x) * 0.5f;
-                const float dy = (high.y - low.y) * 0.5f;
-                const float dz = (high.z - low.z) * 0.5f;
-                region.radius = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (haveBounds)
+                {
+                    region.center = {
+                        (low.x + high.x) * 0.5f, (low.y + high.y) * 0.5f,
+                        (low.z + high.z) * 0.5f
+                    };
+                    const float dx = (high.x - low.x) * 0.5f;
+                    const float dy = (high.y - low.y) * 0.5f;
+                    const float dz = (high.z - low.z) * 0.5f;
+                    region.radius = std::sqrt(dx * dx + dy * dy + dz * dz);
+                }
+                else
+                {
+                    region.radius = 0.0f;
+                }
                 region.vertexCount = surfaces.size() * 6;
                 region.textureDependencies = std::move(dependencies);
                 region.surfaces = std::make_shared<const std::vector<FirstPersonSurface>>(std::move(surfaces));
