@@ -806,6 +806,167 @@
         // image base and failure phase.
         static std::unordered_set<uint64_t> _smallSceneryReportedOutcomes;
 
+        [[nodiscard]] uint64_t FirstPersonSmallSceneryReconstructionKey(
+            const SmallSceneryEntry& entry, const SmallSceneryElement& small)
+        {
+            const bool sharedRotation = FirstPersonSmallSceneryCanShareRotatedAsset(entry, small);
+            const auto stage = FirstPersonSmallSceneryWitherStage(entry, small);
+            uint64_t key = entry.image;
+            ExtendStableKey(key, sharedRotation ? 0u : small.getDirection());
+            ExtendStableKey(key, sharedRotation ? 0u : small.getSceneryQuadrant());
+            ExtendStableKey(key, small.getOccupiedQuadrants());
+            ExtendStableKey(key, stage);
+            return key;
+        }
+
+        void StartFirstPersonSmallSceneryAssetJob(
+            const std::shared_ptr<SmallSceneryJob>& job,
+            const SmallSceneryEntry& entry, CoordsXY tile,
+            uint8_t rotation, bool fromNativePainter)
+        {
+            const auto stage = FirstPersonSmallSceneryWitherStage(entry, job->element);
+                if (!job->submitted)
+                {
+                    for (uint8_t view = 0; view < 4; ++view)
+                        if (!job->sprites.capture(entry->image + view + uint32_t(stage) * 4u, _snapshotBudget))
+                        {
+                            if (fromNativePainter) RequestFirstPersonNativeSceneryRetry(tile, rotation);
+                            return true;
+                        }
+                    job->submitted = _reconstructionWorker.submit([job] {
+                        const auto started = std::chrono::steady_clock::now();
+                        FirstPersonScene result;
+                        FirstPersonVisualHullAttempt attempt{};
+                        SmallSceneryBuildEvidence buildEvidence{};
+                        std::optional<FirstPersonSmallSceneryWalkingMask> walkingMask;
+                        BuildSmallSceneryGeometry(result, job->element, job->entry,
+                            ImageId(job->entry.image), job->sprites,
+                            &attempt, &buildEvidence, &walkingMask);
+                        // Only baked surfaces are needed after this worker finishes.
+                        // Release copied source sprites here, off the game thread.
+                        job->sprites = {};
+                        const auto buildMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - started).count();
+                        return [job, surfaces = std::move(result.surfaces),
+                                attempt, buildEvidence, buildMicros, walkingMask]() mutable {
+                            job->surfaces = std::move(surfaces);
+                            job->ready = true;
+                            if (walkingMask)
+                                PublishFirstPersonSmallSceneryWalkingMask(job->entry, job->element, *walkingMask);
+                            const uint32_t unsupportedFaces =
+                                buildEvidence.withoutSourceMaterial
+                                + buildEvidence.withoutOpaqueSamples;
+                            // The old failure log reported only stage 5 and
+                            // observed coverage below 20%, hiding all other
+                            // failure modes, including the complete loss of a
+                            // certified 3D mesh during texture assignment.
+                            // Emit once per asset/reconstruction phase, not once
+                            // per instance or camera repaint.
+                            if ((buildEvidence.directConvexSurface && gFirstPersonDiagnosticMask != 0)
+                                || job->surfaces.empty()
+                                || (unsupportedFaces > 8
+                                    && unsupportedFaces
+                                        > buildEvidence.materialFaces / 2))
+                            {
+                                uint64_t reportKey = job->entry.image;
+                                ExtendStableKey(
+                                    reportKey, uint64_t(attempt.stage));
+                                ExtendStableKey(
+                                    reportKey, job->surfaces.empty() ? 0u : 1u);
+                                if (_smallSceneryReportedOutcomes.insert(
+                                        reportKey).second)
+                                {
+                                    Console::WriteLine(
+                                        "FP_SMALL_SCENERY_EVIDENCE image=%u"
+                                        " output=%s stage=%u inputViews=%u"
+                                        " supportedCells=%u voxelFaces=%u"
+                                        " hullFaces=%u materialFaces=%u"
+                                        " missingSourceFaces=%u emptyTextureFaces=%u"
+                                        " unobservedBottomFaces=%u"
+                                        " silhouetteIoU=%.3f"
+                                        " observedCoverage=%.3f"
+                                        " candidateCoverage=%.3f edge=%d"
+                                        " registrationTried=%d method=%s buildUs=%lld",
+                                        job->entry.image,
+                                        job->surfaces.empty()
+                                            ? "native-fallback"
+                                            : (unsupportedFaces == 0 ? "source-backed-3d" : "partial-3d"),
+                                        unsigned(attempt.stage),
+                                        unsigned(attempt.nativeViews),
+                                        attempt.occupiedCells,
+                                        attempt.voxelFaces,
+                                        buildEvidence.hullFaces,
+                                        buildEvidence.materialFaces,
+                                        buildEvidence.withoutSourceMaterial,
+                                        buildEvidence.withoutOpaqueSamples,
+                                        buildEvidence.unobservedUndersides,
+                                        double(attempt.minimumIoU),
+                                        double(attempt.observedCoverage),
+                                        double(attempt.candidateCoverage),
+                                        attempt.maximumEdgeError,
+                                        attempt.registrationAttempted ? 1 : 0,
+                                        buildEvidence.directConvexSurface ? "direct-convex" : "voxel-or-tree",
+                                        static_cast<long long>(buildMicros));
+                                }
+                            }
+                            _reconstructionRepaints.enqueue(std::move(job->waitingTiles));
+                        };
+                    }, [job] {
+                        // FirstPersonWorkQueue invokes this continuation only
+                        // when its worker body throws. Never label an exception
+                        // as a normal four-view geometric rejection: retain one
+                        // clear asset-level diagnostic instead of a silent sprite.
+                        job->sprites = {};
+                        uint64_t reportKey = job->entry.image;
+                        ExtendStableKey(reportKey, 255u);
+                        if (_smallSceneryReportedOutcomes.insert(
+                                reportKey).second)
+                        {
+                            Console::WriteLine(
+                                "FP_SMALL_SCENERY_EVIDENCE image=%u"
+                                " output=native-fallback stage=worker-exception",
+                                job->entry.image);
+                        }
+                        job->ready = true;
+                        _reconstructionRepaints.enqueue(std::move(job->waitingTiles));
+                    });
+                    if (!job->submitted) if (fromNativePainter) RequestFirstPersonNativeSceneryRetry(tile, rotation);
+                }
+    
+        }
+
+        // A map element can initiate the shared asset reconstruction without
+        // waiting for the native painter to reach this particular placement.
+        // This only prepares the reusable model; the existing paint path still
+        // owns image remaps, placement, instance text and publication.
+        void PrewarmFirstPersonSmallSceneryAsset(
+            CoordsXY tile, const SmallSceneryElement& small)
+        {
+            const auto* entry = small.getEntry();
+            if (entry == nullptr)
+                return;
+            const uint64_t key =
+                FirstPersonSmallSceneryReconstructionKey(*entry, small);
+            auto it = _smallSceneryJobs.find(key);
+            if (it == _smallSceneryJobs.end())
+            {
+                if (!_snapshotBudget.available()
+                    || !_reconstructionWorker.hasCapacity())
+                    return;
+                auto job = std::make_shared<SmallSceneryJob>();
+                job->entry = *entry;
+                job->entry.frame_offsets = nullptr;
+                job->entry.FrameOffsetCount = 0;
+                job->element = small;
+                if (FirstPersonSmallSceneryCanShareRotatedAsset(*entry, small))
+                    job->element.setDirection(0);
+                it = _smallSceneryJobs.emplace(key, std::move(job)).first;
+            }
+            if (!it->second->ready && !it->second->submitted)
+                StartFirstPersonSmallSceneryAssetJob(
+                    it->second, *entry, tile, 0, false);
+        }
+
         bool AppendCalibratedSmallSceneryGeometry(
             FirstPersonScene& scene, const PaintStruct& ps, ImageId image,
             const ScreenCoordsXY&, uint8_t rotation, ImageId mask = {})
@@ -819,11 +980,8 @@
                     + uint32_t(stage) * 4u) return false;
             const bool sharedRotation = FirstPersonSmallSceneryCanShareRotatedAsset(*entry, *small);
             const uint8_t instanceRotation = sharedRotation ? small->getDirection() : 0;
-            uint64_t key = entry->image;
-            ExtendStableKey(key, sharedRotation ? 0u : small->getDirection());
-            ExtendStableKey(key, sharedRotation ? 0u : small->getSceneryQuadrant());
-            ExtendStableKey(key, small->getOccupiedQuadrants());
-            ExtendStableKey(key, stage);
+            const uint64_t key =
+                FirstPersonSmallSceneryReconstructionKey(*entry, *small);
             auto it = _smallSceneryJobs.find(key);
             if (it == _smallSceneryJobs.end())
             {
@@ -867,112 +1025,7 @@
             }
             const auto tileKey = (uint64_t(uint32_t(ps.MapPos.x)) << 32) | uint32_t(ps.MapPos.y);
             job->waitingTiles.insert(tileKey);
-            if (!job->submitted)
-            {
-                for (uint8_t view = 0; view < 4; ++view)
-                    if (!job->sprites.capture(entry->image + view + uint32_t(stage) * 4u, _snapshotBudget))
-                    {
-                        RequestFirstPersonNativeSceneryRetry(ps.MapPos, rotation);
-                        return true;
-                    }
-                job->submitted = _reconstructionWorker.submit([job] {
-                    const auto started = std::chrono::steady_clock::now();
-                    FirstPersonScene result;
-                    FirstPersonVisualHullAttempt attempt{};
-                    SmallSceneryBuildEvidence buildEvidence{};
-                    std::optional<FirstPersonSmallSceneryWalkingMask> walkingMask;
-                    BuildSmallSceneryGeometry(result, job->element, job->entry,
-                        ImageId(job->entry.image), job->sprites,
-                        &attempt, &buildEvidence, &walkingMask);
-                    // Only baked surfaces are needed after this worker finishes.
-                    // Release copied source sprites here, off the game thread.
-                    job->sprites = {};
-                    const auto buildMicros = std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::steady_clock::now() - started).count();
-                    return [job, surfaces = std::move(result.surfaces),
-                            attempt, buildEvidence, buildMicros, walkingMask]() mutable {
-                        job->surfaces = std::move(surfaces);
-                        job->ready = true;
-                        if (walkingMask)
-                            PublishFirstPersonSmallSceneryWalkingMask(job->entry, job->element, *walkingMask);
-                        const uint32_t unsupportedFaces =
-                            buildEvidence.withoutSourceMaterial
-                            + buildEvidence.withoutOpaqueSamples;
-                        // The old failure log reported only stage 5 and
-                        // observed coverage below 20%, hiding all other
-                        // failure modes, including the complete loss of a
-                        // certified 3D mesh during texture assignment.
-                        // Emit once per asset/reconstruction phase, not once
-                        // per instance or camera repaint.
-                        if ((buildEvidence.directConvexSurface && gFirstPersonDiagnosticMask != 0)
-                            || job->surfaces.empty()
-                            || (unsupportedFaces > 8
-                                && unsupportedFaces
-                                    > buildEvidence.materialFaces / 2))
-                        {
-                            uint64_t reportKey = job->entry.image;
-                            ExtendStableKey(
-                                reportKey, uint64_t(attempt.stage));
-                            ExtendStableKey(
-                                reportKey, job->surfaces.empty() ? 0u : 1u);
-                            if (_smallSceneryReportedOutcomes.insert(
-                                    reportKey).second)
-                            {
-                                Console::WriteLine(
-                                    "FP_SMALL_SCENERY_EVIDENCE image=%u"
-                                    " output=%s stage=%u inputViews=%u"
-                                    " supportedCells=%u voxelFaces=%u"
-                                    " hullFaces=%u materialFaces=%u"
-                                    " missingSourceFaces=%u emptyTextureFaces=%u"
-                                    " unobservedBottomFaces=%u"
-                                    " silhouetteIoU=%.3f"
-                                    " observedCoverage=%.3f"
-                                    " candidateCoverage=%.3f edge=%d"
-                                    " registrationTried=%d method=%s buildUs=%lld",
-                                    job->entry.image,
-                                    job->surfaces.empty()
-                                        ? "native-fallback"
-                                        : (unsupportedFaces == 0 ? "source-backed-3d" : "partial-3d"),
-                                    unsigned(attempt.stage),
-                                    unsigned(attempt.nativeViews),
-                                    attempt.occupiedCells,
-                                    attempt.voxelFaces,
-                                    buildEvidence.hullFaces,
-                                    buildEvidence.materialFaces,
-                                    buildEvidence.withoutSourceMaterial,
-                                    buildEvidence.withoutOpaqueSamples,
-                                    buildEvidence.unobservedUndersides,
-                                    double(attempt.minimumIoU),
-                                    double(attempt.observedCoverage),
-                                    double(attempt.candidateCoverage),
-                                    attempt.maximumEdgeError,
-                                    attempt.registrationAttempted ? 1 : 0,
-                                    buildEvidence.directConvexSurface ? "direct-convex" : "voxel-or-tree",
-                                    static_cast<long long>(buildMicros));
-                            }
-                        }
-                        _reconstructionRepaints.enqueue(std::move(job->waitingTiles));
-                    };
-                }, [job] {
-                    // FirstPersonWorkQueue invokes this continuation only
-                    // when its worker body throws. Never label an exception
-                    // as a normal four-view geometric rejection: retain one
-                    // clear asset-level diagnostic instead of a silent sprite.
-                    job->sprites = {};
-                    uint64_t reportKey = job->entry.image;
-                    ExtendStableKey(reportKey, 255u);
-                    if (_smallSceneryReportedOutcomes.insert(
-                            reportKey).second)
-                    {
-                        Console::WriteLine(
-                            "FP_SMALL_SCENERY_EVIDENCE image=%u"
-                            " output=native-fallback stage=worker-exception",
-                            job->entry.image);
-                    }
-                    job->ready = true;
-                    _reconstructionRepaints.enqueue(std::move(job->waitingTiles));
-                });
-                if (!job->submitted) RequestFirstPersonNativeSceneryRetry(ps.MapPos, rotation);
-            }
+            StartFirstPersonSmallSceneryAssetJob(
+                job, *entry, ps.MapPos, rotation, true);
             return true; // pending geometry deliberately absent
         }
