@@ -825,13 +825,13 @@
             uint8_t rotation, bool fromNativePainter)
         {
             const auto stage = FirstPersonSmallSceneryWitherStage(entry, job->element);
-                if (!job->submitted)
+            if (!job->submitted)
                 {
                     for (uint8_t view = 0; view < 4; ++view)
-                        if (!job->sprites.capture(entry->image + view + uint32_t(stage) * 4u, _snapshotBudget))
+                        if (!job->sprites.capture(entry.image + view + uint32_t(stage) * 4u, _snapshotBudget))
                         {
                             if (fromNativePainter) RequestFirstPersonNativeSceneryRetry(tile, rotation);
-                            return true;
+                            return;
                         }
                     job->submitted = _reconstructionWorker.submit([job] {
                         const auto started = std::chrono::steady_clock::now();
