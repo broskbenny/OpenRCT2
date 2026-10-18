@@ -41,6 +41,22 @@ class TerrainPipelineTest(unittest.TestCase):
         self.assertIn("conservativeLayerLimit(tile)", gl)
         self.assertIn("GL_QUERY_RESULT_AVAILABLE, &ready", gl)
 
+    def test_authoritative_structure_and_reusable_assets(self):
+        world = WORLD.read_text(encoding="utf-8")
+        paint = PAINT.read_text(encoding="utf-8")
+        core = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text(encoding="utf-8")
+        small = (ROOT / "src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc").read_text(encoding="utf-8")
+        self.assertIn("void UpdateAuthoritativeLargeScenery(", world)
+        self.assertIn("GetReconstructionGroup(tile, element)", world)
+        self.assertIn("indexed.largeScenery.push_back(*group);", world)
+        self.assertIn("QueueLargeSceneryGeometry(*large, *entry, group, frame);", world)
+        self.assertIn("UpdateAuthoritativeLargeScenery(scene, frame);", paint)
+        self.assertIn("_largeScenerySourceAssets", core)
+        self.assertIn("std::shared_ptr<FirstPersonSpriteSnapshot> sprites;", core)
+        self.assertIn("model, job->group, job->group.key, frame, *job->sprites, epoch", core)
+        self.assertIn("_smallSceneryJobs.find(key)", small)
+        self.assertIn("job->surfaces", small)
+
     def test_terrain_gpu_keys_do_not_alias_scenery(self):
         compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++") or shutil.which("cl")
         if not compiler:
