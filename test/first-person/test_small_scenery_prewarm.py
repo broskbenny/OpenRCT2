@@ -67,7 +67,7 @@ class SmallSceneryPrewarmTest(unittest.TestCase):
             self.skipTest("C++ compiler not found; use Visual Studio developer shell on Windows")
         scenery = SCENERY.read_text(encoding="utf-8")
         start = scenery.index("        [[nodiscard]] uint64_t FirstPersonSmallSceneryReconstructionKey(")
-        end = scenery.index("        void StartFirstPersonSmallSceneryAssetJob(", start)
+        end = scenery.index("        // Executed by the worker's MAIN-THREAD publication continuation.", start)
         actual = scenery[start:end]
         source = """
 #include <cassert>
