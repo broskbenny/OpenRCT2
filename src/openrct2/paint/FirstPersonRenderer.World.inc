@@ -6071,14 +6071,47 @@
                 };
                 packet.radius = 0.0f;
             }
-            packet.surfaceStorage = std::make_shared<const std::vector<FirstPersonSurface>>(std::move(packet.surfaces));
-            // Publish all metadata and immutable geometry in one move.
-            // A first cold packet can be older than a source observation
-            // made while it was assembling. It is a complete packet snapshot,
-            // never partially published; keep the newer revision pending so
-            // the next build converges without hiding this last-known-good.
+            // A fresh authoritative tile or source view may invalidate a
+            // coherent region without changing its resolved GPU geometry.
+            // Keep its existing immutable residency and avoid uploading the
+            // same 32x32 packet again. Ownership and native paint order are
+            // part of the fingerprint; texture dependencies must also match.
+            const uint64_t fingerprint =
+                ResidentStaticSurfaceFingerprint(packet.surfaces);
+            const bool sameGpuOutput =
+                published.surfaceStorage != nullptr
+                && published.surfaceFingerprint == fingerprint
+                && published.textureDependencies == packet.textureDependencies;
+            // Finish against the newest invalidation serial even when the
+            // snapshot changed during construction. The current published
+            // packet remains visible until the next reconciliation.
             const bool missedSourceChanges =
                 staging.progress.invalidationSerial != published.invalidationSerial;
+            if (sameGpuOutput)
+            {
+                published.reconstructionGroups =
+                    std::move(packet.reconstructionGroups);
+                published.reconstructionSelectionStamp =
+                    packet.reconstructionSelectionStamp;
+                published.reconstructionSelectionSerial =
+                    packet.reconstructionSelectionSerial;
+                published.resolvedInternalInterfaces =
+                    packet.resolvedInternalInterfaces;
+                published.suppressedInternalFaces =
+                    packet.suppressedInternalFaces;
+                published.crossPacketInternalInterfaces =
+                    packet.crossPacketInternalInterfaces;
+                published.lastSeen = frame;
+                published.dirty = missedSourceChanges;
+                _staticRegionPacketBuilds.erase(regionKey);
+                ++_staticPacketPublishes;
+                return true;
+            }
+            packet.surfaceFingerprint = fingerprint;
+            packet.surfaceStorage = std::make_shared<const std::vector<FirstPersonSurface>>(std::move(packet.surfaces));
+            // Publish all metadata and immutable geometry in one move.
+            // An older initial snapshot remains last-known-good until the
+            // newer source revision has been reconciled.
             packet.sourceRevision = published.sourceRevision;
             packet.publishedSourceRevision = staging.initialSourceRevision;
             packet.invalidationSerial = published.invalidationSerial;
