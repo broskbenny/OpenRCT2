@@ -17,7 +17,7 @@ def drain_edits(keys, unavailable, budget_on_every_step=True):
             membership.add(key)
             queue.append(key)
     attempts = {}
-    limit = len(membership) * 2 + 10
+    limit = len(membership) * 5 + 10
     for i in range(limit):
         if not queue:
             break
