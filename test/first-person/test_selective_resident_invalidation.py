@@ -5,7 +5,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 PAINT = ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc"
-WORLD = ROOT / "src/openrct2/paint/FirstPersonRenderer.World.inc"
+LOCAL = ROOT / "src/openrct2/paint/FirstPersonRenderer.LocalScenery.inc"
 CORE = ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc"
 
 
@@ -19,10 +19,10 @@ class SelectiveResidentInvalidationTest(unittest.TestCase):
     def test_previous_and_current_ownership_are_preserved(self):
         paint = PAINT.read_text(encoding="utf-8")
         core = CORE.read_text(encoding="utf-8")
-        world = WORLD.read_text(encoding="utf-8")
+        local = LOCAL.read_text(encoding="utf-8")
         self.assertIn("bool hadCoherentResident = false;", core)
         self.assertIn("bool hadCoherentCameraIndependent = false;", core)
-        self.assertIn("bool FirstPersonResidentContainsCoherentGeometry(", world)
+        self.assertIn("bool FirstPersonResidentContainsCoherentGeometry(", local)
         self.assertIn("IsResidentStaticSurface(surface)", world)
         self.assertIn("!FirstPersonIndependentLocalScenery(surface)", world)
         self.assertIn("cached.hadCoherentCameraIndependent || coherent", paint)
