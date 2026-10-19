@@ -29,6 +29,27 @@ class MapSceneryPersistenceTest(unittest.TestCase):
             self.assertIn(marker, small)
         self.assertIn("packet.viewFlags != scene.options.viewFlags", local)
         self.assertIn("packet.trackDesignSaveMode != gTrackDesignSaveMode", local)
+        self.assertIn("TileInspector::GetSelectedElement()", small)
+        self.assertIn("selected != reinterpret_cast<const TileElement*>(&small)", small)
+        self.assertIn("bool containsInspectedElement = false;", local)
+        self.assertIn("packet.selectionGeneration != selectionGeneration", local)
+        self.assertIn("packet.containsInspectedElement != contains", local)
+        self.assertIn("if (packet.containsInspectedElement != contains)", local)
+        self.assertIn("packet.dirty = true;", local)
+
+    def test_selection_change_only_queues_matching_cells(self):
+        rng = random.Random(20261019)
+        for _ in range(50000):
+            cell_count = rng.randrange(1, 250)
+            previous = rng.randrange(cell_count)
+            current = rng.randrange(cell_count)
+            dirty = {i for i in range(cell_count)
+                     if (i == previous) != (i == current)}
+            self.assertLessEqual(len(dirty), 2)
+            if previous == current:
+                self.assertFalse(dirty)
+            else:
+                self.assertEqual(dirty, {previous, current})
 
     def test_exact_cpp_identity_from_repository(self):
         compiler = os.environ.get("CXX") or shutil.which("clang++") or shutil.which("g++") or shutil.which("cl")
