@@ -1673,6 +1673,25 @@ namespace OpenRCT2::Paint
         const auto y0 = floorTile(std::min(low.y,high.y));
         const auto x1 = floorTile(std::max(low.x,high.x));
         const auto y1 = floorTile(std::max(low.y,high.y));
+        // Native viewport invalidations often originate from entities,
+        // shadows or repaint requests without changing a single TileElement.
+        // Only verified authoritative changes can invalidate persistent
+        // structural/terrain/local GPU geometry. An uncached tile remains
+        // conservative because it may contain newly created structure.
+        std::unordered_set<uint64_t> changedTiles;
+        std::unordered_set<uint64_t> changedRegions;
+        for (int32_t ty = y0; ty <= y1; ++ty)
+        for (int32_t tx = x0; tx <= x1; ++tx)
+        {
+            const auto key = TerrainKey(tx, ty);
+            const auto cached = _staticPaintCache.find(key);
+            if (cached != _staticPaintCache.end() && cached->second.valid
+                && NativeTileSignature({tx * kCoordsXYStep,
+                    ty * kCoordsXYStep}) == cached->second.signature)
+                continue;
+            changedTiles.insert(key);
+            changedRegions.insert(FirstPersonGpuRegionKey(tx, ty));
+        }
         for (auto it = _largeSceneryJobs.begin(); it != _largeSceneryJobs.end();)
         {
             const auto& job = *it->second;
@@ -1720,12 +1739,8 @@ namespace OpenRCT2::Paint
         std::unordered_set<uint64_t> trackCandidates;
         std::unordered_set<uint64_t> largeSceneryCandidates;
         std::unordered_set<uint64_t> parkEntranceCandidates;
-        for (int32_t regionY = y0 / 32; regionY <= y1 / 32; ++regionY)
-        for (int32_t regionX = x0 / 32; regionX <= x1 / 32; ++regionX)
+        for (const uint64_t regionKey : changedRegions)
         {
-            const uint64_t regionKey =
-                FirstPersonGpuRegionKey(
-                    regionX * 32, regionY * 32);
             MarkStaticRegionPacketDirty(regionKey);
             ++_staticRegionPackets[regionKey].sourceRevision;
             MarkStaticRegionRelationshipNeighboursDirty(
@@ -1767,28 +1782,23 @@ namespace OpenRCT2::Paint
         for (int32_t ty = y0; ty <= y1; ++ty)
         for (int32_t tx = x0; tx <= x1; ++tx)
         {
-            WithdrawFirstPersonSemanticComponents(
-                { tx * kCoordsXYStep,
-                  ty * kCoordsXYStep });
-
-            // Both caches are already addressed by the exact tile key. A local
-            // native invalidation should therefore cost O(invalidated tiles),
-            // not O(every terrain/static tile first person has ever cached).
             const uint64_t key = TerrainKey(tx, ty);
-            MarkTerrainRegionDirtyForTile(tx, ty);
-            MarkLocalSceneryDirtyForTile(tx, ty);
-            // Revisit only the edited authoritative tile after the finite
-            // park-wide asset-discovery sweep has finished.
-            QueueFirstPersonParkSceneryTile(tx, ty);
-            if (auto terrain = _terrainCache.entries.find(key);
-                terrain != _terrainCache.entries.end())
+            const bool authoritativeChange = changedTiles.contains(key);
+            if (authoritativeChange)
             {
-                terrain->second.dirty = true;
+                WithdrawFirstPersonSemanticComponents(
+                    { tx * kCoordsXYStep, ty * kCoordsXYStep });
+                MarkTerrainRegionDirtyForTile(tx, ty);
+                MarkLocalSceneryDirtyForTile(tx, ty);
+                QueueFirstPersonParkSceneryTile(tx, ty);
+                if (auto terrain = _terrainCache.entries.find(key);
+                    terrain != _terrainCache.entries.end())
+                    terrain->second.dirty = true;
             }
             if (auto cached = _staticPaintCache.find(key);
                 cached != _staticPaintCache.end())
             {
-                if (NativeTileSignature({tx * kCoordsXYStep, ty * kCoordsXYStep}) != cached->second.signature)
+                if (authoritativeChange)
                 {
                     ++cached->second.sourceRevision;
                     _semanticJobs.erase(key);
@@ -1797,6 +1807,8 @@ namespace OpenRCT2::Paint
                     cached->second.semanticStreamedSurfaces.clear();
                     cached->second.semanticSurfaceFingerprint = 0;
                 }
+                // Even when TileElement data are unchanged, the next source
+                // admission refreshes visibility/animation classifications.
                 cached->second.dirty = true;
                 cached->second.visibilityDirty = true;
             }
