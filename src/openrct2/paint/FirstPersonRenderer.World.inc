@@ -1274,6 +1274,28 @@
                 && !surface.exteriorOnly;
         }
 
+        // A native source-view change only affects surfaces selected from
+        // cached rotations. Keep a 32x32 relationship rebuild when any
+        // rotated resident needs coherent ownership; otherwise the local
+        // 8x8 cell is the only changed GPU residency unit.
+        [[nodiscard]] bool FirstPersonRotationHasCoherentTileGeometry(
+            const StaticPaintCacheEntry& cached)
+        {
+            for (const auto& variant : cached.rotations)
+            {
+                if (!variant.valid)
+                    continue;
+                for (const auto& surface : variant.residentSurfaces)
+                {
+                    if (IsResidentStaticSurface(surface)
+                        && surface.reconstructionGroup == 0
+                        && !FirstPersonIndependentLocalScenery(surface))
+                        return true;
+                }
+            }
+            return false;
+        }
+
         struct FirstPersonLocalSceneryPacket
         {
             std::shared_ptr<const std::vector<FirstPersonSurface>> surfaces;
