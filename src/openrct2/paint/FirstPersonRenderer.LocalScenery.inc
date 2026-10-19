@@ -65,6 +65,8 @@
             uint64_t fingerprint = 0;
             size_t vertexCount = 0;
             bool containsNativeSource = false;
+            uint32_t viewFlags = 0;
+            bool trackDesignSaveMode = false;
             bool dirty = true;
         };
         static std::unordered_map<uint64_t, FirstPersonLocalSceneryPacket>
@@ -104,6 +106,13 @@
             for (const auto key : visible)
             {
                 auto& packet = _localSceneryPackets[key];
+                // Placement ownership depends on presentation flags as well
+                // as map identity. Existing GPU cells must not outlive a
+                // transition to ghost/highlight/track-design native artwork.
+                if (packet.surfaces
+                    && (packet.viewFlags != scene.options.viewFlags
+                        || packet.trackDesignSaveMode != gTrackDesignSaveMode))
+                    packet.dirty = true;
                 if (!packet.dirty)
                     continue;
                 const int32_t rx = int32_t(uint32_t((key >> 32) & 0x3fffffffu)) - 1;
@@ -258,6 +267,8 @@
                     std::unique(dependencies.begin(), dependencies.end()),
                     dependencies.end());
                 auto& packet = _localSceneryPackets[key];
+                packet.viewFlags = scene.options.viewFlags;
+                packet.trackDesignSaveMode = gTrackDesignSaveMode;
                 const uint64_t fingerprint =
                     ResidentStaticSurfaceFingerprint(surfaces);
                 if (packet.surfaces
