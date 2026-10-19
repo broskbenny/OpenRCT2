@@ -1471,8 +1471,11 @@
                 backgroundEpoch = _sceneEpoch;
                 backgroundCursor = 0;
             }
-            std::vector<CoordsXY> workTiles(
-                scene.visibleTiles.begin(), scene.visibleTiles.end());
+            // Only stage the small background slice. Copying thousands of
+            // visible tiles into another vector every frame would negate
+            // much of the benefit of persistent terrain.
+            std::vector<CoordsXY> backgroundTiles;
+            backgroundTiles.reserve(32);
             const auto map = getGameState().mapSize;
             if (map.x > 0 && map.y > 0)
             {
@@ -1495,16 +1498,20 @@
                     if (cached != _terrainCache.entries.end()
                         && !cached->second.dirty)
                         continue;
-                    workTiles.push_back(tile);
+                    backgroundTiles.push_back(tile);
                 }
             }
             FirstPersonFrameBudget warmBuildBudget(
                 8, std::chrono::microseconds(500));
-            for (size_t terrainIndex = 0; terrainIndex < workTiles.size(); ++terrainIndex)
+            const size_t visibleCount = scene.visibleTiles.size();
+            for (size_t terrainIndex = 0;
+                 terrainIndex < visibleCount + backgroundTiles.size();
+                 ++terrainIndex)
             {
-                const CoordsXY origin = workTiles[terrainIndex];
-                const bool presentInFrame =
-                    terrainIndex < scene.visibleTiles.size();
+                const bool presentInFrame = terrainIndex < visibleCount;
+                const CoordsXY origin = presentInFrame
+                    ? scene.visibleTiles[terrainIndex]
+                    : backgroundTiles[terrainIndex - visibleCount];
                 if (!presentInFrame && !warmBuildBudget.take())
                 {
                     // Budget applies to SOURCE CONSTRUCTION, not merely the
