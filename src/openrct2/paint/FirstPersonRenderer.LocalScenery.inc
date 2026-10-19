@@ -214,12 +214,14 @@
                 bool haveBounds = false;
                 bool waitingForSourceRevalidation = false;
                 bool containsNativeSource = false;
+                std::unordered_set<uint64_t> mapOwnedNativeKeys;
 
                 const auto add = [&](const FirstPersonSurface& source,
                                      uint64_t owningRegion, bool mapOwned = false) {
                     if (!IsResidentStaticSurface(source)
                         || source.gpuRegion != owningRegion
-                        || (!mapOwned && !FirstPersonIndependentLocalScenery(source)))
+                        || (!mapOwned && !FirstPersonIndependentLocalScenery(source))
+                        || (!mapOwned && mapOwnedNativeKeys.contains(source.sourceInstanceKey)))
                         return;
                     if (!mapOwned)
                         containsNativeSource = true;
@@ -293,6 +295,18 @@
                                             mapSurfaces, mapTile, *small,
                                             scene.options.viewFlags))
                                     {
+                                        // A previously native-owned cache view
+                                        // may survive an inspector selection
+                                        // transition. A completed map instance
+                                        // supersedes that exact native element,
+                                        // otherwise it would render twice.
+                                        uint64_t nativeKey = 14695981039346656037ull;
+                                        ExtendStableKey(nativeKey, uint32_t(tx));
+                                        ExtendStableKey(nativeKey, uint32_t(ty));
+                                        ExtendStableKey(nativeKey, elementIndex);
+                                        ExtendStableKey(nativeKey,
+                                            uint8_t(TileElementType::smallScenery));
+                                        mapOwnedNativeKeys.insert(nativeKey == 0 ? 1 : nativeKey);
                                         const auto target = BuildFirstPersonTileInteractionTarget(
                                             ViewportInteractionItem::scenery, mapTile, element);
                                         for (auto& surface : mapSurfaces)
