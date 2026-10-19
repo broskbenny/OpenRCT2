@@ -1691,11 +1691,8 @@ namespace OpenRCT2::Paint
             changedTiles.insert(key);
             changedRegions.insert(FirstPersonGpuRegionKey(tx, ty));
         }
-        // The proxies and trajectory requests depend on authoritative
-        // placement. Unrelated redraws must not withdraw stable collision
-        // geometry or restart pending track reconstruction work.
-        if (!changedTiles.empty())
-            ClearFirstPersonLargeSceneryPhysicalProxies();
+        // Keep existing large-scenery walking proxies unless the individual
+        // owning object's recorded authoritative tile signatures change.
         for (auto it = _largeSceneryJobs.begin(); it != _largeSceneryJobs.end();)
         {
             const auto& job = *it->second;
@@ -1860,6 +1857,20 @@ namespace OpenRCT2::Paint
                 && y0 <= geometry.maxTileY
                 && y1 >= geometry.minTileY)
             {
+                const bool objectChanged =
+                    geometry.tileSignatures.empty()
+                    || std::any_of(
+                        geometry.tileSignatures.begin(),
+                        geometry.tileSignatures.end(),
+                        [](const auto& source) {
+                            return NativeTileSignature(source.first)
+                                != source.second;
+                        });
+                if (!objectChanged)
+                    continue;
+                // Invalidate only this changed instance's mesh and collision
+                // proxies, never every unrelated structure in the park.
+                WithdrawFirstPersonLargeSceneryPhysicalProxies(groupKey);
                 MarkLargeSceneryGeometryRegionsDirty(geometry);
                 geometry.dirty = true;
             }
