@@ -166,6 +166,7 @@ namespace OpenRCT2::Paint
 
         #include "FirstPersonRenderer.Core.inc"
         #include "FirstPersonRenderer.World.inc"
+        #include "FirstPersonRenderer.ParkSceneryPrewarm.inc"
         #include "FirstPersonRenderer.Paint.inc"
     } // namespace
 
@@ -1573,6 +1574,7 @@ namespace OpenRCT2::Paint
         // native painting, but does not consume native paint capture slots.
         _snapshotBudget = FirstPersonFrameBudget(32, std::chrono::microseconds(700));
         PrewarmVisibleSmallSceneryAssets(scene);
+        PrewarmParkSmallSceneryAssets();
     }
 
     FirstPersonScene CollectFirstPersonScene(
