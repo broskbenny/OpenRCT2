@@ -1523,7 +1523,7 @@
                 const uint64_t key = _terrainBackgroundEditedTiles.front();
                 const auto tx = int32_t(uint32_t(key >> 32));
                 const auto ty = int32_t(uint32_t(key));
-                editedTile = {tx * kCoordsXYStep, ty * kCoordsXYStep};
+                editedTile = CoordsXY{tx * kCoordsXYStep, ty * kCoordsXYStep};
                 if (MapIsLocationValid(*editedTile))
                     backgroundTiles.push_back(*editedTile);
                 else
