@@ -1690,7 +1690,8 @@ namespace OpenRCT2::Paint
             && _largeSceneryGeometryCache.empty()
             && _parkEntranceGeometryCache.empty()
             && _staticRegionPackets.empty()
-            && _localSceneryPackets.empty()) return;
+            && _localSceneryPackets.empty()
+            && _onDemandLargeSceneryProxySources.empty()) return;
         const auto floorTile = [](int32_t x) {return int32_t(std::floor(float(x)/kCoordsXYStep));};
         const auto x0 = floorTile(std::min(low.x,high.x));
         const auto y0 = floorTile(std::min(low.y,high.y));
