@@ -1192,7 +1192,8 @@
                     && (paint->second.visibilityDirty
                         || (paint->second.visibilityKnown
                             && paint->second.visibilitySignature
-                                != index->second.signature)))
+                                != index->second.signature))
+                    && NativeTileSignature(tile) != index->second.signature)
                     continue;
                 for (const auto& group : index->second.largeScenery)
                 {
