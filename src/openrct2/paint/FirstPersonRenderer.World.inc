@@ -905,8 +905,21 @@
             {
                 const auto key = TerrainKey(x0, y0);
                 const bool known = _regionBounds.contains(key);
+                // Discovery budget governs refinement, not world existence.
+                // An unknown leaf remains conservatively visible so that
+                // terrain and already reconstructed structures do not vanish.
                 if (!known && !_discoveryBudget.available())
-                    return {{}, {}, false}; // discover this leaf on a later frame
+                {
+                    constexpr float kHalo = 512.0f;
+                    const float dx = float(x1-x0) * 0.5f * kTile;
+                    const float dy = float(y1-y0) * 0.5f * kTile;
+                    return {
+                        { float(x0+x1) * 0.5f * kTile,
+                          float(y0+y1) * 0.5f * kTile, 1792.0f },
+                        { dx + kHalo, dy + kHalo, 2304.0f + kHalo },
+                        true
+                    };
+                }
                 auto& entry = _regionBounds[key];
                 if ((entry.dirty || entry.x1 != x1 || entry.y1 != y1)
                     && _discoveryBudget.take(size_t((x1 - x0) * (y1 - y0))))
@@ -1000,10 +1013,27 @@
         std::optional<FirstPersonSemanticSphere> CachedTileVisibilityBounds(
             CoordsXY world, uint32_t sourceGeneration)
         {
+            // The source-view cache is optional evidence, not the world.
+            // Keep unknown tiles conservatively admissible while the bounded
+            // visibility worker completes their more precise semantic bounds.
+            const auto unknown = [&]() -> FirstPersonSemanticSphere {
+                constexpr float kLow = -512.0f;
+                constexpr float kHigh = 4096.0f;
+                constexpr float kHalo = 256.0f;
+                const float halfZ = (kHigh-kLow) * 0.5f;
+                return {
+                    { float(world.x + kCoordsXYHalfTile),
+                      float(world.y + kCoordsXYHalfTile),
+                      (kLow + kHigh) * 0.5f },
+                    std::sqrt(2.0f * float(kCoordsXYHalfTile*kCoordsXYHalfTile)
+                        + halfZ*halfZ) + kHalo
+                };
+            };
             const int32_t tx = world.x / kCoordsXYStep;
             const int32_t ty = world.y / kCoordsXYStep;
             const uint64_t key = TerrainKey(tx, ty);
-            if (!_staticPaintCache.contains(key) && !_discoveryBudget.available()) return std::nullopt;
+            if (!_staticPaintCache.contains(key) && !_discoveryBudget.available())
+                return unknown();
             auto& cached = _staticPaintCache[key];
             constexpr uint64_t kVisibilityProbeInterval = 240;
             const bool probeDue = !cached.visibilityKnown || cached.visibilityDirty
@@ -1035,7 +1065,8 @@
             }
 
             if (!cached.visibilityBoundValid)
-                return std::nullopt;
+                return cached.visibilityKnown ? std::nullopt
+                                              : std::optional<FirstPersonSemanticSphere>{ unknown() };
             const float halfZ = 0.5f
                 * float(cached.visibilityMaxZ - cached.visibilityMinZ);
             const FirstPersonVec3 center{
