@@ -13,6 +13,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SMALL = ROOT / "src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc"
 WORLD = ROOT / "src/openrct2/paint/FirstPersonRenderer.World.inc"
+LOCAL = ROOT / "src/openrct2/paint/FirstPersonRenderer.LocalScenery.inc"
 CORE = ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc"
 
 
@@ -40,16 +41,17 @@ class MapSmallSceneryTest(unittest.TestCase):
     def test_map_publication_and_native_suppression_share_gate(self):
         small = SMALL.read_text(encoding="utf-8")
         world = WORLD.read_text(encoding="utf-8")
+        local = LOCAL.read_text(encoding="utf-8")
         core = CORE.read_text(encoding="utf-8")
         self.assertIn("bool FirstPersonMapSmallSceneryEligible(", small)
         self.assertIn("bool FirstPersonMapSmallSceneryCanPublish(", small)
         self.assertIn("bool AppendFirstPersonMapSmallScenery(", small)
         self.assertIn("FirstPersonMapSmallSceneryCanPublish(\n                        *entry, *small, scene.options.viewFlags)", small)
-        self.assertIn("AppendFirstPersonMapSmallScenery(\n                                            mapSurfaces, mapTile, *small,", world)
-        self.assertIn("add(surface, owningRegion, true);", world)
-        self.assertIn("BuildFirstPersonTileInteractionTarget(", world)
-        self.assertIn("surface.sourceInstanceKey = instance;", world)
-        self.assertIn("MapIsLocationValid(mapTile)", world)
+        self.assertIn("AppendFirstPersonMapSmallScenery(\n                                            mapSurfaces, mapTile, *small,", local)
+        self.assertIn("add(surface, owningRegion, true);", local)
+        self.assertIn("BuildFirstPersonTileInteractionTarget(", local)
+        self.assertIn("surface.sourceInstanceKey = instance;", local)
+        self.assertIn("MapIsLocationValid(mapTile)", local)
         self.assertIn("waitingMapCells", small)
         self.assertIn("readyMapCells", small)
         self.assertIn("InvalidateReadyFirstPersonSmallSceneryCells(*job);", small)
