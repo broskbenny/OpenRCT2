@@ -1661,7 +1661,6 @@ namespace OpenRCT2::Paint
     }
     void InvalidateFirstPersonSceneRegion(CoordsXY low, CoordsXY high)
     {
-        ClearFirstPersonLargeSceneryPhysicalProxies();
         if (_regionBounds.empty() && _terrainCache.entries.empty()
             && _staticPaintCache.empty() && _trackTrajectoryCache.empty()
             && _largeSceneryGeometryCache.empty()
@@ -1692,6 +1691,11 @@ namespace OpenRCT2::Paint
             changedTiles.insert(key);
             changedRegions.insert(FirstPersonGpuRegionKey(tx, ty));
         }
+        // The proxies and trajectory requests depend on authoritative
+        // placement. Unrelated redraws must not withdraw stable collision
+        // geometry or restart pending track reconstruction work.
+        if (!changedTiles.empty())
+            ClearFirstPersonLargeSceneryPhysicalProxies();
         for (auto it = _largeSceneryJobs.begin(); it != _largeSceneryJobs.end();)
         {
             const auto& job = *it->second;
@@ -1731,8 +1735,17 @@ namespace OpenRCT2::Paint
         for (auto it = _trackGeometryRequests.begin(); it != _trackGeometryRequests.end();)
         {
             const auto p = it->second.tile;
-            if (p.x / kCoordsXYStep >= x0 - 16 && p.x / kCoordsXYStep <= x1 + 16
-                && p.y / kCoordsXYStep >= y0 - 16 && p.y / kCoordsXYStep <= y1 + 16)
+            const int32_t tileX = p.x / kCoordsXYStep;
+            const int32_t tileY = p.y / kCoordsXYStep;
+            const bool affected = std::any_of(
+                changedTiles.begin(), changedTiles.end(),
+                [&](uint64_t key) {
+                    const int32_t changedX = int32_t(uint32_t(key >> 32));
+                    const int32_t changedY = int32_t(uint32_t(key));
+                    return std::abs(tileX - changedX) <= 16
+                        && std::abs(tileY - changedY) <= 16;
+                });
+            if (affected)
                 it = _trackGeometryRequests.erase(it);
             else ++it;
         }
