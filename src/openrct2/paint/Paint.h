@@ -84,6 +84,9 @@ enum class FirstPersonPaintSemanticRole : uint8_t
     movingMachinery,
     seat,
     sign,
+    // A closed, tile-local reconstructed small-scenery asset. Unlike an
+    // unclassified native sprite this has proven per-instance ownership.
+    smallSceneryBody,
 };
 
 enum class FirstPersonPaintSemanticPrimitiveKind : uint8_t
