@@ -859,6 +859,25 @@
                     SmallSceneryFlag::flag17);
         }
 
+        [[nodiscard]] bool FirstPersonMapSmallSceneryCanPublish(
+            const SmallSceneryEntry& entry, const SmallSceneryElement& small,
+            uint32_t viewFlags)
+        {
+            if (!FirstPersonMapSmallSceneryEligible(entry, small, viewFlags))
+                return false;
+            const auto key = FirstPersonSmallSceneryReconstructionKey(entry, small);
+            const auto found = _smallSceneryJobs.find(key);
+            if (found == _smallSceneryJobs.end() || !found->second->ready
+                || found->second->surfaces.empty())
+                return false;
+            return std::all_of(found->second->surfaces.begin(),
+                found->second->surfaces.end(), [](const auto& local) {
+                    return local.cameraIndependent && !local.viewFacing
+                        && !local.image.IsBlended()
+                        && (local.solidColour != 0 || local.persistentBitmap);
+                });
+        }
+
         // The same canonical local-space surfaces produced for native paint
         // are instanced directly from authoritative TileElements. Per-instance
         // colours and orientation are applied here; no new visual inference.
@@ -869,14 +888,10 @@
         {
             const auto* entry = small.getEntry();
             if (entry == nullptr
-                || !FirstPersonMapSmallSceneryEligible(*entry, small, viewFlags))
+                || !FirstPersonMapSmallSceneryCanPublish(*entry, small, viewFlags))
                 return false;
             const auto key = FirstPersonSmallSceneryReconstructionKey(*entry, small);
-            const auto found = _smallSceneryJobs.find(key);
-            if (found == _smallSceneryJobs.end() || !found->second->ready
-                || found->second->surfaces.empty())
-                return false;
-            const auto& job = *found->second;
+            const auto& job = *_smallSceneryJobs.at(key);
             const bool sharedRotation =
                 FirstPersonSmallSceneryCanShareRotatedAsset(*entry, small);
             const uint8_t instanceRotation = sharedRotation ? small.getDirection() : 0;
@@ -892,15 +907,6 @@
             if (entry->flags.has(SmallSceneryFlag::hasTertiaryColour))
                 image = image.WithTertiary(small.getTertiaryColour());
 
-            // A baked nonresident/translucent face cannot be silently lost
-            // in an opaque GPU packet. Keep its native painter fallback.
-            for (const auto& local : job.surfaces)
-            {
-                if (!local.cameraIndependent || local.viewFacing
-                    || local.image.IsBlended()
-                    || (local.solidColour == 0 && !local.persistentBitmap))
-                    return false;
-            }
             for (const auto& local : job.surfaces)
             {
                 auto surface = local;
@@ -1131,6 +1137,11 @@
             const auto job = it->second;
             if (job->ready)
             {
+                // The authoritative 8x8 packet now owns eligible static
+                // placements. Do not draw a second native-capture instance.
+                if (FirstPersonMapSmallSceneryCanPublish(
+                        *entry, *small, scene.options.viewFlags))
+                    return true;
                 if (job->surfaces.empty()) return false;
                 for (const auto& local : job->surfaces)
                 {
