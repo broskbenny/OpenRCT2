@@ -1515,8 +1515,8 @@
                     && packet.fingerprint == fingerprint
                     && packet.textureDependencies == dependencies)
                 {
-                    // This invalidation did not change GPU geometry. Keep
-                    // the resident generation and avoid a redundant upload.
+                    // No GPU change: preserve the resident generation.
+                    packet.containsNativeSource = containsNativeSource;
                     packet.dirty = false;
                     continue;
                 }
