@@ -40,6 +40,11 @@ struct SmallSceneryElement {
     bool isInvisible() const { return invisible; }
     bool needsSupports() const { return supports; }
 };
+using TileElement = SmallSceneryElement;
+struct TileInspector {
+    static inline const TileElement* selected = nullptr;
+    static const TileElement* GetSelectedElement() { return selected; }
+};
 bool gTrackDesignSaveMode=false;
 """ + actual + """
 int main() {
@@ -47,6 +52,9 @@ int main() {
     SmallSceneryElement element;
     assert(FirstPersonMapSmallSceneryEligible(entry,element,0));
     assert(!FirstPersonMapSmallSceneryEligible(entry,element,1));
+    TileInspector::selected = &element;
+    assert(!FirstPersonMapSmallSceneryEligible(entry,element,0));
+    TileInspector::selected = nullptr;
     for (int bit=0; bit<6; ++bit) {
         entry.flags.bits=1u<<bit;
         assert(!FirstPersonMapSmallSceneryEligible(entry,element,0));
