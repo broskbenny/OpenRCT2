@@ -862,8 +862,11 @@
             const SmallSceneryElement& small,
             uint32_t viewFlags)
         {
+            const auto* selected = TileInspector::GetSelectedElement();
             return viewFlags == 0
                 && !gTrackDesignSaveMode
+                && (selected == nullptr
+                    || selected != reinterpret_cast<const TileElement*>(&small))
                 && !small.isGhost() && !small.isInvisible()
                 && !small.needsSupports()
                 && !entry.flags.hasAny(
