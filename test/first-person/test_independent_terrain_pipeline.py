@@ -24,6 +24,8 @@ class TerrainPipelineTest(unittest.TestCase):
         self.assertIn("cache.ground.gpuRegion = FirstPersonTerrainRegionKey(tx,ty);", world)
         self.assertIn("bool haveKnownTerrain = false;", world)
         self.assertIn("if (!terrain.verticalOpening)", world)
+        self.assertIn("terrainIt->second.verticalOpening = verticalOpening;", paint)
+        self.assertIn("MarkTerrainRegionDirtyForTile(\n                                            item.position.x / kCoordsXYStep,", paint)
         self.assertIn("region.surfaces = std::make_shared<const std::vector<FirstPersonSurface>>", world)
         builder = world[world.index("bool RebuildStaticRegionPacket("):
                         world.index("void SubmitVisibleStaticRegions(")]
