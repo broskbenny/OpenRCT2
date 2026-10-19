@@ -1326,15 +1326,20 @@
                     ? 0
                     : ResidentStaticSurfaceFingerprint(
                         cached.cameraIndependentResidentSurfaces);
-                if (cached.cameraIndependentFingerprint
-                    != fingerprint)
+                const bool coherent =
+                    FirstPersonResidentContainsCoherentGeometry(
+                        cached.cameraIndependentResidentSurfaces);
+                if (cached.cameraIndependentFingerprint != fingerprint)
                 {
-                    MarkStaticRegionDirtyForTile(
-                        int32_t(key >> 32),
-                        int32_t(key & 0xffffffffu));
+                    const auto tx = int32_t(key >> 32);
+                    const auto ty = int32_t(key & 0xffffffffu);
+                    if (cached.hadCoherentCameraIndependent || coherent)
+                        MarkStaticRegionDirtyForTile(tx, ty);
+                    else
+                        MarkLocalSceneryDirtyForTile(tx, ty);
                 }
-                cached.cameraIndependentFingerprint =
-                    fingerprint;
+                cached.hadCoherentCameraIndependent = coherent;
+                cached.cameraIndependentFingerprint = fingerprint;
             }
 
             // Repainting a streamed/animated tile is not a resident-geometry
@@ -1357,17 +1362,21 @@
                     const uint64_t fingerprint =
                         ResidentStaticSurfaceFingerprint(
                             variant.residentSurfaces);
+                    const bool coherent =
+                        FirstPersonResidentContainsCoherentGeometry(
+                            variant.residentSurfaces);
                     if (!cached.animated
-                        && variant.residentFingerprint
-                            != fingerprint)
+                        && variant.residentFingerprint != fingerprint)
                     {
-                        MarkStaticRegionDirtyForTile(
-                            int32_t(key >> 32),
-                            int32_t(
-                                key & 0xffffffffu));
+                        const auto tx = int32_t(key >> 32);
+                        const auto ty = int32_t(key & 0xffffffffu);
+                        if (variant.hadCoherentResident || coherent)
+                            MarkStaticRegionDirtyForTile(tx, ty);
+                        else
+                            MarkLocalSceneryDirtyForTile(tx, ty);
                     }
-                    variant.residentFingerprint =
-                        fingerprint;
+                    variant.hadCoherentResident = coherent;
+                    variant.residentFingerprint = fingerprint;
                 }
             }
 
