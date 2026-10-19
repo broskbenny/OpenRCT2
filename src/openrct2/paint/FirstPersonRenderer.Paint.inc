@@ -1287,9 +1287,18 @@
                 {
                     if (cached.hasUngroupedResident)
                     {
-                        MarkStaticRegionDirtyForTile(
-                            int32_t(key >> 32),
-                            int32_t(key & 0xffffffffu));
+                        const auto tx = int32_t(key >> 32);
+                        const auto ty = int32_t(key & 0xffffffffu);
+                        if (FirstPersonRotationHasCoherentTileGeometry(cached))
+                        {
+                            MarkStaticRegionDirtyForTile(tx, ty);
+                        }
+                        else
+                        {
+                            // Native view changed only 8x8-local scenery.
+                            // Do not rebuild unrelated grouped geometry.
+                            MarkLocalSceneryDirtyForTile(tx, ty);
+                        }
                     }
                     cached.selectedRotation = requested;
                     cached.hasSelectedRotation = true;
