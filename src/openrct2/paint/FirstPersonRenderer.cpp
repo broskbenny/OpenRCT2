@@ -1525,8 +1525,24 @@ namespace OpenRCT2::Paint
         FirstPersonFrameBudget publicationBudget(2, std::chrono::microseconds(750));
         _reconstructionWorker.publish(publicationBudget);
         FirstPersonFrameBudget repaintBudget(32, std::chrono::microseconds(750));
-        _reconstructionRepaints.drain(repaintBudget, [](uint64_t tile) {
-            InvalidateFirstPersonSceneTile({ int32_t(tile >> 32), int32_t(tile) });
+        _reconstructionRepaints.drain(repaintBudget, [](uint64_t packedTile) {
+            // A completed worker asset is not an authoritative map edit.
+            // Retry only the native source views that originally requested
+            // this geometry. Actual resident-geometry changes invalidate
+            // their GPU packets after source publication, not beforehand.
+            const CoordsXY tile{
+                int32_t(packedTile >> 32), int32_t(packedTile)
+            };
+            const auto key = TerrainKey(
+                tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+            const auto found = _staticPaintCache.find(key);
+            if (found == _staticPaintCache.end() || found->second.dirty)
+                return;
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
+            {
+                if (found->second.rotations[rotation].valid)
+                    RequestFirstPersonNativeSceneryRetry(tile, rotation);
+            }
         });
         _discoveryBudget = FirstPersonFrameBudget(2048, std::chrono::microseconds(2000));
         // Reuse the prepared scene's backing allocations between presentation
