@@ -1498,11 +1498,23 @@
                     workTiles.push_back(tile);
                 }
             }
+            FirstPersonFrameBudget warmBuildBudget(
+                8, std::chrono::microseconds(500));
             for (size_t terrainIndex = 0; terrainIndex < workTiles.size(); ++terrainIndex)
             {
                 const CoordsXY origin = workTiles[terrainIndex];
                 const bool presentInFrame =
                     terrainIndex < scene.visibleTiles.size();
+                if (!presentInFrame && !warmBuildBudget.take())
+                {
+                    // Budget applies to SOURCE CONSTRUCTION, not merely the
+                    // cheap scan that discovers work. Resume precisely at
+                    // the first unbuilt tile next frame; none are lost.
+                    backgroundCursor =
+                        size_t(origin.y / kCoordsXYStep) * size_t(map.x)
+                        + size_t(origin.x / kCoordsXYStep);
+                    break;
+                }
                 const int32_t tx = origin.x / kCoordsXYStep;
                 const int32_t ty = origin.y / kCoordsXYStep;
                 const int32_t x = origin.x;
