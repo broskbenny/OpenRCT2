@@ -66,6 +66,17 @@ class LocalSceneryPacketsTest(unittest.TestCase):
         ):
             self.assertIn(forbidden, independent)
 
+    def test_rotation_only_local_changes_do_not_rebuild_parent(self):
+        world = WORLD.read_text(encoding="utf-8")
+        paint = PAINT.read_text(encoding="utf-8")
+        self.assertIn("bool FirstPersonRotationHasCoherentTileGeometry(", world)
+        self.assertIn("&& surface.reconstructionGroup == 0", world)
+        self.assertIn("if (FirstPersonRotationHasCoherentTileGeometry(cached))", paint)
+        self.assertIn("MarkStaticRegionDirtyForTile(tx, ty);", paint)
+        self.assertIn("MarkLocalSceneryDirtyForTile(tx, ty);", paint)
+        self.assertLess(paint.index("if (FirstPersonRotationHasCoherentTileGeometry(cached))"),
+                        paint.index("cached.selectedRotation = requested;"))
+
     def test_native_cpp_key_spaces_and_safe_eligibility(self):
         compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++") or shutil.which("cl")
         if not compiler:
