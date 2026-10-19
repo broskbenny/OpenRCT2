@@ -873,6 +873,12 @@
                                     if (terrainIt->second.verticalOpening != verticalOpening)
                                     {
                                         terrainIt->second.verticalOpening = verticalOpening;
+                                        // Native tunnel evidence changes ground geometry,
+                                        // not merely scenery. Retire the affected 8x8
+                                        // terrain cell and keep scene publication coherent.
+                                        MarkTerrainRegionDirtyForTile(
+                                            item.position.x / kCoordsXYStep,
+                                            item.position.y / kCoordsXYStep);
                                         MarkStaticRegionDirtyForTile(
                                             item.position.x / kCoordsXYStep,
                                             item.position.y / kCoordsXYStep);
