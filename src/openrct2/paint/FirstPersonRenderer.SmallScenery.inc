@@ -1014,6 +1014,13 @@
                 for (const auto& local : job->surfaces)
                 {
                     auto surface = local;
+                    // The asset worker proved tile-local ownership. This
+                    // explicit role allows only reconstructed small scenery
+                    // (not arbitrary unclassified native walls or buildings)
+                    // to use independently replaceable GPU cells.
+                    surface.diagnosticSemanticRole =
+                        static_cast<uint8_t>(
+                            FirstPersonPaintSemanticRole::smallSceneryBody);
                     surface.image = image.WithIndex(local.image.GetIndex());
                     if (instanceRotation != 0)
                         surface.outwardNormal = FirstPersonRotateSceneryVector(surface.outwardNormal, instanceRotation);
