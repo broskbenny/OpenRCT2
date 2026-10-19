@@ -1081,22 +1081,32 @@
                     job->element.setDirection(0);
                 it = _smallSceneryJobs.emplace(key, std::move(job)).first;
             }
-            const uint64_t cell =
-                (uint64_t(uint32_t(tile.x / kCoordsXYStep / 8)) << 32)
-                | uint32_t(tile.y / kCoordsXYStep / 8);
-            if (it->second->ready)
+            // Only objects which may actually publish through the map
+            // path can invalidate a map-owned GPU cell. Animated, glass,
+            // supporting and other native-only objects still share the
+            // reconstruction cache without touching unrelated packets.
+            const bool mapEligible =
+                FirstPersonMapSmallSceneryEligible(*entry, small, 0);
+            if (mapEligible)
             {
-                if (it->second->readyMapCells.insert(cell).second)
-                    MarkLocalSceneryDirtyForTile(
-                        tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+                const uint64_t cell =
+                    (uint64_t(uint32_t(tile.x / kCoordsXYStep / 8)) << 32)
+                    | uint32_t(tile.y / kCoordsXYStep / 8);
+                if (it->second->ready)
+                {
+                    if (FirstPersonMapSmallSceneryCanPublish(*entry, small, 0)
+                        && it->second->readyMapCells.insert(cell).second)
+                        MarkLocalSceneryDirtyForTile(
+                            tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+                }
+                else
+                {
+                    it->second->waitingMapCells.insert(cell);
+                }
             }
-            else
-            {
-                it->second->waitingMapCells.insert(cell);
-                if (!it->second->submitted)
-                    StartFirstPersonSmallSceneryAssetJob(
-                        it->second, *entry, tile, 0, false);
-            }
+            if (!it->second->ready && !it->second->submitted)
+                StartFirstPersonSmallSceneryAssetJob(
+                    it->second, *entry, tile, 0, false);
         }
 
         bool AppendCalibratedSmallSceneryGeometry(
