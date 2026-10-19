@@ -1379,9 +1379,10 @@
                 bool waitingForSourceRevalidation = false;
 
                 const auto add = [&](const FirstPersonSurface& source,
-                                     uint64_t owningRegion) {
-                    if (!FirstPersonIndependentLocalScenery(source)
-                        || source.gpuRegion != owningRegion)
+                                     uint64_t owningRegion, bool mapOwned = false) {
+                    if (!IsResidentStaticSurface(source)
+                        || source.gpuRegion != owningRegion
+                        || (!mapOwned && !FirstPersonIndependentLocalScenery(source)))
                         return;
                     auto surface = source;
                     surface.gpuRegion = key;
@@ -1425,9 +1426,50 @@
                     surfaces.emplace_back(std::move(surface));
                 };
 
+                std::vector<FirstPersonSurface> mapSurfaces;
                 for (int32_t ty = ry * 8; ty < (ry + 1) * 8; ++ty)
                 for (int32_t tx = rx * 8; tx < (rx + 1) * 8; ++tx)
                 {
+                    // Reconstructed objects already have local geometry.
+                    // Place them from authoritative TileElements instead of
+                    // waiting for the native painter to discover each copy.
+                    const CoordsXY mapTile{tx * kCoordsXYStep, ty * kCoordsXYStep};
+                    const uint64_t owningRegion = FirstPersonGpuRegionKey(tx, ty);
+                    if (MapIsLocationValid(mapTile))
+                    {
+                        auto* element = MapGetFirstElementAt(mapTile);
+                        uint32_t elementIndex = 0;
+                        if (element != nullptr)
+                        do
+                        {
+                            if (element->getType() == TileElementType::smallScenery)
+                            {
+                                const auto* small = element->asSmallScenery();
+                                if (small != nullptr)
+                                {
+                                    mapSurfaces.clear();
+                                    if (AppendFirstPersonMapSmallScenery(
+                                            mapSurfaces, mapTile, *small,
+                                            scene.options.viewFlags))
+                                    {
+                                        const auto target = BuildFirstPersonTileInteractionTarget(
+                                            ViewportInteractionItem::scenery, mapTile, element);
+                                        uint64_t instance = 14695981039346656037ull;
+                                        ExtendStableKey(instance, uint32_t(tx));
+                                        ExtendStableKey(instance, uint32_t(ty));
+                                        ExtendStableKey(instance, elementIndex);
+                                        for (auto& surface : mapSurfaces)
+                                        {
+                                            surface.interactionTarget = target;
+                                            surface.sourceInstanceKey = instance;
+                                            add(surface, owningRegion, true);
+                                        }
+                                    }
+                                }
+                            }
+                            ++elementIndex;
+                        } while (!(element++)->isLastForTile());
+                    }
                     const auto it = _staticPaintCache.find(TerrainKey(tx, ty));
                     if (it == _staticPaintCache.end())
                         continue;
@@ -1439,7 +1481,6 @@
                     if (!it->second.valid)
                         continue;
                     const auto& cached = it->second;
-                    const uint64_t owningRegion = FirstPersonGpuRegionKey(tx, ty);
                     for (const auto& source : cached.semanticResidentSurfaces)
                         add(source, owningRegion);
                     if (cached.animated)
