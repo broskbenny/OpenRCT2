@@ -42,6 +42,7 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
         self.assertIn("PrewarmFirstPersonSmallSceneryAsset(tile, *small);", code)
         self.assertLess(main.index("PrewarmVisibleSmallSceneryAssets(scene);"),
                         main.index("PrewarmParkSmallSceneryAssets();"))
+        self.assertIn("_snapshotBudget = FirstPersonFrameBudget(\n            4, std::chrono::microseconds(200));", main)
 
 
 if __name__ == "__main__":
