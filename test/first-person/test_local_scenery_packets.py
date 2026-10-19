@@ -61,6 +61,8 @@ class LocalSceneryPacketsTest(unittest.TestCase):
             "!surface.coplanarOwner",
             "!surface.artworkCarrier",
             "!surface.exteriorOnly",
+            "semanticRole == FirstPersonPaintSemanticRole::none",
+            "semanticRole == FirstPersonPaintSemanticRole::pathFixture",
         ):
             self.assertIn(forbidden, independent)
 
@@ -77,7 +79,14 @@ class LocalSceneryPacketsTest(unittest.TestCase):
         source = """
 #include <cstdint>
 #include <cassert>
+enum class FirstPersonPaintSemanticRole : uint8_t {
+    none=0, support=1, pathDeck=2, railing=3, pathFixture=4,
+    stationFloor=5, stationFence=6, stationCover=7, wall=8,
+    terrainEdge=9, structureBody=10, structureFloor=11, structureRoof=12,
+    pier=13, towerSection=14, movingMachinery=15, seat=16, sign=17
+};
 struct FirstPersonSurface {
+    uint8_t diagnosticSemanticRole=0;
     bool resident=true;
     uint64_t reconstructionGroup=0;
     bool reconstructedOccupancyBoundary=false;
@@ -106,6 +115,14 @@ int main() {
     s.coplanarOwner=true; assert(!FirstPersonIndependentLocalScenery(s)); s.coplanarOwner=false;
     s.artworkCarrier=true; assert(!FirstPersonIndependentLocalScenery(s)); s.artworkCarrier=false;
     s.exteriorOnly=true; assert(!FirstPersonIndependentLocalScenery(s)); s.exteriorOnly=false;
+    s.diagnosticSemanticRole=uint8_t(FirstPersonPaintSemanticRole::wall);
+    assert(!FirstPersonIndependentLocalScenery(s));
+    s.diagnosticSemanticRole=uint8_t(FirstPersonPaintSemanticRole::pathDeck);
+    assert(!FirstPersonIndependentLocalScenery(s));
+    s.diagnosticSemanticRole=uint8_t(FirstPersonPaintSemanticRole::structureBody);
+    assert(!FirstPersonIndependentLocalScenery(s));
+    s.diagnosticSemanticRole=uint8_t(FirstPersonPaintSemanticRole::pathFixture);
+    assert(FirstPersonIndependentLocalScenery(s));
     s.resident=false; assert(!FirstPersonIndependentLocalScenery(s));
 }
 """
