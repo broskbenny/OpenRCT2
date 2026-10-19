@@ -828,6 +828,22 @@
         // Never invalidate authoritative tiles merely because an asset became ready.
         void InvalidateReadyFirstPersonSmallSceneryCells(SmallSceneryJob& job)
         {
+            // A reconstruction may complete with no certified faces, or
+            // with geometry which cannot use opaque resident storage.
+            // Neither outcome is a map-cell geometry change: leave the
+            // exact native fallback responsible and avoid futile VBO rebuilds.
+            const bool resident = !job.surfaces.empty()
+                && std::all_of(job.surfaces.begin(), job.surfaces.end(),
+                    [](const auto& face) {
+                        return face.cameraIndependent && !face.viewFacing
+                            && !face.image.IsBlended()
+                            && (face.solidColour != 0 || face.persistentBitmap);
+                    });
+            if (!resident)
+            {
+                job.waitingMapCells.clear();
+                return;
+            }
             for (const uint64_t cell : job.waitingMapCells)
             {
                 const auto cx = int32_t(uint32_t(cell >> 32));
