@@ -694,6 +694,7 @@ void main() {
         int64_t coverageWaitUs = 0;
         size_t executedPeels = 0;
         size_t singleLayerTiles = 0;
+        size_t depthOrderedTiles = 0;
         size_t activeTransparencyTiles = 0;
         const auto pollPeelCoverageQueries =
             [&](uint64_t token) {
@@ -1487,6 +1488,10 @@ void main() {
                 size_t vertexOffset{};
                 size_t vertexCount{};
                 int32_t x0{}, y0{}, x1{}, y1{};
+                // Camera-space bounds after near clipping: provably disjoint
+                // intervals have a fixed far-to-near palette composition order.
+                float depthMin{}, depthMax{};
+                bool fixedDepthOrder = false;
             };
             struct TransparentScreenTile
             {
@@ -1582,6 +1587,8 @@ void main() {
                 float maxY =
                     -std::numeric_limits<float>::infinity();
                 bool haveProjection = false;
+                float depthMin = std::numeric_limits<float>::infinity();
+                float depthMax = -std::numeric_limits<float>::infinity();
 
                 for (size_t triangleStart :
                      { size_t{ 0 }, size_t{ 3 } })
@@ -1629,6 +1636,8 @@ void main() {
                         const auto projected =
                             projectCameraPoint(clipped[i]);
                         haveProjection = true;
+                        depthMin = std::min(depthMin, clipped[i].z);
+                        depthMax = std::max(depthMax, clipped[i].z);
                         minX = std::min(
                             minX, projected[0]);
                         minY = std::min(
@@ -1697,6 +1706,8 @@ void main() {
                         std::max(y0, tile.y0),
                         std::min(x1, tile.x1),
                         std::min(y1, tile.y1),
+                        depthMin, depthMax,
+                        !surface->coplanarOwner,
                     });
                 }
             }
@@ -1890,6 +1901,98 @@ void main() {
                     continue;
                 }
 
+                // Exact depth-separated fast path. Camera-space z is the
+                // same monotonic physical-depth key used by the fragment
+                // shader for non-owner surfaces. Strictly disjoint intervals
+                // prove that every pixel sees the same far-to-near ordering.
+                // Ties, canonical coplanar owners and crossing surfaces
+                // always use the established exact two-stage peeler.
+                std::vector<size_t> depthOrder;
+                if (tile.candidates.size() >= 2
+                    && tile.candidates.size() <= 64)
+                {
+                    depthOrder.reserve(tile.candidates.size());
+                    for (size_t i = 0; i < tile.candidates.size(); ++i)
+                        depthOrder.push_back(i);
+                    std::sort(depthOrder.begin(), depthOrder.end(),
+                        [&](size_t a, size_t b) {
+                            const auto& left = tile.candidates[a];
+                            const auto& right = tile.candidates[b];
+                            return left.depthMin > right.depthMin
+                                || (left.depthMin == right.depthMin && a < b);
+                        });
+                    constexpr float kSeparationMargin = 0.01f;
+                    for (size_t i = 0; i < depthOrder.size(); ++i)
+                    {
+                        const auto& candidate =
+                            tile.candidates[depthOrder[i]];
+                        if (!candidate.fixedDepthOrder
+                            || !std::isfinite(candidate.depthMin)
+                            || !std::isfinite(candidate.depthMax)
+                            || candidate.depthMin <= 0.0f
+                            || candidate.depthMin > candidate.depthMax
+                            || (i > 0 && tile.candidates[
+                                depthOrder[i - 1]].depthMin
+                                <= candidate.depthMax + kSeparationMargin))
+                        {
+                            depthOrder.clear();
+                            break;
+                        }
+                    }
+                }
+                if (!depthOrder.empty())
+                {
+                    auto& logicalLayer = *_peelLayers[0];
+                    const GLuint emptyToken[4] = { 0, 0, 0, 0 };
+                    const GLfloat initialDepth[1] = { 0.0f };
+                    // Existing tile element indices are contiguous for each
+                    // candidate; reordering draw ranges needs no new EBO.
+                    std::vector<size_t> offsets;
+                    offsets.reserve(tile.candidates.size());
+                    size_t indexAt = range.start;
+                    for (const auto& candidate : tile.candidates)
+                    {
+                        offsets.push_back(indexAt);
+                        indexAt += candidate.vertexCount;
+                    }
+                    for (const auto candidateIndex : depthOrder)
+                    {
+                        const auto& candidate = tile.candidates[candidateIndex];
+                        logicalLayer.Bind();
+                        glCall(glViewport, left, viewportBottom, width, height);
+                        setTileScissor(tile);
+                        glCall(glClearBufferuiv, GL_COLOR, 0, emptyToken);
+                        glCall(glClearBufferfv, GL_DEPTH, 0, initialDepth);
+                        glCall(glDepthMask, GL_TRUE);
+                        glCall(glEnable, GL_DEPTH_TEST);
+                        glCall(glDepthFunc, GL_GREATER);
+                        glCall(glUseProgram, _program);
+                        glCall(glUniform1i, Uniform(_program, "uPeeling"), 0);
+                        glCall(glUniform1i, Uniform(_program, "uPeelStage"), 3);
+                        OpenGLAPI::SetTexture(0, GL_TEXTURE_2D_ARRAY,
+                            textures.GetAtlasesTexture());
+                        OpenGLAPI::SetTexture(1, GL_TEXTURE_2D,
+                            textures.GetPaletteTexture());
+                        OpenGLAPI::SetTexture(2, GL_TEXTURE_2D,
+                            _opaqueSnapshot->GetDepthTexture());
+                        OpenGLAPI::SetTexture(3, GL_TEXTURE_2D,
+                            _opaqueSnapshot->GetDepthTexture());
+                        OpenGLAPI::SetTexture(4, GL_TEXTURE_2D,
+                            _opaqueSnapshot->GetTexture());
+                        OpenGLAPI::SetTexture(5, GL_TEXTURE_2D,
+                            _opaqueSnapshot->GetDepthTexture());
+                        const void* offset = reinterpret_cast<const void*>(
+                            offsets[candidateIndex] * sizeof(GLuint));
+                        glCall(glDrawElements, GL_TRIANGLES,
+                            GLsizei(candidate.vertexCount),
+                            GL_UNSIGNED_INT, offset);
+                        composeLayer(logicalLayer, tile);
+                        ++executedPeels;
+                    }
+                    ++depthOrderedTiles;
+                    continue;
+                }
+
                 constexpr size_t kCoverageProbeThreshold = 8;
                 const bool probeExhaustion =
                     logicalPasses > kCoverageProbeThreshold;
@@ -2052,7 +2155,7 @@ void main() {
             };
             Console::WriteLine(
                 "FP_GL_RENDER_STAGES totalUs=%lld opaqueUs=%lld transparencyUs=%lld"
-                " finishUs=%lld transparencySurfaces=%zu tiles=%zu peels=%zu singleLayerTiles=%zu coverageWaitUs=%lld"
+                " finishUs=%lld transparencySurfaces=%zu tiles=%zu peels=%zu singleLayerTiles=%zu depthOrderedTiles=%zu coverageWaitUs=%lld"
                 " streamedOpaque=%zu staticRegions=%zu"
                 " ownerReplayCpuUs=%lld ownerDraws=%zu ownerVertices=%zu sideWallReplay=%d",
                 static_cast<long long>(elapsed(renderStarted, renderDone)),
@@ -2060,7 +2163,7 @@ void main() {
                 static_cast<long long>(elapsed(opaqueDone, transparencyDone)),
                 static_cast<long long>(elapsed(transparencyDone, renderDone)),
                 streamedTransparent.size(), activeTransparencyTiles, executedPeels,
-                singleLayerTiles, static_cast<long long>(coverageWaitUs),
+                singleLayerTiles, depthOrderedTiles, static_cast<long long>(coverageWaitUs),
                 streamedOpaque.size(), scene.staticRegions.size(),
                 static_cast<long long>(elapsed(ownerReplayBegin, ownerReplayEnd)),
                 opaqueOwnerDrawCalls, opaqueOwnerSubmittedVertices,
