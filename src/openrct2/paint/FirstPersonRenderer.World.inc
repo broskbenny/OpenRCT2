@@ -1315,6 +1315,7 @@
             uint64_t generation = 0;
             uint64_t fingerprint = 0;
             size_t vertexCount = 0;
+            bool containsNativeSource = false;
             bool dirty = true;
         };
         static std::unordered_map<uint64_t, FirstPersonLocalSceneryPacket>
@@ -1377,6 +1378,7 @@
                 FirstPersonVec3 low{}, high{};
                 bool haveBounds = false;
                 bool waitingForSourceRevalidation = false;
+                bool containsNativeSource = false;
 
                 const auto add = [&](const FirstPersonSurface& source,
                                      uint64_t owningRegion, bool mapOwned = false) {
@@ -1384,6 +1386,8 @@
                         || source.gpuRegion != owningRegion
                         || (!mapOwned && !FirstPersonIndependentLocalScenery(source)))
                         return;
+                    if (!mapOwned)
+                        containsNativeSource = true;
                     auto surface = source;
                     surface.gpuRegion = key;
                     if (surface.image.HasValue()
@@ -1430,9 +1434,7 @@
                 for (int32_t ty = ry * 8; ty < (ry + 1) * 8; ++ty)
                 for (int32_t tx = rx * 8; tx < (rx + 1) * 8; ++tx)
                 {
-                    // Reconstructed objects already have local geometry.
-                    // Place them from authoritative TileElements instead of
-                    // waiting for the native painter to discover each copy.
+                    // Instantiate ready assets from the authoritative map.
                     const CoordsXY mapTile{tx * kCoordsXYStep, ty * kCoordsXYStep};
                     const uint64_t owningRegion = FirstPersonGpuRegionKey(tx, ty);
                     if (MapIsLocationValid(mapTile))
@@ -1494,15 +1496,13 @@
                              cached.rotations[rotation].residentSurfaces)
                             add(source, owningRegion);
                 }
-                // On a warm cell, never replace last-known-good geometry
-                // with an incomplete snapshot while native source painting is
-                // revalidating an edited tile. A cold cell may still publish
-                // whatever ready structural scenery is already available.
+                // Preserve warm native-owned faces during source revalidation.
                 const auto current = _localSceneryPackets.find(key);
                 if (waitingForSourceRevalidation
                     && current != _localSceneryPackets.end()
                     && current->second.surfaces
-                    && !current->second.surfaces->empty())
+                    && !current->second.surfaces->empty()
+                    && current->second.containsNativeSource)
                     continue;
                 std::sort(dependencies.begin(), dependencies.end());
                 dependencies.erase(
@@ -1521,6 +1521,7 @@
                     continue;
                 }
                 packet.fingerprint = fingerprint;
+                packet.containsNativeSource = containsNativeSource;
                 packet.vertexCount = surfaces.size() * 6;
                 packet.surfaces =
                     std::make_shared<const std::vector<FirstPersonSurface>>(
