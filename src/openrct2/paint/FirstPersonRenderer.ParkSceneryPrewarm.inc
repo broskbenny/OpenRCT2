@@ -36,6 +36,10 @@
 
             FirstPersonFrameBudget budget(
                 32, std::chrono::microseconds(300));
+            // Keep unadmitted assets for a subsequent frame. Requeue after
+            // this slice so an exhausted snapshot/worker budget cannot cause
+            // a busy loop over the same tile or prevent the initial sweep.
+            std::vector<uint64_t> deferred;
             size_t examined = 0;
             while (budget.take())
             {
@@ -92,9 +96,24 @@
                         if (entry != nullptr
                             && FirstPersonMapSmallSceneryEligible(
                                 *entry, *small, 0))
-                            PrewarmFirstPersonSmallSceneryAsset(
-                                tile, *small);
+                        {
+                            PrewarmFirstPersonSmallSceneryAsset(tile, *small);
+                            const auto key =
+                                FirstPersonSmallSceneryReconstructionKey(
+                                    *entry, *small);
+                            const auto job = _smallSceneryJobs.find(key);
+                            if (job == _smallSceneryJobs.end()
+                                || (!job->second->ready
+                                    && !job->second->submitted))
+                            {
+                                deferred.push_back(
+                                    TerrainKey(int32_t(tileNumber % width),
+                                        int32_t(tileNumber / width)));
+                            }
+                        }
                     }
                 } while (!(element++)->isLastForTile());
             }
+            for (const uint64_t key : deferred)
+                _parkSceneryChangedTiles.insert(key);
         }
