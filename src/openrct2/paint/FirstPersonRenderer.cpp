@@ -1574,6 +1574,10 @@ namespace OpenRCT2::Paint
         // native painting, but does not consume native paint capture slots.
         _snapshotBudget = FirstPersonFrameBudget(32, std::chrono::microseconds(700));
         PrewarmVisibleSmallSceneryAssets(scene);
+        // Reserve a separate small slice: a perpetually dense foreground
+        // must not starve park-wide asset preparation.
+        _snapshotBudget = FirstPersonFrameBudget(
+            4, std::chrono::microseconds(200));
         PrewarmParkSmallSceneryAssets();
     }
 
