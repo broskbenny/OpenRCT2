@@ -1651,6 +1651,8 @@ namespace OpenRCT2::Paint
         // next first-person scene happens to reach each lazy reset path.
         _terrainRegionPackets.clear();
         _terrainRegionEpoch = _sceneEpoch;
+        _terrainBackgroundEditedTiles.clear();
+        _terrainBackgroundEditedSet.clear();
         _localSceneryPackets.clear();
         _localSceneryEpoch = _sceneEpoch;
         _structuralTileIndex.clear();
@@ -1846,6 +1848,7 @@ namespace OpenRCT2::Paint
                 WithdrawFirstPersonSemanticComponents(
                     { tx * kCoordsXYStep, ty * kCoordsXYStep });
                 MarkTerrainRegionDirtyForTile(tx, ty);
+                QueueFirstPersonTerrainBackgroundEdit(tx, ty);
                 MarkLocalSceneryDirtyForTile(tx, ty);
                 QueueFirstPersonParkSceneryTile(tx, ty);
                 if (auto terrain = _terrainCache.entries.find(key);
