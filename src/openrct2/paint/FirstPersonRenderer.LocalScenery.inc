@@ -362,7 +362,12 @@
                     && packet.fingerprint == fingerprint
                     && packet.textureDependencies == dependencies)
                 {
-                    // No GPU change: preserve the resident generation.
+                    // Identical GPU triangles do not imply identical picking
+                    // provenance. Refresh immutable CPU metadata for selection
+                    // and tile-edit validation without uploading the VBO again.
+                    packet.surfaces =
+                        std::make_shared<const std::vector<FirstPersonSurface>>(
+                            std::move(surfaces));
                     packet.containsNativeSource = containsNativeSource;
                     packet.dirty = false;
                     continue;
