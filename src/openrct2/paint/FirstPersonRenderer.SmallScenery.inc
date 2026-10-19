@@ -797,6 +797,10 @@
             FirstPersonSpriteSnapshot sprites;
             std::vector<FirstPersonSurface> surfaces;
             std::unordered_set<uint64_t> waitingTiles;
+            // Independent map placements reference 8x8 cells, not native
+            // paint sessions. A ready asset invalidates only those cells.
+            std::unordered_set<uint64_t> waitingMapCells;
+            std::unordered_set<uint64_t> readyMapCells;
             bool submitted = false;
             bool ready = false;
             uint8_t stage = 0;
@@ -818,6 +822,108 @@
             ExtendStableKey(key, small.getOccupiedQuadrants());
             ExtendStableKey(key, stage);
             return key;
+        }
+
+        // Executed by the worker's MAIN-THREAD publication continuation.
+        // Never invalidate authoritative tiles merely because an asset became ready.
+        void InvalidateReadyFirstPersonSmallSceneryCells(SmallSceneryJob& job)
+        {
+            for (const uint64_t cell : job.waitingMapCells)
+            {
+                const auto cx = int32_t(uint32_t(cell >> 32));
+                const auto cy = int32_t(uint32_t(cell));
+                MarkLocalSceneryDirtyForTile(cx * 8, cy * 8);
+                job.readyMapCells.insert(cell);
+            }
+            job.waitingMapCells.clear();
+        }
+
+        // Map-based instancing is intentionally narrower than native painting.
+        // Objects with overlays, animation, glass, supports, ghost/selection
+        // effects or altered view flags still use the exact native path.
+        [[nodiscard]] bool FirstPersonMapSmallSceneryEligible(
+            const SmallSceneryEntry& entry,
+            const SmallSceneryElement& small,
+            uint32_t viewFlags)
+        {
+            return viewFlags == 0
+                && !gTrackDesignSaveMode
+                && !small.isGhost() && !small.isInvisible()
+                && !small.needsSupports()
+                && !entry.flags.hasAny(
+                    SmallSceneryFlag::isAnimated,
+                    SmallSceneryFlag::hasFrameOffsets,
+                    SmallSceneryFlag::hasGlass,
+                    SmallSceneryFlag::hasOverlayImage,
+                    SmallSceneryFlag::isVisibleWhenZoomed,
+                    SmallSceneryFlag::flag17);
+        }
+
+        // The same canonical local-space surfaces produced for native paint
+        // are instanced directly from authoritative TileElements. Per-instance
+        // colours and orientation are applied here; no new visual inference.
+        [[nodiscard]] bool AppendFirstPersonMapSmallScenery(
+            std::vector<FirstPersonSurface>& destination,
+            CoordsXY tile, const SmallSceneryElement& small,
+            uint32_t viewFlags)
+        {
+            const auto* entry = small.getEntry();
+            if (entry == nullptr
+                || !FirstPersonMapSmallSceneryEligible(*entry, small, viewFlags))
+                return false;
+            const auto key = FirstPersonSmallSceneryReconstructionKey(*entry, small);
+            const auto found = _smallSceneryJobs.find(key);
+            if (found == _smallSceneryJobs.end() || !found->second->ready
+                || found->second->surfaces.empty())
+                return false;
+            const auto& job = *found->second;
+            const bool sharedRotation =
+                FirstPersonSmallSceneryCanShareRotatedAsset(*entry, small);
+            const uint8_t instanceRotation = sharedRotation ? small.getDirection() : 0;
+            auto image = ImageId(entry->image
+                + (small.getDirection() & 3u)
+                + uint32_t(FirstPersonSmallSceneryWitherStage(*entry, small)) * 4u);
+            if (entry->flags.has(SmallSceneryFlag::hasPrimaryColour))
+            {
+                image = image.WithPrimary(small.getPrimaryColour());
+                if (entry->flags.has(SmallSceneryFlag::hasSecondaryColour))
+                    image = image.WithSecondary(small.getSecondaryColour());
+            }
+            if (entry->flags.has(SmallSceneryFlag::hasTertiaryColour))
+                image = image.WithTertiary(small.getTertiaryColour());
+
+            // A baked nonresident/translucent face cannot be silently lost
+            // in an opaque GPU packet. Keep its native painter fallback.
+            for (const auto& local : job.surfaces)
+            {
+                if (!local.cameraIndependent || local.viewFacing
+                    || local.image.IsBlended()
+                    || (local.solidColour == 0 && !local.persistentBitmap))
+                    return false;
+            }
+            for (const auto& local : job.surfaces)
+            {
+                auto surface = local;
+                surface.diagnosticSemanticRole = static_cast<uint8_t>(
+                    FirstPersonPaintSemanticRole::smallSceneryBody);
+                surface.image = image.WithIndex(local.image.GetIndex());
+                surface.gpuRegion = FirstPersonGpuRegionKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+                if (instanceRotation != 0)
+                    surface.outwardNormal = FirstPersonRotateSceneryVector(
+                        surface.outwardNormal, instanceRotation);
+                for (auto& vertex : surface.triangles)
+                {
+                    if (instanceRotation != 0)
+                        vertex.world = FirstPersonRotateSceneryPoint(
+                            vertex.world, instanceRotation);
+                    vertex.world.x += float(tile.x);
+                    vertex.world.y += float(tile.y);
+                    vertex.world.z += float(small.getBaseZ());
+                }
+                destination.emplace_back(std::move(surface));
+            }
+            return true;
         }
 
         void StartFirstPersonSmallSceneryAssetJob(
@@ -912,6 +1018,7 @@
                                     static_cast<long long>(buildMicros));
                             }
                         }
+                        InvalidateReadyFirstPersonSmallSceneryCells(*job);
                         _reconstructionRepaints.enqueue(std::move(job->waitingTiles));
                     };
                 }, [job] {
@@ -931,6 +1038,7 @@
                             job->entry.image);
                     }
                     job->ready = true;
+                    InvalidateReadyFirstPersonSmallSceneryCells(*job);
                     _reconstructionRepaints.enqueue(std::move(job->waitingTiles));
                 });
                 if (!job->submitted && fromNativePainter)
@@ -967,9 +1075,22 @@
                     job->element.setDirection(0);
                 it = _smallSceneryJobs.emplace(key, std::move(job)).first;
             }
-            if (!it->second->ready && !it->second->submitted)
-                StartFirstPersonSmallSceneryAssetJob(
-                    it->second, *entry, tile, 0, false);
+            const uint64_t cell =
+                (uint64_t(uint32_t(tile.x / kCoordsXYStep / 8)) << 32)
+                | uint32_t(tile.y / kCoordsXYStep / 8);
+            if (it->second->ready)
+            {
+                if (it->second->readyMapCells.insert(cell).second)
+                    MarkLocalSceneryDirtyForTile(
+                        tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+            }
+            else
+            {
+                it->second->waitingMapCells.insert(cell);
+                if (!it->second->submitted)
+                    StartFirstPersonSmallSceneryAssetJob(
+                        it->second, *entry, tile, 0, false);
+            }
         }
 
         bool AppendCalibratedSmallSceneryGeometry(
