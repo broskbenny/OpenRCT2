@@ -61,10 +61,11 @@ class LocalSceneryPacketsTest(unittest.TestCase):
             "!surface.coplanarOwner",
             "!surface.artworkCarrier",
             "!surface.exteriorOnly",
-            "semanticRole == FirstPersonPaintSemanticRole::none",
             "semanticRole == FirstPersonPaintSemanticRole::pathFixture",
+            "semanticRole == FirstPersonPaintSemanticRole::smallSceneryBody",
         ):
             self.assertIn(forbidden, independent)
+        self.assertNotIn("semanticRole == FirstPersonPaintSemanticRole::none", independent)
 
     def test_rotation_only_local_changes_do_not_rebuild_parent(self):
         world = WORLD.read_text(encoding="utf-8")
@@ -86,7 +87,7 @@ class LocalSceneryPacketsTest(unittest.TestCase):
         keys = header[header.index("    [[nodiscard]] constexpr uint64_t FirstPersonGpuRegionKey("):
                       header.index("    struct FirstPersonSurface", header.index("FirstPersonGpuRegionKey("))]
         predicate = world[world.index("        [[nodiscard]] bool FirstPersonIndependentLocalScenery("):
-                          world.index("        struct FirstPersonLocalSceneryPacket")]
+                          world.index("        [[nodiscard]] bool FirstPersonResidentContainsCoherentGeometry(")]
         source = """
 #include <cstdint>
 #include <cassert>
@@ -94,7 +95,8 @@ enum class FirstPersonPaintSemanticRole : uint8_t {
     none=0, support=1, pathDeck=2, railing=3, pathFixture=4,
     stationFloor=5, stationFence=6, stationCover=7, wall=8,
     terrainEdge=9, structureBody=10, structureFloor=11, structureRoof=12,
-    pier=13, towerSection=14, movingMachinery=15, seat=16, sign=17
+    pier=13, towerSection=14, movingMachinery=15, seat=16, sign=17,
+    smallSceneryBody=18
 };
 struct FirstPersonSurface {
     uint8_t diagnosticSemanticRole=0;
@@ -120,6 +122,8 @@ int main() {
         }
     assert(FirstPersonLocalSceneryRegionKey(7,7)!=FirstPersonLocalSceneryRegionKey(8,7));
     FirstPersonSurface s;
+    assert(!FirstPersonIndependentLocalScenery(s));
+    s.diagnosticSemanticRole=uint8_t(FirstPersonPaintSemanticRole::smallSceneryBody);
     assert(FirstPersonIndependentLocalScenery(s));
     s.reconstructionGroup=123; assert(!FirstPersonIndependentLocalScenery(s)); s.reconstructionGroup=0;
     s.reconstructedOccupancyBoundary=true; assert(!FirstPersonIndependentLocalScenery(s)); s.reconstructedOccupancyBoundary=false;
@@ -133,6 +137,8 @@ int main() {
     s.diagnosticSemanticRole=uint8_t(FirstPersonPaintSemanticRole::structureBody);
     assert(!FirstPersonIndependentLocalScenery(s));
     s.diagnosticSemanticRole=uint8_t(FirstPersonPaintSemanticRole::pathFixture);
+    assert(FirstPersonIndependentLocalScenery(s));
+    s.diagnosticSemanticRole=uint8_t(FirstPersonPaintSemanticRole::smallSceneryBody);
     assert(FirstPersonIndependentLocalScenery(s));
     s.resident=false; assert(!FirstPersonIndependentLocalScenery(s));
 }
