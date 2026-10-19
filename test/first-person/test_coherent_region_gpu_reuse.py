@@ -20,6 +20,8 @@ def publication(current, built, missed):
         return {
             "generation": current["generation"],
             "gpu_revision": current["gpu_revision"],
+            "published_source_revision": built["source_revision"],
+            "picking_target": built["picking_target"],
             "fingerprint": current["fingerprint"],
             "materials": current["materials"],
             "selection_stamp": built["selection_stamp"],
@@ -28,6 +30,8 @@ def publication(current, built, missed):
     return {
         "generation": current["generation"] + 1 if current else 1,
         "gpu_revision": built["source_revision"],
+        "published_source_revision": built["source_revision"],
+        "picking_target": built["picking_target"],
         "fingerprint": built["fingerprint"],
         "materials": built["materials"],
         "selection_stamp": built["selection_stamp"],
@@ -48,7 +52,9 @@ class CoherentRegionReuseTest(unittest.TestCase):
         no_op = world[world.index("if (sameGpuOutput)"):
                       world.index("packet.surfaceFingerprint = fingerprint;")]
         self.assertNotIn("++published.generation", no_op)
-        self.assertNotIn("published.surfaceStorage =", no_op)
+        self.assertIn("published.surfaceStorage =", no_op)
+        self.assertIn("published.publishedSourceRevision =", no_op)
+        self.assertNotIn("published.generation =", no_op)
         self.assertIn("published.reconstructionSelectionStamp", no_op)
         self.assertIn("published.dirty = missedSourceChanges;", no_op)
         self.assertIn("_staticRegionPacketBuilds.erase(regionKey)", no_op)
@@ -63,6 +69,7 @@ class CoherentRegionReuseTest(unittest.TestCase):
                 "fingerprint": rng.getrandbits(64),
                 "materials": tuple(sorted({rng.randrange(200) for _ in range(6)})),
                 "selection_stamp": rng.getrandbits(64),
+                "picking_target": rng.getrandbits(64),
             }
             same = rng.random() < 0.75
             built = {
@@ -70,6 +77,7 @@ class CoherentRegionReuseTest(unittest.TestCase):
                 "fingerprint": old["fingerprint"] if same else rng.getrandbits(64),
                 "materials": old["materials"],
                 "selection_stamp": rng.getrandbits(64),
+                "picking_target": rng.getrandbits(64),
             }
             if rng.random() < 0.1:
                 built["materials"] = old["materials"] + (201,)
@@ -80,6 +88,8 @@ class CoherentRegionReuseTest(unittest.TestCase):
             self.assertEqual(out["gpu_revision"],
                              old["gpu_revision"] if same else built["source_revision"])
             self.assertEqual(out["selection_stamp"], built["selection_stamp"])
+            self.assertEqual(out["picking_target"], built["picking_target"])
+            self.assertEqual(out["published_source_revision"], built["source_revision"])
             self.assertEqual(out["dirty"], missed)
 
 
