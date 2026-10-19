@@ -1907,14 +1907,34 @@ void main() {
                 // prove that every pixel sees the same far-to-near ordering.
                 // Ties, canonical coplanar owners and crossing surfaces
                 // always use the established exact two-stage peeler.
-                std::vector<size_t> depthOrder;
-                if (tile.candidates.size() >= 2
-                    && tile.candidates.size() <= 64)
+                std::array<size_t, 64> depthOrder{};
+                size_t depthOrderCount = tile.candidates.size();
+                if (depthOrderCount < 2 || depthOrderCount > depthOrder.size())
+                    depthOrderCount = 0;
+                if (depthOrderCount != 0)
                 {
-                    depthOrder.reserve(tile.candidates.size());
-                    for (size_t i = 0; i < tile.candidates.size(); ++i)
-                        depthOrder.push_back(i);
-                    std::sort(depthOrder.begin(), depthOrder.end(),
+                    // Reject owners and malformed ranges BEFORE sorting.
+                    // In particular NaN would violate std::sort's strict
+                    // weak-order contract if admitted to the comparator.
+                    for (const auto& candidate : tile.candidates)
+                    {
+                        if (!candidate.fixedDepthOrder
+                            || !std::isfinite(candidate.depthMin)
+                            || !std::isfinite(candidate.depthMax)
+                            || candidate.depthMin <= 0.0f
+                            || candidate.depthMin > candidate.depthMax)
+                        {
+                            depthOrderCount = 0;
+                            break;
+                        }
+                    }
+                }
+                if (depthOrderCount != 0)
+                {
+                    for (size_t i = 0; i < depthOrderCount; ++i)
+                        depthOrder[i] = i;
+                    std::sort(depthOrder.begin(),
+                        depthOrder.begin() + depthOrderCount,
                         [&](size_t a, size_t b) {
                             const auto& left = tile.candidates[a];
                             const auto& right = tile.candidates[b];
@@ -1922,41 +1942,34 @@ void main() {
                                 || (left.depthMin == right.depthMin && a < b);
                         });
                     constexpr float kSeparationMargin = 0.01f;
-                    for (size_t i = 0; i < depthOrder.size(); ++i)
+                    for (size_t i = 1; i < depthOrderCount; ++i)
                     {
-                        const auto& candidate =
-                            tile.candidates[depthOrder[i]];
-                        if (!candidate.fixedDepthOrder
-                            || !std::isfinite(candidate.depthMin)
-                            || !std::isfinite(candidate.depthMax)
-                            || candidate.depthMin <= 0.0f
-                            || candidate.depthMin > candidate.depthMax
-                            || (i > 0 && tile.candidates[
-                                depthOrder[i - 1]].depthMin
-                                <= candidate.depthMax + kSeparationMargin))
+                        if (tile.candidates[depthOrder[i - 1]].depthMin
+                            <= tile.candidates[depthOrder[i]].depthMax
+                                + kSeparationMargin)
                         {
-                            depthOrder.clear();
+                            depthOrderCount = 0;
                             break;
                         }
                     }
                 }
-                if (!depthOrder.empty())
+                if (depthOrderCount != 0)
                 {
                     auto& logicalLayer = *_peelLayers[0];
                     const GLuint emptyToken[4] = { 0, 0, 0, 0 };
                     const GLfloat initialDepth[1] = { 0.0f };
                     // Existing tile element indices are contiguous for each
                     // candidate; reordering draw ranges needs no new EBO.
-                    std::vector<size_t> offsets;
-                    offsets.reserve(tile.candidates.size());
+                    std::array<size_t, 64> offsets{};
                     size_t indexAt = range.start;
-                    for (const auto& candidate : tile.candidates)
+                    for (size_t i = 0; i < depthOrderCount; ++i)
                     {
-                        offsets.push_back(indexAt);
-                        indexAt += candidate.vertexCount;
+                        offsets[i] = indexAt;
+                        indexAt += tile.candidates[i].vertexCount;
                     }
-                    for (const auto candidateIndex : depthOrder)
+                    for (size_t i = 0; i < depthOrderCount; ++i)
                     {
+                        const auto candidateIndex = depthOrder[i];
                         const auto& candidate = tile.candidates[candidateIndex];
                         logicalLayer.Bind();
                         glCall(glViewport, left, viewportBottom, width, height);
