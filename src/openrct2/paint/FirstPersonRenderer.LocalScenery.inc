@@ -67,6 +67,9 @@
             bool containsNativeSource = false;
             uint32_t viewFlags = 0;
             bool trackDesignSaveMode = false;
+            // Inspector selection changes appearance for one map placement.
+            uint64_t selectionGeneration = 0;
+            bool containsInspectedElement = false;
             bool dirty = true;
         };
         static std::unordered_map<uint64_t, FirstPersonLocalSceneryPacket>
@@ -102,6 +105,19 @@
                 _localSceneryPackets.clear();
                 _localSceneryEpoch = _sceneEpoch;
             }
+            // Selection is not part of TileElement bytes or viewport flags.
+            // Visit each cell only once per selection generation to find the
+            // affected object; don't rebuild the entire visible world on click.
+            static const TileElement* lastInspected = nullptr;
+            static uint64_t selectionGeneration = 1;
+            const TileElement* inspected = TileInspector::GetSelectedElement();
+            if (inspected != lastInspected)
+            {
+                lastInspected = inspected;
+                ++selectionGeneration;
+                if (selectionGeneration == 0)
+                    ++selectionGeneration;
+            }
             std::unordered_set<uint64_t> visible;
             visible.reserve(scene.visibleTiles.size() / 32 + 1);
             for (const auto tile : scene.visibleTiles)
@@ -122,6 +138,38 @@
             for (const auto key : visible)
             {
                 auto& packet = _localSceneryPackets[key];
+                if (packet.selectionGeneration != selectionGeneration)
+                {
+                    bool contains = false;
+                    if (inspected != nullptr)
+                    {
+                        const int32_t rx =
+                            int32_t(uint32_t((key >> 32) & 0x3fffffffu)) - 1;
+                        const int32_t ry = int32_t(uint32_t(key)) - 1;
+                        for (int32_t ty = ry * 8; ty < (ry + 1) * 8 && !contains; ++ty)
+                        for (int32_t tx = rx * 8; tx < (rx + 1) * 8 && !contains; ++tx)
+                        {
+                            const CoordsXY tile{tx * kCoordsXYStep, ty * kCoordsXYStep};
+                            if (!MapIsLocationValid(tile))
+                                continue;
+                            auto* element = MapGetFirstElementAt(tile);
+                            if (element == nullptr)
+                                continue;
+                            do
+                            {
+                                if (element == inspected)
+                                {
+                                    contains = true;
+                                    break;
+                                }
+                            } while (!(element++)->isLastForTile());
+                        }
+                    }
+                    if (packet.containsInspectedElement != contains)
+                        packet.dirty = true;
+                    packet.containsInspectedElement = contains;
+                    packet.selectionGeneration = selectionGeneration;
+                }
                 // Placement ownership depends on presentation flags as well
                 // as map identity. Existing GPU cells must not outlive a
                 // transition to ghost/highlight/track-design native artwork.
