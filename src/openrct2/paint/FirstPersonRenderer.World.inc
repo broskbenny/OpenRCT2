@@ -1256,7 +1256,17 @@
         [[nodiscard]] bool FirstPersonIndependentLocalScenery(
             const FirstPersonSurface& surface)
         {
+            const auto semanticRole =
+                static_cast<FirstPersonPaintSemanticRole>(surface.diagnosticSemanticRole);
+            // An ungrouped wall, path deck, station, roof, railing or sign
+            // can still depend on adjacent surfaces. Only unclassified
+            // independent native geometry and path fixtures may leave the
+            // coherent interface/owner packet.
+            const bool locallyOwned =
+                semanticRole == FirstPersonPaintSemanticRole::none
+                || semanticRole == FirstPersonPaintSemanticRole::pathFixture;
             return IsResidentStaticSurface(surface)
+                && locallyOwned
                 && surface.reconstructionGroup == 0
                 && !surface.reconstructedOccupancyBoundary
                 && !surface.coplanarOwner
