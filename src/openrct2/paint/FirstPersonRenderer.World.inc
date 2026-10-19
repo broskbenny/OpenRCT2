@@ -1150,12 +1150,10 @@
                 const auto tile = scene.visibleTiles[(start + examined++) % count];
                 const auto key = TerrainKey(tile.x / kCoordsXYStep,
                     tile.y / kCoordsXYStep);
-                const auto paint = _staticPaintCache.find(key);
-                if (paint == _staticPaintCache.end()
-                    || !paint->second.visibilityBoundValid
-                    || paint->second.visibilityDirty)
-                    continue;
-                const uint64_t signature = paint->second.visibilitySignature;
+                // Source-independent structural discovery must not wait
+                // for the painter's semantic-visibility cache. Hash the
+                // actual authoritative TileElements in this bounded slice.
+                const uint64_t signature = NativeTileSignature(tile);
                 const auto existing = _structuralTileIndex.find(key);
                 if (existing != _structuralTileIndex.end()
                     && existing->second.signature == signature)
@@ -1190,25 +1188,19 @@
                 if (index == _structuralTileIndex.end())
                     continue;
                 const auto paint = _staticPaintCache.find(key);
-                if (paint == _staticPaintCache.end()
-                    || paint->second.visibilityDirty
-                    || paint->second.visibilitySignature != index->second.signature)
+                if (paint != _staticPaintCache.end()
+                    && (paint->second.visibilityDirty
+                        || (paint->second.visibilityKnown
+                            && paint->second.visibilitySignature
+                                != index->second.signature)))
                     continue;
                 for (const auto& group : index->second.largeScenery)
                 {
                     if (!seen.insert(group.key).second)
                         continue;
-                    const auto ready = _largeSceneryGeometryCache.find(group.key);
-                    if (ready != _largeSceneryGeometryCache.end()
-                        && !ready->second.dirty)
-                    {
-                        ready->second.lastSeen = frame;
-                        ActivateLargeSceneryRegions(ready->second);
-                        continue;
-                    }
-
-                    // Admission and validation mirror the established worker
-                    // path, but discovery does not wait for native painting.
+                    // Validate the live source element BEFORE reactivating
+                    // cached geometry. The indexed group may have been removed
+                    // or replaced since the bounded structural scan.
                     auto* element = MapGetFirstElementAt(group.sourceTile);
                     LargeSceneryElement* large = nullptr;
                     if (element != nullptr)
@@ -1227,8 +1219,18 @@
                             }
                         } while (!(element++)->isLastForTile());
                     }
+                    if (large == nullptr)
+                        continue;
+                    const auto ready = _largeSceneryGeometryCache.find(group.key);
+                    if (ready != _largeSceneryGeometryCache.end()
+                        && !ready->second.dirty)
+                    {
+                        ready->second.lastSeen = frame;
+                        ActivateLargeSceneryRegions(ready->second);
+                        continue;
+                    }
                     const auto* entry =
-                        large != nullptr ? large->getEntry() : nullptr;
+                        large->getEntry();
                     if (large == nullptr || entry == nullptr
                         || !LargeSceneryAssetEligible(*entry)
                         || !LargeSceneryInstanceMetadataMatches(*large, *entry)
