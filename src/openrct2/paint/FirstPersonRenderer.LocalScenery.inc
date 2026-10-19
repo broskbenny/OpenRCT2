@@ -94,6 +94,19 @@
             ExtendStableKey(key, index);
             ExtendStableKey(key, uint32_t(small.getEntryIndex()));
             ExtendStableKey(key, uint32_t(small.getBaseZ()));
+            // Last-known-good ownership is legal only for the exact
+            // authoritative pose and appearance. Reusing a tile-element
+            // slot after rotation, recolouring or withering cannot inherit
+            // the preceding mesh while another asset job is pending.
+            ExtendStableKey(key, uint32_t(small.getDirection()));
+            ExtendStableKey(key, uint32_t(small.getSceneryQuadrant()));
+            ExtendStableKey(key, uint32_t(small.getOccupiedQuadrants()));
+            if (const auto* entry = small.getEntry(); entry != nullptr)
+                ExtendStableKey(key,
+                    FirstPersonSmallSceneryWitherStage(*entry, small));
+            ExtendStableKey(key, uint32_t(small.getPrimaryColour()));
+            ExtendStableKey(key, uint32_t(small.getSecondaryColour()));
+            ExtendStableKey(key, uint32_t(small.getTertiaryColour()));
             return key == 0 ? 1 : key;
         }
 
