@@ -1302,6 +1302,17 @@
         static std::unordered_map<uint64_t, FirstPersonTerrainRegionPacket>
             _terrainRegionPackets;
         static uint64_t _terrainRegionEpoch = 0;
+        static std::deque<uint64_t> _terrainBackgroundEditedTiles;
+        static std::unordered_set<uint64_t> _terrainBackgroundEditedSet;
+
+        // Only authoritative map changes enter this queue; ordinary renderer
+        // packet generation must not schedule itself again.
+        void QueueFirstPersonTerrainBackgroundEdit(int32_t tx, int32_t ty)
+        {
+            const auto key = TerrainKey(tx, ty);
+            if (_terrainBackgroundEditedSet.insert(key).second)
+                _terrainBackgroundEditedTiles.push_back(key);
+        }
 
         void MarkTerrainRegionDirtyForTile(int32_t tx, int32_t ty)
         {
@@ -1501,6 +1512,25 @@
                     backgroundTiles.push_back(tile);
                 }
             }
+            // Once the finite initial sweep finishes, changed offscreen
+            // tiles reuse the same generator. One queued edit per frame is
+            // enough to guarantee eventual progress without polling the map.
+            std::optional<CoordsXY> editedTile;
+            if (map.x > 0 && map.y > 0
+                && backgroundCursor >= size_t(map.x) * size_t(map.y)
+                && !_terrainBackgroundEditedTiles.empty())
+            {
+                const uint64_t key = _terrainBackgroundEditedTiles.front();
+                const auto tx = int32_t(uint32_t(key >> 32));
+                const auto ty = int32_t(uint32_t(key));
+                editedTile = {tx * kCoordsXYStep, ty * kCoordsXYStep};
+                if (MapIsLocationValid(*editedTile))
+                    backgroundTiles.push_back(*editedTile);
+            }
+            const size_t editedIndex = editedTile.has_value()
+                ? scene.visibleTiles.size() + backgroundTiles.size() - 1
+                : size_t(-1);
+            bool attemptedEdit = false;
             FirstPersonFrameBudget warmBuildBudget(
                 8, std::chrono::microseconds(500));
             const size_t visibleCount = scene.visibleTiles.size();
@@ -1516,14 +1546,16 @@
                     warmBuildBudget.beginPhase(std::chrono::microseconds(500));
                 if (!presentInFrame && !warmBuildBudget.take())
                 {
-                    // Budget applies to SOURCE CONSTRUCTION, not merely the
-                    // cheap scan that discovers work. Resume precisely at
-                    // the first unbuilt tile next frame; none are lost.
-                    backgroundCursor =
-                        size_t(origin.y / kCoordsXYStep) * size_t(map.x)
-                        + size_t(origin.x / kCoordsXYStep);
+                    // Retry an unscheduled edit from the queue next frame;
+                    // initial sweep work resumes from its exact tile index.
+                    if (terrainIndex != editedIndex)
+                        backgroundCursor =
+                            size_t(origin.y / kCoordsXYStep) * size_t(map.x)
+                            + size_t(origin.x / kCoordsXYStep);
                     break;
                 }
+                if (terrainIndex == editedIndex)
+                    attemptedEdit = true;
                 const int32_t tx = origin.x / kCoordsXYStep;
                 const int32_t ty = origin.y / kCoordsXYStep;
                 const int32_t x = origin.x;
@@ -1962,9 +1994,21 @@
                                 scene.surfaces.emplace_back(overlaySurface);
                     }
             }
-            // Terrain is bounded by the park and changes only through native
-            // invalidation. Retaining it makes a turn a visibility operation,
-            // not a terrain reconstruction operation.
+            // Release completed edits. Unresolved source images return to
+            // the tail instead of blocking unrelated authoritative changes.
+            if (attemptedEdit && editedTile.has_value()
+                && !_terrainBackgroundEditedTiles.empty())
+            {
+                const uint64_t key = _terrainBackgroundEditedTiles.front();
+                _terrainBackgroundEditedTiles.pop_front();
+                const auto ready = _terrainCache.entries.find(key);
+                if (ready != _terrainCache.entries.end() && !ready->second.dirty)
+                    _terrainBackgroundEditedSet.erase(key);
+                else
+                    _terrainBackgroundEditedTiles.push_back(key);
+            }
+            // Terrain is retained after preparation: turning the camera
+            // is a visibility change, not a new construction job.
         }
                 [[nodiscard]] std::vector<std::array<FirstPersonVec3, 4>>
             BuildFirstPersonSemanticPhysicalFaces(
