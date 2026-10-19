@@ -66,7 +66,9 @@ class FrameBudgetTelemetryTest(unittest.TestCase):
         self.assertIn("found->second.rotations[rotation].valid = false;", core)
         self.assertIn("rotationMask |= cached.nativeRetryMask;", paint)
         self.assertIn("cached.nativeRetryMask &=", paint)
-        self.assertEqual(small.count("RequestFirstPersonNativeSceneryRetry(ps.MapPos, rotation);"), 3)
+        self.assertEqual(small.count("RequestFirstPersonNativeSceneryRetry(ps.MapPos, rotation);"), 1)
+        self.assertIn("if (fromNativePainter) RequestFirstPersonNativeSceneryRetry(tile, rotation);", small)
+        self.assertIn("if (!job->submitted && fromNativePainter)", small)
         self.assertNotIn("InvalidateFirstPersonSceneTile(ps.MapPos);", small)
         self.assertIn("_reconstructionRepaints.enqueue(", small)
 
