@@ -1512,6 +1512,7 @@
             uint64_t lastPainted{};
             uint32_t lastAnimationGeneration{};
             uint64_t residentFingerprint{};
+            bool hadCoherentResident = false;
             uint64_t semanticFingerprint{};
             bool valid = false;
             bool semanticValid = false;
@@ -1557,6 +1558,7 @@
             int32_t visibilityMaxZ = 0;
             uint32_t lastVisibilityGeneration = 0;
             uint64_t cameraIndependentFingerprint = 0;
+            bool hadCoherentCameraIndependent = false;
             uint64_t semanticSurfaceFingerprint = 0;
             uint64_t semanticRequest = 0;
             uint64_t sourceRevision = 0;
