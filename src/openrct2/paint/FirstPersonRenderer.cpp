@@ -1718,13 +1718,18 @@ namespace OpenRCT2::Paint
         // Keep existing large-scenery walking proxies unless the individual
         // owning object's recorded authoritative tile signatures change.
         // Early walking proxies have no completed geometry-cache entry yet.
+        if (!changedTiles.empty())
         for (auto it = _onDemandLargeSceneryProxySources.begin();
              it != _onDemandLargeSceneryProxySources.end();)
         {
             const bool changed = std::any_of(
                 it->second.begin(), it->second.end(),
-                [](const auto& source) {
-                    return NativeTileSignature(source.first) != source.second;
+                [&](const auto& source) {
+                    const auto sourceKey = TerrainKey(
+                        source.first.x / kCoordsXYStep,
+                        source.first.y / kCoordsXYStep);
+                    return changedTiles.contains(sourceKey)
+                        && NativeTileSignature(source.first) != source.second;
                 });
             if (changed)
             {
