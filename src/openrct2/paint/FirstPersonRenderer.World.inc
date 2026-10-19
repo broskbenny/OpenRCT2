@@ -1526,6 +1526,12 @@
                 editedTile = {tx * kCoordsXYStep, ty * kCoordsXYStep};
                 if (MapIsLocationValid(*editedTile))
                     backgroundTiles.push_back(*editedTile);
+                else
+                {
+                    _terrainBackgroundEditedTiles.pop_front();
+                    _terrainBackgroundEditedSet.erase(key);
+                    editedTile.reset();
+                }
             }
             const size_t editedIndex = editedTile.has_value()
                 ? scene.visibleTiles.size() + backgroundTiles.size() - 1
