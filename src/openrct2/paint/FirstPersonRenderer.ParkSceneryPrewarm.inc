@@ -42,7 +42,12 @@
                         continue;
                     if (const auto* small = element->asSmallScenery();
                         small != nullptr)
-                        PrewarmFirstPersonSmallSceneryAsset(tile, *small);
+                    {
+                        const auto* entry = small->getEntry();
+                        if (entry != nullptr
+                            && FirstPersonMapSmallSceneryEligible(*entry, *small, 0))
+                            PrewarmFirstPersonSmallSceneryAsset(tile, *small);
+                    }
                 } while (!(element++)->isLastForTile());
             }
         }
