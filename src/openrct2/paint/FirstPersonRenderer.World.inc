@@ -1460,8 +1460,49 @@
             const auto frustum = FirstPersonFrustum(
                 view.camera, view.fieldOfViewDegrees, view.aspect,
                 view.nearClip, view.farClip);
-            for (const CoordsXY origin : scene.visibleTiles)
+            // Native terrain geometry is a permanent map resource. Prepare
+            // visible tiles first, then advance a FINITE offscreen sweep using
+            // the identical source-generation rules. No offscreen streamed
+            // surface enters the current draw list.
+            static uint64_t backgroundEpoch = 0;
+            static size_t backgroundCursor = 0;
+            if (backgroundEpoch != _sceneEpoch)
             {
+                backgroundEpoch = _sceneEpoch;
+                backgroundCursor = 0;
+            }
+            std::vector<CoordsXY> workTiles(
+                scene.visibleTiles.begin(), scene.visibleTiles.end());
+            const auto map = getGameState().mapSize;
+            if (map.x > 0 && map.y > 0)
+            {
+                const size_t width = size_t(map.x);
+                const size_t total = width * size_t(map.y);
+                FirstPersonFrameBudget warmBudget(
+                    32, std::chrono::microseconds(500));
+                while (backgroundCursor < total && warmBudget.take())
+                {
+                    const size_t index = backgroundCursor++;
+                    const CoordsXY tile{
+                        int32_t(index % width) * kCoordsXYStep,
+                        int32_t(index / width) * kCoordsXYStep
+                    };
+                    if (!MapIsLocationValid(tile))
+                        continue;
+                    const auto cached = _terrainCache.entries.find(
+                        TerrainKey(int32_t(index % width),
+                            int32_t(index / width)));
+                    if (cached != _terrainCache.entries.end()
+                        && !cached->second.dirty)
+                        continue;
+                    workTiles.push_back(tile);
+                }
+            }
+            for (size_t terrainIndex = 0; terrainIndex < workTiles.size(); ++terrainIndex)
+            {
+                const CoordsXY origin = workTiles[terrainIndex];
+                const bool presentInFrame =
+                    terrainIndex < scene.visibleTiles.size();
                 const int32_t tx = origin.x / kCoordsXYStep;
                 const int32_t ty = origin.y / kCoordsXYStep;
                 const int32_t x = origin.x;
@@ -1476,8 +1517,9 @@
                 const float high = float(std::max({corners.north,corners.east,corners.south,corners.west,waterZ}));
                 // Region discovery keeps tall scenery independently. The terrain
                 // itself can use its tighter real slope/water volume here.
-                if (!frustum.visible({float(x+16),float(y+16),0.5f*(low+high)},
-                                    48.0f+0.5f*(high-low))) continue;
+                if (presentInFrame
+                    && !frustum.visible({float(x+16),float(y+16),0.5f*(low+high)},
+                        48.0f+0.5f*(high-low))) continue;
                     const uint8_t sourceRotation = ChooseTerrainSourceRotation(slope);
                     const uint64_t terrainKey = TerrainKey(tx, ty);
                     auto& cache = _terrainCache.entries[terrainKey];
@@ -1522,15 +1564,18 @@
                     if (sourceStateMatches)
                     {
                         cache.lastSeen = frame;
-                        if (!cache.verticalOpening
-                            && !IsResidentStaticSurface(cache.ground))
-                            scene.surfaces.emplace_back(cache.ground);
-                        for (const auto& waterSurface : cache.water)
-                            if (!IsResidentStaticSurface(waterSurface))
-                                scene.surfaces.emplace_back(waterSurface);
-                        for (const auto& overlaySurface : cache.waterOverlay)
-                            if (!IsResidentStaticSurface(overlaySurface))
-                                scene.surfaces.emplace_back(overlaySurface);
+                        if (presentInFrame)
+                        {
+                            if (!cache.verticalOpening
+                                && !IsResidentStaticSurface(cache.ground))
+                                scene.surfaces.emplace_back(cache.ground);
+                            for (const auto& waterSurface : cache.water)
+                                if (!IsResidentStaticSurface(waterSurface))
+                                    scene.surfaces.emplace_back(waterSurface);
+                            for (const auto& overlaySurface : cache.waterOverlay)
+                                if (!IsResidentStaticSurface(overlaySurface))
+                                    scene.surfaces.emplace_back(overlaySurface);
+                        }
                         continue;
                     }
 
@@ -1884,14 +1929,17 @@
                     }
                     cache.lastSeen = frame;
                     cache.dirty = false;
-                    if (!cache.verticalOpening && !IsResidentStaticSurface(cache.ground))
-                        scene.surfaces.emplace_back(cache.ground);
-                    for (const auto& waterSurface : cache.water)
-                        if (!IsResidentStaticSurface(waterSurface))
-                            scene.surfaces.emplace_back(waterSurface);
-                    for (const auto& overlaySurface : cache.waterOverlay)
-                        if (!IsResidentStaticSurface(overlaySurface))
-                            scene.surfaces.emplace_back(overlaySurface);
+                    if (presentInFrame)
+                    {
+                        if (!cache.verticalOpening && !IsResidentStaticSurface(cache.ground))
+                            scene.surfaces.emplace_back(cache.ground);
+                        for (const auto& waterSurface : cache.water)
+                            if (!IsResidentStaticSurface(waterSurface))
+                                scene.surfaces.emplace_back(waterSurface);
+                        for (const auto& overlaySurface : cache.waterOverlay)
+                            if (!IsResidentStaticSurface(overlaySurface))
+                                scene.surfaces.emplace_back(overlaySurface);
+                    }
             }
             // Terrain is bounded by the park and changes only through native
             // invalidation. Retaining it makes a turn a visibility operation,
