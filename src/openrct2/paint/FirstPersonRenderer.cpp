@@ -1777,6 +1777,9 @@ namespace OpenRCT2::Paint
             const uint64_t key = TerrainKey(tx, ty);
             MarkTerrainRegionDirtyForTile(tx, ty);
             MarkLocalSceneryDirtyForTile(tx, ty);
+            // Revisit only the edited authoritative tile after the finite
+            // park-wide asset-discovery sweep has finished.
+            QueueFirstPersonParkSceneryTile(tx, ty);
             if (auto terrain = _terrainCache.entries.find(key);
                 terrain != _terrainCache.entries.end())
             {
