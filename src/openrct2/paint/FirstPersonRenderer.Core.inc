@@ -1920,6 +1920,9 @@
             int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
             std::vector<FirstPersonSurface> surfaces;
             std::vector<FirstPersonPhysicalBoxProxy> collisionProxies;
+            // Track exactly which authoritative placement tiles supplied the
+            // inferred geometry and walking proxies.
+            std::vector<std::pair<CoordsXY, uint64_t>> tileSignatures;
         };
         static std::unordered_map<uint64_t, LargeSceneryGeometryCacheEntry> _largeSceneryGeometryCache;
         static std::unordered_map<uint64_t, std::unordered_set<uint64_t>>
@@ -4972,6 +4975,7 @@
                             _largeSceneryJobs.erase(pending);
                             return;
                         }
+                    result.tileSignatures = job->tileSignatures;
                     auto existing = _largeSceneryGeometryCache.find(job->group.key);
                     if (existing != _largeSceneryGeometryCache.end())
                     {
