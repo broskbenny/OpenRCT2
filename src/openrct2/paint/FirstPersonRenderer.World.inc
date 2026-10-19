@@ -1512,6 +1512,8 @@
                 const CoordsXY origin = presentInFrame
                     ? scene.visibleTiles[terrainIndex]
                     : backgroundTiles[terrainIndex - visibleCount];
+                if (!presentInFrame && terrainIndex == visibleCount)
+                    warmBuildBudget.beginPhase(std::chrono::microseconds(500));
                 if (!presentInFrame && !warmBuildBudget.take())
                 {
                     // Budget applies to SOURCE CONSTRUCTION, not merely the
