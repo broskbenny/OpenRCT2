@@ -39,6 +39,8 @@ class TerrainBackgroundPreparationTest(unittest.TestCase):
         self.assertIn("FirstPersonFrameBudget warmBuildBudget(", collector)
         self.assertIn("8, std::chrono::microseconds(500)", collector)
         self.assertIn("!presentInFrame && !warmBuildBudget.take()", collector)
+        self.assertIn("if (!presentInFrame && terrainIndex == visibleCount)", collector)
+        self.assertIn("warmBuildBudget.beginPhase(std::chrono::microseconds(500))", collector)
         self.assertIn("backgroundCursor =", collector)
         self.assertIn("backgroundTiles.reserve(32)", collector)
         self.assertIn("terrainIndex < visibleCount + backgroundTiles.size()", collector)
