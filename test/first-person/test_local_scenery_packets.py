@@ -8,6 +8,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORLD = ROOT / "src/openrct2/paint/FirstPersonRenderer.World.inc"
+LOCAL = ROOT / "src/openrct2/paint/FirstPersonRenderer.LocalScenery.inc"
 CORE = ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc"
 HEADER = ROOT / "src/openrct2/paint/FirstPersonRenderer.h"
 MAIN = ROOT / "src/openrct2/paint/FirstPersonRenderer.cpp"
@@ -17,11 +18,12 @@ PAINT = ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc"
 class LocalSceneryPacketsTest(unittest.TestCase):
     def test_locality_invalidation_lifetime_and_publication(self):
         world = WORLD.read_text(encoding="utf-8")
+        local = LOCAL.read_text(encoding="utf-8")
         core = CORE.read_text(encoding="utf-8")
         main = MAIN.read_text(encoding="utf-8")
         paint = PAINT.read_text(encoding="utf-8")
-        self.assertIn("void SubmitVisibleLocalSceneryRegions(", world)
-        self.assertIn("void MarkLocalSceneryDirtyForTile(int32_t tx, int32_t ty)", world)
+        self.assertIn("void SubmitVisibleLocalSceneryRegions(", local)
+        self.assertIn("void MarkLocalSceneryDirtyForTile(int32_t tx, int32_t ty)", local)
         self.assertIn("MarkLocalSceneryDirtyForTile(tileX, tileY);", core)
         self.assertIn("MarkLocalSceneryDirtyForTile(tx, ty);", main)
         self.assertIn("MarkTerrainRegionDirtyForTile(tx, ty);", main)
@@ -42,6 +44,7 @@ class LocalSceneryPacketsTest(unittest.TestCase):
 
     def test_only_source_tile_independent_surfaces_move_to_local(self):
         world = WORLD.read_text(encoding="utf-8")
+        local = LOCAL.read_text(encoding="utf-8")
         start = world.index("bool RebuildStaticRegionPacket(")
         end = world.index("void SubmitVisibleStaticRegions(", start)
         coherent = world[start:end]
@@ -53,8 +56,8 @@ class LocalSceneryPacketsTest(unittest.TestCase):
         self.assertIn("addSurface(sourceSurface);", coherent)
         self.assertIn("addSurface(surfaces[staging.surfaceOffset++]);", coherent)
         self.assertIn("ResolveFirstPersonInternalOccupancyInterfaces(", coherent)
-        independent = world[world.index("bool FirstPersonIndependentLocalScenery("):
-                            world.index("struct FirstPersonLocalSceneryPacket")]
+        independent = local[local.index("bool FirstPersonIndependentLocalScenery("):
+                            local.index("struct FirstPersonLocalSceneryPacket")]
         for forbidden in (
             "surface.reconstructionGroup == 0",
             "!surface.reconstructedOccupancyBoundary",
@@ -69,9 +72,10 @@ class LocalSceneryPacketsTest(unittest.TestCase):
 
     def test_rotation_only_local_changes_do_not_rebuild_parent(self):
         world = WORLD.read_text(encoding="utf-8")
+        local = LOCAL.read_text(encoding="utf-8")
         paint = PAINT.read_text(encoding="utf-8")
-        self.assertIn("bool FirstPersonRotationHasCoherentTileGeometry(", world)
-        self.assertIn("&& surface.reconstructionGroup == 0", world)
+        self.assertIn("bool FirstPersonRotationHasCoherentTileGeometry(", local)
+        self.assertIn("&& surface.reconstructionGroup == 0", local)
         self.assertIn("if (FirstPersonRotationHasCoherentTileGeometry(cached))", paint)
         self.assertIn("MarkStaticRegionDirtyForTile(tx, ty);", paint)
         self.assertIn("MarkLocalSceneryDirtyForTile(tx, ty);", paint)
@@ -84,10 +88,11 @@ class LocalSceneryPacketsTest(unittest.TestCase):
             self.skipTest("C++ compiler unavailable")
         header = HEADER.read_text(encoding="utf-8")
         world = WORLD.read_text(encoding="utf-8")
+        local = LOCAL.read_text(encoding="utf-8")
         keys = header[header.index("    [[nodiscard]] constexpr uint64_t FirstPersonGpuRegionKey("):
                       header.index("    struct FirstPersonSurface", header.index("FirstPersonGpuRegionKey("))]
-        predicate = world[world.index("        [[nodiscard]] bool FirstPersonIndependentLocalScenery("):
-                          world.index("        [[nodiscard]] bool FirstPersonResidentContainsCoherentGeometry(")]
+        predicate = local[local.index("        [[nodiscard]] bool FirstPersonIndependentLocalScenery("):
+                          local.index("        [[nodiscard]] bool FirstPersonResidentContainsCoherentGeometry(")]
         source = """
 #include <cstdint>
 #include <cassert>
