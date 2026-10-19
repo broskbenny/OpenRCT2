@@ -1274,6 +1274,16 @@
                 && !surface.exteriorOnly;
         }
 
+        [[nodiscard]] bool FirstPersonResidentContainsCoherentGeometry(
+            const std::vector<FirstPersonSurface>& surfaces)
+        {
+            return std::any_of(surfaces.begin(), surfaces.end(),
+                [](const auto& surface) {
+                    return IsResidentStaticSurface(surface)
+                        && !FirstPersonIndependentLocalScenery(surface);
+                });
+        }
+
         // A native source-view change only affects surfaces selected from
         // cached rotations. Keep a 32x32 relationship rebuild when any
         // rotated resident needs coherent ownership; otherwise the local
