@@ -78,6 +78,22 @@
             _localSceneryPackets[FirstPersonLocalSceneryRegionKey(tx, ty)].dirty = true;
         }
 
+        // A placement key also includes authoritative object identity and
+        // elevation. Reusing the same tile-element slot for another asset
+        // must never inherit the previous object's published mesh.
+        [[nodiscard]] uint64_t FirstPersonLocalSmallSceneryInstanceKey(
+            int32_t tx, int32_t ty, uint32_t index,
+            const SmallSceneryElement& small)
+        {
+            uint64_t key = 14695981039346656037ull;
+            ExtendStableKey(key, uint32_t(tx));
+            ExtendStableKey(key, uint32_t(ty));
+            ExtendStableKey(key, index);
+            ExtendStableKey(key, uint32_t(small.getEntryIndex()));
+            ExtendStableKey(key, uint32_t(small.getBaseZ()));
+            return key == 0 ? 1 : key;
+        }
+
         void SubmitVisibleLocalSceneryRegions(
             FirstPersonScene& scene, const FirstPersonFrustum& frustum)
         {
@@ -189,6 +205,7 @@
                 };
 
                 std::vector<FirstPersonSurface> mapSurfaces;
+                const auto previousCell = _localSceneryPackets.find(key);
                 for (int32_t ty = ry * 8; ty < (ry + 1) * 8; ++ty)
                 for (int32_t tx = rx * 8; tx < (rx + 1) * 8; ++tx)
                 {
@@ -208,21 +225,43 @@
                                 if (small != nullptr)
                                 {
                                     mapSurfaces.clear();
+                                    const uint64_t instance =
+                                        FirstPersonLocalSmallSceneryInstanceKey(
+                                            tx, ty, elementIndex, *small);
                                     if (AppendFirstPersonMapSmallScenery(
                                             mapSurfaces, mapTile, *small,
                                             scene.options.viewFlags))
                                     {
                                         const auto target = BuildFirstPersonTileInteractionTarget(
                                             ViewportInteractionItem::scenery, mapTile, element);
-                                        uint64_t instance = 14695981039346656037ull;
-                                        ExtendStableKey(instance, uint32_t(tx));
-                                        ExtendStableKey(instance, uint32_t(ty));
-                                        ExtendStableKey(instance, elementIndex);
                                         for (auto& surface : mapSurfaces)
                                         {
                                             surface.interactionTarget = target;
                                             surface.sourceInstanceKey = instance;
                                             add(surface, owningRegion, true);
+                                        }
+                                    }
+                                    else if (FirstPersonMapSmallSceneryPending(
+                                            *small, scene.options.viewFlags)
+                                        && previousCell != _localSceneryPackets.end()
+                                        && previousCell->second.surfaces)
+                                    {
+                                        // Carry only this exact object's prior
+                                        // appearance while its new asset is
+                                        // awaiting reconstruction. An edited
+                                        // object ID, deleted placement or
+                                        // altered elevation never matches.
+                                        for (const auto& old :
+                                             *previousCell->second.surfaces)
+                                        {
+                                            if (old.sourceInstanceKey != instance
+                                                || old.diagnosticSemanticRole
+                                                    != static_cast<uint8_t>(
+                                                        FirstPersonPaintSemanticRole::smallSceneryBody))
+                                                continue;
+                                            auto carried = old;
+                                            carried.gpuRegion = owningRegion;
+                                            add(carried, owningRegion, true);
                                         }
                                     }
                                 }
