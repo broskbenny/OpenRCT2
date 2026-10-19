@@ -1045,6 +1045,7 @@
 // A pending asset admission is not an authoritative map edit. The capture
         // scheduler below retries just this native observation next frame.
         void RequestFirstPersonNativeSceneryRetry(CoordsXY tile, uint8_t rotation);
+        void MarkLocalSceneryDirtyForTile(int32_t tileX, int32_t tileY);
 #include "FirstPersonRenderer.SmallScenery.inc"
 
         [[nodiscard]] uint64_t
