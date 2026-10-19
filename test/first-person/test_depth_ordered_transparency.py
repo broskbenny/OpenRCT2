@@ -6,6 +6,7 @@ separation guarantees the physical order everywhere and permits skipping
 both general depth selection and native-ordinal arbitration.
 """
 from pathlib import Path
+import math
 import random
 import unittest
 
@@ -20,7 +21,7 @@ def order_nonoverlapping_intervals(candidates):
     order = sorted(range(len(candidates)), key=lambda i: (-candidates[i][0], i))
     for n, index in enumerate(order):
         lo, hi, eligible = candidates[index]
-        if not eligible or lo <= 0 or lo > hi:
+        if not eligible or not math.isfinite(lo) or not math.isfinite(hi) or lo <= 0 or lo > hi:
             return None
         if n and candidates[order[n - 1]][0] <= hi + 0.01:
             return None
@@ -49,6 +50,9 @@ class DepthOrderedTransparencyTest(unittest.TestCase):
         self.assertIn("!surface->coplanarOwner", source)
         self.assertIn("candidate.depthMin > candidate.depthMax", source)
         self.assertIn("kSeparationMargin = 0.01f", source)
+        self.assertIn("std::array<size_t, 64> depthOrder{}", source)
+        self.assertIn("std::array<size_t, 64> offsets{}", source)
+        self.assertIn("std::isfinite(candidate.depthMin)", source)
         self.assertIn('glUniform1i, Uniform(_program, "uPeelStage"), 3', source)
         self.assertIn("GLsizei(candidate.vertexCount)", source)
         self.assertIn("composeLayer(logicalLayer, tile);", source)
@@ -93,6 +97,10 @@ class DepthOrderedTransparencyTest(unittest.TestCase):
             (1.0, 1.2, True), (2.0, 2.4, False)]))
         self.assertIsNone(order_nonoverlapping_intervals([
             (0.0, 0.0, True), (2.0, 3.0, True)]))
+        self.assertIsNone(order_nonoverlapping_intervals([
+            (float('nan'), 2.0, True), (3.0, 4.0, True)]))
+        self.assertIsNone(order_nonoverlapping_intervals([
+            (1.0, float('inf'), True), (3.0, 4.0, True)]))
 
     def test_palette_order_noncommutative(self):
         # Synthetic noncommutative palette filters. A mistaken near-to-far
