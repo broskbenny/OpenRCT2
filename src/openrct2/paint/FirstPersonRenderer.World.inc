@@ -1258,13 +1258,13 @@
         {
             const auto semanticRole =
                 static_cast<FirstPersonPaintSemanticRole>(surface.diagnosticSemanticRole);
-            // An ungrouped wall, path deck, station, roof, railing or sign
-            // can still depend on adjacent surfaces. Only unclassified
-            // independent native geometry and path fixtures may leave the
-            // coherent interface/owner packet.
+            // Missing semantic classification is NOT proof of independent
+            // ownership: native walls, roofs and buildings can be unclassified.
+            // Only explicitly local fixtures and certified reconstructed
+            // small-scenery instances leave the coherent interface packet.
             const bool locallyOwned =
-                semanticRole == FirstPersonPaintSemanticRole::none
-                || semanticRole == FirstPersonPaintSemanticRole::pathFixture;
+                semanticRole == FirstPersonPaintSemanticRole::pathFixture
+                || semanticRole == FirstPersonPaintSemanticRole::smallSceneryBody;
             return IsResidentStaticSurface(surface)
                 && locallyOwned
                 && surface.reconstructionGroup == 0
