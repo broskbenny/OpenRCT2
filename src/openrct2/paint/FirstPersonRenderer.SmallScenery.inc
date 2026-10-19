@@ -878,6 +878,21 @@
                 });
         }
 
+        // A ready but rejected source reconstruction is NOT pending.
+        // Only an asset whose reconstruction has not completed may retain
+        // that same authoritative placement's last-known-good geometry.
+        [[nodiscard]] bool FirstPersonMapSmallSceneryPending(
+            const SmallSceneryElement& small, uint32_t viewFlags)
+        {
+            const auto* entry = small.getEntry();
+            if (entry == nullptr
+                || !FirstPersonMapSmallSceneryEligible(*entry, small, viewFlags))
+                return false;
+            const auto key = FirstPersonSmallSceneryReconstructionKey(*entry, small);
+            const auto found = _smallSceneryJobs.find(key);
+            return found == _smallSceneryJobs.end() || !found->second->ready;
+        }
+
         // The same canonical local-space surfaces produced for native paint
         // are instanced directly from authoritative TileElements. Per-instance
         // colours and orientation are applied here; no new visual inference.
