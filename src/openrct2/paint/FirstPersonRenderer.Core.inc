@@ -1832,6 +1832,7 @@
             uint64_t generation{};
             uint64_t sourceRevision{};
             uint64_t publishedSourceRevision{};
+            uint64_t surfaceFingerprint{};
             uint64_t invalidationSerial{};
             size_t vertexCount{};
             size_t resolvedInternalInterfaces{};
@@ -5837,12 +5838,11 @@
                     fingerprint, surface.textureFallbackOnly ? 1 : 0);
                 ExtendStableKey(
                     fingerprint, surface.reconstructionGroup);
-                if (!surface.cameraIndependent)
-                {
-                    ExtendStableKey(
-                        fingerprint,
-                        surface.nativePaintOrdinal);
-                }
+                // A resident native owner may depend on paint order even
+                // when its geometry is camera-independent. A no-op GPU
+                // publication test must never ignore this state.
+                ExtendStableKey(
+                    fingerprint, surface.nativePaintOrdinal);
                 ExtendStableKey(
                     fingerprint, surface.gpuRegion);
                 ExtendStableKey(
