@@ -1420,6 +1420,14 @@ namespace OpenRCT2::Paint
         return std::nullopt;
     }
 
+    // Walking may request a large-scenery collision proxy before its
+    // reconstructed visual model exists. Record exact authoritative sources
+    // for these on-demand proxies so edits can withdraw ONLY the affected
+    // group without emptying collision for the entire park.
+    static std::unordered_map<uint64_t,
+        std::vector<std::pair<CoordsXY, uint64_t>>>
+        _onDemandLargeSceneryProxySources;
+
     std::optional<uint64_t>
         EnsureFirstPersonLargeSceneryPhysicalProxy(
             CoordsXY tile, const LargeSceneryElement& large)
@@ -1474,6 +1482,21 @@ namespace OpenRCT2::Paint
             return std::nullopt;
         PublishFirstPersonLargeSceneryPhysicalProxies(
             group->key, proxies);
+        auto& sources = _onDemandLargeSceneryProxySources[group->key];
+        sources.clear();
+        for (const auto& part : entry->tiles)
+        {
+            const auto offset =
+                CoordsXY{part.offset.x, part.offset.y}.rotate(direction);
+            const int32_t tx =
+                int32_t(group->anchor.x + offset.x) / kCoordsXYStep;
+            const int32_t ty =
+                int32_t(group->anchor.y + offset.y) / kCoordsXYStep;
+            const CoordsXY location{
+                tx * kCoordsXYStep, ty * kCoordsXYStep
+            };
+            sources.emplace_back(location, NativeTileSignature(location));
+        }
         return group->key;
     }
 
@@ -1647,6 +1670,7 @@ namespace OpenRCT2::Paint
         ClearFirstPersonSmallSceneryReconstructionCache();
         _largeSceneryGeometryCache.clear();
         ClearFirstPersonLargeSceneryPhysicalProxies();
+        _onDemandLargeSceneryProxySources.clear();
         _largeSceneryGroupsByRegion.clear();
         _largeSceneryGroupsByBoundsRegion.clear();
         _activeLargeSceneryRegions.clear();
@@ -1693,6 +1717,23 @@ namespace OpenRCT2::Paint
         }
         // Keep existing large-scenery walking proxies unless the individual
         // owning object's recorded authoritative tile signatures change.
+        // Early walking proxies have no completed geometry-cache entry yet.
+        for (auto it = _onDemandLargeSceneryProxySources.begin();
+             it != _onDemandLargeSceneryProxySources.end();)
+        {
+            const bool changed = std::any_of(
+                it->second.begin(), it->second.end(),
+                [](const auto& source) {
+                    return NativeTileSignature(source.first) != source.second;
+                });
+            if (changed)
+            {
+                WithdrawFirstPersonLargeSceneryPhysicalProxies(it->first);
+                it = _onDemandLargeSceneryProxySources.erase(it);
+            }
+            else
+                ++it;
+        }
         for (auto it = _largeSceneryJobs.begin(); it != _largeSceneryJobs.end();)
         {
             const auto& job = *it->second;
