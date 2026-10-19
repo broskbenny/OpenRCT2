@@ -5861,6 +5861,15 @@
                 staging.progress.invalidationSerial != published.invalidationSerial;
             if (sameGpuOutput)
             {
+                // Geometry and textures are identical, but authoritative
+                // interaction targets, tile signatures and diagnostic
+                // provenance may have changed. Refresh immutable CPU metadata
+                // without incrementing the GPU buffer generation.
+                published.surfaceStorage =
+                    std::make_shared<const std::vector<FirstPersonSurface>>(
+                        std::move(packet.surfaces));
+                published.publishedSourceRevision =
+                    staging.initialSourceRevision;
                 published.reconstructionGroups =
                     std::move(packet.reconstructionGroups);
                 published.reconstructionSelectionStamp =
