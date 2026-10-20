@@ -5752,7 +5752,12 @@
             const auto pending =
                 _pendingLargeSceneryBodies.find(
                     surface.reconstructionGroup);
+            // Never hide the only currently drawable appearance while its
+            // first 3D mesh is still being built. A dirty cached mesh, on the
+            // other hand, remains the last-known-good world until replacement.
             return pending != _pendingLargeSceneryBodies.end()
+                && found != _largeSceneryGeometryCache.end()
+                && !found->second.surfaces.empty()
                 && image >= pending->second.first
                 && image < pending->second.last;
         }
