@@ -30,6 +30,14 @@ class ColdObjectNativeCapturePriorityTest(unittest.TestCase):
         self.assertIn("coldObjectCursor += captureExamined;", paint)
         self.assertIn("captureCursor += captureExamined;", paint)
         self.assertIn("size_t nativeCapturesRemaining = 2;", paint)
+        capture_loop = paint.split(
+            "while (captureExamined < scene.visibleTiles.size()", 1)[1].split(
+            "captureCursor += captureExamined;", 1)[0]
+        self.assertIn("if (useColdObjectCursor)", capture_loop)
+        self.assertIn("&& first->isLastForTile()", capture_loop)
+        self.assertLess(
+            capture_loop.index("if (useColdObjectCursor)"),
+            capture_loop.index("const int32_t tx = tile.x / kCoordsXYStep;"))
 
     def test_actual_cpp_policy_limits_probes_and_gives_general_sweep_a_turn(self):
         compiler = shutil.which("clang++") or shutil.which("g++")
