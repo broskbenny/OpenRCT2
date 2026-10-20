@@ -269,7 +269,7 @@
                         TerrainKey(tile.x / kCoordsXYStep,
                             tile.y / kCoordsXYStep));
                     if (found == _staticPaintCache.end()
-                        || !found->second.valid || found->second.dirty)
+                        || !found->second.valid)
                         return true;
                     const auto& cached = found->second;
                     return !cached.animated
