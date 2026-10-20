@@ -5740,9 +5740,8 @@
                 && !found->second.dirty
                 && found->second.lastSeen == frame)
             {
-                // A completed unusable result is an explicit reconstruction
-                // failure. Only then may native artwork become the last-resort
-                // fallback instead of a temporary loading representation.
+                // A completed empty mesh is not a replacement: native
+                // appearance must remain available as its fallback.
                 if (found->second.surfaces.empty())
                     return false;
                 return image >= found->second.bodyImageFirst
