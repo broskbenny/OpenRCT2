@@ -5527,8 +5527,6 @@
                 || found->second.dirty
                 || found->second.lastSeen != frame)
                 return false;
-            if (role == FirstPersonPaintSemanticRole::sign)
-                return true;
             return !found->second.surfaces.empty();
         }
 
