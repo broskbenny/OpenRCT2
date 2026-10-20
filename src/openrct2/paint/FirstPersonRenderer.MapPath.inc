@@ -1,12 +1,13 @@
         // Map-native path decks do not require per-placement PaintSession
         // discovery. Restrict direct ownership to flat paths sitting on flat,
-        // dry ground: supported, sloped, ghost and wide-plaza presentations
-        // continue through the proven native semantic painter.
+        // dry ground: supported, sloped and ghost presentations continue
+        // through the proven native semantic painter. Wide plazas reuse
+        // its full-tile art and physical footprint instead of routing edges.
         [[nodiscard]] bool FirstPersonMapOwnsFlatPathDeck(
             CoordsXY tile, const PathElement& path, uint32_t viewFlags)
         {
             if (path.isGhost() || path.isInvisible()
-                || path.isSloped() || path.isWide()
+                || path.isSloped()
                 || gTrackDesignSaveMode
                 || (viewFlags & VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES) != 0
                 || path.getSurfaceDescriptor() == nullptr
@@ -51,7 +52,7 @@
             // table, so no parallel/path-specific sprite rule is invented.
             constexpr uint8_t sourceRotation = 0;
             ImageId image(descriptor->image
-                + GetPathSurfaceImageOffset(path, sourceRotation));
+                + GetFirstPersonPathDeckImageOffset(path, sourceRotation));
             if (TileInspector::GetSelectedElement()
                 == reinterpret_cast<const TileElement*>(&path))
                 image = image.WithRemap(
@@ -59,6 +60,9 @@
             if (gPaintBlockedTiles && path.isBlockedByVehicle())
                 image = image.WithRemap(
                     Drawing::FilterPaletteID::palette46);
+            if (gPaintWidePathsAsGhost && path.isWide())
+                image = image.WithRemap(
+                    Drawing::FilterPaletteID::paletteGhost);
             const auto* sprite = GfxGetG1Element(image);
             if (sprite == nullptr || sprite->width <= 0
                 || sprite->height <= 0)
@@ -68,8 +72,12 @@
                 tile, sourceRotation);
             const auto isoOrigin = Translate3DTo2DWithZ(
                 sourceRotation, { paintOrigin, path.getBaseZ() });
-            const auto cells = BuildFirstPersonPathFootprint(
-                path.getEdges(), path.getCorners(), path.isQueue());
+            std::vector<FirstPersonPathFootprintCell> cells;
+            if (FirstPersonPathUsesFullTileDeck(path))
+                cells.push_back({ 0, 0, kCoordsXYStep, kCoordsXYStep });
+            else
+                cells = BuildFirstPersonPathFootprint(
+                    path.getEdges(), path.getCorners(), path.isQueue());
             const auto target = BuildFirstPersonTileInteractionTarget(
                 ViewportInteractionItem::footpath, tile,
                 reinterpret_cast<const TileElement*>(&path));
