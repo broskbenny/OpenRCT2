@@ -9,7 +9,8 @@
                 || path.isSloped() || path.isWide()
                 || gTrackDesignSaveMode
                 || (viewFlags & VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES) != 0
-                || path.getSurfaceDescriptor() == nullptr)
+                || path.getSurfaceDescriptor() == nullptr
+                || path.getRailingsDescriptor() == nullptr)
                 return false;
             const auto* ground = MapGetSurfaceElementAt(tile);
             return ground != nullptr
@@ -49,8 +50,12 @@
             // The native painter already exposes the authoritative rotation
             // table, so no parallel/path-specific sprite rule is invented.
             constexpr uint8_t sourceRotation = 0;
-            const ImageId image(descriptor->image
+            ImageId image(descriptor->image
                 + GetPathSurfaceImageOffset(path, sourceRotation));
+            if (TileInspector::GetSelectedElement()
+                == reinterpret_cast<const TileElement*>(&path))
+                image = image.WithRemap(
+                    Drawing::FilterPaletteID::paletteGhost);
             const auto* sprite = GfxGetG1Element(image);
             if (sprite == nullptr || sprite->width <= 0
                 || sprite->height <= 0)
