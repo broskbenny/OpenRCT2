@@ -34,7 +34,7 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         self.assertIn("gPaintBlockedTiles && path.isBlockedByVehicle()", path)
         self.assertIn("Drawing::FilterPaletteID::palette46", path)
         self.assertIn("gPaintWidePathsAsGhost && path.isWide()", path)
-        self.assertIn("ground->getSlope() == kTileSlopeFlat", path)
+        self.assertIn("ground->getSlope() == pathSlope", path)
         self.assertIn("ground->getBaseZ() == path.getBaseZ()", path)
         self.assertIn("ground->getWaterHeight() <= path.getBaseZ()", path)
         self.assertIn("return paths == 1 && eligible;", path)
