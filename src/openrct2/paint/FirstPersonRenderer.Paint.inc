@@ -250,7 +250,40 @@
             FirstPersonFrameBudget captureScanBudget(
                 256, std::chrono::microseconds(1200));
             static size_t captureCursor = 0;
-            const size_t captureStart = scene.visibleTiles.empty() ? 0 : captureCursor % scene.visibleTiles.size();
+            static size_t coldObjectCursor = 0;
+            const size_t visibleCount = scene.visibleTiles.size();
+            // A source-only terrain tile need not consume the first two
+            // native paint slots while thousands of object tiles are cold.
+            // The ordinary cursor is independent and always resumes, so
+            // native terrain edges and unsupported fallbacks still complete.
+            const size_t coldOffset = FirstPersonColdObjectCaptureOffset(
+                visibleCount, coldObjectCursor, frame,
+                [&](size_t index) {
+                    const auto tile = scene.visibleTiles[index];
+                    const auto* first = MapGetFirstElementAt(tile);
+                    if (first == nullptr
+                        || (first->getType() == TileElementType::surface
+                            && first->isLastForTile()))
+                        return false;
+                    const auto found = _staticPaintCache.find(
+                        TerrainKey(tile.x / kCoordsXYStep,
+                            tile.y / kCoordsXYStep));
+                    if (found == _staticPaintCache.end()
+                        || !found->second.valid || found->second.dirty)
+                        return true;
+                    const auto& cached = found->second;
+                    return !cached.animated
+                        && !std::any_of(cached.rotations.begin(),
+                            cached.rotations.end(),
+                            [](const auto& variant) { return variant.valid; });
+                });
+            const bool useColdObjectCursor = coldOffset < visibleCount;
+            if (useColdObjectCursor)
+                coldObjectCursor += coldOffset;
+            else if (visibleCount != 0)
+                coldObjectCursor += std::min<size_t>(visibleCount, 32);
+            const size_t captureStart = visibleCount == 0 ? 0
+                : (useColdObjectCursor ? coldObjectCursor : captureCursor) % visibleCount;
             size_t captureExamined = 0;
             while (captureExamined < scene.visibleTiles.size()
                    && nativeCapturesRemaining != 0 && captureScanBudget.take())
@@ -558,7 +591,10 @@
                 }
             }
 
-            captureCursor += captureExamined;
+            if (useColdObjectCursor)
+                coldObjectCursor += captureExamined;
+            else
+                captureCursor += captureExamined;
             const auto selectedViewsDone = PaintClock::now();
             // The shared semantic visual hull needs four native observations
             // to carve a volumetric box/local-hull envelope reliably. Camera
