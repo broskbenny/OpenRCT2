@@ -1,21 +1,23 @@
         // Map-native path decks do not require per-placement PaintSession
-        // discovery. Restrict direct ownership to flat paths sitting on flat,
-        // dry ground: supported, sloped and ghost presentations continue
-        // through the proven native semantic painter. Wide plazas reuse
-        // its full-tile art and physical footprint instead of routing edges.
+        // discovery. Direct ownership requires the path to lie exactly on
+        // dry terrain with the same slope. Unsupported bridges, hovering
+        // slopes and ghost presentations retain the native semantic painter.
+        // Wide plazas reuse the native full-tile art and physical footprint.
         [[nodiscard]] bool FirstPersonMapOwnsFlatPathDeck(
             CoordsXY tile, const PathElement& path, uint32_t viewFlags)
         {
             if (path.isGhost() || path.isInvisible()
-                || path.isSloped()
                 || gTrackDesignSaveMode
                 || (viewFlags & VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES) != 0
                 || path.getSurfaceDescriptor() == nullptr
                 || path.getRailingsDescriptor() == nullptr)
                 return false;
             const auto* ground = MapGetSurfaceElementAt(tile);
+            const uint8_t pathSlope = path.isSloped()
+                ? FirstPersonPathLandSlope(path.getSlopeDirection())
+                : kTileSlopeFlat;
             return ground != nullptr
-                && ground->getSlope() == kTileSlopeFlat
+                && ground->getSlope() == pathSlope
                 && ground->getBaseZ() == path.getBaseZ()
                 && ground->getWaterHeight() <= path.getBaseZ();
         }
@@ -81,17 +83,29 @@
             const auto target = BuildFirstPersonTileInteractionTarget(
                 ViewportInteractionItem::footpath, tile,
                 reinterpret_cast<const TileElement*>(&path));
+            const uint8_t slope = path.isSloped()
+                ? FirstPersonPathLandSlope(path.getSlopeDirection())
+                : kTileSlopeFlat;
+            const auto heights = GetSlopeCornerHeights(path.getBaseZ(), slope);
+            const auto heightAt = [&](float localX, float localY) {
+                const float x = localX / float(kCoordsXYStep);
+                const float y = localY / float(kCoordsXYStep);
+                return float(heights.south) * (1.0f - x) * (1.0f - y)
+                    + float(heights.east) * x * (1.0f - y)
+                    + float(heights.north) * x * y
+                    + float(heights.west) * (1.0f - x) * y;
+            };
             for (const auto& cell : cells)
             {
                 const std::array<FirstPersonVec3, 4> points{ {
                     { float(tile.x + cell.x0), float(tile.y + cell.y0),
-                        float(path.getBaseZ()) },
+                        heightAt(float(cell.x0), float(cell.y0)) },
                     { float(tile.x + cell.x1), float(tile.y + cell.y0),
-                        float(path.getBaseZ()) },
+                        heightAt(float(cell.x1), float(cell.y0)) },
                     { float(tile.x + cell.x1), float(tile.y + cell.y1),
-                        float(path.getBaseZ()) },
+                        heightAt(float(cell.x1), float(cell.y1)) },
                     { float(tile.x + cell.x0), float(tile.y + cell.y1),
-                        float(path.getBaseZ()) },
+                        heightAt(float(cell.x0), float(cell.y1)) },
                 } };
                 std::array<FirstPersonVertex, 4> vertices{};
                 for (size_t i = 0; i < 4; ++i)
