@@ -4409,11 +4409,10 @@
             const bool havePublishedPacket =
                 published.surfaceStorage != nullptr
                 && !published.surfaceStorage->empty();
-            const bool sourceChanged =
-                staging.progress.invalidationSerial == std::numeric_limits<uint64_t>::max()
-                || (havePublishedPacket
-                    && staging.initialMapEditSerial
-                        != FirstPersonRegionMapEditSerial(regionKey));
+            const bool sourceChanged = FirstPersonStagedPacketNeedsSourceRestart(
+                staging.progress.invalidationSerial, havePublishedPacket,
+                staging.initialMapEditSerial,
+                FirstPersonRegionMapEditSerial(regionKey));
             const bool relevantSelectionChanged =
                 !sourceChanged
                 && staging.progress.selectionSerial != _reconstructionSelectionSerial
