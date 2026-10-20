@@ -63,12 +63,25 @@ class MapSceneryPersistenceTest(unittest.TestCase):
 #include <cstdint>
 #include <cassert>
 #include <random>
+struct SmallSceneryEntry { uint32_t wither = 0; };
 struct SmallSceneryElement {
     uint32_t entry=0;
     int32_t z=0;
+    uint32_t direction=0, quadrant=0, occupied=0;
+    uint32_t primary=0, secondary=0, tertiary=0;
+    const SmallSceneryEntry* metadata=nullptr;
     uint32_t getEntryIndex() const { return entry; }
     int32_t getBaseZ() const { return z; }
+    uint32_t getDirection() const { return direction; }
+    uint32_t getSceneryQuadrant() const { return quadrant; }
+    uint32_t getOccupiedQuadrants() const { return occupied; }
+    const SmallSceneryEntry* getEntry() const { return metadata; }
+    uint32_t getPrimaryColour() const { return primary; }
+    uint32_t getSecondaryColour() const { return secondary; }
+    uint32_t getTertiaryColour() const { return tertiary; }
 };
+uint32_t FirstPersonSmallSceneryWitherStage(
+    const SmallSceneryEntry& entry, const SmallSceneryElement&) { return entry.wither; }
 void ExtendStableKey(uint64_t& k, uint64_t v) { k ^= v; k *= 1099511628211ULL; }
 """ + implementation + """
 int main() {
@@ -84,6 +97,22 @@ int main() {
         assert(FirstPersonLocalSmallSceneryInstanceKey(10,20+int(variant),3,element)!=baseline);
         assert(FirstPersonLocalSmallSceneryInstanceKey(10,20,3+variant,element)!=baseline);
     }
+    for (uint32_t component=0; component<6; ++component) {
+        SmallSceneryElement changed=element;
+        switch (component) {
+        case 0: changed.direction=1; break;
+        case 1: changed.quadrant=1; break;
+        case 2: changed.occupied=1; break;
+        case 3: changed.primary=1; break;
+        case 4: changed.secondary=1; break;
+        default: changed.tertiary=1; break;
+        }
+        assert(FirstPersonLocalSmallSceneryInstanceKey(10,20,3,changed)!=baseline);
+    }
+    SmallSceneryEntry withered{2};
+    SmallSceneryElement withAppearance=element;
+    withAppearance.metadata=&withered;
+    assert(FirstPersonLocalSmallSceneryInstanceKey(10,20,3,withAppearance)!=baseline);
 }
 """
         with tempfile.TemporaryDirectory() as folder:
