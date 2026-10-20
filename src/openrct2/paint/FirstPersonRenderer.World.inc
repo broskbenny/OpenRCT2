@@ -4280,6 +4280,7 @@
             FirstPersonPacketBuildProgress progress{};
             uint64_t buildToken = 0;
             uint64_t initialSourceRevision = 0;
+            uint64_t initialMapEditSerial = 0;
             uint64_t lastVisibleFrame = 0;
             StaticRegionPacketCache packet{};
             bool haveBounds = false;
@@ -4322,6 +4323,34 @@
         static std::unordered_map<uint64_t, FirstPersonStaticPacketStaging>
             _staticRegionPacketBuilds;
         static uint64_t _nextStaticPacketBuildToken = 0;
+        // Native artwork arrival is not an authoritative map edit. Keep a
+        // separate serial so new snapshots can be reconciled AFTER a staged
+        // region completes instead of restarting its 1024-tile traversal.
+        static std::unordered_map<uint64_t, uint64_t>
+            _authoritativeRegionEditSerials;
+        [[nodiscard]] uint64_t FirstPersonRegionMapEditSerial(uint64_t key)
+        {
+            const auto found = _authoritativeRegionEditSerials.find(key);
+            return found == _authoritativeRegionEditSerials.end()
+                ? 0 : found->second;
+        }
+        void MarkFirstPersonAuthoritativeRegionEdit(uint64_t regionKey)
+        {
+            const int32_t rx = int32_t(uint32_t(regionKey >> 32)) - 1;
+            const int32_t ry = int32_t(uint32_t(regionKey)) - 1;
+            constexpr std::array<std::array<int32_t, 2>, 5>
+                affected{ { { 0, 0 }, { -1, 0 }, { 1, 0 },
+                    { 0, -1 }, { 0, 1 } } };
+            for (const auto& offset : affected)
+            {
+                const int32_t x = rx + offset[0];
+                const int32_t y = ry + offset[1];
+                if (x < 0 || y < 0)
+                    continue;
+                ++_authoritativeRegionEditSerials[
+                    FirstPersonGpuRegionKey(x * 32, y * 32)];
+            }
+        }
         static uint64_t _staticPacketSourceRestarts = 0;
         static uint64_t _staticPacketSelectionRestarts = 0;
         static uint64_t _staticPacketPublishes = 0;
@@ -4383,7 +4412,8 @@
             const bool sourceChanged =
                 staging.progress.invalidationSerial == std::numeric_limits<uint64_t>::max()
                 || (havePublishedPacket
-                    && staging.progress.invalidationSerial != published.invalidationSerial);
+                    && staging.initialMapEditSerial
+                        != FirstPersonRegionMapEditSerial(regionKey));
             const bool relevantSelectionChanged =
                 !sourceChanged
                 && staging.progress.selectionSerial != _reconstructionSelectionSerial
@@ -4398,6 +4428,8 @@
                 staging.progress.restart(
                     published.invalidationSerial, _reconstructionSelectionSerial);
                 staging.initialSourceRevision = published.sourceRevision;
+                staging.initialMapEditSerial =
+                    FirstPersonRegionMapEditSerial(regionKey);
                 staging.buildToken = ++_nextStaticPacketBuildToken;
             }
             else
