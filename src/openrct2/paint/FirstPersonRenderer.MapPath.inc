@@ -8,7 +8,12 @@
         {
             if (path.isGhost() || path.isInvisible()
                 || gTrackDesignSaveMode
-                || (viewFlags & VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES) != 0
+                || (viewFlags & (
+                    VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES
+                    | VIEWPORT_FLAG_HIDE_PATHS
+                    | VIEWPORT_FLAG_INVISIBLE_PATHS
+                    | VIEWPORT_FLAG_CLIP_VIEW
+                    | VIEWPORT_FLAG_UNDERGROUND_INSIDE)) != 0
                 || path.getSurfaceDescriptor() == nullptr
                 || path.getRailingsDescriptor() == nullptr)
                 return false;
