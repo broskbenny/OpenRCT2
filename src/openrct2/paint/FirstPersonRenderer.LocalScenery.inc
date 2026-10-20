@@ -76,6 +76,25 @@
             _localSceneryPackets;
         static uint64_t _localSceneryEpoch = 0;
 
+        [[nodiscard]] bool FirstPersonLocalFlatPathReady(CoordsXY tile)
+        {
+            const auto key = FirstPersonLocalSceneryRegionKey(
+                tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+            const auto it = _localSceneryPackets.find(key);
+            if (it == _localSceneryPackets.end() || it->second.dirty
+                || !it->second.surfaces)
+                return false;
+            return std::any_of(it->second.surfaces->begin(),
+                it->second.surfaces->end(),
+                [&](const auto& surface) {
+                    return surface.diagnosticSemanticRole
+                            == static_cast<uint8_t>(
+                                FirstPersonPaintSemanticRole::pathDeck)
+                        && surface.diagnosticSourceTile.x == tile.x
+                        && surface.diagnosticSourceTile.y == tile.y;
+                });
+        }
+
         void MarkLocalSceneryDirtyForTile(int32_t tx, int32_t ty)
         {
             _localSceneryPackets[FirstPersonLocalSceneryRegionKey(tx, ty)].dirty = true;
@@ -282,6 +301,21 @@
                         if (element != nullptr)
                         do
                         {
+                            if (element->getType() == TileElementType::path
+                                && FirstPersonTileHasMapOwnedFlatPathDeck(
+                                    mapTile, scene.options.viewFlags))
+                            {
+                                const auto* path = element->asPath();
+                                mapSurfaces.clear();
+                                if (path != nullptr
+                                    && AppendFirstPersonMapFlatPathDeck(
+                                        mapSurfaces, mapTile, *path,
+                                        scene.options.viewFlags))
+                                {
+                                    for (auto& surface : mapSurfaces)
+                                        add(surface, owningRegion, true);
+                                }
+                            }
                             if (element->getType() == TileElementType::smallScenery)
                             {
                                 const auto* small = element->asSmallScenery();
