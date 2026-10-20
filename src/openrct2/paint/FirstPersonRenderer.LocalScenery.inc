@@ -55,6 +55,10 @@
             return false;
         }
 
+        // Defined by the authoritative region builder after this include.
+        // Ownership handoff must invalidate both packet and in-flight worker.
+        void MarkFirstPersonAuthoritativeRegionEdit(uint64_t regionKey);
+
         struct FirstPersonLocalSceneryPacket
         {
             std::shared_ptr<const std::vector<FirstPersonSurface>> surfaces;
@@ -416,6 +420,17 @@
                     std::unique(dependencies.begin(), dependencies.end()),
                     dependencies.end());
                 auto& packet = _localSceneryPackets[key];
+                if (packet.mappedPathTiles != mappedPathTiles)
+                {
+                    // First appearance, removal or fallback of a map-owned
+                    // deck changes which presentation must win in the
+                    // coherent 32x32 packet. A general source revision alone
+                    // does not restart an in-progress geometry worker.
+                    const uint64_t coherentKey = FirstPersonGpuRegionKey(
+                        rx * 8, ry * 8);
+                    MarkFirstPersonAuthoritativeRegionEdit(coherentKey);
+                    MarkStaticRegionPacketDirty(coherentKey);
+                }
                 packet.viewFlags = scene.options.viewFlags;
                 packet.trackDesignSaveMode = gTrackDesignSaveMode;
                 packet.paintBlockedMode = gPaintBlockedTiles;
