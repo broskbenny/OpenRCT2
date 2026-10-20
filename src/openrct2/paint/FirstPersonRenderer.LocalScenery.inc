@@ -465,7 +465,14 @@
                 packet.dirty = false;
             }
 
-            for (const auto key : visible)
+            // Visible cells are discovered in an unordered set. Their GPU
+            // owner-replay order must not change when nearby cells enter or
+            // leave view: equal-depth path edges and local fixtures otherwise
+            // change their winner as the camera turns.
+            std::vector<uint64_t> orderedVisible(
+                visible.begin(), visible.end());
+            std::sort(orderedVisible.begin(), orderedVisible.end());
+            for (const auto key : orderedVisible)
             {
                 const auto it = _localSceneryPackets.find(key);
                 if (it == _localSceneryPackets.end())
