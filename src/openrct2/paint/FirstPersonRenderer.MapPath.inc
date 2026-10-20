@@ -56,6 +56,9 @@
                 == reinterpret_cast<const TileElement*>(&path))
                 image = image.WithRemap(
                     Drawing::FilterPaletteID::paletteGhost);
+            if (gPaintBlockedTiles && path.isBlockedByVehicle())
+                image = image.WithRemap(
+                    Drawing::FilterPaletteID::palette46);
             const auto* sprite = GfxGetG1Element(image);
             if (sprite == nullptr || sprite->width <= 0
                 || sprite->height <= 0)
