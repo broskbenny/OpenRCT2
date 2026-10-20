@@ -69,6 +69,7 @@
             uint32_t viewFlags = 0;
             bool trackDesignSaveMode = false;
             bool paintBlockedMode = false;
+            bool paintWideGhostMode = false;
             // Inspector selection changes appearance for one map placement.
             uint64_t selectionGeneration = 0;
             bool containsInspectedElement = false;
@@ -204,7 +205,8 @@
                 if (packet.surfaces
                     && (packet.viewFlags != scene.options.viewFlags
                         || packet.trackDesignSaveMode != gTrackDesignSaveMode
-                        || packet.paintBlockedMode != gPaintBlockedTiles))
+                        || packet.paintBlockedMode != gPaintBlockedTiles
+                        || packet.paintWideGhostMode != gPaintWidePathsAsGhost))
                     packet.dirty = true;
                 if (!packet.dirty)
                     continue;
@@ -417,6 +419,7 @@
                 packet.viewFlags = scene.options.viewFlags;
                 packet.trackDesignSaveMode = gTrackDesignSaveMode;
                 packet.paintBlockedMode = gPaintBlockedTiles;
+                packet.paintWideGhostMode = gPaintWidePathsAsGhost;
                 const uint64_t fingerprint =
                     ResidentStaticSurfaceFingerprint(surfaces);
                 if (packet.surfaces
