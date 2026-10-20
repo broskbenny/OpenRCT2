@@ -1555,6 +1555,10 @@
             // observation separate from the source signature so change
             // detection never destroys its own previous-state evidence.
             uint64_t visibilitySignature = 0;
+            // Independent of native capture and periodically refreshed
+            // visibility evidence. Advance only after an actual invalidation.
+            uint64_t lastInvalidatedSignature = 0;
+            bool hasInvalidationSignature = false;
             int32_t visibilityMinZ = 0;
             int32_t visibilityMaxZ = 0;
             uint32_t lastVisibilityGeneration = 0;
