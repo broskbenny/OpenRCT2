@@ -5512,7 +5512,14 @@
                 return false;
             if (_pendingParkEntranceBodies.contains(
                     surface.reconstructionGroup))
-                return true;
+            {
+                if (role == FirstPersonPaintSemanticRole::sign)
+                    return true;
+                const auto previous = _parkEntranceGeometryCache.find(
+                    surface.reconstructionGroup);
+                return previous != _parkEntranceGeometryCache.end()
+                    && !previous->second.surfaces.empty();
+            }
             const auto found =
                 _parkEntranceGeometryCache.find(
                     surface.reconstructionGroup);
