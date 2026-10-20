@@ -1888,10 +1888,16 @@ namespace OpenRCT2::Paint
                     cached->second.semanticStreamedSurfaces.clear();
                     cached->second.semanticSurfaceFingerprint = 0;
                 }
-                // Generic redraws can affect animation/source capture,
-                // but only changed TileElements can change the authoritative
-                // geometry bounds used by frustum discovery.
-                cached->second.dirty = true;
+                // Entity/shadow-only redraws are not source edits. Keep
+                // static native variants available instead of revalidating
+                // every cached tile within an unrelated viewport repaint.
+                // Animated and camera-dependent sources still refresh, as
+                // does artwork under active Tile Inspector selection.
+                if (FirstPersonNativeRedrawNeedsRevalidation(
+                        authoritativeChange, cached->second.animated,
+                        cached->second.hasCameraDependentFallback,
+                        TileInspector::GetSelectedElement() != nullptr))
+                    cached->second.dirty = true;
                 if (authoritativeChange)
                     cached->second.visibilityDirty = true;
             }
