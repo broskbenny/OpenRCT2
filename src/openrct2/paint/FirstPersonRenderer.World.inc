@@ -4264,6 +4264,7 @@
             FirstPersonPacketBuildProgress progress{};
             uint64_t buildToken = 0;
             uint64_t initialSourceRevision = 0;
+            uint64_t lastVisibleFrame = 0;
             StaticRegionPacketCache packet{};
             bool haveBounds = false;
             FirstPersonVec3 low{}, high{};
@@ -4387,6 +4388,7 @@
             {
                 staging.progress.selectionSerial = _reconstructionSelectionSerial;
             }
+            staging.lastVisibleFrame = frame;
             auto& packet = staging.packet;
             auto& haveBounds = staging.haveBounds;
             auto& low = staging.low;
@@ -6065,14 +6067,41 @@
                 }
             }
 
-            // Reclaim abandoned partial geometry after a camera move.
+            // A quick camera turn must not throw away several frames of
+            // unpublished 32x32 geometry. Keep only a small, recent offscreen
+            // working set; new visible builds still receive all build slots.
+            constexpr uint64_t kPausedBuildGraceFrames = 120;
+            constexpr size_t kPausedBuildLimit = 4;
+            std::vector<std::pair<uint64_t, uint64_t>> pausedBuilds;
             for (auto it = _staticRegionPacketBuilds.begin();
                  it != _staticRegionPacketBuilds.end();)
             {
-                if (!visibleRegions.contains(it->first))
-                    it = _staticRegionPacketBuilds.erase(it);
-                else
+                if (visibleRegions.contains(it->first))
+                {
+                    it->second.lastVisibleFrame = frame;
                     ++it;
+                }
+                else if (frame - it->second.lastVisibleFrame
+                    > kPausedBuildGraceFrames)
+                {
+                    it = _staticRegionPacketBuilds.erase(it);
+                }
+                else
+                {
+                    pausedBuilds.emplace_back(
+                        it->second.lastVisibleFrame, it->first);
+                    ++it;
+                }
+            }
+            if (pausedBuilds.size() > kPausedBuildLimit)
+            {
+                std::sort(pausedBuilds.begin(), pausedBuilds.end(),
+                    [](const auto& a, const auto& b) {
+                        return a.first > b.first
+                            || (a.first == b.first && a.second < b.second);
+                    });
+                for (size_t i = kPausedBuildLimit; i < pausedBuilds.size(); ++i)
+                    _staticRegionPacketBuilds.erase(pausedBuilds[i].second);
             }
 
             _snapshotBudget = FirstPersonFrameBudget(32, std::chrono::microseconds(1000));
