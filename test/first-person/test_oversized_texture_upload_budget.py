@@ -17,6 +17,22 @@ class OversizedTextureBudgetTest(unittest.TestCase):
         self.assertIn("uploadBudget.takeOversized(size_t(surface.immutableWidth) * size_t(surface.immutableHeight))", gl)
         self.assertIn("6 * sizeof(GPUVertex)", gl)
 
+    def test_region_materials_precede_vertex_charges_in_both_passes(self):
+        gl = GL.read_text(encoding="utf-8")
+        region_upload = gl.split("while (uploadBudget.available())", 1)[1]
+        regular = region_upload.split("if (!pending.ownersPhase)", 1)[1].split(
+            "else\\n", 1)[0]
+        # Use full source-order matches to cover each resident upload phase.
+        first_vertex = region_upload.index("if (!uploadBudget.take(")
+        first_material = region_upload.index("if (!prepareMaterial(surface))")
+        self.assertLess(first_material, first_vertex)
+        second_vertex = region_upload.index(
+            "if (!uploadBudget.take(", first_vertex + 1)
+        second_material = region_upload.index(
+            "if (!prepareMaterial(surface))", first_material + 1)
+        self.assertLess(first_vertex, second_material)
+        self.assertLess(second_material, second_vertex)
+
     def test_actual_budget_compiles_and_guards_indivisible_uploads(self):
         compiler = shutil.which("g++") or shutil.which("clang++")
         if compiler is None:
@@ -49,6 +65,14 @@ int main() {
     assert(phased.take(1));
     phased.beginPhase(duration_cast<microseconds>(generous));
     assert(!phased.takeOversized(1000));
+
+    // A cold, oversized resident material consumes this frame. Its six
+    // vertices are safely deferred; the next frame can append them.
+    FirstPersonFrameBudget firstRegionFrame(512, duration_cast<microseconds>(generous));
+    assert(firstRegionFrame.takeOversized(1024));
+    assert(!firstRegionFrame.take(6));
+    FirstPersonFrameBudget nextRegionFrame(512, duration_cast<microseconds>(generous));
+    assert(nextRegionFrame.take(6));
 
     FirstPersonFrameBudget zero(0, duration_cast<microseconds>(generous));
     assert(!zero.takeOversized(1000));
