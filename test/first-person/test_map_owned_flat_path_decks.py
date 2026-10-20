@@ -15,7 +15,7 @@ FOOTPRINT = ROOT / "src/openrct2/paint/FirstPersonPathGeometry.h"
 class MapOwnedFlatPathDeckTest(unittest.TestCase):
     def test_source_independent_deck_reuses_native_artwork_and_pick(self):
         path = MAP_PATH.read_text(encoding="utf-8")
-        self.assertIn("GetPathSurfaceImageOffset(path, sourceRotation)", path)
+        self.assertIn("GetFirstPersonPathDeckImageOffset(path, sourceRotation)", path)
         self.assertIn("GetTileElementPaintSpritePosition(", path)
         self.assertIn("Translate3DTo2DWithZ(", path)
         self.assertIn("BuildFirstPersonPathFootprint(", path)
@@ -24,12 +24,16 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         self.assertIn("surface.diagnosticSourceTile = tile;", path)
         self.assertIn("surface.coplanarOwner = true;", path)
         self.assertNotIn("0.01f", path)
-        self.assertIn("path.isSloped() || path.isWide()", path)
+        self.assertIn("path.isSloped()", path)
+        self.assertNotIn("path.isSloped() || path.isWide()", path)
+        self.assertIn("FirstPersonPathUsesFullTileDeck(path)", path)
+        self.assertIn("cells.push_back({ 0, 0, kCoordsXYStep, kCoordsXYStep });", path)
         self.assertIn("path.getRailingsDescriptor() == nullptr", path)
         self.assertIn("image.WithRemap(", path)
         self.assertIn("Drawing::FilterPaletteID::paletteGhost", path)
         self.assertIn("gPaintBlockedTiles && path.isBlockedByVehicle()", path)
         self.assertIn("Drawing::FilterPaletteID::palette46", path)
+        self.assertIn("gPaintWidePathsAsGhost && path.isWide()", path)
         self.assertIn("ground->getSlope() == kTileSlopeFlat", path)
         self.assertIn("ground->getBaseZ() == path.getBaseZ()", path)
         self.assertIn("ground->getWaterHeight() <= path.getBaseZ()", path)
@@ -52,9 +56,23 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         self.assertIn("std::unordered_set<uint64_t> mappedPathTiles;", local)
         self.assertIn("packet.paintBlockedMode != gPaintBlockedTiles", local)
         self.assertIn("packet.paintBlockedMode = gPaintBlockedTiles;", local)
+        self.assertIn("packet.paintWideGhostMode != gPaintWidePathsAsGhost", local)
+        self.assertIn("packet.paintWideGhostMode = gPaintWidePathsAsGhost;", local)
         self.assertIn('#include "FirstPersonRenderer.MapPath.inc"', world)
         self.assertLess(world.index('#include "FirstPersonRenderer.MapPath.inc"'),
                         world.index('#include "FirstPersonRenderer.LocalScenery.inc"'))
+
+    def test_native_box_pole_and_map_paths_share_wide_plaza_artwork(self):
+        native = (ROOT / "src/openrct2/paint/tile_element/Paint.Path.cpp").read_text(
+            encoding="utf-8")
+        declaration = (ROOT / "src/openrct2/paint/tile_element/Paint.Path.h").read_text(
+            encoding="utf-8")
+        self.assertIn("uint8_t GetFirstPersonPathDeckImageOffset(", declaration)
+        self.assertEqual(native.count(
+            "GetFirstPersonPathDeckImageOffset(pathElement, session.CurrentRotation)"), 2)
+        self.assertIn("kPathEdgesAndCornersToSurfaceImageIndexOffset[0xFF]", native)
+        self.assertIn("FirstPersonPathUsesFullTileDeck(pathElement)", native)
+        self.assertIn("GetPathSurfaceImageOffset(pathElement, rotation)", native)
 
     def test_compiled_native_footprints_never_overlap_or_escape_a_tile(self):
         compiler = shutil.which("g++") or shutil.which("clang++")
