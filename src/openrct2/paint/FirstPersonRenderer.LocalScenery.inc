@@ -68,6 +68,7 @@
             std::unordered_set<uint64_t> mappedPathTiles;
             uint32_t viewFlags = 0;
             bool trackDesignSaveMode = false;
+            bool paintBlockedMode = false;
             // Inspector selection changes appearance for one map placement.
             uint64_t selectionGeneration = 0;
             bool containsInspectedElement = false;
@@ -202,7 +203,8 @@
                 // transition to ghost/highlight/track-design native artwork.
                 if (packet.surfaces
                     && (packet.viewFlags != scene.options.viewFlags
-                        || packet.trackDesignSaveMode != gTrackDesignSaveMode))
+                        || packet.trackDesignSaveMode != gTrackDesignSaveMode
+                        || packet.paintBlockedMode != gPaintBlockedTiles))
                     packet.dirty = true;
                 if (!packet.dirty)
                     continue;
@@ -414,6 +416,7 @@
                 auto& packet = _localSceneryPackets[key];
                 packet.viewFlags = scene.options.viewFlags;
                 packet.trackDesignSaveMode = gTrackDesignSaveMode;
+                packet.paintBlockedMode = gPaintBlockedTiles;
                 const uint64_t fingerprint =
                     ResidentStaticSurfaceFingerprint(surfaces);
                 if (packet.surfaces
