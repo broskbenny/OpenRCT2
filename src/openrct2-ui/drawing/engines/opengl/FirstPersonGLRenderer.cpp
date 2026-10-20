@@ -820,7 +820,7 @@ void main() {
                 if (!id.HasValue() || textures.HasImageTexture(id)) return true;
                 const auto* source = GfxGetG1Element(id);
                 if (source == nullptr || source->width <= 0 || source->height <= 0) return true;
-                if (!uploadBudget.take(size_t(source->width) * size_t(source->height))) return false;
+                if (!uploadBudget.takeOversized(size_t(source->width) * size_t(source->height))) return false;
                 textures.GetOrLoadImageTexture(id);
                 return true;
             };
@@ -833,7 +833,7 @@ void main() {
                         : immutableTextures.contains(surface.immutableFingerprint);
                     if (!loaded)
                     {
-                        if (!uploadBudget.take(size_t(surface.immutableWidth) * size_t(surface.immutableHeight))) return false;
+                        if (!uploadBudget.takeOversized(size_t(surface.immutableWidth) * size_t(surface.immutableHeight))) return false;
                         const auto& pixels = surface.immutablePixelData();
                         if (surface.persistentBitmap)
                             textures.GetOrLoadFirstPersonPersistentBitmap(surface.immutableFingerprint, pixels.data(),
