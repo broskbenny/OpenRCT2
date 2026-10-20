@@ -44,7 +44,10 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
             "if (!staging.progress.tilesDone(kRegionTileCount))", 1)[0]
         self.assertEqual(gather.count("if (mappedPathReady"), 3)
         self.assertEqual(gather.count("FirstPersonPaintSemanticRole::pathDeck"), 3)
-        self.assertIn("FirstPersonPaintSemanticRole::pathDeck", local)
+        self.assertIn("mappedPathTiles.insert(TerrainKey(tx, ty));", local)
+        self.assertIn("mappedPathTiles.contains(", local)
+        self.assertEqual(local.count("packet.mappedPathTiles = std::move(mappedPathTiles);"), 2)
+        self.assertIn("std::unordered_set<uint64_t> mappedPathTiles;", local)
         self.assertIn('#include "FirstPersonRenderer.MapPath.inc"', world)
         self.assertLess(world.index('#include "FirstPersonRenderer.MapPath.inc"'),
                         world.index('#include "FirstPersonRenderer.LocalScenery.inc"'))
