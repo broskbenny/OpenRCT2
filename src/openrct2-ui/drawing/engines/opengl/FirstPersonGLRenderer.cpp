@@ -5,6 +5,7 @@
 #ifndef DISABLE_OPENGL
 #include "FirstPersonGLRenderer.h"
 #include "FirstPersonGpuBatching.h"
+#include "FirstPersonRegionResidencyBudget.h"
 #include <openrct2/paint/FirstPersonAsync.h>
 #include "SwapFramebuffer.h"
 #include "OpenGLFramebuffer.h"
@@ -1109,11 +1110,26 @@ void main() {
             visibleBytes += bytes;
             largestPacketBytes = std::max(largestPacketBytes, bytes);
         }
-        const size_t regionBudget = std::max(kRegionGpuLimit, visibleBytes + largestPacketBytes);
-        // Protect every visible resident before considering LRU eviction.
+        size_t residentVisibleBytes = 0;
+        // Keep last-known-good geometry drawable while a different-sized
+        // replacement is prepared. A shrink can temporarily need OLD + NEW
+        // bytes, not just desired visible bytes. Unseen VBOs remain evictable.
         for (const auto& packet : scene.staticRegions)
-            if (const auto it = _staticOpaqueRegions.find(packet.key); it != _staticOpaqueRegions.end())
-                it->second.lastSeen = _frame;
+        {
+            const auto it = _staticOpaqueRegions.find(packet.key);
+            if (it == _staticOpaqueRegions.end())
+                continue;
+            if (it->second.sceneEpoch != packet.sceneEpoch)
+            {
+                DiscardRegionBuffer(packet.key);
+                continue;
+            }
+            residentVisibleBytes += it->second.bytes;
+            it->second.lastSeen = _frame;
+        }
+        const size_t regionBudget = FirstPersonVisibleRegionGpuBudget(
+            kRegionGpuLimit, visibleBytes, residentVisibleBytes,
+            largestPacketBytes);
         if (_pendingRegion)
         {
             const auto packet = std::find_if(scene.staticRegions.begin(), scene.staticRegions.end(),
