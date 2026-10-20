@@ -1859,6 +1859,8 @@ namespace OpenRCT2::Paint
         if (!changedTiles.empty())
             InvalidateFirstPersonRegionBounds(
                 changedX0, changedY0, changedX1, changedY1);
+        const bool inspectorActive =
+            TileInspector::GetSelectedElement() != nullptr;
         for (int32_t ty = y0; ty <= y1; ++ty)
         for (int32_t tx = x0; tx <= x1; ++tx)
         {
@@ -1896,7 +1898,7 @@ namespace OpenRCT2::Paint
                 if (FirstPersonNativeRedrawNeedsRevalidation(
                         authoritativeChange, cached->second.animated,
                         cached->second.hasCameraDependentFallback,
-                        TileInspector::GetSelectedElement() != nullptr))
+                        inspectorActive))
                     cached->second.dirty = true;
                 if (authoritativeChange)
                     cached->second.visibilityDirty = true;
