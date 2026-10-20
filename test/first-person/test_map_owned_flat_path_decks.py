@@ -113,8 +113,18 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
             def height(x, y):
                 u, v = x / 32.0, y / 32.0
                 return sw * (1-u) * (1-v) + se * u * (1-v) + ne*u*v + nw*(1-u)*v
-            x, y = rng.randrange(0, 33), rng.randrange(0, 33)
-            self.assertAlmostEqual(height(x, y), height(x, y), places=12)
+            x0, x1 = sorted(rng.sample(range(33), 2))
+            y0, y1 = sorted(rng.sample(range(33), 2))
+            x = rng.uniform(x0, x1)
+            y = rng.uniform(y0, y1)
+            u, v = (x-x0)/(x1-x0), (y-y0)/(y1-y0)
+            subdivided = (
+                height(x0,y0)*(1-u)*(1-v)
+                + height(x1,y0)*u*(1-v)
+                + height(x1,y1)*u*v
+                + height(x0,y1)*(1-u)*v
+            )
+            self.assertAlmostEqual(height(x, y), subdivided, places=10)
             self.assertAlmostEqual(height(0, 0), sw)
             self.assertAlmostEqual(height(32, 0), se)
             self.assertAlmostEqual(height(32, 32), ne)
