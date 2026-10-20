@@ -944,6 +944,12 @@
                         auto& tileCache =
                             _staticPaintCache[TerrainKey(tx, ty)];
                         tileCache.visibilityKnown = true;
+                        if (!tileCache.hasInvalidationSignature)
+                        {
+                            tileCache.lastInvalidatedSignature =
+                                tileCache.valid ? tileCache.signature : snapshot.signature;
+                            tileCache.hasInvalidationSignature = true;
+                        }
                         if (!snapshot.populated)
                         {
                             tileCache.visibilityBoundValid = false;
@@ -1044,6 +1050,12 @@
             {
                 const auto snapshot = ReadTileSemanticSnapshot(world);
                 cached.visibilityKnown = true;
+                if (!cached.hasInvalidationSignature)
+                {
+                    cached.lastInvalidatedSignature =
+                        cached.valid ? cached.signature : snapshot.signature;
+                    cached.hasInvalidationSignature = true;
+                }
                 if (!snapshot.populated)
                 {
                     cached.visibilityBoundValid = false;
