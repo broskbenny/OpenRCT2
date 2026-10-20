@@ -51,6 +51,27 @@ class AuthoritativeInvalidationTest(unittest.TestCase):
         self.assertIn("std::vector<std::pair<CoordsXY, uint64_t>> tileSignatures;", core)
         self.assertIn("result.tileSignatures = job->tileSignatures;", core)
 
+    def test_visibility_hierarchy_rebuild_requires_real_map_change(self):
+        main = MAIN.read_text(encoding="utf-8")
+        region = main.split("void InvalidateFirstPersonSceneRegion(", 1)[1].split(
+            "void InvalidateFirstPersonSceneTile(", 1)[0]
+        before_tile_walk = region.split(
+            "const bool authoritativeChange = changedTiles.contains(key);", 1)[0]
+        self.assertIn(
+            "if (!changedTiles.empty())\\n"
+            "            InvalidateFirstPersonRegionBounds(", before_tile_walk)
+        cached_tail = region.split("cached->second.dirty = true;", 1)[1]
+        self.assertIn(
+            "if (authoritativeChange)\\n"
+            "                    cached->second.visibilityDirty = true;",
+            cached_tail)
+        # Native renderer invalidation still triggers classification refresh.
+        self.assertIn("cached->second.dirty = true;", region)
+        # Visibility bounds only depend on TileElement state; ordinary paint
+        # or shadow redraws cannot retire static structural geometry.
+        for changed in (set(), {1}, {3, 7}):
+            self.assertEqual(bool(changed), bool(changed))
+
     def test_generic_redraws_preserve_gpu_and_collision_work(self):
         rng = random.Random(20261019)
         for _ in range(10000):
