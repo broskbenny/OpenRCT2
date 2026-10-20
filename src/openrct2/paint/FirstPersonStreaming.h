@@ -306,6 +306,16 @@ namespace OpenRCT2::Paint
         return (frame + FirstPersonRefreshPhase(key, interval)) % interval == 0;
     }
 
+    // A native viewport invalidation can be only a moving entity/shadow.
+    // Static, already classified tiles must not lose their coherent source
+    // geometry merely because a 2D redraw covered their screen area.
+    [[nodiscard]] inline bool FirstPersonNativeRedrawNeedsRevalidation(
+        bool mapChanged, bool animated, bool cameraDependent,
+        bool inspectorActive)
+    {
+        return mapChanged || animated || cameraDependent || inspectorActive;
+    }
+
     // Native paint is still needed for terrain walls, cliffs, fences and
     // unsupported objects. Give cold object tiles an independent, bounded
     // lookahead while leaving every fourth frame to the complete sequential
