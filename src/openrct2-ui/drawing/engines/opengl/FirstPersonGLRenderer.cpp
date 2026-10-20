@@ -1213,6 +1213,13 @@ void main() {
                             continue;
                         }
 
+                        // Admit source pixels before charging vertices, so
+                        // an oversized bitmap can use an untouched frame.
+                        if (!prepareMaterial(surface))
+                        {
+                            --pending.nextSurface;
+                            break;
+                        }
                         if (!uploadBudget.take(
                                 6 * sizeof(GPUVertex)))
                         {
@@ -1233,6 +1240,8 @@ void main() {
                                 ->second[pending.nextOwner];
                         const auto& surface =
                             (*pending.surfaces)[index];
+                        if (!prepareMaterial(surface))
+                            break;
                         if (!uploadBudget.take(
                                 6 * sizeof(GPUVertex)))
                             break;
