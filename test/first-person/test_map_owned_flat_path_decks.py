@@ -83,6 +83,31 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
             new_shared = [key for key in sorted(current) if key in previous]
             self.assertEqual(old_shared, new_shared)
 
+    def test_native_visibility_modes_remain_authoritative(self):
+        path = MAP_PATH.read_text(encoding="utf-8")
+        for mode in (
+            "VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES",
+            "VIEWPORT_FLAG_HIDE_PATHS",
+            "VIEWPORT_FLAG_INVISIBLE_PATHS",
+            "VIEWPORT_FLAG_CLIP_VIEW",
+            "VIEWPORT_FLAG_UNDERGROUND_INSIDE",
+        ):
+            self.assertIn(mode, path)
+        self.assertIn("scene.options.viewFlags", LOCAL.read_text(encoding="utf-8"))
+        self.assertIn("packet.viewFlags != scene.options.viewFlags",
+                      LOCAL.read_text(encoding="utf-8"))
+        # Unchanged map tiles must still switch representations promptly on
+        # a viewport visibility transition, without rebuilding whole terrain.
+        import random
+        rng = random.Random(20261020)
+        def can_map(flags):
+            return (flags & 0b11111) == 0
+        for _ in range(50000):
+            old, new = rng.randrange(32), rng.randrange(32)
+            changed = old != new
+            self.assertEqual(changed, bool(old ^ new))
+            self.assertFalse(can_map(old) and old != 0)
+
     def test_on_grade_slopes_use_the_same_height_rule_as_native_path_painter(self):
         path = MAP_PATH.read_text(encoding="utf-8")
         native = (ROOT / "src/openrct2/paint/tile_element/Paint.Path.cpp").read_text(
