@@ -1706,6 +1706,8 @@ namespace OpenRCT2::Paint
         // conservative because it may contain newly created structure.
         std::unordered_set<uint64_t> changedTiles;
         std::unordered_set<uint64_t> changedRegions;
+        int32_t changedX0 = x1, changedY0 = y1;
+        int32_t changedX1 = x0, changedY1 = y0;
         for (int32_t ty = y0; ty <= y1; ++ty)
         for (int32_t tx = x0; tx <= x1; ++tx)
         {
@@ -1717,6 +1719,10 @@ namespace OpenRCT2::Paint
                 continue;
             changedTiles.insert(key);
             changedRegions.insert(FirstPersonGpuRegionKey(tx, ty));
+            changedX0 = std::min(changedX0, tx);
+            changedY0 = std::min(changedY0, ty);
+            changedX1 = std::max(changedX1, tx);
+            changedY1 = std::max(changedY1, ty);
         }
         // Keep existing large-scenery walking proxies unless the individual
         // owning object's recorded authoritative tile signatures change.
@@ -1836,12 +1842,12 @@ namespace OpenRCT2::Paint
                     entrances->second.end());
             }
         }
-        // Entity/shadow redraws do not change the TileElement-based
-        // visibility hierarchy. Invalidating its leaves on every native
-        // repaint would force repeated 16x16 authoritative map rescans.
+        // Only genuinely changed tiles can alter the authoritative visibility
+        // hierarchy. One map edit in a large viewport-redraw rectangle must
+        // not discard every unrelated 16x16 leaf bound.
         if (!changedTiles.empty())
             InvalidateFirstPersonRegionBounds(
-                x0, y0, x1, y1);
+                changedX0, changedY0, changedX1, changedY1);
         for (int32_t ty = y0; ty <= y1; ++ty)
         for (int32_t tx = x0; tx <= x1; ++tx)
         {
