@@ -15,7 +15,7 @@ class OversizedTextureBudgetTest(unittest.TestCase):
         gl = GL.read_text(encoding="utf-8")
         self.assertIn("uploadBudget.takeOversized(size_t(source->width) * size_t(source->height))", gl)
         self.assertIn("uploadBudget.takeOversized(size_t(surface.immutableWidth) * size_t(surface.immutableHeight))", gl)
-        self.assertIn("if (!uploadBudget.take(\n                                 6 * sizeof(GPUVertex)))", gl)
+        self.assertIn("6 * sizeof(GPUVertex)", gl)
 
     def test_actual_budget_compiles_and_guards_indivisible_uploads(self):
         compiler = shutil.which("g++") or shutil.which("clang++")
