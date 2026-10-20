@@ -1684,6 +1684,7 @@ namespace OpenRCT2::Paint
         ClearFirstPersonSemanticComponents();
         _staticRegionPacketBuilds.clear();
         _staticRegionPackets.clear();
+        _authoritativeRegionEditSerials.clear();
     }
     void InvalidateFirstPersonSceneRegion(CoordsXY low, CoordsXY high)
     {
@@ -1817,6 +1818,7 @@ namespace OpenRCT2::Paint
         std::unordered_set<uint64_t> parkEntranceCandidates;
         for (const uint64_t regionKey : changedRegions)
         {
+            MarkFirstPersonAuthoritativeRegionEdit(regionKey);
             MarkStaticRegionPacketDirty(regionKey);
             ++_staticRegionPackets[regionKey].sourceRevision;
             MarkStaticRegionRelationshipNeighboursDirty(
