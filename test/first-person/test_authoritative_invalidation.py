@@ -58,11 +58,11 @@ class AuthoritativeInvalidationTest(unittest.TestCase):
         before_tile_walk = region.split(
             "const bool authoritativeChange = changedTiles.contains(key);", 1)[0]
         self.assertIn(
-            "if (!changedTiles.empty())\\n"
+            "if (!changedTiles.empty())\n"
             "            InvalidateFirstPersonRegionBounds(", before_tile_walk)
         cached_tail = region.split("cached->second.dirty = true;", 1)[1]
         self.assertIn(
-            "if (authoritativeChange)\\n"
+            "if (authoritativeChange)\n"
             "                    cached->second.visibilityDirty = true;",
             cached_tail)
         # Native renderer invalidation still triggers classification refresh.
