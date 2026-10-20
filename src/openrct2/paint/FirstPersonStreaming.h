@@ -306,6 +306,25 @@ namespace OpenRCT2::Paint
         return (frame + FirstPersonRefreshPhase(key, interval)) % interval == 0;
     }
 
+    // Native paint is still needed for terrain walls, cliffs, fences and
+    // unsupported objects. Give cold object tiles an independent, bounded
+    // lookahead while leaving every fourth frame to the complete sequential
+    // traversal. No tile type is permanently excluded from source capture.
+    template<class IsColdObject>
+    [[nodiscard]] inline size_t FirstPersonColdObjectCaptureOffset(
+        size_t visibleCount, size_t cursor, uint64_t frame,
+        IsColdObject&& isColdObject)
+    {
+        if (visibleCount == 0 || (frame & 3u) == 0)
+            return visibleCount;
+        const size_t start = cursor % visibleCount;
+        const size_t lookahead = std::min<size_t>(visibleCount, 32);
+        for (size_t offset = 0; offset < lookahead; ++offset)
+            if (isColdObject((start + offset) % visibleCount))
+                return offset;
+        return visibleCount;
+    }
+
     // Tile-map aligned region partition: a full-park visibility traversal, not
     // a fixed camera-centred ring. Bounds are deliberately conservative until
     // OpenRCT2 exposes authoritative region invalidation and accurate bounds.
