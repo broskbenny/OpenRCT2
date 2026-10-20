@@ -24,15 +24,28 @@ namespace OpenRCT2::Paint
         using Clock = std::chrono::steady_clock;
         Clock::time_point _end;
         size_t _remaining;
+        size_t _capacity;
     public:
         explicit FirstPersonFrameBudget(size_t units, std::chrono::microseconds time)
-            : _end(Clock::now() + time), _remaining(units) {}
+            : _end(Clock::now() + time), _remaining(units), _capacity(units) {}
         bool available() const { return _remaining != 0 && Clock::now() < _end; }
         void beginPhase(std::chrono::microseconds time) { _end = Clock::now() + time; }
         bool take(size_t units = 1)
         {
             if (units > _remaining || !available()) return false;
             _remaining -= units;
+            return true;
+        }
+        // A texture larger than the whole byte allowance would otherwise
+        // fail forever and block the resumable region uploader behind it.
+        // Permit one indivisible oversized resource only at the start of a
+        // fresh budget; never allow an already partly spent frame to overrun.
+        bool takeOversized(size_t units)
+        {
+            if (take(units)) return true;
+            if (units <= _capacity || _remaining != _capacity || !available())
+                return false;
+            _remaining = 0;
             return true;
         }
     };
