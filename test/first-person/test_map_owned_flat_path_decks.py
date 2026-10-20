@@ -62,6 +62,27 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         self.assertLess(world.index('#include "FirstPersonRenderer.MapPath.inc"'),
                         world.index('#include "FirstPersonRenderer.LocalScenery.inc"'))
 
+    def test_local_gpu_owner_order_is_stable_across_camera_turns(self):
+        local = LOCAL.read_text(encoding="utf-8")
+        publish = local.split("std::vector<uint64_t> orderedVisible(", 1)[1].split(
+            "scene.staticRegions.push_back({", 1)[0]
+        self.assertIn("visible.begin(), visible.end()", publish)
+        self.assertIn("std::sort(orderedVisible.begin(), orderedVisible.end());", publish)
+        self.assertIn("for (const auto key : orderedVisible)", publish)
+        # A moving frustum may change the cell set, but unchanged neighbours
+        # keep a fixed relative owner draw order.
+        import random
+        rng = random.Random(20261020)
+        for _ in range(30000):
+            previous = {rng.randrange(1024) for _ in range(90)}
+            current = set(previous)
+            for _ in range(8):
+                current.discard(rng.randrange(1024))
+                current.add(rng.randrange(1024))
+            old_shared = [key for key in sorted(previous) if key in current]
+            new_shared = [key for key in sorted(current) if key in previous]
+            self.assertEqual(old_shared, new_shared)
+
     def test_native_box_pole_and_map_paths_share_wide_plaza_artwork(self):
         native = (ROOT / "src/openrct2/paint/tile_element/Paint.Path.cpp").read_text(
             encoding="utf-8")
