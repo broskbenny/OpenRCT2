@@ -1083,6 +1083,13 @@ uint8_t GetPathSurfaceImageOffset(const PathElement& pathElement, uint8_t rotati
     return kPathEdgesAndCornersToSurfaceImageIndexOffset[edgesAndCorners];
 }
 
+uint8_t GetFirstPersonPathDeckImageOffset(const PathElement& pathElement, uint8_t rotation)
+{
+    return OpenRCT2::Paint::FirstPersonPathUsesFullTileDeck(pathElement)
+        ? kPathEdgesAndCornersToSurfaceImageIndexOffset[0xFF]
+        : GetPathSurfaceImageOffset(pathElement, rotation);
+}
+
 static ImageIndex PathPaintGetBaseImage(
     const PaintSession& session, const PathElement& pathElement, const FootpathPaintInfo& pathPaintInfo)
 {
@@ -1176,12 +1183,9 @@ static void PathPaintBoxSupport(
     const auto surfaceBaseImageIndex = PathPaintGetBaseImage(session, pathElement, pathPaintInfo);
     const auto surfaceImage =
         imageTemplate.WithIndex(surfaceBaseImageIndex);
-    const auto firstPersonSurfaceImage =
-        OpenRCT2::Paint::FirstPersonPathUsesFullTileDeck(pathElement)
-        ? imageTemplate.WithIndex(
-            pathPaintInfo.surface.image
-            + kPathEdgesAndCornersToSurfaceImageIndexOffset[0xFF])
-        : surfaceImage;
+    const auto firstPersonSurfaceImage = imageTemplate.WithIndex(
+        pathPaintInfo.surface.image
+        + GetFirstPersonPathDeckImageOffset(pathElement, session.CurrentRotation));
     const uint32_t pathArtworkGroup =
         PublishFirstPersonPathDeckGeometry(
             session, pathElement, height,
@@ -1248,12 +1252,9 @@ static void PathPaintPoleSupport(
     const auto surfaceBaseImageIndex = PathPaintGetBaseImage(session, pathElement, pathPaintInfo);
     const auto surfaceImage =
         imageTemplate.WithIndex(surfaceBaseImageIndex);
-    const auto firstPersonSurfaceImage =
-        OpenRCT2::Paint::FirstPersonPathUsesFullTileDeck(pathElement)
-        ? imageTemplate.WithIndex(
-            pathPaintInfo.surface.image
-            + kPathEdgesAndCornersToSurfaceImageIndexOffset[0xFF])
-        : surfaceImage;
+    const auto firstPersonSurfaceImage = imageTemplate.WithIndex(
+        pathPaintInfo.surface.image
+        + GetFirstPersonPathDeckImageOffset(pathElement, session.CurrentRotation));
     const uint32_t pathArtworkGroup =
         PublishFirstPersonPathDeckGeometry(
             session, pathElement, height,
