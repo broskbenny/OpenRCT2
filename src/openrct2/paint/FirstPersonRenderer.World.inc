@@ -4957,28 +4957,31 @@
                 auto input = std::make_shared<RelationshipInput>();
                 input->source = staging.provisionalSurfaces;
                 input->context = std::move(relationshipContext);
-                const auto serial = published.invalidationSerial;
+                const auto serial = staging.progress.invalidationSerial;
+                const auto mapEditSerial = staging.initialMapEditSerial;
                 const auto epoch = _sceneEpoch;
                 const auto token = staging.buildToken;
                 const bool accepted = _reconstructionWorker.submit(
-                    [input, regionKey, serial, epoch, token]() {
+                    [input, regionKey, serial, mapEditSerial, epoch, token]() {
                         // Copy to mutable working storage OFF the foreground
                         // thread; the same immutable source stays visible.
                         input->surfaces = *input->source;
                         auto result = ResolveFirstPersonInternalOccupancyInterfaces(
                             input->surfaces, input->context);
-                        return [input, regionKey, serial, epoch, token, result]() mutable {
+                        return [input, regionKey, serial, mapEditSerial, epoch, token, result]() mutable {
                             if (_sceneEpoch != epoch)
                                 return;
                             const auto live = _staticRegionPackets.find(regionKey);
                             if (live == _staticRegionPackets.end()
-                                || (live->second.invalidationSerial != serial
+                                || (FirstPersonRegionMapEditSerial(regionKey)
+                                        != mapEditSerial
                                     && live->second.surfaceStorage != nullptr
                                     && !live->second.surfaceStorage->empty()))
                                 return;
                             const auto pending = _staticRegionPacketBuilds.find(regionKey);
                             if (pending == _staticRegionPacketBuilds.end()
                                 || pending->second.progress.invalidationSerial != serial
+                                || pending->second.initialMapEditSerial != mapEditSerial
                                 || pending->second.buildToken != token
                                 || !pending->second.relationshipSubmitted)
                                 return;
