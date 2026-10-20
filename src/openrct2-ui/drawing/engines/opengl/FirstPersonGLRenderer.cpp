@@ -2016,6 +2016,11 @@ void main() {
                 }
 
                 constexpr size_t kCoverageProbeThreshold = 8;
+                // GL_QUERY_RESULT_AVAILABLE can still require a driver
+                // round-trip. Poll a bounded number of times per tile rather
+                // than after every physical and ordinal draw; any extra
+                // conservative layers remain exact, only more expensive.
+                constexpr size_t kCoveragePollInterval = 4;
                 const bool probeExhaustion =
                     logicalPasses > kCoverageProbeThreshold;
                 uint64_t coverageToken = 0;
@@ -2032,8 +2037,8 @@ void main() {
                         _peelCoverageQueries.size();
                     if (probeExhaustion)
                     {
-                        if (pollPeelCoverageQueries(
-                                coverageToken))
+                        if (pass % kCoveragePollInterval == 0
+                            && pollPeelCoverageQueries(coverageToken))
                             break;
 
                         coverageSlot =
@@ -2102,14 +2107,9 @@ void main() {
                             coverageSlot] = true;
                     }
 
-                    // A completed zero-sample result is definitive: every
-                    // subsequent logical layer is empty too. Normal progress
-                    // remains nonblocking; saturation backpressure above is the
-                    // only place that waits for a coverage result.
-                    if (probeExhaustion
-                        && pollPeelCoverageQueries(
-                            coverageToken))
-                        break;
+                    // Do not synchronously query completion between the
+                    // physical and logical selection draws. The next
+                    // scheduled poll may elide remaining empty layers.
 
                     // Stage 2: at that exact physical depth, select the earliest
                     // remaining native paint ordinal. gl_FragDepth is an ordinal
@@ -2139,11 +2139,6 @@ void main() {
                         range.count,
                         GL_UNSIGNED_INT,indexOffset);
                     composeLayer(logicalLayer,tile);
-
-                    if (probeExhaustion
-                        && pollPeelCoverageQueries(
-                            coverageToken))
-                        break;
                 }
             }
 
