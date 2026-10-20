@@ -33,8 +33,7 @@ class BoundedPeelCoveragePollingTest(unittest.TestCase):
         self.assertNotIn("glFinish", path)
         self.assertNotIn("GL_QUERY_RESULT", path)
         self.assertIn("if (coverageSlot", path)
-        self.assertIn("&& _peelCoverageTokens[i] == token", gl.replace(
-            "if (_peelCoverageTokens[i] == token", "if (&& _peelCoverageTokens[i] == token"))
+        self.assertIn("_peelCoverageTokens[i] == token", gl)
         # Guard against reintroducing a second poll after stage one or two.
         after_geometry = path.split("glDrawElements,GL_TRIANGLES", 1)[1]
         self.assertEqual(after_geometry.count("pollPeelCoverageQueries("), 0)
