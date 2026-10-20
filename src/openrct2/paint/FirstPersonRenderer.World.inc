@@ -6257,8 +6257,16 @@
                 }
             }
 
+            // Publish coherent regions in stable spatial order, not the
+            // hash-table order of frustum discovery. Coplanar owner replay
+            // spans region boundaries; changing its region order on camera
+            // turns can change same-depth appearance even with unchanged
+            // world geometry. Rebuild admission remains distance-prioritized.
+            std::vector<uint64_t> orderedRegions(
+                visibleRegions.begin(), visibleRegions.end());
+            std::sort(orderedRegions.begin(), orderedRegions.end());
             scene.staticRegions.reserve(visibleRegions.size());
-            for (const auto key : visibleRegions)
+            for (const auto key : orderedRegions)
             {
                 auto& packet = _staticRegionPackets[key];
                 packet.lastSeen = frame;
