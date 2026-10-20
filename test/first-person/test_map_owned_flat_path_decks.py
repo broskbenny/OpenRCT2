@@ -28,6 +28,8 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         self.assertIn("path.getRailingsDescriptor() == nullptr", path)
         self.assertIn("image.WithRemap(", path)
         self.assertIn("Drawing::FilterPaletteID::paletteGhost", path)
+        self.assertIn("gPaintBlockedTiles && path.isBlockedByVehicle()", path)
+        self.assertIn("Drawing::FilterPaletteID::palette46", path)
         self.assertIn("ground->getSlope() == kTileSlopeFlat", path)
         self.assertIn("ground->getBaseZ() == path.getBaseZ()", path)
         self.assertIn("ground->getWaterHeight() <= path.getBaseZ()", path)
@@ -48,6 +50,8 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         self.assertIn("mappedPathTiles.contains(", local)
         self.assertEqual(local.count("packet.mappedPathTiles = std::move(mappedPathTiles);"), 2)
         self.assertIn("std::unordered_set<uint64_t> mappedPathTiles;", local)
+        self.assertIn("packet.paintBlockedMode != gPaintBlockedTiles", local)
+        self.assertIn("packet.paintBlockedMode = gPaintBlockedTiles;", local)
         self.assertIn('#include "FirstPersonRenderer.MapPath.inc"', world)
         self.assertLess(world.index('#include "FirstPersonRenderer.MapPath.inc"'),
                         world.index('#include "FirstPersonRenderer.LocalScenery.inc"'))
