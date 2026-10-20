@@ -1836,8 +1836,12 @@ namespace OpenRCT2::Paint
                     entrances->second.end());
             }
         }
-        InvalidateFirstPersonRegionBounds(
-            x0, y0, x1, y1);
+        // Entity/shadow redraws do not change the TileElement-based
+        // visibility hierarchy. Invalidating its leaves on every native
+        // repaint would force repeated 16x16 authoritative map rescans.
+        if (!changedTiles.empty())
+            InvalidateFirstPersonRegionBounds(
+                x0, y0, x1, y1);
         for (int32_t ty = y0; ty <= y1; ++ty)
         for (int32_t tx = x0; tx <= x1; ++tx)
         {
@@ -1867,10 +1871,12 @@ namespace OpenRCT2::Paint
                     cached->second.semanticStreamedSurfaces.clear();
                     cached->second.semanticSurfaceFingerprint = 0;
                 }
-                // Even when TileElement data are unchanged, the next source
-                // admission refreshes visibility/animation classifications.
+                // Generic redraws can affect animation/source capture,
+                // but only changed TileElements can change the authoritative
+                // geometry bounds used by frustum discovery.
                 cached->second.dirty = true;
-                cached->second.visibilityDirty = true;
+                if (authoritativeChange)
+                    cached->second.visibilityDirty = true;
             }
         }
         for (const auto groupKey : trackCandidates)
