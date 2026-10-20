@@ -75,6 +75,35 @@ class AuthoritativeInvalidationTest(unittest.TestCase):
             self.assertFalse(changed)
             self.assertFalse(regions)
 
+    def test_changed_bounds_do_not_invalidate_unrelated_redraw_leaves(self):
+        main = MAIN.read_text(encoding="utf-8")
+        region = main.split("void InvalidateFirstPersonSceneRegion(", 1)[1].split(
+            "void InvalidateFirstPersonSceneTile(", 1)[0]
+        self.assertIn("changedX0 = std::min(changedX0, tx);", region)
+        self.assertIn("changedY0 = std::min(changedY0, ty);", region)
+        self.assertIn("changedX1 = std::max(changedX1, tx);", region)
+        self.assertIn("changedY1 = std::max(changedY1, ty);", region)
+        self.assertIn("changedX0, changedY0, changedX1, changedY1", region)
+        self.assertNotIn(
+            "InvalidateFirstPersonRegionBounds(\\n                x0, y0, x1, y1)",
+            region)
+        rng = random.Random(20261020)
+        for _ in range(50000):
+            width, height = rng.randrange(2, 512), rng.randrange(2, 512)
+            changed = {(rng.randrange(width), rng.randrange(height))
+                       for _ in range(rng.randrange(1, 12))}
+            x0 = min(x for x, _ in changed)
+            x1 = max(x for x, _ in changed)
+            y0 = min(y for _, y in changed)
+            y1 = max(y for _, y in changed)
+            self.assertTrue(all(x0 <= x <= x1 and y0 <= y <= y1
+                                for x, y in changed))
+            self.assertLessEqual((x1 - x0 + 1) * (y1 - y0 + 1),
+                                 width * height)
+        # A one-cell edit inside a full-map repaint dirties just one leaf.
+        self.assertEqual((16, 16, 16, 16),
+                         (min([16]), min([16]), max([16]), max([16])))
+
     def test_generic_redraws_preserve_gpu_and_collision_work(self):
         rng = random.Random(20261019)
         for _ in range(10000):
