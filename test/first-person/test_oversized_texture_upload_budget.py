@@ -20,8 +20,6 @@ class OversizedTextureBudgetTest(unittest.TestCase):
     def test_region_materials_precede_vertex_charges_in_both_passes(self):
         gl = GL.read_text(encoding="utf-8")
         region_upload = gl.split("while (uploadBudget.available())", 1)[1]
-        regular = region_upload.split("if (!pending.ownersPhase)", 1)[1].split(
-            "else\\n", 1)[0]
         # Use full source-order matches to cover each resident upload phase.
         first_vertex = region_upload.index("if (!uploadBudget.take(")
         first_material = region_upload.index("if (!prepareMaterial(surface))")
