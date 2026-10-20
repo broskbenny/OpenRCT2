@@ -10,6 +10,20 @@
 
 namespace OpenRCT2::Paint
 {
+    // Native artwork arrival may advance a region's general invalidation
+    // serial each frame. Only a genuine map edit may discard an in-progress
+    // last-known-good region. The first-ever packet can finish and publish
+    // dirty even across edits; it has no old geometry to preserve.
+    [[nodiscard]] inline bool FirstPersonStagedPacketNeedsSourceRestart(
+        uint64_t stagedInvalidationSerial, bool havePublishedPacket,
+        uint64_t stagedMapEditSerial, uint64_t liveMapEditSerial)
+    {
+        return stagedInvalidationSerial
+                == std::numeric_limits<uint64_t>::max()
+            || (havePublishedPacket
+                && stagedMapEditSerial != liveMapEditSerial);
+    }
+
     // Tracks independent stages without ever exposing an incomplete packet.
     struct FirstPersonPacketBuildProgress
     {
