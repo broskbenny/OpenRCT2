@@ -37,7 +37,10 @@ class AuthoritativeInvalidationTest(unittest.TestCase):
         implementation = main[begin:end]
         self.assertIn("std::unordered_set<uint64_t> changedTiles;", implementation)
         self.assertIn("std::unordered_set<uint64_t> changedRegions;", implementation)
-        self.assertIn("NativeTileSignature({tx * kCoordsXYStep,", implementation)
+        self.assertIn("const uint64_t signature = NativeTileSignature({", implementation)
+        self.assertIn("tileCache.hasInvalidationSignature", implementation)
+        self.assertIn("tileCache.lastInvalidatedSignature == signature", implementation)
+        self.assertIn("tileCache.lastInvalidatedSignature = signature;", implementation)
         self.assertIn("for (const uint64_t regionKey : changedRegions)", implementation)
         self.assertIn("const bool authoritativeChange = changedTiles.contains(key);", implementation)
         self.assertIn("if (authoritativeChange)", implementation)
