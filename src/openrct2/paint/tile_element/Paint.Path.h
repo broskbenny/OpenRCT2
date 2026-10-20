@@ -24,3 +24,8 @@ void PaintPath(PaintSession& session, uint16_t height, const OpenRCT2::PathEleme
 // First-person rendering uses the same selection even when supported paths omit
 // the separate surface sprite and put the visible deck inside bridge artwork.
 uint8_t GetPathSurfaceImageOffset(const OpenRCT2::PathElement& pathElement, uint8_t rotation);
+
+// The semantic 3D deck uses full-tile artwork for wide plazas, even when
+// the native routing edges are sparse. Share this selection with map-backed
+// first-person reconstruction to prevent texture mismatches.
+uint8_t GetFirstPersonPathDeckImageOffset(const OpenRCT2::PathElement& pathElement, uint8_t rotation);
