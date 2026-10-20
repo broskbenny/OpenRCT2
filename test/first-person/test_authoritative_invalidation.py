@@ -88,7 +88,7 @@ class AuthoritativeInvalidationTest(unittest.TestCase):
         self.assertIn("changedY1 = std::max(changedY1, ty);", region)
         self.assertIn("changedX0, changedY0, changedX1, changedY1", region)
         self.assertNotIn(
-            "InvalidateFirstPersonRegionBounds(\\n                x0, y0, x1, y1)",
+            "InvalidateFirstPersonRegionBounds(\n                x0, y0, x1, y1)",
             region)
         rng = random.Random(20261020)
         for _ in range(50000):
