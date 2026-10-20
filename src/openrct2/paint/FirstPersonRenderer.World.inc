@@ -4533,6 +4533,8 @@
                 const int32_t ty = y0 + int32_t(index / 32);
                 const int32_t tx = x0 + int32_t(index % 32);
                 const auto tileKey = TerrainKey(tx, ty);
+                const bool mappedPathReady = FirstPersonLocalFlatPathReady(
+                    { tx * kCoordsXYStep, ty * kCoordsXYStep });
                 if (auto supportIt =
                         _staticPaintCache.find(tileKey);
                     supportIt != _staticPaintCache.end()
@@ -4543,6 +4545,11 @@
                          supportIt->second
                              .semanticResidentSurfaces)
                     {
+                        if (mappedPathReady
+                            && surface.diagnosticSemanticRole
+                                == static_cast<uint8_t>(
+                                    FirstPersonPaintSemanticRole::pathDeck))
+                            continue;
                         if (IsReconstructedParkEntranceBody(
                                 surface, frame))
                             continue;
@@ -4573,7 +4580,14 @@
                 auto& cached = cacheIt->second;
                 for (const auto& surface :
                      cached.cameraIndependentResidentSurfaces)
+                {
+                    if (mappedPathReady
+                        && surface.diagnosticSemanticRole
+                            == static_cast<uint8_t>(
+                                FirstPersonPaintSemanticRole::pathDeck))
+                        continue;
                     addSurface(surface, true);
+                }
 
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
@@ -4583,6 +4597,11 @@
                     for (const auto& surface :
                          variant.residentSurfaces)
                     {
+                        if (mappedPathReady
+                            && surface.diagnosticSemanticRole
+                                == static_cast<uint8_t>(
+                                    FirstPersonPaintSemanticRole::pathDeck))
+                            continue;
                         if (IsReconstructedParkEntranceBody(
                                 surface, frame))
                             continue;
