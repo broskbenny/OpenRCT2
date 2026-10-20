@@ -289,6 +289,14 @@
                    && nativeCapturesRemaining != 0 && captureScanBudget.take())
             {
                 const auto tile = scene.visibleTiles[(captureStart + captureExamined++) % scene.visibleTiles.size()];
+                if (useColdObjectCursor)
+                {
+                    const auto* first = MapGetFirstElementAt(tile);
+                    if (first == nullptr
+                        || (first->getType() == TileElementType::surface
+                            && first->isLastForTile()))
+                        continue;
+                }
                 const int32_t tx = tile.x / kCoordsXYStep;
                 const int32_t ty = tile.y / kCoordsXYStep;
                 const auto key = TerrainKey(tx, ty);
