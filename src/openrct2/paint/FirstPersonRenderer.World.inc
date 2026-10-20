@@ -1295,6 +1295,10 @@
             cursor = start + examined;
         }
 
+        // The same native path texture can be mapped directly onto known
+        // flat, on-grade path geometry without a per-placement paint capture.
+#include "FirstPersonRenderer.MapPath.inc"
+
         // Explicitly owned local scenery publishes independently of grouped structure.
 #include "FirstPersonRenderer.LocalScenery.inc"
 
