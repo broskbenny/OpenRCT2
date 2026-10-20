@@ -67,10 +67,13 @@ class AuthoritativeInvalidationTest(unittest.TestCase):
             cached_tail)
         # Native renderer invalidation still triggers classification refresh.
         self.assertIn("cached->second.dirty = true;", region)
-        # Visibility bounds only depend on TileElement state; ordinary paint
-        # or shadow redraws cannot retire static structural geometry.
-        for changed in (set(), {1}, {3, 7}):
-            self.assertEqual(bool(changed), bool(changed))
+        # An unchanged source signature needs neither a leaf rebuild nor
+        # invalidation of previously known structural visibility evidence.
+        for tiles in ({(2, 3)}, {(7, 1), (31, 31)}, {(5, 5), (48, 20)}):
+            signatures = {tile: hash(tile) for tile in tiles}
+            changed, regions = dirty_regions(tiles, signatures, signatures)
+            self.assertFalse(changed)
+            self.assertFalse(regions)
 
     def test_generic_redraws_preserve_gpu_and_collision_work(self):
         rng = random.Random(20261019)
