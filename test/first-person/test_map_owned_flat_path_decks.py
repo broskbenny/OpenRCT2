@@ -130,6 +130,32 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
             self.assertAlmostEqual(height(32, 32), ne)
             self.assertAlmostEqual(height(0, 32), nw)
 
+    def test_map_ownership_handoffs_invalidate_in_flight_coherent_geometry(self):
+        local = LOCAL.read_text(encoding="utf-8")
+        world = WORLD.read_text(encoding="utf-8")
+        self.assertIn("packet.mappedPathTiles != mappedPathTiles", local)
+        self.assertIn("MarkFirstPersonAuthoritativeRegionEdit(coherentKey);", local)
+        self.assertIn("MarkStaticRegionPacketDirty(coherentKey);", local)
+        self.assertIn("FirstPersonRegionMapEditSerial(regionKey)", world)
+        self.assertIn("FirstPersonStagedPacketNeedsSourceRestart(", world)
+        self.assertIn("packet.mappedPathTiles = std::move(mappedPathTiles);", local)
+        self.assertLess(
+            local.index("packet.mappedPathTiles != mappedPathTiles"),
+            local.index("packet.mappedPathTiles = std::move(mappedPathTiles);"))
+        # First admission, removal and restoration all invalidate coherent
+        # ownership; identity-preserving redraws do not.
+        import random
+        rng = random.Random(20261020)
+        for _ in range(50000):
+            old = {rng.randrange(64) for _ in range(rng.randrange(65))}
+            new = set(old)
+            if rng.randrange(3) == 0:
+                new.discard(rng.randrange(64))
+            elif rng.randrange(3) == 0:
+                new.add(rng.randrange(64))
+            transition = old != new
+            self.assertEqual(transition, bool(old.symmetric_difference(new)))
+
     def test_native_box_pole_and_map_paths_share_wide_plaza_artwork(self):
         native = (ROOT / "src/openrct2/paint/tile_element/Paint.Path.cpp").read_text(
             encoding="utf-8")
