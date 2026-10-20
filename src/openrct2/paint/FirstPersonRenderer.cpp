@@ -26,6 +26,7 @@
 #include "FirstPersonVehicleBodyHull.h"
 #include "FirstPersonVehiclePose.h"
 #include "FirstPersonWalkingSemantics.h"
+#include "FirstPersonPathGeometry.h"
 #include "Paint.h"
 #include "Paint.SessionFlags.h"
 #include "tile_element/Paint.Surface.h"
