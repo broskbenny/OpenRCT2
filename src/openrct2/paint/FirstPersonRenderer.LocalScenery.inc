@@ -65,6 +65,7 @@
             uint64_t fingerprint = 0;
             size_t vertexCount = 0;
             bool containsNativeSource = false;
+            std::unordered_set<uint64_t> mappedPathTiles;
             uint32_t viewFlags = 0;
             bool trackDesignSaveMode = false;
             // Inspector selection changes appearance for one map placement.
@@ -84,15 +85,9 @@
             if (it == _localSceneryPackets.end() || it->second.dirty
                 || !it->second.surfaces)
                 return false;
-            return std::any_of(it->second.surfaces->begin(),
-                it->second.surfaces->end(),
-                [&](const auto& surface) {
-                    return surface.diagnosticSemanticRole
-                            == static_cast<uint8_t>(
-                                FirstPersonPaintSemanticRole::pathDeck)
-                        && surface.diagnosticSourceTile.x == tile.x
-                        && surface.diagnosticSourceTile.y == tile.y;
-                });
+            return it->second.mappedPathTiles.contains(
+                TerrainKey(tile.x / kCoordsXYStep,
+                    tile.y / kCoordsXYStep));
         }
 
         void MarkLocalSceneryDirtyForTile(int32_t tx, int32_t ty)
@@ -234,6 +229,7 @@
                 bool waitingForSourceRevalidation = false;
                 bool containsNativeSource = false;
                 std::unordered_set<uint64_t> mapOwnedNativeKeys;
+                std::unordered_set<uint64_t> mappedPathTiles;
 
                 const auto add = [&](const FirstPersonSurface& source,
                                      uint64_t owningRegion, bool mapOwned = false) {
@@ -312,6 +308,7 @@
                                         mapSurfaces, mapTile, *path,
                                         scene.options.viewFlags))
                                 {
+                                    mappedPathTiles.insert(TerrainKey(tx, ty));
                                     for (auto& surface : mapSurfaces)
                                         add(surface, owningRegion, true);
                                 }
@@ -430,11 +427,13 @@
                         std::make_shared<const std::vector<FirstPersonSurface>>(
                             std::move(surfaces));
                     packet.containsNativeSource = containsNativeSource;
+                    packet.mappedPathTiles = std::move(mappedPathTiles);
                     packet.dirty = false;
                     continue;
                 }
                 packet.fingerprint = fingerprint;
                 packet.containsNativeSource = containsNativeSource;
+                packet.mappedPathTiles = std::move(mappedPathTiles);
                 packet.vertexCount = surfaces.size() * 6;
                 packet.surfaces =
                     std::make_shared<const std::vector<FirstPersonSurface>>(
