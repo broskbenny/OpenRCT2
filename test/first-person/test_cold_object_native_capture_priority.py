@@ -23,6 +23,9 @@ class ColdObjectNativeCapturePriorityTest(unittest.TestCase):
         self.assertIn("first->getType() == TileElementType::surface", paint)
         self.assertIn("&& first->isLastForTile()", paint)
         self.assertIn("!std::any_of(cached.rotations.begin()", paint)
+        lookahead = paint.split("const size_t coldOffset =", 1)[1].split(
+            "const bool useColdObjectCursor =", 1)[0]
+        self.assertNotIn("|| found->second.dirty", lookahead)
         self.assertIn("if (useColdObjectCursor)", paint)
         self.assertIn("coldObjectCursor += captureExamined;", paint)
         self.assertIn("captureCursor += captureExamined;", paint)
