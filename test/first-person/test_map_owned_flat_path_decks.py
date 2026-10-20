@@ -83,6 +83,43 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
             new_shared = [key for key in sorted(current) if key in previous]
             self.assertEqual(old_shared, new_shared)
 
+    def test_on_grade_slopes_use_the_same_height_rule_as_native_path_painter(self):
+        path = MAP_PATH.read_text(encoding="utf-8")
+        native = (ROOT / "src/openrct2/paint/tile_element/Paint.Path.cpp").read_text(
+            encoding="utf-8")
+        walking = (ROOT / "src/openrct2/paint/FirstPersonWalkingSemantics.h").read_text(
+            encoding="utf-8")
+        # An elevated bridge or a path whose slope disagrees with its land
+        # stays with the native painter. No detached plane is substituted.
+        self.assertIn("ground->getSlope() == pathSlope", path)
+        self.assertIn("ground->getBaseZ() == path.getBaseZ()", path)
+        self.assertIn("ground->getWaterHeight() <= path.getBaseZ()", path)
+        self.assertIn("FirstPersonPathLandSlope(path.getSlopeDirection())", path)
+        self.assertIn("GetSlopeCornerHeights(path.getBaseZ(), slope)", path)
+        self.assertIn("heightAt(float(cell.x0), float(cell.y0))", path)
+        self.assertIn("heightAt(float(cell.x1), float(cell.y1))", path)
+        self.assertIn("GetSlopeCornerHeights(height, slope)", native)
+        self.assertIn("FirstPersonPathLandSlope(", walking)
+        self.assertNotIn("|| path.isSloped()\n", path)
+
+        # Both native semantic and map-owned decks interpolate the same
+        # four physical corners. Subdividing a sloped deck into any subset
+        # of native footprint cells cannot introduce seams at shared edges.
+        import random
+        rng = random.Random(20261020)
+        for _ in range(20000):
+            sw, se = rng.randrange(0, 100), rng.randrange(0, 100)
+            nw, ne = rng.randrange(0, 100), rng.randrange(0, 100)
+            def height(x, y):
+                u, v = x / 32.0, y / 32.0
+                return sw * (1-u) * (1-v) + se * u * (1-v) + ne*u*v + nw*(1-u)*v
+            x, y = rng.randrange(0, 33), rng.randrange(0, 33)
+            self.assertAlmostEqual(height(x, y), height(x, y), places=12)
+            self.assertAlmostEqual(height(0, 0), sw)
+            self.assertAlmostEqual(height(32, 0), se)
+            self.assertAlmostEqual(height(32, 32), ne)
+            self.assertAlmostEqual(height(0, 32), nw)
+
     def test_native_box_pole_and_map_paths_share_wide_plaza_artwork(self):
         native = (ROOT / "src/openrct2/paint/tile_element/Paint.Path.cpp").read_text(
             encoding="utf-8")
