@@ -1713,10 +1713,21 @@ namespace OpenRCT2::Paint
         {
             const auto key = TerrainKey(tx, ty);
             const auto cached = _staticPaintCache.find(key);
-            if (cached != _staticPaintCache.end() && cached->second.valid
-                && NativeTileSignature({tx * kCoordsXYStep,
-                    ty * kCoordsXYStep}) == cached->second.signature)
-                continue;
+            const uint64_t signature = NativeTileSignature({
+                tx * kCoordsXYStep, ty * kCoordsXYStep });
+            if (cached != _staticPaintCache.end())
+            {
+                auto& tileCache = cached->second;
+                const bool unchanged = tileCache.hasInvalidationSignature
+                    ? tileCache.lastInvalidatedSignature == signature
+                    : tileCache.valid && tileCache.signature == signature;
+                if (unchanged)
+                    continue;
+                // Advance only when processing a verified edit, not when
+                // the visibility traversal happens to see a new snapshot.
+                tileCache.lastInvalidatedSignature = signature;
+                tileCache.hasInvalidationSignature = true;
+            }
             changedTiles.insert(key);
             changedRegions.insert(FirstPersonGpuRegionKey(tx, ty));
             changedX0 = std::min(changedX0, tx);
