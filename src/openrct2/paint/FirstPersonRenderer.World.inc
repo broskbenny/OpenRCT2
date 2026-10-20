@@ -1609,8 +1609,12 @@
                         : ImageId{};
                     const auto semanticCache =
                         _staticPaintCache.find(terrainKey);
+                    // Never-painted native art does not imply the
+                    // independently reconstructed terrain is stale. The
+                    // source cache starts dirty until its first capture.
                     const bool semanticDirty =
                         semanticCache != _staticPaintCache.end()
+                        && semanticCache->second.valid
                         && semanticCache->second.dirty;
                     const bool sourceStateMatches =
                         !wasDirty && !semanticDirty
