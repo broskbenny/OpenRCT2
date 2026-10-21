@@ -75,6 +75,43 @@
                 || sprite->height <= 0)
                 return false;
 
+            // Native path rasters include transparent pixels outside their
+            // isometric outline. Mapping those pixels onto a complete
+            // physical footprint exposes land at seams between adjoining
+            // decks. Reuse the cached, opaque native-colour extension already
+            // used by terrain; the footprint below still defines the exact
+            // path boundary. Never manufacture a second sprite or a Z bias.
+            const FirstPersonTerrainResidentMaterial* deckMaterial = nullptr;
+            if (!image.IsBlended())
+            {
+                auto found = _terrainCache.materials.find(image.GetIndex());
+                if (found == _terrainCache.materials.end())
+                {
+                    FirstPersonTerrainResidentMaterial material{};
+                    if (const auto decoded = DecodeFirstPersonSpritePixels(*sprite);
+                        decoded.has_value())
+                    {
+                        if (auto expanded = BuildFirstPersonTerrainEdgeMaterial(
+                                *decoded, sprite->width, sprite->height))
+                        {
+                            material.width = int16_t(expanded->width);
+                            material.height = int16_t(expanded->height);
+                            material.padding = int16_t(expanded->padding);
+                            material.pixels = std::make_shared<const std::vector<uint8_t>>(
+                                std::move(expanded->pixels));
+                            material.fingerprint = 0x2b806e4815771f09ull;
+                            ExtendStableKey(material.fingerprint, image.GetIndex());
+                            ExtendStableKey(material.fingerprint, uint64_t(material.width));
+                            ExtendStableKey(material.fingerprint, uint64_t(material.height));
+                        }
+                    }
+                    found = _terrainCache.materials.emplace(
+                        image.GetIndex(), std::move(material)).first;
+                }
+                if (found->second.pixels != nullptr)
+                    deckMaterial = &found->second;
+            }
+
             const auto paintOrigin = GetTileElementPaintSpritePosition(
                 tile, sourceRotation);
             const auto isoOrigin = Translate3DTo2DWithZ(
@@ -131,6 +168,20 @@
                 FirstPersonSurface surface{};
                 surface.image = image;
                 surface.cameraIndependent = true;
+                if (deckMaterial != nullptr)
+                {
+                    for (auto& vertex : vertices)
+                    {
+                        vertex.u += float(deckMaterial->padding);
+                        vertex.v += float(deckMaterial->padding);
+                    }
+                    surface.persistentPixels = deckMaterial->pixels;
+                    surface.immutableWidth = deckMaterial->width;
+                    surface.immutableHeight = deckMaterial->height;
+                    surface.immutableFingerprint = deckMaterial->fingerprint;
+                    surface.persistentBitmap = true;
+                    surface.physicalCoverage = true;
+                }
                 // Path paint is coplanar with terrain. Use the existing exact
                 // owner/depth replay; never introduce a world-Z offset.
                 surface.coplanarOwner = true;
