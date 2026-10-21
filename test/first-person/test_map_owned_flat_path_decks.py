@@ -48,7 +48,7 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         self.assertIn("FirstPersonLocalFlatPathReady(", world)
         gather = world.split("bool RebuildStaticRegionPacket(", 1)[1].split(
             "if (!staging.progress.tilesDone(kRegionTileCount))", 1)[0]
-        self.assertEqual(gather.count("if (mappedPathReady"), 3)
+        self.assertEqual(gather.count("mappedPathReady"), 4)
         self.assertEqual(gather.count("FirstPersonPaintSemanticRole::pathDeck"), 3)
         self.assertIn("mappedPathTiles.insert(TerrainKey(tx, ty));", local)
         self.assertIn("mappedPathTiles.contains(", local)
