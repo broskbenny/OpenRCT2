@@ -31,7 +31,8 @@ class NearFirstStaticGpuUploadsTest(unittest.TestCase):
         self.assertIn("if (found != _staticOpaqueRegions.end()", region)
         # A superseding VBO must not hide an old generation during upload.
         self.assertIn("found->second.sceneEpoch == packet.sceneEpoch", region)
-        self.assertIn("regionDraws.push_back(packet.key);", region)
+        self.assertIn("regionDraws.push_back(packet.key);",
+                      source[draw_loop:])
         self.assertNotIn("regionDraws.push_back(packet.key);",
                          source[upload_loop:draw_loop])
 
