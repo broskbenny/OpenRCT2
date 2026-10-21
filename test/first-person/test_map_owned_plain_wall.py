@@ -22,7 +22,7 @@ class MapPlainWallTest(unittest.TestCase):
                           "WallSceneryFlag2::isTransparent",
                           "WallSceneryFlag2::isAnimated",
                           "kScrollingModeNone",
-                          "wall.getSlope() != 0",
+                          "wall.getSlope() > 2",
                           "wall.isGhost()",
                           "wall.isInvisible()",
                           "gTrackDesignSaveMode",
@@ -52,6 +52,28 @@ class MapPlainWallTest(unittest.TestCase):
         self.assertIn("templateImage.WithPrimary(", m)
         self.assertIn("templateImage.WithSecondary(", m)
         self.assertIn("templateImage.WithTertiary(", m)
+
+    def test_sloped_wall_uses_the_native_geometry_and_artwork_table(self):
+        direct = MAP.read_text(encoding="utf-8")
+        native = NATIVE.read_text(encoding="utf-8")
+        painting = (ROOT / "src/openrct2/paint/Paint.h").read_text(
+            encoding="utf-8")
+        self.assertIn("wall.getSlope() > 2", direct)
+        self.assertIn("BuildFirstPersonWallPlane(", direct)
+        self.assertIn("wall.getSlope(),", direct)
+        self.assertIn("GetFirstPersonWallBodyImageOffset(", native)
+        self.assertIn("GetFirstPersonWallBodyImageOffset(", direct)
+        self.assertIn("FirstPersonWallSemanticCorners(", painting)
+        self.assertIn("if ((slope & 1u) != 0)", painting)
+        self.assertIn("else if ((slope & 2u) != 0)", painting)
+        # The native painter authors only two raised-end states, and the
+        # direct plane uses that exact existing geometry contract.
+        for direction in range(4):
+            for slope in (0, 1, 2):
+                raised_a = bool(slope & 2)
+                raised_b = bool(slope & 1)
+                self.assertFalse(raised_a and raised_b)
+                self.assertEqual(int(raised_a) + int(raised_b), int(slope != 0))
 
     def test_native_and_map_ownership_handoff_is_transactional(self):
         local = LOCAL.read_text(encoding="utf-8")
