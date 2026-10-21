@@ -39,6 +39,29 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         self.assertIn("ground->getWaterHeight() <= path.getBaseZ()", path)
         self.assertIn("return paths == 1 && eligible;", path)
 
+    def test_path_sprite_edges_use_a_persistent_opaque_native_palette_material(self):
+        path = MAP_PATH.read_text(encoding="utf-8")
+        self.assertIn("BuildFirstPersonTerrainEdgeMaterial(", path)
+        self.assertIn("DecodeFirstPersonSpritePixels(*sprite)", path)
+        self.assertIn("_terrainCache.materials.find(image.GetIndex())", path)
+        self.assertIn("if (!image.IsBlended())", path)
+        self.assertIn("if (deckMaterial != nullptr)", path)
+        self.assertIn("vertex.u += float(deckMaterial->padding);", path)
+        self.assertIn("vertex.v += float(deckMaterial->padding);", path)
+        self.assertIn("surface.persistentPixels = deckMaterial->pixels;", path)
+        self.assertIn("surface.persistentBitmap = true;", path)
+        self.assertIn("surface.physicalCoverage = true;", path)
+        self.assertLess(path.index("BuildFirstPersonTerrainEdgeMaterial("),
+                        path.index("BuildFirstPersonPathFootprint("))
+        self.assertLess(path.index("surface.physicalCoverage = true;"),
+                        path.index("EmitQuad(surface, vertices);"))
+        # The physical tile coverage still belongs to the authored footprint:
+        # filling image transparency must not widen a path or lift it off land.
+        self.assertIn("BuildFirstPersonPathFootprint(", path)
+        self.assertIn("FirstPersonPathUsesFullTileDeck(path)", path)
+        self.assertIn("surface.coplanarOwner = true;", path)
+        self.assertNotIn("heightAt(float(cell.x0), float(cell.y0)) +", path)
+
     def test_path_packets_publish_and_suppress_only_ready_duplicates(self):
         local = LOCAL.read_text(encoding="utf-8")
         world = WORLD.read_text(encoding="utf-8")
