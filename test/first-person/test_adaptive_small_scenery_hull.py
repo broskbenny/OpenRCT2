@@ -19,6 +19,7 @@ class AdaptiveSmallSceneryHullTest(unittest.TestCase):
         self.assertIn("carveAttempt.candidateCoverage >= 0.40f", code)
         self.assertIn("carveAttempt.candidateCoverage < config.minimumCandidateCoverage", code)
         self.assertIn("carveAttempt.maximumEdgeError <= 2", code)
+        self.assertIn("carveAttempt.voxelFaces <= 2048", code)
         self.assertIn("fineBounds.step = 1.0f;", code)
         self.assertIn("kMaximumFineCells = 65536", code)
         self.assertIn("fineConfig.allowContinuousSurfaceRefinement = false;", code)
