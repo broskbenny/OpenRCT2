@@ -82,6 +82,31 @@ class MapPlainWallTest(unittest.TestCase):
         self.assertIn("other->getType() == TileElementType::wall", m)
         self.assertIn("return false;", m)
 
+    def test_wall_projection_uses_original_native_sprite_offsets(self):
+        m = MAP.read_text(encoding="utf-8")
+        native = NATIVE.read_text(encoding="utf-8")
+        source = (ROOT / "src/openrct2/paint/FirstPersonRenderer.cpp").read_text(
+            encoding="utf-8")
+        paint = (ROOT / "src/openrct2/paint/Paint.cpp").read_text(
+            encoding="utf-8")
+        for offset in (
+            "{ 0, 0, height }",
+            "{ 1, 31, height }",
+            "{ 31, 0, height }",
+            "{ 2, 1, height }",
+        ):
+            self.assertIn(offset, native)
+        self.assertIn("{ { 0, 0 }, { 1, 31 }", m)
+        self.assertIn("{ 31, 0 }, { 2, 1 }", m)
+        self.assertIn("GetTileElementPaintSpritePosition(", m)
+        self.assertIn("sourceRotation = 0;", m)
+        self.assertIn("Translate3DTo2DWithZ(", m)
+        self.assertIn("BuildFirstPersonWallPlane(", m)
+        self.assertIn("FirstPersonWallSemanticCorners(", source)
+        self.assertIn("FirstPersonSemanticArtworkScreenPos(", paint)
+        self.assertIn("imageAnchor.x - sprite->xOffset", m)
+        self.assertIn("imageAnchor.y - sprite->yOffset", m)
+
     def test_compiled_shared_native_image_offsets_match_original_wall_table(self):
         compiler = shutil.which("g++") or shutil.which("clang++")
         if compiler is None:
