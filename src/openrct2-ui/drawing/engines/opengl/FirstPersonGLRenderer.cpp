@@ -799,6 +799,22 @@ void main() {
             if (surface.image.IsBlended()) streamedTransparent.push_back(&surface);
             else streamedOpaque.push_back(&surface);
         }
+        // Native camera-facing fallbacks can overlap on precisely the same
+        // physical plane (e.g. adjacent bush sprites). Source-cache arrival
+        // order is not the original painter's layer order and may vary with
+        // streaming or camera movement. Preserve native paint order for the
+        // opaque streamed pass; real physical depth still wins regardless of
+        // this ordering, and equal-depth ties now have a stable winner.
+        std::stable_sort(
+            streamedOpaque.begin(), streamedOpaque.end(),
+            [](const auto* a, const auto* b) {
+                const auto order = [](const auto* surface) {
+                    return surface->nativePaintOrdinal == 0
+                        ? std::numeric_limits<uint64_t>::max()
+                        : surface->nativePaintOrdinal;
+                };
+                return order(a) < order(b);
+            });
         // Native texture-cache atlas handles can change on sprite loads or
         // game-art reload. Preload unique image/mask IDs BEFORE constructing
         // any resident buffer; never retain stale atlas UV/layer metadata.
