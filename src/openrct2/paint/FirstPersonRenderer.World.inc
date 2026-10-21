@@ -1298,6 +1298,7 @@
         // The same native path texture can be mapped directly onto known
         // flat, on-grade path geometry without a per-placement paint capture.
 #include "FirstPersonRenderer.MapPath.inc"
+#include "FirstPersonRenderer.MapWall.inc"
 
         // Explicitly owned local scenery publishes independently of grouped structure.
 #include "FirstPersonRenderer.LocalScenery.inc"
@@ -4535,6 +4536,8 @@
                 const auto tileKey = TerrainKey(tx, ty);
                 const bool mappedPathReady = FirstPersonLocalFlatPathReady(
                     { tx * kCoordsXYStep, ty * kCoordsXYStep });
+                const bool mappedWallReady = FirstPersonLocalPlainWallReady(
+                    { tx * kCoordsXYStep, ty * kCoordsXYStep });
                 if (auto supportIt =
                         _staticPaintCache.find(tileKey);
                     supportIt != _staticPaintCache.end()
@@ -4545,10 +4548,14 @@
                          supportIt->second
                              .semanticResidentSurfaces)
                     {
-                        if (mappedPathReady
+                        if ((mappedPathReady
                             && surface.diagnosticSemanticRole
                                 == static_cast<uint8_t>(
                                     FirstPersonPaintSemanticRole::pathDeck))
+                            || (mappedWallReady
+                                && surface.diagnosticSemanticRole
+                                    == static_cast<uint8_t>(
+                                        FirstPersonPaintSemanticRole::wall)))
                             continue;
                         if (IsReconstructedParkEntranceBody(
                                 surface, frame))
@@ -4581,10 +4588,14 @@
                 for (const auto& surface :
                      cached.cameraIndependentResidentSurfaces)
                 {
-                    if (mappedPathReady
-                        && surface.diagnosticSemanticRole
-                            == static_cast<uint8_t>(
-                                FirstPersonPaintSemanticRole::pathDeck))
+                    if ((mappedPathReady
+                            && surface.diagnosticSemanticRole
+                                == static_cast<uint8_t>(
+                                    FirstPersonPaintSemanticRole::pathDeck))
+                            || (mappedWallReady
+                                && surface.diagnosticSemanticRole
+                                    == static_cast<uint8_t>(
+                                        FirstPersonPaintSemanticRole::wall)))
                         continue;
                     addSurface(surface, true);
                 }
@@ -4597,10 +4608,14 @@
                     for (const auto& surface :
                          variant.residentSurfaces)
                     {
-                        if (mappedPathReady
+                        if ((mappedPathReady
                             && surface.diagnosticSemanticRole
                                 == static_cast<uint8_t>(
                                     FirstPersonPaintSemanticRole::pathDeck))
+                            || (mappedWallReady
+                                && surface.diagnosticSemanticRole
+                                    == static_cast<uint8_t>(
+                                        FirstPersonPaintSemanticRole::wall)))
                             continue;
                         if (IsReconstructedParkEntranceBody(
                                 surface, frame))
