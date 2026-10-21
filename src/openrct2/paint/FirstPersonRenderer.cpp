@@ -31,6 +31,7 @@
 #include "Paint.SessionFlags.h"
 #include "tile_element/Paint.Surface.h"
 #include "tile_element/Paint.Path.h"
+#include "tile_element/Paint.Wall.h"
 #include "tile_element/Paint.TileElement.h"
 #include "Paint.Entity.h"
 
