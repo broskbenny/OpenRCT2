@@ -43,6 +43,8 @@ class MapPlainWallTest(unittest.TestCase):
         self.assertIn("BuildFirstPersonWallPlane(", m)
         self.assertIn("GetFirstPersonWallBodyImageOffset(", m)
         self.assertIn("surface.coplanarOwner = true;", m)
+        self.assertIn("if (image.IsBlended() || sprite == nullptr", m)
+        self.assertIn("|| sprite->width <= 0 || sprite->height <= 0", m)
         self.assertIn("ViewportInteractionItem::wall", m)
         self.assertIn("imageAnchor.x - sprite->xOffset", m)
         self.assertIn("imageAnchor.y - sprite->yOffset", m)
