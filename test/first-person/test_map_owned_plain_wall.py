@@ -30,8 +30,9 @@ class MapPlainWallTest(unittest.TestCase):
                           "VIEWPORT_FLAG_CLIP_VIEW",
                           "VIEWPORT_FLAG_UNDERGROUND_INSIDE"):
             self.assertIn(forbidden, m)
-        self.assertIn("count != 1 || loneWall == nullptr", m)
-        self.assertIn("!FirstPersonMapOwnsPlainWall(*loneWall, viewFlags)", m)
+        self.assertIn("return count > 0;", m)
+        self.assertIn("!FirstPersonMapOwnsPlainWall(*wall, viewFlags)", m)
+        self.assertIn("if (directions[direction])", m)
         self.assertIn("TileElementType::largeScenery", m)
         self.assertIn("TileElementType::track", m)
         self.assertIn("TileElementType::entrance", m)
@@ -96,7 +97,7 @@ class MapPlainWallTest(unittest.TestCase):
         local = LOCAL.read_text(encoding="utf-8")
         world = WORLD.read_text(encoding="utf-8")
         self.assertIn('#include "FirstPersonRenderer.MapWall.inc"', world)
-        self.assertIn("AppendFirstPersonMapPlainWall(", local)
+        self.assertIn("AppendFirstPersonMapPlainWallTile(", local)
         self.assertIn("mappedWallTiles.insert(TerrainKey(tx, ty));", local)
         self.assertIn("packet.mappedWallTiles != mappedWallTiles", local)
         self.assertIn("MarkFirstPersonAuthoritativeRegionEdit(coherentKey);", local)
@@ -108,6 +109,28 @@ class MapPlainWallTest(unittest.TestCase):
             "if (!staging.progress.tilesDone(kRegionTileCount))", 1)[0]
         self.assertEqual(coherent.count("mappedWallReady"), 4)
         self.assertEqual(coherent.count("FirstPersonPaintSemanticRole::wall"), 3)
+
+    def test_multiple_edges_publish_atomically_or_remain_native(self):
+        m = MAP.read_text(encoding="utf-8")
+        local = LOCAL.read_text(encoding="utf-8")
+        self.assertIn("std::array<bool, 4> directions{};", m)
+        self.assertIn("if (directions[direction])", m)
+        self.assertIn("return count > 0;", m)
+        self.assertIn("AppendFirstPersonMapPlainWallTile(", m)
+        tile = m.split("bool AppendFirstPersonMapPlainWallTile(", 1)[1]
+        self.assertIn("std::vector<FirstPersonSurface> completed;", tile)
+        self.assertIn("if (wall == nullptr", tile)
+        self.assertIn("|| !AppendFirstPersonMapPlainWall(", tile)
+        self.assertIn("return false;", tile)
+        self.assertIn("for (auto& surface : completed)", tile)
+        self.assertLess(tile.index("if (completed.empty())"),
+                        tile.index("destination.push_back(std::move(surface));"))
+        self.assertIn("mapSurfaces.clear();", local)
+        self.assertIn("AppendFirstPersonMapPlainWallTile(", local)
+        self.assertIn("mappedWallTiles.insert(TerrainKey(tx, ty));", local)
+        # Source selection and native suppression remain all-or-nothing for
+        # each tile, including when several distinct wall edges are authored.
+        self.assertIn("FirstPersonLocalPlainWallReady(tile)", local)
 
     def test_opposite_wall_edge_mapping_is_symmetric(self):
         m = MAP.read_text(encoding="utf-8")
