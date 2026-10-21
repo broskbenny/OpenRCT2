@@ -1162,10 +1162,11 @@ void main() {
                 continue;
             uploadOrder.push_back(&packet);
         }
+        const auto& uploadEye = scene.options.camera.position;
         const auto distanceSquared = [&](const auto* packet) {
-            const auto dx = packet->center.x - eye.x;
-            const auto dy = packet->center.y - eye.y;
-            const auto dz = packet->center.z - eye.z;
+            const auto dx = packet->center.x - uploadEye.x;
+            const auto dy = packet->center.y - uploadEye.y;
+            const auto dz = packet->center.z - uploadEye.z;
             return dx * dx + dy * dy + dz * dz;
         };
         std::sort(uploadOrder.begin(), uploadOrder.end(),
