@@ -108,6 +108,38 @@
                     tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
         }
 
+        [[nodiscard]] bool FirstPersonTileObjectsMapOwnedAndReady(
+            CoordsXY tile)
+        {
+            const auto* element = MapGetFirstElementAt(tile);
+            if (element == nullptr)
+                return false;
+            bool hasObject = false;
+            do
+            {
+                switch (element->getType())
+                {
+                    case TileElementType::surface:
+                        break;
+                    case TileElementType::path:
+                        if (!FirstPersonLocalFlatPathReady(tile))
+                            return false;
+                        hasObject = true;
+                        break;
+                    case TileElementType::wall:
+                        if (!FirstPersonLocalPlainWallReady(tile))
+                            return false;
+                        hasObject = true;
+                        break;
+                    default:
+                        return false;
+                }
+            } while (!(element++)->isLastForTile());
+            // Native captures are still admitted through the independent
+            // periodic sweep for terrain edges and presentation changes.
+            return hasObject;
+        }
+
         void MarkLocalSceneryDirtyForTile(int32_t tx, int32_t ty)
         {
             _localSceneryPackets[FirstPersonLocalSceneryRegionKey(tx, ty)].dirty = true;
