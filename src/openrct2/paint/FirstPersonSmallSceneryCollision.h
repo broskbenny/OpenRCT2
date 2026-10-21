@@ -693,7 +693,8 @@ namespace OpenRCT2::Paint
                 && carveAttempt.observedCoverage >= 0.95f
                 && carveAttempt.candidateCoverage >= 0.40f
                 && carveAttempt.candidateCoverage < config.minimumCandidateCoverage
-                && carveAttempt.maximumEdgeError <= 2)
+                && carveAttempt.maximumEdgeError <= 2
+                && carveAttempt.voxelFaces <= 2048)
             {
                 auto fineBounds = bounds;
                 fineBounds.step = 1.0f;
