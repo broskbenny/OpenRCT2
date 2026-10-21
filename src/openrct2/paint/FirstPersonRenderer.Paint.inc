@@ -263,7 +263,8 @@
                     const auto* first = MapGetFirstElementAt(tile);
                     if (first == nullptr
                         || (first->getType() == TileElementType::surface
-                            && first->isLastForTile()))
+                            && first->isLastForTile())
+                        || FirstPersonTileObjectsMapOwnedAndReady(tile))
                         return false;
                     const auto found = _staticPaintCache.find(
                         TerrainKey(tile.x / kCoordsXYStep,
@@ -294,7 +295,8 @@
                     const auto* first = MapGetFirstElementAt(tile);
                     if (first == nullptr
                         || (first->getType() == TileElementType::surface
-                            && first->isLastForTile()))
+                            && first->isLastForTile())
+                        || FirstPersonTileObjectsMapOwnedAndReady(tile))
                         continue;
                 }
                 const int32_t tx = tile.x / kCoordsXYStep;
