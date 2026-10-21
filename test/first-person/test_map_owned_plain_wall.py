@@ -18,7 +18,6 @@ class MapPlainWallTest(unittest.TestCase):
         m = MAP.read_text(encoding="utf-8")
         for forbidden in ("WallSceneryFlag::isDoor",
                           "WallSceneryFlag::hasGlass",
-                          "WallSceneryFlag::isDoubleSided",
                           "WallSceneryFlag2::isTransparent",
                           "WallSceneryFlag2::isAnimated",
                           "kScrollingModeNone",
@@ -74,6 +73,24 @@ class MapPlainWallTest(unittest.TestCase):
                 raised_b = bool(slope & 1)
                 self.assertFalse(raised_a and raised_b)
                 self.assertEqual(int(raised_a) + int(raised_b), int(slope != 0))
+
+    def test_double_sided_opaque_wall_matches_native_artwork_selection(self):
+        wall = MAP.read_text(encoding="utf-8")
+        native = NATIVE.read_text(encoding="utf-8")
+        self.assertIn(
+            "entry->flags.has(WallSceneryFlag::isDoubleSided), false", wall)
+        self.assertIn("GetFirstPersonWallBodyImageOffset(", native)
+        self.assertNotIn(
+            "&& !entry->flags.has(WallSceneryFlag::isDoubleSided)", wall)
+        # The native painter adds a direction-dependent offset for an opaque
+        # double-sided body, but adds no second sprite except for glass.
+        for direction in range(4):
+            offset = 6 if direction in (1, 2) else 0
+            for slope in (0, 1, 2):
+                expected_base = ((1, 5, 3), (0, 4, 2),
+                                 (1, 3, 5), (0, 2, 4))[direction][slope]
+                self.assertEqual(expected_base + offset,
+                                 expected_base + (6 if direction in (1, 2) else 0))
 
     def test_native_and_map_ownership_handoff_is_transactional(self):
         local = LOCAL.read_text(encoding="utf-8")
