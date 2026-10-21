@@ -1149,7 +1149,19 @@ void main() {
         std::vector<const Paint::FirstPersonStaticRegion*> uploadOrder;
         uploadOrder.reserve(scene.staticRegions.size());
         for (const auto& packet : scene.staticRegions)
+        {
+            // Fully resident, texture-current regions have no upload work.
+            // Do not sort them every frame after a park has settled.
+            const auto found = _staticOpaqueRegions.find(packet.key);
+            if (found != _staticOpaqueRegions.end()
+                && found->second.sceneEpoch == packet.sceneEpoch
+                && found->second.generation == packet.generation
+                && found->second.imageRevisions.current(
+                    *packet.textureDependencies, textureRevisionSerial,
+                    imageRevision))
+                continue;
             uploadOrder.push_back(&packet);
+        }
         const auto eye = scene.options.camera.position;
         const auto distanceSquared = [&](const auto* packet) {
             const auto dx = packet->center.x - eye.x;
