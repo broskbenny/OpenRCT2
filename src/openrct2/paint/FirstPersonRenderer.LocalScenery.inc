@@ -70,6 +70,7 @@
             size_t vertexCount = 0;
             bool containsNativeSource = false;
             std::unordered_set<uint64_t> mappedPathTiles;
+            std::unordered_set<uint64_t> mappedWallTiles;
             uint32_t viewFlags = 0;
             bool trackDesignSaveMode = false;
             bool paintBlockedMode = false;
@@ -94,6 +95,17 @@
             return it->second.mappedPathTiles.contains(
                 TerrainKey(tile.x / kCoordsXYStep,
                     tile.y / kCoordsXYStep));
+        }
+
+        [[nodiscard]] bool FirstPersonLocalPlainWallReady(CoordsXY tile)
+        {
+            const auto key = FirstPersonLocalSceneryRegionKey(
+                tile.x / kCoordsXYStep, tile.y / kCoordsXYStep);
+            const auto it = _localSceneryPackets.find(key);
+            return it != _localSceneryPackets.end()
+                && !it->second.dirty && it->second.surfaces
+                && it->second.mappedWallTiles.contains(TerrainKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
         }
 
         void MarkLocalSceneryDirtyForTile(int32_t tx, int32_t ty)
@@ -238,6 +250,7 @@
                 bool containsNativeSource = false;
                 std::unordered_set<uint64_t> mapOwnedNativeKeys;
                 std::unordered_set<uint64_t> mappedPathTiles;
+                std::unordered_set<uint64_t> mappedWallTiles;
 
                 const auto add = [&](const FirstPersonSurface& source,
                                      uint64_t owningRegion, bool mapOwned = false) {
@@ -317,6 +330,22 @@
                                         scene.options.viewFlags))
                                 {
                                     mappedPathTiles.insert(TerrainKey(tx, ty));
+                                    for (auto& surface : mapSurfaces)
+                                        add(surface, owningRegion, true);
+                                }
+                            }
+                            if (element->getType() == TileElementType::wall
+                                && FirstPersonTileHasMapOwnedPlainWall(
+                                    mapTile, scene.options.viewFlags))
+                            {
+                                const auto* wall = element->asWall();
+                                mapSurfaces.clear();
+                                if (wall != nullptr
+                                    && AppendFirstPersonMapPlainWall(
+                                        mapSurfaces, mapTile, *wall,
+                                        scene.options.viewFlags))
+                                {
+                                    mappedWallTiles.insert(TerrainKey(tx, ty));
                                     for (auto& surface : mapSurfaces)
                                         add(surface, owningRegion, true);
                                 }
@@ -420,7 +449,8 @@
                     std::unique(dependencies.begin(), dependencies.end()),
                     dependencies.end());
                 auto& packet = _localSceneryPackets[key];
-                if (packet.mappedPathTiles != mappedPathTiles)
+                if ((packet.mappedPathTiles != mappedPathTiles
+                    || packet.mappedWallTiles != mappedWallTiles))
                 {
                     // First appearance, removal or fallback of a map-owned
                     // deck changes which presentation must win in the
@@ -449,12 +479,14 @@
                             std::move(surfaces));
                     packet.containsNativeSource = containsNativeSource;
                     packet.mappedPathTiles = std::move(mappedPathTiles);
+                    packet.mappedWallTiles = std::move(mappedWallTiles);
                     packet.dirty = false;
                     continue;
                 }
                 packet.fingerprint = fingerprint;
                 packet.containsNativeSource = containsNativeSource;
                 packet.mappedPathTiles = std::move(mappedPathTiles);
+                packet.mappedWallTiles = std::move(mappedWallTiles);
                 packet.vertexCount = surfaces.size() * 6;
                 packet.surfaces =
                     std::make_shared<const std::vector<FirstPersonSurface>>(
