@@ -1142,8 +1142,30 @@ void main() {
                     *packet->textureDependencies, textureRevisionSerial, imageRevision))
                 DiscardPendingRegion();
         }
+        // A region's stable draw order is not a good upload priority:
+        // spatial key order may load distant scenery before the nearest
+        // missing wall. Prioritise new VBO work by camera distance while
+        // retaining the original submission order for coplanar owner replay.
+        std::vector<const Paint::FirstPersonStaticRegion*> uploadOrder;
+        uploadOrder.reserve(scene.staticRegions.size());
         for (const auto& packet : scene.staticRegions)
+            uploadOrder.push_back(&packet);
+        const auto eye = scene.options.camera.position;
+        const auto distanceSquared = [&](const auto* packet) {
+            const auto dx = packet->center.x - eye.x;
+            const auto dy = packet->center.y - eye.y;
+            const auto dz = packet->center.z - eye.z;
+            return dx * dx + dy * dy + dz * dz;
+        };
+        std::sort(uploadOrder.begin(), uploadOrder.end(),
+            [&](const auto* a, const auto* b) {
+                const auto ad = distanceSquared(a);
+                const auto bd = distanceSquared(b);
+                return ad != bd ? ad < bd : a->key < b->key;
+            });
+        for (const auto* selected : uploadOrder)
         {
+            const auto& packet = *selected;
             auto found = _staticOpaqueRegions.find(packet.key);
             const bool ready = found != _staticOpaqueRegions.end()
                 && found->second.sceneEpoch == packet.sceneEpoch
@@ -1294,16 +1316,18 @@ void main() {
                     found = _staticOpaqueRegions.find(packet.key);
                 }
             }
-            if (found != _staticOpaqueRegions.end())
-            {
-                // The scene still references this region, so its existing GPU
-                // buffer is the last-known-good presentation generation. Keep
-                // drawing it while a newer generation/revision uploads. A
-                // scene-epoch change is a real park teardown and must never
-                // retain geometry from the previous world.
-                if (found->second.sceneEpoch == packet.sceneEpoch)
-                    regionDraws.push_back(packet.key);
-            }
+        }
+        // Preserve the deterministic CPU region order for all draw and owner
+        // replay passes. Uploading near-first must never change which of two
+        // coincident native or map-owned wall faces wins the depth tie.
+        for (const auto& packet : scene.staticRegions)
+        {
+            const auto found = _staticOpaqueRegions.find(packet.key);
+            // Keep last-known-good buffers while their replacements upload;
+            // only the scene epoch denotes a different park altogether.
+            if (found != _staticOpaqueRegions.end()
+                && found->second.sceneEpoch == packet.sceneEpoch)
+                regionDraws.push_back(packet.key);
         }
         // Do not evict fixed world geometry merely because the camera looked
         // away. The memory-budget path above performs LRU eviction only when a
