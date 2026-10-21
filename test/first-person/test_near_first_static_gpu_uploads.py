@@ -19,6 +19,10 @@ class NearFirstStaticGpuUploadsTest(unittest.TestCase):
         self.assertLess(draw_loop, draw_append)
         region = source[start:draw_append]
         self.assertIn("uploadOrder.push_back(&packet);", region)
+        self.assertIn("found->second.generation == packet.generation", region)
+        self.assertIn("found->second.imageRevisions.current(", region)
+        self.assertLess(region.index("continue;"),
+                        region.index("uploadOrder.push_back(&packet);"))
         self.assertIn("scene.options.camera.position", region)
         self.assertIn("dx * dx + dy * dy + dz * dz", region)
         self.assertIn("std::sort(uploadOrder.begin(), uploadOrder.end()", region)
