@@ -1,6 +1,7 @@
         // Only plain, static, fully opaque wall bodies can leave native
         // PaintSession discovery. Doors, glass, animation, scrolling signs,
-        // unsupported slopes and double-sided artwork retain the proven painter.
+        // unsupported slopes retain the proven painter. Opaque double-sided
+        // bodies use the native back-facing offset from the shared table.
         // The two authored slope states use the native image table and the
         // same slanted world quad already defined by wall semantics.
         [[nodiscard]] bool FirstPersonMapOwnsPlainWall(
@@ -19,7 +20,6 @@
                 return false;
             return !entry->flags.has(WallSceneryFlag::isDoor)
                 && !entry->flags.has(WallSceneryFlag::hasGlass)
-                && !entry->flags.has(WallSceneryFlag::isDoubleSided)
                 && !entry->flags2.has(WallSceneryFlag2::isTransparent)
                 && !entry->flags2.has(WallSceneryFlag2::isAnimated)
                 && entry->scrolling_mode == kScrollingModeNone;
@@ -103,7 +103,8 @@
                     Drawing::FilterPaletteID::paletteGhost);
             const auto image = templateImage.WithIndex(
                 entry->image + GetFirstPersonWallBodyImageOffset(
-                    direction, wall.getSlope(), false, false));
+                    direction, wall.getSlope(),
+                    entry->flags.has(WallSceneryFlag::isDoubleSided), false));
             const auto* sprite = GfxGetG1Element(image);
             // Resident static VBOs deliberately exclude blended sprites.
             // An unsupported material must never be marked map-owned or the
