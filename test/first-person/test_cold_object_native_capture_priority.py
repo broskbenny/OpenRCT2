@@ -39,6 +39,30 @@ class ColdObjectNativeCapturePriorityTest(unittest.TestCase):
             capture_loop.index("if (useColdObjectCursor)"),
             capture_loop.index("const int32_t tx = tile.x / kCoordsXYStep;"))
 
+    def test_complete_map_owned_objects_free_priority_without_hiding_terrain(self):
+        paint = PAINT.read_text(encoding="utf-8")
+        local = (ROOT / "src/openrct2/paint/FirstPersonRenderer.LocalScenery.inc"
+                 ).read_text(encoding="utf-8")
+        self.assertEqual(paint.count(
+            "FirstPersonTileObjectsMapOwnedAndReady(tile)"), 2)
+        self.assertIn("bool FirstPersonTileObjectsMapOwnedAndReady(", local)
+        self.assertIn("FirstPersonLocalFlatPathReady(tile)", local)
+        self.assertIn("FirstPersonLocalPlainWallReady(tile)", local)
+        self.assertIn("default:\n                        return false;", local)
+        self.assertIn("return hasObject;", local)
+        priority = paint.split("const size_t coldOffset =", 1)[1].split(
+            "const bool useColdObjectCursor =", 1)[0]
+        general = paint.split("const size_t captureStart =", 1)[1].split(
+            "const bool authoritativeInvalidation =", 1)[0]
+        self.assertIn("FirstPersonTileObjectsMapOwnedAndReady(tile)", priority)
+        self.assertIn("if (useColdObjectCursor)", general)
+        self.assertIn("FirstPersonTileObjectsMapOwnedAndReady(tile)", general)
+        # No map-owned filter may apply to general source sweeps; terrain
+        # cliffs, fences and unsupported fallbacks retain eventual admission.
+        self.assertNotIn("FirstPersonTileObjectsMapOwnedAndReady(tile)",
+                         paint.split("if (useColdObjectCursor)", 2)[-1].split(
+                             "const bool authoritativeInvalidation =", 1)[-1])
+
     def test_actual_cpp_policy_limits_probes_and_gives_general_sweep_a_turn(self):
         compiler = shutil.which("clang++") or shutil.which("g++")
         if compiler is None:
