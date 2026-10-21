@@ -680,6 +680,46 @@ namespace OpenRCT2::Paint
             if (carved.valid)
                 return carved;
 
+            // Thin, perforated artwork can lose half its coverage when
+            // rasterised on the 2-unit occupancy grid. Retry with 1-unit
+            // cells only when the failed four-view certificate already
+            // explains nearly all source pixels, has a small edge error,
+            // and overpaints the silhouette. This is not a relaxation of
+            // admission: the finer mesh must pass the same four-view gate.
+            // Bound the retry to 64K cells and one raw certificate so an
+            // ornate asset cannot monopolise the reconstruction worker.
+            if (carveAttempt.stage == 5
+                && carveAttempt.nativeViews == 4
+                && carveAttempt.observedCoverage >= 0.95f
+                && carveAttempt.candidateCoverage >= 0.40f
+                && carveAttempt.candidateCoverage < config.minimumCandidateCoverage
+                && carveAttempt.maximumEdgeError <= 2)
+            {
+                auto fineBounds = bounds;
+                fineBounds.step = 1.0f;
+                const size_t fineForward = size_t(std::ceil(
+                    (fineBounds.maxForward - fineBounds.minForward) / fineBounds.step));
+                const size_t fineRight = size_t(std::ceil(
+                    (fineBounds.maxRight - fineBounds.minRight) / fineBounds.step));
+                const size_t fineUp = size_t(std::ceil(
+                    (fineBounds.maxUp - fineBounds.minUp) / fineBounds.step));
+                constexpr size_t kMaximumFineCells = 65536;
+                if (fineForward > 0 && fineForward <= 32
+                    && fineRight > 0 && fineRight <= 32
+                    && fineUp > 0
+                    && fineUp <= kMaximumFineCells / (fineForward * fineRight))
+                {
+                    auto fineConfig = config;
+                    fineConfig.maximumGridCells = kMaximumFineCells;
+                    fineConfig.allowContinuousSurfaceRefinement = false;
+                    auto fine = BuildFirstPersonVisualHull(
+                        views, fineBounds, fineConfig,
+                        projectPoint, occupancyPredicate, pointSupported);
+                    if (fine.valid)
+                        return fine;
+                }
+            }
+
             // The origin hypothesis may itself be inconsistent with the
             // authored sprite margins. Retry once with envelope-derived
             // image-space registration, only after a complete four-view
