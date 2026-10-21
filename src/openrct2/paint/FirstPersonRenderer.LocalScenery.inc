@@ -348,6 +348,18 @@
                         auto* element = MapGetFirstElementAt(mapTile);
                         uint32_t elementIndex = 0;
                         if (element != nullptr)
+                        {
+                            mapSurfaces.clear();
+                            if (AppendFirstPersonMapPlainWallTile(
+                                    mapSurfaces, mapTile,
+                                    scene.options.viewFlags))
+                            {
+                                mappedWallTiles.insert(TerrainKey(tx, ty));
+                                for (auto& surface : mapSurfaces)
+                                    add(surface, owningRegion, true);
+                            }
+                        }
+                        if (element != nullptr)
                         do
                         {
                             if (element->getType() == TileElementType::path
@@ -362,22 +374,6 @@
                                         scene.options.viewFlags))
                                 {
                                     mappedPathTiles.insert(TerrainKey(tx, ty));
-                                    for (auto& surface : mapSurfaces)
-                                        add(surface, owningRegion, true);
-                                }
-                            }
-                            if (element->getType() == TileElementType::wall
-                                && FirstPersonTileHasMapOwnedPlainWall(
-                                    mapTile, scene.options.viewFlags))
-                            {
-                                const auto* wall = element->asWall();
-                                mapSurfaces.clear();
-                                if (wall != nullptr
-                                    && AppendFirstPersonMapPlainWall(
-                                        mapSurfaces, mapTile, *wall,
-                                        scene.options.viewFlags))
-                                {
-                                    mappedWallTiles.insert(TerrainKey(tx, ty));
                                     for (auto& surface : mapSurfaces)
                                         add(surface, owningRegion, true);
                                 }
