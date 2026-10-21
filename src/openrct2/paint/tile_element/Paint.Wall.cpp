@@ -289,99 +289,30 @@ static void PaintWallWall(
     PROFILED_FUNCTION();
 
     uint8_t bbHeight = wallEntry.height * 8 - 2;
-    ImageIndex imageOffset = 0;
+    const ImageIndex imageOffset = GetFirstPersonWallBodyImageOffset(
+        direction, wallElement.getSlope(),
+        wallEntry.flags.has(WallSceneryFlag::isDoubleSided),
+        wallEntry.flags.has(WallSceneryFlag::hasGlass));
     CoordsXYZ offset;
     BoundBoxXYZ boundBox;
     switch (direction)
     {
         case 0:
-            if (wallElement.getSlope() == 2)
-            {
-                imageOffset = 3;
-            }
-            else if (wallElement.getSlope() == 1)
-            {
-                imageOffset = 5;
-            }
-            else
-            {
-                imageOffset = 1;
-            }
-
             offset = { 0, 0, height };
             boundBox = { { 1, 1, height + 1 }, { 1, 28, bbHeight } };
             break;
 
         case 1:
-            if (wallElement.getSlope() == 2)
-            {
-                imageOffset = 2;
-            }
-            else if (wallElement.getSlope() == 1)
-            {
-                imageOffset = 4;
-            }
-            else
-            {
-                imageOffset = 0;
-            }
-
-            if (wallEntry.flags.has(WallSceneryFlag::hasGlass))
-            {
-                if (wallEntry.flags.has(WallSceneryFlag::isDoubleSided))
-                {
-                    imageOffset += 12;
-                }
-            }
-            else
-            {
-                if (wallEntry.flags.has(WallSceneryFlag::isDoubleSided))
-                {
-                    imageOffset += 6;
-                }
-            }
-
             offset = { 1, 31, height };
             boundBox = { { 2, 30, height + 1 }, { 29, 1, bbHeight } };
             break;
 
         case 2:
-            if (wallElement.getSlope() == 2)
-            {
-                imageOffset = 5;
-            }
-            else if (wallElement.getSlope() == 1)
-            {
-                imageOffset = 3;
-            }
-            else
-            {
-                imageOffset = 1;
-            }
-
-            if (wallEntry.flags.has(WallSceneryFlag::isDoubleSided))
-            {
-                imageOffset += 6;
-            }
-
             offset = { 31, 0, height };
             boundBox = { { 30, 2, height + 1 }, { 1, 29, bbHeight } };
             break;
 
         case 3:
-            if (wallElement.getSlope() == 2)
-            {
-                imageOffset = 4;
-            }
-            else if (wallElement.getSlope() == 1)
-            {
-                imageOffset = 2;
-            }
-            else
-            {
-                imageOffset = 0;
-            }
-
             offset = { 2, 1, height };
             boundBox = { { 1, 1, height + 1 }, { 28, 1, bbHeight } };
             break;
