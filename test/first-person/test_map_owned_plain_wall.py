@@ -132,6 +132,43 @@ class MapPlainWallTest(unittest.TestCase):
         # each tile, including when several distinct wall edges are authored.
         self.assertIn("FirstPersonLocalPlainWallReady(tile)", local)
 
+    def test_authoritative_wall_edits_dirty_adjacent_local_cells(self):
+        local = LOCAL.read_text(encoding="utf-8")
+        main = (ROOT / "src/openrct2/paint/FirstPersonRenderer.cpp").read_text(
+            encoding="utf-8")
+        self.assertIn("MarkLocalSceneryRelationshipDirtyForTile(tx, ty);", main)
+        self.assertIn("void MarkLocalSceneryRelationshipDirtyForTile(", local)
+        section = local.split("void MarkLocalSceneryRelationshipDirtyForTile(", 1)[1].split(
+            "FirstPersonLocalSmallSceneryInstanceKey(", 1)[0]
+        self.assertIn("MarkLocalSceneryDirtyForTile(tx, ty);", section)
+        self.assertIn("(tx & kCellMask) == 0", section)
+        self.assertIn("(tx & kCellMask) == kCellMask", section)
+        self.assertIn("(ty & kCellMask) == 0", section)
+        self.assertIn("(ty & kCellMask) == kCellMask", section)
+        self.assertIn("MarkLocalSceneryDirtyForTile(tx - 1, ty);", section)
+        self.assertIn("MarkLocalSceneryDirtyForTile(tx + 1, ty);", section)
+        self.assertIn("MarkLocalSceneryDirtyForTile(tx, ty - 1);", section)
+        self.assertIn("MarkLocalSceneryDirtyForTile(tx, ty + 1);", section)
+        import random
+        rng = random.Random(20261021)
+        for _ in range(100000):
+            tx, ty = rng.randrange(1, 300), rng.randrange(1, 300)
+            cells = {(tx//8, ty//8)}
+            if tx % 8 == 0:
+                cells.add(((tx-1)//8, ty//8))
+            if tx % 8 == 7:
+                cells.add(((tx+1)//8, ty//8))
+            if ty % 8 == 0:
+                cells.add((tx//8, (ty-1)//8))
+            if ty % 8 == 7:
+                cells.add((tx//8, (ty+1)//8))
+            impacted = {(tx//8, ty//8)}
+            for dx, dy in ((-1,0),(1,0),(0,-1),(0,1)):
+                other = ((tx+dx)//8, (ty+dy)//8)
+                if other != (tx//8, ty//8):
+                    impacted.add(other)
+            self.assertEqual(cells, impacted)
+
     def test_opposite_wall_edge_mapping_is_symmetric(self):
         m = MAP.read_text(encoding="utf-8")
         self.assertIn("{ -kCoordsXYStep, 0 }, { 0, kCoordsXYStep }", m)
