@@ -1,12 +1,14 @@
         // Only plain, static, fully opaque wall bodies can leave native
         // PaintSession discovery. Doors, glass, animation, scrolling signs,
-        // slope variants and double-sided artwork retain the proven painter.
+        // unsupported slopes and double-sided artwork retain the proven painter.
+        // The two authored slope states use the native image table and the
+        // same slanted world quad already defined by wall semantics.
         [[nodiscard]] bool FirstPersonMapOwnsPlainWall(
             const WallElement& wall, uint32_t viewFlags)
         {
             const auto* entry = wall.getEntry();
             if (entry == nullptr || wall.isGhost() || wall.isInvisible()
-                || wall.getSlope() != 0 || entry->height == 0
+                || wall.getSlope() > 2 || entry->height == 0
                 || gTrackDesignSaveMode
                 || (viewFlags & (
                     VIEWPORT_FLAG_HIGHLIGHT_PATH_ISSUES
