@@ -184,8 +184,7 @@
             } while (!(element++)->isLastForTile());
             if (completed.empty())
                 return false;
-            destination.insert(destination.end(),
-                std::make_move_iterator(completed.begin()),
-                std::make_move_iterator(completed.end()));
+            for (auto& surface : completed)
+                destination.push_back(std::move(surface));
             return true;
         }
