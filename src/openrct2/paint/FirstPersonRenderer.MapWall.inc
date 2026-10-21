@@ -103,8 +103,11 @@
                 entry->image + GetFirstPersonWallBodyImageOffset(
                     direction, wall.getSlope(), false, false));
             const auto* sprite = GfxGetG1Element(image);
-            if (sprite == nullptr || sprite->width <= 0
-                || sprite->height <= 0)
+            // Resident static VBOs deliberately exclude blended sprites.
+            // An unsupported material must never be marked map-owned or the
+            // coherent native face would be suppressed with no replacement.
+            if (image.IsBlended() || sprite == nullptr
+                || sprite->width <= 0 || sprite->height <= 0)
                 return false;
 
             // Exactly the same local artwork offsets used by PaintWallWall.
