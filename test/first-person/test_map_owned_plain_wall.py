@@ -31,7 +31,14 @@ class MapPlainWallTest(unittest.TestCase):
                           "VIEWPORT_FLAG_CLIP_VIEW",
                           "VIEWPORT_FLAG_UNDERGROUND_INSIDE"):
             self.assertIn(forbidden, m)
-        self.assertIn("return count == 1 && eligible;", m)
+        self.assertIn("count != 1 || loneWall == nullptr", m)
+        self.assertIn("!FirstPersonMapOwnsPlainWall(*loneWall, viewFlags)", m)
+        self.assertIn("TileElementType::largeScenery", m)
+        self.assertIn("TileElementType::track", m)
+        self.assertIn("TileElementType::entrance", m)
+        self.assertIn("MapIsLocationValid(neighbour)", m)
+        self.assertIn("((direction + 2u) & 3u)", m)
+        self.assertIn("return true;", m)
         self.assertIn("FirstPersonPaintSemanticRole::wall", m)
         self.assertIn("BuildFirstPersonWallPlane(", m)
         self.assertIn("GetFirstPersonWallBodyImageOffset(", m)
@@ -60,6 +67,20 @@ class MapPlainWallTest(unittest.TestCase):
             "if (!staging.progress.tilesDone(kRegionTileCount))", 1)[0]
         self.assertEqual(coherent.count("mappedWallReady"), 4)
         self.assertEqual(coherent.count("FirstPersonPaintSemanticRole::wall"), 3)
+
+    def test_opposite_wall_edge_mapping_is_symmetric(self):
+        m = MAP.read_text(encoding="utf-8")
+        self.assertIn("{ -kCoordsXYStep, 0 }, { 0, kCoordsXYStep }", m)
+        self.assertIn("{ kCoordsXYStep, 0 }, { 0, -kCoordsXYStep }", m)
+        offsets = ((-32, 0), (0, 32), (32, 0), (0, -32))
+        for direction, (x, y) in enumerate(offsets):
+            opposite = (direction + 2) & 3
+            self.assertEqual((x+offsets[opposite][0],
+                              y+offsets[opposite][1]), (0, 0))
+        # Cross-tile coplanar wall pairs stay on the coherent interface path
+        # regardless of elevation or colour, rather than risking a z fight.
+        self.assertIn("other->getType() == TileElementType::wall", m)
+        self.assertIn("return false;", m)
 
     def test_compiled_shared_native_image_offsets_match_original_wall_table(self):
         compiler = shutil.which("g++") or shutil.which("clang++")
