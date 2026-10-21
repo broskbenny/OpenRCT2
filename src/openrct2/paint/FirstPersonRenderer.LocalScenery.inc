@@ -145,6 +145,24 @@
             _localSceneryPackets[FirstPersonLocalSceneryRegionKey(tx, ty)].dirty = true;
         }
 
+        // Map ownership of a wall depends on the opposite edge in the
+        // neighbouring tile. Only edits crossing an 8x8-cell boundary need
+        // additional local packet invalidation: edits inside one cell are
+        // already covered by rebuilding its whole authoritative tile map.
+        void MarkLocalSceneryRelationshipDirtyForTile(int32_t tx, int32_t ty)
+        {
+            MarkLocalSceneryDirtyForTile(tx, ty);
+            constexpr int32_t kCellMask = 7;
+            if ((tx & kCellMask) == 0 && tx > 0)
+                MarkLocalSceneryDirtyForTile(tx - 1, ty);
+            if ((tx & kCellMask) == kCellMask)
+                MarkLocalSceneryDirtyForTile(tx + 1, ty);
+            if ((ty & kCellMask) == 0 && ty > 0)
+                MarkLocalSceneryDirtyForTile(tx, ty - 1);
+            if ((ty & kCellMask) == kCellMask)
+                MarkLocalSceneryDirtyForTile(tx, ty + 1);
+        }
+
         // A placement key also includes authoritative object identity and
         // elevation. Reusing the same tile-element slot for another asset
         // must never inherit the previous object's published mesh.
