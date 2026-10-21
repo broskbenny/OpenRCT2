@@ -33,18 +33,51 @@
             if (element == nullptr)
                 return false;
             size_t count = 0;
-            bool eligible = false;
+            const WallElement* loneWall = nullptr;
             do
             {
                 if (element->getType() == TileElementType::wall)
                 {
                     ++count;
-                    const auto* wall = element->asWall();
-                    eligible = wall != nullptr
-                        && FirstPersonMapOwnsPlainWall(*wall, viewFlags);
+                    loneWall = element->asWall();
                 }
+                // A wall sharing a footprint with a structural object must
+                // remain in the coherent resolver for contact/occlusion.
+                if (element->getType() == TileElementType::track
+                    || element->getType() == TileElementType::entrance
+                    || element->getType() == TileElementType::largeScenery)
+                    return false;
             } while (!(element++)->isLastForTile());
-            return count == 1 && eligible;
+            if (count != 1 || loneWall == nullptr
+                || !FirstPersonMapOwnsPlainWall(*loneWall, viewFlags))
+                return false;
+
+            // Two authored wall placements can occupy the same physical
+            // tile edge from opposite tiles. Those pairs require coherent
+            // interface ownership, not two independent local GPU owners.
+            const uint8_t direction = uint8_t(loneWall->getDirection()) & 3u;
+            constexpr std::array<std::array<int32_t, 2>, 4> neighbourStep{ {
+                { -kCoordsXYStep, 0 }, { 0, kCoordsXYStep },
+                { kCoordsXYStep, 0 }, { 0, -kCoordsXYStep }
+            } };
+            const CoordsXY neighbour{
+                tile.x + neighbourStep[direction][0],
+                tile.y + neighbourStep[direction][1]
+            };
+            if (MapIsLocationValid(neighbour))
+            {
+                const auto* other = MapGetFirstElementAt(neighbour);
+                if (other != nullptr)
+                    do
+                    {
+                        if (other->getType() == TileElementType::wall
+                            && other->asWall() != nullptr
+                            && (uint8_t(other->asWall()->getDirection()) & 3u)
+                                == ((direction + 2u) & 3u))
+                            return false;
+                    } while (!(other++)->isLastForTile());
+            }
+            return true;
         }
 
         [[nodiscard]] bool AppendFirstPersonMapPlainWall(
