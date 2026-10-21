@@ -32,17 +32,17 @@ class MapPlainWallTest(unittest.TestCase):
                           "VIEWPORT_FLAG_UNDERGROUND_INSIDE"):
             self.assertIn(forbidden, m)
         self.assertIn("return count == 1 && eligible;", m)
-        self.assertIn("FirstPersonWallSemanticRole", m.replace(
-            "FirstPersonPaintSemanticRole::wall", "FirstPersonWallSemanticRole"))
+        self.assertIn("FirstPersonPaintSemanticRole::wall", m)
         self.assertIn("BuildFirstPersonWallPlane(", m)
         self.assertIn("GetFirstPersonWallBodyImageOffset(", m)
         self.assertIn("surface.coplanarOwner = true;", m)
         self.assertIn("ViewportInteractionItem::wall", m)
         self.assertIn("imageAnchor.x - sprite->xOffset", m)
         self.assertIn("imageAnchor.y - sprite->yOffset", m)
-        self.assertIn("image.With", m.replace(
-            "templateImage.WithIndex", "image.WithIndex").replace(
-            "image.WithIndex", "image.With"))
+        self.assertIn("templateImage.WithIndex(", m)
+        self.assertIn("templateImage.WithPrimary(", m)
+        self.assertIn("templateImage.WithSecondary(", m)
+        self.assertIn("templateImage.WithTertiary(", m)
 
     def test_native_and_map_ownership_handoff_is_transactional(self):
         local = LOCAL.read_text(encoding="utf-8")
