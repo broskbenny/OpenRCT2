@@ -25,61 +25,60 @@
                 && entry->scrolling_mode == kScrollingModeNone;
         }
 
-        // The coherent native packet can suppress wall artwork by tile only
-        // when the tile has exactly one WallElement. More elaborate structures
-        // remain native to avoid accidentally replacing a second wall face.
+        // Tile-wide suppression is safe only if EVERY wall edge is mapped.
+        // Reject coincident directions, neighbour-side overlaps and structural
+        // interfaces rather than hiding any unmatched native wall bodies.
         [[nodiscard]] bool FirstPersonTileHasMapOwnedPlainWall(
             CoordsXY tile, uint32_t viewFlags)
         {
             const auto* element = MapGetFirstElementAt(tile);
             if (element == nullptr)
                 return false;
-            size_t count = 0;
-            const WallElement* loneWall = nullptr;
-            do
-            {
-                if (element->getType() == TileElementType::wall)
-                {
-                    ++count;
-                    loneWall = element->asWall();
-                }
-                // A wall sharing a footprint with a structural object must
-                // remain in the coherent resolver for contact/occlusion.
-                if (element->getType() == TileElementType::track
-                    || element->getType() == TileElementType::entrance
-                    || element->getType() == TileElementType::largeScenery)
-                    return false;
-            } while (!(element++)->isLastForTile());
-            if (count != 1 || loneWall == nullptr
-                || !FirstPersonMapOwnsPlainWall(*loneWall, viewFlags))
-                return false;
-
-            // Two authored wall placements can occupy the same physical
-            // tile edge from opposite tiles. Those pairs require coherent
-            // interface ownership, not two independent local GPU owners.
-            const uint8_t direction = uint8_t(loneWall->getDirection()) & 3u;
             constexpr std::array<std::array<int32_t, 2>, 4> neighbourStep{ {
                 { -kCoordsXYStep, 0 }, { 0, kCoordsXYStep },
                 { kCoordsXYStep, 0 }, { 0, -kCoordsXYStep }
             } };
-            const CoordsXY neighbour{
-                tile.x + neighbourStep[direction][0],
-                tile.y + neighbourStep[direction][1]
-            };
-            if (MapIsLocationValid(neighbour))
+            std::array<bool, 4> directions{};
+            size_t count = 0;
+            do
             {
+                if (element->getType() == TileElementType::track
+                    || element->getType() == TileElementType::entrance
+                    || element->getType() == TileElementType::largeScenery)
+                    return false;
+                if (element->getType() != TileElementType::wall)
+                    continue;
+                const auto* wall = element->asWall();
+                if (wall == nullptr
+                    || !FirstPersonMapOwnsPlainWall(*wall, viewFlags))
+                    return false;
+                const uint8_t direction =
+                    uint8_t(wall->getDirection()) & 3u;
+                if (directions[direction])
+                    return false;
+                directions[direction] = true;
+                ++count;
+                // Opposing placements on two tiles can be coplanar and need
+                // the existing coherent resolver, regardless of elevation.
+                const CoordsXY neighbour{
+                    tile.x + neighbourStep[direction][0],
+                    tile.y + neighbourStep[direction][1]
+                };
+                if (!MapIsLocationValid(neighbour))
+                    continue;
                 const auto* other = MapGetFirstElementAt(neighbour);
-                if (other != nullptr)
-                    do
-                    {
-                        if (other->getType() == TileElementType::wall
-                            && other->asWall() != nullptr
-                            && (uint8_t(other->asWall()->getDirection()) & 3u)
-                                == ((direction + 2u) & 3u))
-                            return false;
-                    } while (!(other++)->isLastForTile());
-            }
-            return true;
+                if (other == nullptr)
+                    continue;
+                do
+                {
+                    if (other->getType() == TileElementType::wall
+                        && other->asWall() != nullptr
+                        && (uint8_t(other->asWall()->getDirection()) & 3u)
+                            == ((direction + 2u) & 3u))
+                        return false;
+                } while (!(other++)->isLastForTile());
+            } while (!(element++)->isLastForTile());
+            return count > 0;
         }
 
         [[nodiscard]] bool AppendFirstPersonMapPlainWall(
@@ -157,5 +156,36 @@
             surface.diagnosticSourceTile = tile;
             EmitQuad(surface, vertices);
             destination.push_back(std::move(surface));
+            return true;
+        }
+
+        // Build all walls in a tile as one transaction: one missing texture
+        // must not make the coherent renderer drop the other native faces.
+        [[nodiscard]] bool AppendFirstPersonMapPlainWallTile(
+            std::vector<FirstPersonSurface>& destination,
+            CoordsXY tile, uint32_t viewFlags)
+        {
+            if (!FirstPersonTileHasMapOwnedPlainWall(tile, viewFlags))
+                return false;
+            const auto* element = MapGetFirstElementAt(tile);
+            if (element == nullptr)
+                return false;
+            std::vector<FirstPersonSurface> completed;
+            do
+            {
+                if (element->getType() == TileElementType::wall)
+                {
+                    const auto* wall = element->asWall();
+                    if (wall == nullptr
+                        || !AppendFirstPersonMapPlainWall(
+                            completed, tile, *wall, viewFlags))
+                        return false;
+                }
+            } while (!(element++)->isLastForTile());
+            if (completed.empty())
+                return false;
+            destination.insert(destination.end(),
+                std::make_move_iterator(completed.begin()),
+                std::make_move_iterator(completed.end()));
             return true;
         }
