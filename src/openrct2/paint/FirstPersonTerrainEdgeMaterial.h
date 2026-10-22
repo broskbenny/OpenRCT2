@@ -6,6 +6,7 @@
 
 #include "FirstPersonMaterialInference.h"
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -61,4 +62,30 @@ namespace OpenRCT2::Paint
             return std::nullopt;
         return material;
     }
+    // An isometric native material is not periodic. Instead of changing any
+    // palette pixels, reflect its physical tile UV basis on alternating map
+    // coordinates. Along an edge between equal native sprites, both tiles
+    // then fetch EXACTLY the same original texels. A mirror changes neither
+    // the geometry nor the authored alpha/colour and adds no atlas entries.
+    // Only call this on flat, symmetric tile art: a sloped or asymmetric
+    // edge-specific sprite would otherwise acquire the wrong orientation.
+    template<typename Vertex>
+    inline void MirrorFirstPersonFlatTileUV(
+        std::array<Vertex, 4>& vertices, bool mirrorX, bool mirrorY)
+    {
+        if (!mirrorX && !mirrorY)
+            return;
+        constexpr std::array<size_t, 4> flipX{ 1, 0, 3, 2 };
+        constexpr std::array<size_t, 4> flipY{ 3, 2, 1, 0 };
+        const auto original = vertices;
+        for (size_t i = 0; i < 4; ++i)
+        {
+            size_t src = mirrorX ? flipX[i] : i;
+            if (mirrorY)
+                src = flipY[src];
+            vertices[i].u = original[src].u;
+            vertices[i].v = original[src].v;
+        }
+    }
+
 } // namespace OpenRCT2::Paint
