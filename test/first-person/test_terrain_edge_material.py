@@ -71,8 +71,15 @@ int main() {
         source[size_t(y)*64+size_t(x)] = uint8_t(3 + ((x*7+y*3) % 120));
     auto expanded = BuildFirstPersonTerrainEdgeMaterial(source, 64, 40, 4);
     assert(expanded);
+    const auto originalPalette = expanded->pixels;
     const std::array<UV,4> quad{{ {8,8}, {56,8}, {56,32}, {8,32} }};
     assert(PeriodizeFirstPersonFlatTileMaterial(*expanded, quad));
+    // Physical edge stitching must never resample or dither interior
+    // native texels, even if a periodic edge colour differs substantially.
+    for (int y=12;y<28;++y)
+    for (int x=16;x<48;++x)
+      assert(expanded->pixels[size_t(y+4)*expanded->width+size_t(x+4)]
+          == originalPalette[size_t(y+4)*expanded->width+size_t(x+4)]);
     const auto sample = [&](int x,int y) {
         return expanded->pixels[size_t(y+4)*size_t(expanded->width)+size_t(x+4)];
     };
