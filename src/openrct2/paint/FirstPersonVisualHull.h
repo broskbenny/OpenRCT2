@@ -154,6 +154,7 @@ namespace OpenRCT2::Paint
         // edges, accepted only after four-view raster certification.
         bool planarSurfaceSelected = false;
         bool directConvexSurface = false;
+        bool structuralBeamSelected = false;
         // Exact surface-level round-trip evidence. The legacy coverage fields
         // remain directly readable because reconstruction policies use them as
         // conservative admission gates.
@@ -864,6 +865,98 @@ namespace OpenRCT2::Paint
             hull);
     }
 
+    // Infer *continuous axial structure* from the four-view intersection
+    // field, rather than accepting every isolated occupied voxel as artwork.
+    // A candidate keeps runs extending at least ten world units along an
+    // orthogonal axis. Their union has long planar beam surfaces and retains
+    // actual openings. This is a visual hypothesis ONLY: its physical
+    // occupancy is never substituted for collision geometry.
+    //
+    // Runs are sourced from cells independently supported by all four
+    // silhouettes; reprojection of the resulting boundary is mandatory before
+    // publication. Diagonal, curved and compact shapes remain on the normal
+    // reconstruction route when no certified axial hypothesis exists.
+    [[nodiscard]] inline std::vector<FirstPersonVisualHullFace>
+        BuildFirstPersonVisualHullStructuralBeamFaces(
+            const FirstPersonVisualHull& hull,
+            size_t originalFaceCount, size_t maximumFaces = 512)
+    {
+        if (!hull.valid || hull.occupied.empty()
+            || !(hull.step > 0.0f) || originalFaceCount < 64
+            || maximumFaces < 6)
+            return {};
+
+        const int32_t size[3] = {
+            int32_t(hull.sizeForward), int32_t(hull.sizeRight),
+            int32_t(hull.sizeUp)
+        };
+        const size_t total = size_t(size[0]) * size_t(size[1]) * size_t(size[2]);
+        if (total != hull.occupied.size() || total > 131072)
+            return {};
+
+        const int32_t minimumRun = std::max(
+            4, int32_t(std::ceil(10.0f / hull.step)));
+        std::vector<uint8_t> beams(total, 0);
+        const auto index = [&](int32_t f, int32_t r, int32_t u) -> size_t {
+            return (size_t(u) * size_t(size[1]) + size_t(r))
+                * size_t(size[0]) + size_t(f);
+        };
+        for (int32_t axis = 0; axis < 3; ++axis)
+        {
+            const int32_t alongSize = size[axis];
+            const int32_t aSize = axis == 0 ? size[1] : size[0];
+            const int32_t bSize = axis == 2 ? size[1] : size[2];
+            if (alongSize < minimumRun)
+                continue;
+            const auto lineIndex = [&](int32_t along, int32_t a, int32_t b) {
+                const int32_t f = axis == 0 ? along : a;
+                const int32_t r = axis == 1 ? along : (axis == 0 ? a : b);
+                const int32_t u = axis == 2 ? along : b;
+                return index(f, r, u);
+            };
+            for (int32_t b = 0; b < bSize; ++b)
+            for (int32_t a = 0; a < aSize; ++a)
+            {
+                int32_t along = 0;
+                while (along < alongSize)
+                {
+                    if (hull.occupied[lineIndex(along, a, b)] == 0)
+                    {
+                        ++along;
+                        continue;
+                    }
+                    const int32_t start = along;
+                    while (along < alongSize
+                        && hull.occupied[lineIndex(along, a, b)] != 0)
+                        ++along;
+                    if (along - start < minimumRun)
+                        continue;
+                    for (int32_t k = start; k < along; ++k)
+                        beams[lineIndex(k, a, b)] = 1;
+                }
+            }
+        }
+
+        const size_t kept = size_t(std::count(beams.begin(), beams.end(), uint8_t{ 1 }));
+        const size_t occupied = size_t(std::count_if(
+            hull.occupied.begin(), hull.occupied.end(),
+            [](uint8_t cell) { return cell != 0; }));
+        // Require a meaningful set of beams, rather than isolated rods
+        // surviving from an otherwise unrelated 3D shape.
+        if (kept < size_t(minimumRun) * 2 || kept * 3 < occupied)
+            return {};
+        FirstPersonVisualHull candidate = hull;
+        candidate.occupied = std::move(beams);
+        candidate.refinedFaces.clear();
+        auto faces = BuildFirstPersonVisualHullVoxelBoundaryFaces(candidate);
+        // The structural hypothesis is valuable only if it materially
+        // removes the visual fragmentation, not if it merely renames voxels.
+        if (faces.empty() || faces.size() > maximumFaces
+            || faces.size() * 3 >= originalFaceCount * 2)
+            return {};
+        return faces;
+    }
+
     struct FirstPersonVisualHullView
     {
         uint8_t imageDirection{};
@@ -899,6 +992,7 @@ namespace OpenRCT2::Paint
         // visibly smoother conforming surface. This preference is opt-in;
         // other families continue to demand a strictly better certificate.
         bool preferCertifiedSmoothSurface = false;
+        bool allowStructuralBeamReconstruction = false;
         size_t maximumContinuousSurfaceFaces = 8192;
         uint8_t continuousSurfaceSearchSteps = 3;
         // Kept at zero by default until asset-wide calibration establishes a
@@ -1153,6 +1247,31 @@ namespace OpenRCT2::Paint
 
         auto selectedCertificate =
             voxelCertificate;
+        if (config.allowStructuralBeamReconstruction)
+        {
+            // Four simultaneous source views first define supported 3D
+            // occupancy. Extract long consistent structural spans, then
+            // independently certify the BEAM BOUNDARY against every view.
+            // Never promote a merely plausible skeleton or weaker image fit.
+            auto beamFaces = BuildFirstPersonVisualHullStructuralBeamFaces(
+                result, voxelFaces.size(),
+                std::min<size_t>(512, config.maximumContinuousSurfaceFaces));
+            if (!beamFaces.empty())
+            {
+                auto beamCertificate = CertifyFirstPersonReconstruction(
+                    TriangulateFirstPersonReconstructionFaces(beamFaces),
+                    views, projectPoint);
+                if (passesAdmission(beamCertificate)
+                    && (!passesAdmission(selectedCertificate)
+                        || FirstPersonRoundTripNonWorse(
+                            beamCertificate, selectedCertificate)))
+                {
+                    result.refinedFaces = std::move(beamFaces);
+                    result.structuralBeamSelected = true;
+                    selectedCertificate = beamCertificate;
+                }
+            }
+        }
         if (config.allowContinuousSurfaceRefinement
             && !voxelFaces.empty()
             && voxelFaces.size()
@@ -1197,6 +1316,7 @@ namespace OpenRCT2::Paint
 
                 result.refinedFaces =
                     candidateFaces;
+                result.structuralBeamSelected = false;
                 selectedCertificate =
                     candidateCertificate;
             }
@@ -1217,7 +1337,7 @@ namespace OpenRCT2::Paint
             attempt->stage = 6;
 
         result.continuousSurfaceRefined =
-            !result.refinedFaces.empty();
+            !result.refinedFaces.empty() && !result.structuralBeamSelected;
         result.voxelRoundTripSymmetricDifference =
             voxelCertificate.symmetricDifferencePixels;
         result.roundTripSymmetricDifference =
