@@ -6,6 +6,7 @@
             uint32_t withoutOpaqueSamples = 0;
             uint32_t unobservedUndersides = 0;
             bool directConvexSurface = false;
+            bool structuralBeamSelected = false;
         };
 
         bool BuildSmallSceneryGeometry(FirstPersonScene& scene,
@@ -42,6 +43,7 @@
                     *walkingMask = BuildFirstPersonSmallSceneryWalkingMaskFromHull(ownedHull, metadata.height);
                 if (buildEvidence != nullptr)
                     buildEvidence->directConvexSurface = hull->directConvexSurface;
+                    buildEvidence->structuralBeamSelected = hull->structuralBeamSelected;
             }
             const auto appearance =
                 BuildFirstPersonSmallSceneryAppearancePlan(
@@ -1072,7 +1074,9 @@
                                     double(attempt.candidateCoverage),
                                     attempt.maximumEdgeError,
                                     attempt.registrationAttempted ? 1 : 0,
-                                    buildEvidence.directConvexSurface ? "direct-convex" : "voxel-or-tree",
+                                    buildEvidence.directConvexSurface ? "direct-convex"
+                                        : buildEvidence.structuralBeamSelected ? "structural-beam"
+                                        : "voxel-or-tree",
                                     static_cast<long long>(buildMicros));
                             }
                         }
