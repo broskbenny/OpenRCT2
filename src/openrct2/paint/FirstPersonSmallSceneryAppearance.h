@@ -461,9 +461,13 @@ namespace OpenRCT2::Paint
         // eligible for silhouette carving; if its four-view certificate
         // fails, let the existing renderer use native artwork as a last
         // resort, after the asynchronous reconstruction attempt completes.
-        // Stateful/animated/glass objects retain their separate policy.
-        if (FirstPersonSmallSceneryCanUseSilhouetteRefinement(entry)
-            && reconstructedHull->roundTripViewCount < 4)
+        // Stateful/animated/glass objects retain authoritative occupancy
+        // for collision, but this does not make their voxel envelope
+        // evidence-backed visible geometry. Apply the same four-view
+        // requirement to EVERY solid appearance. In particular, an
+        // animated object without four simultaneous valid silhouette views
+        // must never publish thousands of untextured voxel fragments.
+        if (reconstructedHull->roundTripViewCount < 4)
             return result;
 
         result.faces =
