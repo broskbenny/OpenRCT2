@@ -168,6 +168,17 @@ namespace OpenRCT2::Paint
             if (s < -invSide || s > 1.0f + invSide
                 || t < -invSide || t > 1.0f + invSide)
                 continue;
+            // Only connected physical edges require periodic colour.
+            // Reprojecting the entire diamond onto 32x32 cells quantizes
+            // genuine interior artwork and creates a visible pixel grid.
+            // Preserve native palette texels everywhere except this rim.
+            constexpr float kEdgeWidth = 1.5f * invSide;
+            const bool nearX = (periodicAxes & 1u) != 0
+                && (s <= kEdgeWidth || s >= 1.0f - kEdgeWidth);
+            const bool nearY = (periodicAxes & 2u) != 0
+                && (t <= kEdgeWidth || t >= 1.0f - kEdgeWidth);
+            if (!nearX && !nearY)
+                continue;
             const auto px = std::clamp(
                 int32_t(std::floor(s * float(side))), 0, side - 1);
             const auto py = std::clamp(
