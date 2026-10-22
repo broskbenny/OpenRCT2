@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <unordered_set>
 #include <vector>
 
 namespace OpenRCT2::Paint
@@ -999,6 +1000,209 @@ namespace OpenRCT2::Paint
         FirstPersonSilhouette observed{};
     };
 
+    // A four-view visual hull contains *possible* matter, not just the
+    // true scaffold. Multiple candidate rods can project onto the same
+    // painted bar, so preserving every long run overpaints the source.
+    // Choose a compact set of straight beams that contributes NEW observed
+    // pixels in all four views, penalising predictions outside the artwork.
+    // This does not use object IDs, colour heuristics or any scene-specific
+    // topology. The final complete union is separately round-trip certified.
+    template<typename ProjectPoint>
+    [[nodiscard]] inline std::vector<FirstPersonVisualHullFace>
+        BuildFirstPersonVisualHullSourceMatchedBeamFaces(
+            const FirstPersonVisualHull& hull,
+            const std::vector<FirstPersonVisualHullView>& views,
+            ProjectPoint&& projectPoint,
+            size_t originalFaceCount, size_t maximumFaces = 512)
+    {
+        if (!hull.valid || hull.occupied.empty() || views.size() != 4
+            || originalFaceCount < 64 || maximumFaces < 6)
+            return {};
+        const int32_t dims[3]{
+            int32_t(hull.sizeForward), int32_t(hull.sizeRight),
+            int32_t(hull.sizeUp)
+        };
+        const size_t cellCount = size_t(dims[0]) * size_t(dims[1]) * size_t(dims[2]);
+        if (cellCount != hull.occupied.size() || cellCount > 65536)
+            return {};
+        std::array<bool,4> seen{};
+        for (const auto& view : views)
+        {
+            if (view.imageDirection >= 4 || view.observed.empty()
+                || seen[view.imageDirection])
+                return {};
+            seen[view.imageDirection] = true;
+        }
+        constexpr size_t kMaximumLines = 128;
+        constexpr size_t kMaximumSelected = 48;
+        const int32_t minLength = std::max(4, int32_t(std::ceil(8.0f / hull.step)));
+        const int32_t maxGap = std::max(1, int32_t(std::ceil(2.0f / hull.step)));
+        const auto index = [&](int32_t f, int32_t r, int32_t u) -> size_t {
+            return (size_t(u) * size_t(dims[1]) + size_t(r))
+                * size_t(dims[0]) + size_t(f);
+        };
+        struct Candidate
+        {
+            std::vector<size_t> cells;
+            std::array<FirstPersonSilhouette,4> projected{};
+        };
+        std::vector<Candidate> candidates;
+        for (int32_t axis = 0; axis < 3; ++axis)
+        {
+            const int32_t alongSize = dims[axis];
+            if (alongSize < minLength)
+                continue;
+            const int32_t aSize = axis == 0 ? dims[1] : dims[0];
+            const int32_t bSize = axis == 2 ? dims[1] : dims[2];
+            const auto lineIndex = [&](int32_t along, int32_t a, int32_t b) {
+                const int32_t f = axis == 0 ? along : a;
+                const int32_t r = axis == 1 ? along : (axis == 0 ? a : b);
+                const int32_t u = axis == 2 ? along : b;
+                return index(f, r, u);
+            };
+            for (int32_t b = 0; b < bSize; ++b)
+            for (int32_t a = 0; a < aSize; ++a)
+            {
+                int32_t along = 0;
+                while (along < alongSize)
+                {
+                    if (!hull.occupied[lineIndex(along, a, b)])
+                    {
+                        ++along;
+                        continue;
+                    }
+                    const int32_t start = along;
+                    while (along < alongSize)
+                    {
+                        if (hull.occupied[lineIndex(along, a, b)])
+                        {
+                            ++along;
+                            continue;
+                        }
+                        const int32_t gapStart = along;
+                        while (along < alongSize
+                            && along - gapStart <= maxGap
+                            && !hull.occupied[lineIndex(along, a, b)])
+                            ++along;
+                        if (along >= alongSize || along - gapStart > maxGap
+                            || !hull.occupied[lineIndex(along, a, b)])
+                        {
+                            along = gapStart;
+                            break;
+                        }
+                        ++along;
+                    }
+                    if (along - start >= minLength)
+                    {
+                        if (candidates.size() >= kMaximumLines)
+                            return {};
+                        Candidate line{};
+                        line.cells.reserve(size_t(along - start));
+                        FirstPersonVisualHull primitive = hull;
+                        primitive.occupied.assign(cellCount, 0);
+                        primitive.refinedFaces.clear();
+                        for (int32_t k = start; k < along; ++k)
+                        {
+                            const auto cell = lineIndex(k, a, b);
+                            primitive.occupied[cell] = 1;
+                            line.cells.push_back(cell);
+                        }
+                        const auto primitiveFaces =
+                            BuildFirstPersonVisualHullVoxelBoundaryFaces(primitive);
+                        const auto triangles =
+                            TriangulateFirstPersonReconstructionFaces(primitiveFaces);
+                        if (!triangles.empty())
+                        {
+                            bool valid = true;
+                            for (const auto& view : views)
+                            {
+                                auto predicted =
+                                    RenderFirstPersonReconstructionSilhouette(
+                                        triangles, view.imageDirection, projectPoint);
+                                if (predicted.empty() || predicted.overflowed)
+                                {
+                                    valid = false;
+                                    break;
+                                }
+                                line.projected[view.imageDirection] =
+                                    std::move(predicted);
+                            }
+                            if (valid)
+                                candidates.push_back(std::move(line));
+                        }
+                    }
+                    // An enclosed gap that was too long to bridge is the
+                    // start of another run; do not loop on the same cell.
+                    while (along < alongSize
+                        && !hull.occupied[lineIndex(along, a, b)])
+                        ++along;
+                }
+            }
+        }
+        if (candidates.size() < 2)
+            return {};
+        std::array<std::unordered_set<uint64_t>,4> covered{};
+        std::vector<uint8_t> chosen(candidates.size(),0);
+        std::vector<uint8_t> selectedCells(cellCount,0);
+        size_t chosenCount = 0;
+        for (; chosenCount < kMaximumSelected; ++chosenCount)
+        {
+            int64_t bestScore = 0;
+            size_t best = candidates.size();
+            for (size_t i = 0; i < candidates.size(); ++i)
+            {
+                if (chosen[i])
+                    continue;
+                int64_t newObserved = 0;
+                int64_t newUnsupported = 0;
+                for (const auto& view : views)
+                {
+                    const auto direction = view.imageDirection;
+                    const auto& seenPixels = covered[direction];
+                    for (const auto pixel : candidates[i].projected[direction].pixels)
+                    {
+                        if (seenPixels.contains(pixel))
+                            continue;
+                        if (view.observed.pixels.contains(pixel))
+                            ++newObserved;
+                        else
+                            ++newUnsupported;
+                    }
+                }
+                // A false intersection filament cannot win simply by
+                // explaining a few source pixels if it creates many novel
+                // pixels outside the four authored silhouettes.
+                const int64_t score = newObserved * 2 - newUnsupported * 5;
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = i;
+                }
+            }
+            if (best == candidates.size())
+                break;
+            chosen[best] = 1;
+            for (const auto cell : candidates[best].cells)
+                selectedCells[cell] = 1;
+            for (const auto& view : views)
+            {
+                const auto direction = view.imageDirection;
+                const auto& pixels = candidates[best].projected[direction].pixels;
+                covered[direction].insert(pixels.begin(), pixels.end());
+            }
+        }
+        if (chosenCount < 2)
+            return {};
+        FirstPersonVisualHull selected = hull;
+        selected.occupied = std::move(selectedCells);
+        selected.refinedFaces.clear();
+        auto output = BuildFirstPersonVisualHullVoxelBoundaryFaces(selected);
+        if (output.empty() || output.size() > maximumFaces
+            || output.size() * 3 >= originalFaceCount * 2)
+            return {};
+        return output;
+    }
+
     struct FirstPersonVisualHullBounds
     {
         float minForward{};
@@ -1290,6 +1494,19 @@ namespace OpenRCT2::Paint
             auto beamFaces = BuildFirstPersonVisualHullStructuralBeamFaces(
                 result, voxelFaces.size(),
                 std::min<size_t>(512, config.maximumContinuousSurfaceFaces));
+            if (beamFaces.empty()
+                || !config.allowContinuousSurfaceRefinement)
+            {
+                // The source-matched hypothesis can rescue highly ambiguous
+                // visual-hull intersections. On slender structures it removes
+                // mutually redundant phantom beams rather than displaying
+                // all four-view-consistent occupancy as a voxel cloud.
+                auto matched = BuildFirstPersonVisualHullSourceMatchedBeamFaces(
+                    result, views, projectPoint, voxelFaces.size(),
+                    std::min<size_t>(512, config.maximumContinuousSurfaceFaces));
+                if (!matched.empty())
+                    beamFaces = std::move(matched);
+            }
             if (!beamFaces.empty())
             {
                 auto beamCertificate = CertifyFirstPersonReconstruction(
