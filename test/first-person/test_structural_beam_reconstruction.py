@@ -52,6 +52,15 @@ int main() {
     assert(beams.size()<voxel.size()*2/3);
     assert(beams.size()<=512);
     assert(BuildFirstPersonVisualHullStructuralBeamFaces(hull,63).empty());
+    // A single missing source-raster cell may not split a continuous post
+    // into two staircase caps; the 3D collision occupancy is still untouched.
+    auto gapped=hull;
+    gapped.occupied[(size_t(7)*16+2)*16+2]=0;
+    const auto gappedVoxel=BuildFirstPersonVisualHullVoxelBoundaryFaces(gapped);
+    const auto repaired=BuildFirstPersonVisualHullStructuralBeamFaces(
+        gapped,gappedVoxel.size());
+    assert(!repaired.empty());
+    assert(repaired.size()==beams.size());
     const auto project = [](uint8_t direction,FirstPersonVec3 p) {
         switch(direction&3) {
         case 0: return std::array<float,2>{p.x-p.y+50.0f,(p.x+p.y)*0.5f-p.z+50.0f};
