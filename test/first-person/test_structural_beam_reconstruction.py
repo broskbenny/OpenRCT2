@@ -138,6 +138,7 @@ int main() {
         self.assertIn("strict.structuralBeamSelected", collision)
         self.assertIn("fine.structuralBeamSelected", collision)
         self.assertIn('"structural-beam"', renderer)
+        self.assertIn("|| buildEvidence.structuralBeamSelected", renderer)
 
 
 if __name__ == "__main__":
