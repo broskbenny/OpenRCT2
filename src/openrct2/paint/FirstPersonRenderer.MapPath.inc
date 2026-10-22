@@ -84,17 +84,6 @@
             const FirstPersonTerrainResidentMaterial* deckMaterial = nullptr;
             bool deckMaterialResolved = false;
 
-            // Native path sprite indices preserve whether the deck reaches
-            // opposite physical edges. Repeat the material only along those
-            // confirmed connecting directions; exposed grass/path borders
-            // retain their authored texture and footprint.
-            const uint8_t connected = path.getEdges() & 0x0Fu;
-            const uint8_t periodicAxes =
-                FirstPersonPathUsesFullTileDeck(path) ? 3u
-                : path.isSloped() ? 0u
-                : uint8_t(((connected & 0x05u) == 0x05u ? 1u : 0u)
-                    | ((connected & 0x0Au) == 0x0Au ? 2u : 0u));
-
             const auto paintOrigin = GetTileElementPaintSpritePosition(
                 tile, sourceRotation);
             const auto isoOrigin = Translate3DTo2DWithZ(
@@ -163,31 +152,6 @@
                                 if (auto expanded = BuildFirstPersonTerrainEdgeMaterial(
                                         *decoded, sprite->width, sprite->height))
                                 {
-                                    if (periodicAxes != 0)
-                                    {
-                                        // The first footprint quad can be a
-                                        // 26-unit centre rectangle. Build the
-                                        // tile-wide projective UV basis, not a
-                                        // periodically repeated 26-unit patch.
-                                        const std::array<CoordsXYZ, 4> corners{ {
-                                            { tile.x, tile.y, path.getBaseZ() },
-                                            { tile.x + kCoordsXYStep, tile.y, path.getBaseZ() },
-                                            { tile.x + kCoordsXYStep, tile.y + kCoordsXYStep, path.getBaseZ() },
-                                            { tile.x, tile.y + kCoordsXYStep, path.getBaseZ() },
-                                        } };
-                                        std::array<FirstPersonVertex, 4> wholeTile{};
-                                        for (size_t corner = 0; corner < corners.size(); ++corner)
-                                        {
-                                            const auto projected = Translate3DTo2DWithZ(
-                                                sourceRotation, corners[corner]);
-                                            wholeTile[corner].u = float(
-                                                projected.x - isoOrigin.x - sprite->xOffset);
-                                            wholeTile[corner].v = float(
-                                                projected.y - isoOrigin.y - sprite->yOffset);
-                                        }
-                                        (void)PeriodizeFirstPersonFlatTileMaterial(
-                                            *expanded, wholeTile, periodicAxes);
-                                    }
                                     material.width = int16_t(expanded->width);
                                     material.height = int16_t(expanded->height);
                                     material.padding = int16_t(expanded->padding);
