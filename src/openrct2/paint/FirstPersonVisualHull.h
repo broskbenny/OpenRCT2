@@ -895,6 +895,10 @@ namespace OpenRCT2::Paint
         // a small deterministic line search; promotion is decided only by the
         // native round-trip evidence.
         bool allowContinuousSurfaceRefinement = false;
+        // A thin reconstructed lattice may have an equally accurate but
+        // visibly smoother conforming surface. This preference is opt-in;
+        // other families continue to demand a strictly better certificate.
+        bool preferCertifiedSmoothSurface = false;
         size_t maximumContinuousSurfaceFaces = 8192;
         uint8_t continuousSurfaceSearchSteps = 3;
         // Kept at zero by default until asset-wide calibration establishes a
@@ -1182,8 +1186,11 @@ namespace OpenRCT2::Paint
                 // baseline is meaningful progress even when total mismatch
                 // happens to tie. Once admitted, require strict improvement.
                 if (passesAdmission(selectedCertificate)
-                    ? !FirstPersonRoundTripStrictlyImproves(
-                        candidateCertificate, selectedCertificate)
+                    ? !(config.preferCertifiedSmoothSurface
+                        ? FirstPersonRoundTripNonWorse(
+                            candidateCertificate, selectedCertificate)
+                        : FirstPersonRoundTripStrictlyImproves(
+                            candidateCertificate, selectedCertificate))
                     : !FirstPersonRoundTripNonWorse(
                         candidateCertificate, selectedCertificate))
                     continue;
