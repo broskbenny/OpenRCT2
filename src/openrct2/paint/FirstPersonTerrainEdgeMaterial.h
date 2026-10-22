@@ -124,13 +124,13 @@ namespace OpenRCT2::Paint
         for (int32_t y = 0; y < side; ++y)
         {
             const uint8_t seam = (hash(0, y) & 1u) != 0
-                ? periodic[index(1, y)] : periodic[index(side - 2, y)];
+                ? periodic[index(4, y)] : periodic[index(side - 5, y)];
             periodic[index(0, y)] = periodic[index(side - 1, y)] = seam;
-            for (int32_t offset = 1; offset <= 3; ++offset)
+            for (int32_t offset = 1; offset <= 5; ++offset)
             {
-                if (hash(offset, y) < uint32_t((4 - offset) * 4))
+                if (hash(offset, y) < uint32_t((6 - offset) * 2))
                     periodic[index(offset, y)] = seam;
-                if (hash(side - 1 - offset, y) < uint32_t((4 - offset) * 4))
+                if (hash(side - 1 - offset, y) < uint32_t((6 - offset) * 2))
                     periodic[index(side - 1 - offset, y)] = seam;
             }
         }
@@ -138,13 +138,13 @@ namespace OpenRCT2::Paint
         {
             const int32_t wrappedX = x == side - 1 ? 0 : x;
             const uint8_t seam = (hash(wrappedX, 0) & 1u) != 0
-                ? periodic[index(x, 1)] : periodic[index(x, side - 2)];
+                ? periodic[index(x, 4)] : periodic[index(x, side - 5)];
             periodic[index(x, 0)] = periodic[index(x, side - 1)] = seam;
-            for (int32_t offset = 1; offset <= 3; ++offset)
+            for (int32_t offset = 1; offset <= 5; ++offset)
             {
-                if (hash(wrappedX, offset) < uint32_t((4 - offset) * 4))
+                if (hash(wrappedX, offset) < uint32_t((6 - offset) * 2))
                     periodic[index(x, offset)] = seam;
-                if (hash(wrappedX, side - 1 - offset) < uint32_t((4 - offset) * 4))
+                if (hash(wrappedX, side - 1 - offset) < uint32_t((6 - offset) * 2))
                     periodic[index(x, side - 1 - offset)] = seam;
             }
         }
