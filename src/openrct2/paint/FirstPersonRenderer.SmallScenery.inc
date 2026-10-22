@@ -1032,6 +1032,7 @@
                         // Emit once per asset/reconstruction phase, not once
                         // per instance or camera repaint.
                         if ((buildEvidence.directConvexSurface && gFirstPersonDiagnosticMask != 0)
+                            || buildEvidence.structuralBeamSelected
                             || job->surfaces.empty()
                             || (unsupportedFaces > 8
                                 && unsupportedFaces
