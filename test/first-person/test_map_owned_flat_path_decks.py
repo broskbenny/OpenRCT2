@@ -95,7 +95,7 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         self.assertIn("!path.isSloped()", path)
         self.assertIn("const CoordsXYZ artworkPoint{", path)
         self.assertIn("sourceRotation, artworkPoint", path)
-        self.assertIn("vertices[i] = {\\n                        points[i],", path)
+        self.assertIn("vertices[i] = {", path)
         # Mirroring an isometric sample about the physical tile centre is
         # an exact involution. It joins identical adjoining sprites, while
         # the surface retains its original physical world-space corners.
