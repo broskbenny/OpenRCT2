@@ -1747,8 +1747,6 @@
                                 if (auto expanded = BuildFirstPersonTerrainEdgeMaterial(
                                         *decoded, g1->width, g1->height))
                                 {
-                                    if (slope == kTileSlopeFlat)
-                                        (void)PeriodizeFirstPersonFlatTileMaterial(*expanded, v);
                                     material.width = int16_t(expanded->width);
                                     material.height = int16_t(expanded->height);
                                     material.padding = int16_t(expanded->padding);
