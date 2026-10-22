@@ -54,7 +54,8 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         self.assertLess(path.index("BuildFirstPersonPathFootprint("),
                         path.index("BuildFirstPersonTerrainEdgeMaterial("))
         self.assertLess(path.index("vertices[i] = {"),
-                        path.index("PeriodizeFirstPersonFlatTileMaterial("))
+                        path.index("if (!deckMaterialResolved)"))
+        self.assertNotIn("PeriodizeFirstPersonFlatTileMaterial(", path)
         self.assertLess(path.index("surface.physicalCoverage = true;"),
                         path.index("EmitQuad(surface, vertices);"))
         # The physical tile coverage still belongs to the authored footprint:
