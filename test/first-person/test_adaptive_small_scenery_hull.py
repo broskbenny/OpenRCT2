@@ -21,6 +21,12 @@ class AdaptiveSmallSceneryHullTest(unittest.TestCase):
         self.assertIn("carveAttempt.maximumEdgeError <= 2", code)
         self.assertIn("carveAttempt.voxelFaces <= 2048", code)
         self.assertIn("fineBounds.step = 1.0f;", code)
+        self.assertIn("supportRadius = 0;", code)
+        self.assertIn("auto strict = BuildFirstPersonVisualHull(", code)
+        self.assertIn("if (strict.valid)", code)
+        self.assertIn("return strict;", code)
+        self.assertLess(code.index("supportRadius = 0;"),
+                        code.index("fineBounds.step = 1.0f;"))
         self.assertIn("kMaximumFineCells = 65536", code)
         self.assertIn("fineConfig.allowContinuousSurfaceRefinement = false;", code)
         self.assertIn("if (fine.valid)", code)
