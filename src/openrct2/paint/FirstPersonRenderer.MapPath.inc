@@ -140,38 +140,37 @@
                 if (!deckMaterialResolved)
                 {
                     deckMaterialResolved = true;
-            const FirstPersonTerrainResidentMaterial* deckMaterial = nullptr;
-            if (!image.IsBlended())
-            {
-                auto found = _terrainCache.materials.find(image.GetIndex());
-                if (found == _terrainCache.materials.end())
-                {
-                    FirstPersonTerrainResidentMaterial material{};
-                    if (const auto decoded = DecodeFirstPersonSpritePixels(*sprite);
-                        decoded.has_value())
+                    if (!image.IsBlended())
                     {
-                        if (auto expanded = BuildFirstPersonTerrainEdgeMaterial(
-                                *decoded, sprite->width, sprite->height))
+                        auto found = _terrainCache.materials.find(image.GetIndex());
+                        if (found == _terrainCache.materials.end())
                         {
-                            if (FirstPersonPathUsesFullTileDeck(path))
-                                (void)PeriodizeFirstPersonFlatTileMaterial(*expanded, vertices);
-                            material.width = int16_t(expanded->width);
-                            material.height = int16_t(expanded->height);
-                            material.padding = int16_t(expanded->padding);
-                            material.pixels = std::make_shared<const std::vector<uint8_t>>(
-                                std::move(expanded->pixels));
-                            material.fingerprint = 0x2b806e4815771f09ull;
-                            ExtendStableKey(material.fingerprint, image.GetIndex());
-                            ExtendStableKey(material.fingerprint, uint64_t(material.width));
-                            ExtendStableKey(material.fingerprint, uint64_t(material.height));
+                            FirstPersonTerrainResidentMaterial material{};
+                            if (const auto decoded = DecodeFirstPersonSpritePixels(*sprite);
+                                decoded.has_value())
+                            {
+                                if (auto expanded = BuildFirstPersonTerrainEdgeMaterial(
+                                        *decoded, sprite->width, sprite->height))
+                                {
+                                    if (FirstPersonPathUsesFullTileDeck(path))
+                                        (void)PeriodizeFirstPersonFlatTileMaterial(*expanded, vertices);
+                                    material.width = int16_t(expanded->width);
+                                    material.height = int16_t(expanded->height);
+                                    material.padding = int16_t(expanded->padding);
+                                    material.pixels = std::make_shared<const std::vector<uint8_t>>(
+                                        std::move(expanded->pixels));
+                                    material.fingerprint = 0x2b806e4815771f09ull;
+                                    ExtendStableKey(material.fingerprint, image.GetIndex());
+                                    ExtendStableKey(material.fingerprint, uint64_t(material.width));
+                                    ExtendStableKey(material.fingerprint, uint64_t(material.height));
+                                }
+                            }
+                            found = _terrainCache.materials.emplace(
+                                image.GetIndex(), std::move(material)).first;
                         }
+                        if (found->second.pixels != nullptr)
+                            deckMaterial = &found->second;
                     }
-                    found = _terrainCache.materials.emplace(
-                        image.GetIndex(), std::move(material)).first;
-                }
-                if (found->second.pixels != nullptr)
-                    deckMaterial = &found->second;
-            }
 
                 }
                 FirstPersonSurface surface{};
