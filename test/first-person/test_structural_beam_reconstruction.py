@@ -188,6 +188,19 @@ int main() {
     const auto& fromImages=loose.valid?loose:strict;
     assert(fromImages.valid);
     assert(fromImages.roundTripViewCount==4);
+    assert(fromImages.structuralBeamSelected);
+    assert(fromImages.refinedFaces.size()*2<strictAttempt.voxelFaces);
+    // A central phantom post overlaps the four projected bars but is not
+    // present in the original structure. Removing this wholly redundant
+    // volume is possible without changing ANY source-view silhouette.
+    for(const auto& face:fromImages.refinedFaces) {
+        bool central=true;
+        for(const auto& point:face.corners)
+            if(point.x<7.0f || point.x>8.0f
+                || point.y<7.0f || point.y>8.0f)
+                central=false;
+        assert(!central);
+    }
     assert(fromImages.minimumObservedCoverage>=0.90f);
     assert(fromImages.minimumCandidateCoverage>=0.90f);
     // Compact solids and isolated fragments do not get falsely identified
@@ -220,6 +233,7 @@ int main() {
         self.assertIn("config.allowStructuralBeamReconstruction = true;", collision)
         self.assertIn("CertifyFirstPersonReconstruction(", hull)
         self.assertIn("FirstPersonRoundTripNonWorse(", hull)
+        self.assertIn("if (redundant && chosenCount > 2)", hull)
         self.assertIn("result.structuralBeamSelected = true;", hull)
         self.assertIn("certificate.minimumIntersectionOverUnion >= 0.85f", hull)
         self.assertIn("certificate.minimumCandidateCoverage >= 0.90f", hull)
