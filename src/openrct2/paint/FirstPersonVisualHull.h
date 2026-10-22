@@ -1487,51 +1487,41 @@ namespace OpenRCT2::Paint
             voxelCertificate;
         if (config.allowStructuralBeamReconstruction)
         {
-            // Four simultaneous source views first define supported 3D
-            // occupancy. Extract long consistent structural spans, then
-            // independently certify the BEAM BOUNDARY against every view.
-            // Never promote a merely plausible skeleton or weaker image fit.
-            auto beamFaces = BuildFirstPersonVisualHullStructuralBeamFaces(
-                result, voxelFaces.size(),
-                std::min<size_t>(512, config.maximumContinuousSurfaceFaces));
-            if (beamFaces.empty()
-                || !config.allowContinuousSurfaceRefinement)
-            {
-                // The source-matched hypothesis can rescue highly ambiguous
-                // visual-hull intersections. On slender structures it removes
-                // mutually redundant phantom beams rather than displaying
-                // all four-view-consistent occupancy as a voxel cloud.
-                auto matched = BuildFirstPersonVisualHullSourceMatchedBeamFaces(
-                    result, views, projectPoint, voxelFaces.size(),
-                    std::min<size_t>(512, config.maximumContinuousSurfaceFaces));
-                if (!matched.empty())
-                    beamFaces = std::move(matched);
-            }
-            if (!beamFaces.empty())
-            {
-                auto beamCertificate = CertifyFirstPersonReconstruction(
-                    TriangulateFirstPersonReconstructionFaces(beamFaces),
-                    views, projectPoint);
-                // Structural meshes must be recognisable and complete,
-                // not merely admissible under the permissive legacy voxel
-                // thresholds. Nearly all native pixels must be explained
-                // without overpainting openings or moving sharp bar edges.
-                const bool highQualityBeamFit =
-                    passesAdmission(beamCertificate)
-                    && beamCertificate.minimumIntersectionOverUnion >= 0.85f
-                    && beamCertificate.minimumCandidateCoverage >= 0.90f
-                    && beamCertificate.minimumObservedCoverage >= 0.90f
-                    && beamCertificate.maximumEdgeError <= 2;
-                if (highQualityBeamFit
-                    && (!passesAdmission(selectedCertificate)
-                        || FirstPersonRoundTripNonWorse(
-                            beamCertificate, selectedCertificate)))
-                {
-                    result.refinedFaces = std::move(beamFaces);
+            // Independently render every structural hypothesis through the
+            // four native observations. A single long-run extraction is not
+            // sufficient for cluttered visual hulls: phantom beams can share
+            // the same source pixels, so also evaluate a sparse image-matched
+            // subset before giving up or publishing voxel fragments.
+            const auto tryStructuralCandidate =
+                [&](std::vector<FirstPersonVisualHullFace> faces) {
+                    if (faces.empty())
+                        return;
+                    const auto certificate = CertifyFirstPersonReconstruction(
+                        TriangulateFirstPersonReconstructionFaces(faces),
+                        views, projectPoint);
+                    const bool highQuality =
+                        passesAdmission(certificate)
+                        && certificate.minimumIntersectionOverUnion >= 0.85f
+                        && certificate.minimumCandidateCoverage >= 0.90f
+                        && certificate.minimumObservedCoverage >= 0.90f
+                        && certificate.maximumEdgeError <= 2;
+                    if (!highQuality)
+                        return;
+                    if (passesAdmission(selectedCertificate)
+                        && !FirstPersonRoundTripNonWorse(
+                            certificate, selectedCertificate))
+                        return;
+                    result.refinedFaces = std::move(faces);
                     result.structuralBeamSelected = true;
-                    selectedCertificate = beamCertificate;
-                }
-            }
+                    selectedCertificate = certificate;
+                };
+            tryStructuralCandidate(BuildFirstPersonVisualHullStructuralBeamFaces(
+                result, voxelFaces.size(),
+                std::min<size_t>(512, config.maximumContinuousSurfaceFaces)));
+            if (!result.structuralBeamSelected)
+                tryStructuralCandidate(BuildFirstPersonVisualHullSourceMatchedBeamFaces(
+                    result, views, projectPoint, voxelFaces.size(),
+                    std::min<size_t>(512, config.maximumContinuousSurfaceFaces)));
         }
         if (config.allowContinuousSurfaceRefinement
             && !voxelFaces.empty()
