@@ -42,6 +42,24 @@ class AdaptiveSmallSceneryHullTest(unittest.TestCase):
         self.assertNotIn("config.minimumCandidateCoverage =", code)
         self.assertNotIn("config.minimumObservedCoverage =", code)
 
+    def test_actual_retry_certificate_and_material_completeness_gate(self):
+        collision = COLLISION.read_text(encoding="utf-8")
+        small = (ROOT/"src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc").read_text(encoding="utf-8")
+        self.assertIn("FirstPersonVisualHullAttempt strictAttempt{};", collision)
+        self.assertIn("FirstPersonVisualHullAttempt fineAttempt{};", collision)
+        self.assertIn("strict.attempt = strictAttempt;", collision)
+        self.assertIn("fine.attempt = fineAttempt;", collision)
+        self.assertIn("unsupportedVisibleFaces >= 128", small)
+        self.assertIn("unsupportedVisibleFaces > emittedFaces / 2", small)
+        self.assertIn("scene.surfaces.resize(surfaceStart);", small)
+        # Recorded mment1 had 1539 unsupported, 1705 textured visible
+        # faces; its low-material-evidence surface must no longer publish.
+        def publish(supported, unsupported):
+            return not (unsupported >= 128 and unsupported > supported // 2)
+        self.assertFalse(publish(1705, 1539))
+        self.assertTrue(publish(1705, 0))
+        self.assertTrue(publish(5, 1))
+
     def test_grid_retry_never_exceeds_admission_or_grid_budget(self):
         rng = random.Random(20261021)
         max_cells = 65536
