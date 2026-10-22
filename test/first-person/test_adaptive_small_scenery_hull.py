@@ -23,7 +23,8 @@ class AdaptiveSmallSceneryHullTest(unittest.TestCase):
         self.assertIn("fineBounds.step = 1.0f;", code)
         self.assertIn("supportRadius = 0;", code)
         self.assertIn("auto strict = BuildFirstPersonVisualHull(", code)
-        self.assertIn("if (strict.valid)", code)
+        self.assertIn("strictConfig.preferCertifiedSmoothSurface = true;", code)
+        self.assertIn("if (strict.valid && strict.continuousSurfaceRefined)", code)
         self.assertIn("return strict;", code)
         self.assertLess(code.index("supportRadius = 0;"),
                         code.index("fineBounds.step = 1.0f;"))
