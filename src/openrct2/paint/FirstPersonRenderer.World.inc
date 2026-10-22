@@ -1727,6 +1727,8 @@
                             v[i] = { world[i], float(src.x - isoOrigin.x - g1->xOffset),
                                                float(src.y - isoOrigin.y - g1->yOffset) };
                         }
+                        if (slope == kTileSlopeFlat)
+                            MirrorFirstPersonFlatTileUV(v, (tx & 1) != 0, (ty & 1) != 0);
                         cache.ground = {};
                         cache.ground.image = image;
                         cache.ground.physicalCoverage = true;
