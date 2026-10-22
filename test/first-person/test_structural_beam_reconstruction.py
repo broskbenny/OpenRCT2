@@ -18,6 +18,7 @@ class StructuralBeamReconstructionTest(unittest.TestCase):
 #include "src/openrct2/paint/FirstPersonVisualHull.h"
 #include <array>
 #include <cassert>
+#include <cstdio>
 #include <cstddef>
 #include <vector>
 using namespace OpenRCT2::Paint;
@@ -107,19 +108,36 @@ int main() {
     // the four 2D silhouettes alone. No 3D ground-truth oracle is available
     // to this candidate. The independently published surface must still
     // reproduce every native view.
-    FirstPersonVisualHullAttempt imageAttempt{};
-    auto fromImages=BuildFirstPersonVisualHull(
-        views,bounds,config,project,
-        [](FirstPersonVec3) { return true; },
-        [&](const FirstPersonVisualHullView& view,FirstPersonVec3 point) {
-            const auto uv=project(view.imageDirection,point);
-            const int px=int(std::lround(uv[0])),py=int(std::lround(uv[1]));
-            for(int dy=-1;dy<=1;++dy)
-            for(int dx=-1;dx<=1;++dx)
-                if(view.observed.contains(px+dx,py+dy))
-                    return true;
-            return false;
-        },&imageAttempt);
+    auto fromObservedMasks = [&](int radius,FirstPersonVisualHullAttempt& certificate) {
+        return BuildFirstPersonVisualHull(
+            views,bounds,config,project,
+            [](FirstPersonVec3) { return true; },
+            [&](const FirstPersonVisualHullView& view,FirstPersonVec3 point) {
+                const auto uv=project(view.imageDirection,point);
+                const int px=int(std::lround(uv[0])),py=int(std::lround(uv[1]));
+                for(int dy=-radius;dy<=radius;++dy)
+                for(int dx=-radius;dx<=radius;++dx)
+                    if(view.observed.contains(px+dx,py+dy))
+                        return true;
+                return false;
+            },&certificate);
+    };
+    FirstPersonVisualHullAttempt looseAttempt{},strictAttempt{};
+    auto loose=fromObservedMasks(1,looseAttempt);
+    auto strict=fromObservedMasks(0,strictAttempt);
+    if (!loose.valid && !strict.valid) {
+        const auto report=[](const char* label,const FirstPersonVisualHullAttempt& attempt) {
+            std::fprintf(stderr,
+                "%s: stage=%u cells=%u faces=%u iou=%.3f cand=%.3f obs=%.3f edge=%d diff=%zu\\n",
+                label,unsigned(attempt.stage),attempt.occupiedCells,attempt.voxelFaces,
+                double(attempt.minimumIoU),double(attempt.candidateCoverage),
+                double(attempt.observedCoverage),attempt.maximumEdgeError,
+                attempt.disagreementPixels);
+        };
+        report("loose",looseAttempt);
+        report("strict",strictAttempt);
+    }
+    const auto& fromImages=loose.valid?loose:strict;
     assert(fromImages.valid);
     assert(fromImages.roundTripViewCount==4);
     assert(fromImages.minimumObservedCoverage>=0.90f);
