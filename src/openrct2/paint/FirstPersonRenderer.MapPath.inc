@@ -84,6 +84,16 @@
             const FirstPersonTerrainResidentMaterial* deckMaterial = nullptr;
             bool deckMaterialResolved = false;
 
+            const uint8_t edges = path.getEdges() & 0x0Fu;
+            const bool fullTile = FirstPersonPathUsesFullTileDeck(path);
+            // Reflect only plain symmetric decks; junctions and exposed
+            // native borders keep their source-artwork orientation.
+            const bool mirrorX = !path.isSloped()
+                && ((tile.x / kCoordsXYStep) & 1) != 0
+                && (fullTile || (edges == 0x05 && path.getCorners() == 0));
+            const bool mirrorY = !path.isSloped()
+                && ((tile.y / kCoordsXYStep) & 1) != 0
+                && (fullTile || (edges == 0x0A && path.getCorners() == 0));
             const auto paintOrigin = GetTileElementPaintSpritePosition(
                 tile, sourceRotation);
             const auto isoOrigin = Translate3DTo2DWithZ(
@@ -129,8 +139,13 @@
                         int32_t(points[i].y),
                         int32_t(points[i].z)
                     };
+                    const CoordsXYZ artworkPoint{
+                        mirrorX ? tile.x + kCoordsXYStep - (world.x - tile.x) : world.x,
+                        mirrorY ? tile.y + kCoordsXYStep - (world.y - tile.y) : world.y,
+                        world.z,
+                    };
                     const auto projected = Translate3DTo2DWithZ(
-                        sourceRotation, world);
+                        sourceRotation, artworkPoint);
                     vertices[i] = {
                         points[i],
                         float(projected.x - isoOrigin.x - sprite->xOffset),
