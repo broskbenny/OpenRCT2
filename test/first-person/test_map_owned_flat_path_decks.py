@@ -70,7 +70,7 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         entries = native.split(
             "kPathEdgesAndCornersToSurfaceImageIndexOffset[] = {", 1
         )[1].split("};", 1)[0]
-        offsets = [int(x) for x in re.findall(r"\\b\\d+\\b", entries)]
+        offsets = [int(x) for x in re.findall(r"\b\d+\b", entries)]
         self.assertEqual(len(offsets), 256)
         axes_per_image = {}
         for combined, offset in enumerate(offsets):
