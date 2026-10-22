@@ -64,6 +64,27 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         self.assertIn("surface.coplanarOwner = true;", path)
         self.assertNotIn("heightAt(float(cell.x0), float(cell.y0)) +", path)
 
+    def test_native_path_image_aliases_never_mix_repeat_axes(self):
+        import re
+        native = (ROOT / "src/openrct2/paint/tile_element/Paint.Path.cpp").read_text()
+        entries = native.split(
+            "kPathEdgesAndCornersToSurfaceImageIndexOffset[] = {", 1
+        )[1].split("};", 1)[0]
+        offsets = [int(x) for x in re.findall(r"\\b\\d+\\b", entries)]
+        self.assertEqual(len(offsets), 256)
+        axes_per_image = {}
+        for combined, offset in enumerate(offsets):
+            edges = combined & 15
+            axes = int((edges & 0x05) == 0x05)
+            axes |= 2 * int((edges & 0x0A) == 0x0A)
+            axes_per_image.setdefault(offset, set()).add(axes)
+        # An immutable cached palette can safely be keyed by sprite ID,
+        # rather than re-created for every path placement.
+        self.assertTrue(all(len(axes) == 1 for axes in axes_per_image.values()))
+        self.assertEqual(axes_per_image[5], {1})
+        self.assertEqual(axes_per_image[10], {2})
+        self.assertEqual(axes_per_image[15], {3})
+
     def test_path_packets_publish_and_suppress_only_ready_duplicates(self):
         local = LOCAL.read_text(encoding="utf-8")
         world = WORLD.read_text(encoding="utf-8")
