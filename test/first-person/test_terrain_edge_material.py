@@ -98,13 +98,57 @@ int main() {
             checked = subprocess.run([str(exe)], capture_output=True, text=True)
             self.assertEqual(checked.returncode, 0, checked.stderr)
 
+    def test_partial_axis_preserves_unconnected_native_border(self):
+        compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
+        if not compiler:
+            self.skipTest("C++ compiler not installed")
+        code = r"""
+#include "src/openrct2/paint/FirstPersonTerrainEdgeMaterial.h"
+#include <array>
+#include <cassert>
+#include <vector>
+using namespace OpenRCT2::Paint;
+struct UV { float u, v; };
+int main() {
+    std::vector<uint8_t> native(64*40, 0);
+    for(int y=0;y<40;++y)
+    for(int x=0;x<64;++x)
+        native[size_t(y)*64+x] = uint8_t(8 + y);
+    auto tile = BuildFirstPersonTerrainEdgeMaterial(native,64,40,4);
+    assert(tile);
+    const std::array<UV,4> uv{{ {8,8}, {56,8}, {56,32}, {8,32} }};
+    assert(PeriodizeFirstPersonFlatTileMaterial(*tile,uv,1));
+    const auto sample = [&](int x,int y) {
+        return tile->pixels[size_t(y+4)*tile->width+size_t(x+4)];
+    };
+    for(int y=8;y<32;++y) assert(sample(8,y) == sample(55,y));
+    // Only the connected X faces repeat. Y borders still use the native
+    // entrance/edge art and have not been forced into a tiled plaza.
+    assert(sample(30,8) != sample(30,31));
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            source=Path(tmp)/"test.cpp"
+            binary=Path(tmp)/"test"
+            source.write_text(code,encoding="utf-8")
+            built=subprocess.run(
+                [compiler,"-std=c++20","-I",str(ROOT),str(source),
+                 "-o",str(binary)], capture_output=True,text=True)
+            self.assertEqual(built.returncode,0,built.stderr)
+            checked=subprocess.run([str(binary)],capture_output=True,text=True)
+            self.assertEqual(checked.returncode,0,checked.stderr)
+
     def test_flat_terrain_and_full_plazas_are_periodized_once_per_image(self):
         world=(ROOT/"src/openrct2/paint/FirstPersonRenderer.World.inc").read_text()
         path=(ROOT/"src/openrct2/paint/FirstPersonRenderer.MapPath.inc").read_text()
         self.assertIn("if (slope == kTileSlopeFlat)", world)
         self.assertIn("PeriodizeFirstPersonFlatTileMaterial(*expanded, v)", world)
         self.assertIn("if (FirstPersonPathUsesFullTileDeck(path))", path)
-        self.assertIn("PeriodizeFirstPersonFlatTileMaterial(*expanded, vertices)", path)
+        self.assertIn("PeriodizeFirstPersonFlatTileMaterial(", path)
+        self.assertIn("*expanded, wholeTile, periodicAxes", path)
+        self.assertIn("(connected & 0x05u) == 0x05u", path)
+        self.assertIn("(connected & 0x0Au) == 0x0Au", path)
+        self.assertIn("path.isSloped() ? 0u", path)
         self.assertIn("bool deckMaterialResolved = false;", path)
         self.assertEqual(path.count("const FirstPersonTerrainResidentMaterial* deckMaterial"), 1)
         self.assertIn("if (!deckMaterialResolved)", path)
