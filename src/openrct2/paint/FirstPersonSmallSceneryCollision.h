@@ -724,11 +724,19 @@ namespace OpenRCT2::Paint
                 {
                     auto fineConfig = config;
                     fineConfig.maximumGridCells = kMaximumFineCells;
-                    fineConfig.allowContinuousSurfaceRefinement = false;
+                    // The previous retry promoted raw one-unit cuboids,
+                    // making thin architectural artwork extremely blocky
+                    // despite its acceptable silhouette certificate.
+                    // Publish only a conforming, continuously refined mesh
+                    // whose four-view coverage is no worse than the raw mesh.
+                    fineConfig.allowContinuousSurfaceRefinement = true;
+                    fineConfig.preferCertifiedSmoothSurface = true;
+                    fineConfig.maximumContinuousSurfaceFaces = 8192;
+                    fineConfig.continuousSurfaceSearchSteps = 2;
                     auto fine = BuildFirstPersonVisualHull(
                         views, fineBounds, fineConfig,
                         projectPoint, occupancyPredicate, pointSupported);
-                    if (fine.valid)
+                    if (fine.valid && fine.continuousSurfaceRefined)
                         return fine;
                 }
             }
