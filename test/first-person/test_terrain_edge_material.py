@@ -53,6 +53,63 @@ int main() {
             result=subprocess.run([str(exe)],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
 
+    def test_flat_native_palette_tiles_have_matching_opposite_edges(self):
+        compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
+        if not compiler:
+            self.skipTest("C++ compiler not installed")
+        code = r"""
+#include "src/openrct2/paint/FirstPersonTerrainEdgeMaterial.h"
+#include <array>
+#include <cassert>
+#include <vector>
+using namespace OpenRCT2::Paint;
+struct UV { float u, v; };
+int main() {
+    std::vector<uint8_t> source(64 * 40, 0);
+    for (int y = 0; y < 40; ++y)
+    for (int x = 0; x < 64; ++x)
+        source[size_t(y)*64+size_t(x)] = uint8_t(3 + ((x*7+y*3) % 120));
+    auto expanded = BuildFirstPersonTerrainEdgeMaterial(source, 64, 40, 4);
+    assert(expanded);
+    const std::array<UV,4> quad{{ {8,8}, {56,8}, {56,32}, {8,32} }};
+    assert(PeriodizeFirstPersonFlatTileMaterial(*expanded, quad));
+    const auto sample = [&](int x,int y) {
+        return expanded->pixels[size_t(y+4)*size_t(expanded->width)+size_t(x+4)];
+    };
+    // Repeated tile geometry samples equal palette colours at both physical
+    // sides: no colour jump at the boundary between identical surfaces.
+    for (int y=8;y<32;++y)
+        assert(sample(8,y) == sample(55,y));
+    for (int x=8;x<56;++x)
+        assert(sample(x,8) == sample(x,31));
+    for (const auto pixel : expanded->pixels) assert(pixel != 0);
+    const std::array<UV,4> collapsed{{ {8,8}, {8,8}, {8,8}, {8,8} }};
+    assert(!PeriodizeFirstPersonFlatTileMaterial(*expanded, collapsed));
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp)/"test.cpp"
+            exe = Path(tmp)/"test"
+            source.write_text(code, encoding="utf-8")
+            built = subprocess.run(
+                [compiler, "-std=c++20", "-I", str(ROOT),
+                 str(source), "-o", str(exe)], capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            checked = subprocess.run([str(exe)], capture_output=True, text=True)
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+
+    def test_flat_terrain_and_full_plazas_are_periodized_once_per_image(self):
+        world=(ROOT/"src/openrct2/paint/FirstPersonRenderer.World.inc").read_text()
+        path=(ROOT/"src/openrct2/paint/FirstPersonRenderer.MapPath.inc").read_text()
+        self.assertIn("if (slope == kTileSlopeFlat)", world)
+        self.assertIn("PeriodizeFirstPersonFlatTileMaterial(*expanded, v)", world)
+        self.assertIn("if (FirstPersonPathUsesFullTileDeck(path))", path)
+        self.assertIn("PeriodizeFirstPersonFlatTileMaterial(*expanded, vertices)", path)
+        self.assertIn("bool deckMaterialResolved = false;", path)
+        self.assertEqual(path.count("const FirstPersonTerrainResidentMaterial* deckMaterial"), 1)
+        self.assertIn("if (!deckMaterialResolved)", path)
+        self.assertIn("surface.coplanarOwner = true;", path)
+
     def test_live_terrain_only_uses_shared_immutable_material(self):
         world=(ROOT/"src/openrct2/paint/FirstPersonRenderer.World.inc").read_text()
         core=(ROOT/"src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text()
