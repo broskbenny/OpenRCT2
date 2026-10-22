@@ -702,10 +702,15 @@ namespace OpenRCT2::Paint
                 // Test undilated source pixels before spending the fine-grid
                 // budget. Both retries retain the same four-view admission.
                 supportRadius = 0;
+                auto strictConfig = config;
+                strictConfig.preferCertifiedSmoothSurface = true;
                 auto strict = BuildFirstPersonVisualHull(
-                    views, bounds, config,
+                    views, bounds, strictConfig,
                     projectPoint, occupancyPredicate, pointSupported);
-                if (strict.valid)
+                // A strict silhouette is not proof of smooth geometry:
+                // prevent the two-unit retry from publishing another
+                // staircase mesh when its conforming refinement failed.
+                if (strict.valid && strict.continuousSurfaceRefined)
                     return strict;
 
                 auto fineBounds = bounds;
