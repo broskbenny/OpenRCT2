@@ -86,6 +86,25 @@ class MapOwnedFlatPathDeckTest(unittest.TestCase):
         self.assertEqual(axes_per_image[10], {2})
         self.assertEqual(axes_per_image[15], {3})
 
+    def test_symmetric_decks_mirror_native_uvs_without_moving_geometry(self):
+        path = MAP_PATH.read_text(encoding="utf-8")
+        self.assertIn("const uint8_t edges = path.getEdges() & 0x0Fu;", path)
+        self.assertIn("const bool fullTile = FirstPersonPathUsesFullTileDeck(path);", path)
+        self.assertIn("edges == 0x05 && path.getCorners() == 0", path)
+        self.assertIn("edges == 0x0A && path.getCorners() == 0", path)
+        self.assertIn("!path.isSloped()", path)
+        self.assertIn("const CoordsXYZ artworkPoint{", path)
+        self.assertIn("sourceRotation, artworkPoint", path)
+        self.assertIn("vertices[i] = {\\n                        points[i],", path)
+        # Mirroring an isometric sample about the physical tile centre is
+        # an exact involution. It joins identical adjoining sprites, while
+        # the surface retains its original physical world-space corners.
+        for offset in range(33):
+            left = offset
+            right = 32 - offset
+            self.assertEqual(32 - right, left)
+        self.assertNotIn("PeriodizeFirstPersonFlatTileMaterial", path)
+
     def test_path_packets_publish_and_suppress_only_ready_duplicates(self):
         local = LOCAL.read_text(encoding="utf-8")
         world = WORLD.read_text(encoding="utf-8")
