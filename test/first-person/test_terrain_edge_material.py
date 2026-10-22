@@ -92,6 +92,37 @@ int main() {
     for (const auto pixel : expanded->pixels) assert(pixel != 0);
     const std::array<UV,4> collapsed{{ {8,8}, {8,8}, {8,8}, {8,8} }};
     assert(!PeriodizeFirstPersonFlatTileMaterial(*expanded, collapsed));
+
+    // Native terrain is an isometric diamond, not an axis-aligned UV quad.
+    // This catches opposite-edge mismatches introduced by raster inversion
+    // when projected texture coordinates have both X and Y components.
+    auto diamond = BuildFirstPersonTerrainEdgeMaterial(source,64,40,4);
+    assert(diamond);
+    const std::array<UV,4> iso{{
+        {32,4}, {63,20}, {32,36}, {1,20}
+    }};
+    const auto originalDiamond = diamond->pixels;
+    assert(PeriodizeFirstPersonFlatTileMaterial(*diamond, iso));
+    const auto isoSample = [&](float s, float t) {
+        const float u = iso[0].u + (iso[1].u-iso[0].u)*s
+            + (iso[3].u-iso[0].u)*t;
+        const float v = iso[0].v + (iso[1].v-iso[0].v)*s
+            + (iso[3].v-iso[0].v)*t;
+        return diamond->pixels[
+            size_t(int(std::floor(v+4)))*diamond->width
+            + size_t(int(std::floor(u+4)))];
+    };
+    for (int i=0;i<32;++i) {
+        const float n = (float(i)+0.5f)/32.0f;
+        assert(isoSample(0.0f,n)==isoSample(1.0f,n));
+        assert(isoSample(n,0.0f)==isoSample(n,1.0f));
+    }
+    // The full central native image survives without reprojecting its
+    // original palette texels through a low-resolution 32x32 grid.
+    for (int y=17;y<24;++y)
+    for (int x=27;x<38;++x)
+        assert(diamond->pixels[size_t(y+4)*diamond->width+x+4]
+            == originalDiamond[size_t(y+4)*diamond->width+x+4]);
 }
 """
         with tempfile.TemporaryDirectory() as tmp:
