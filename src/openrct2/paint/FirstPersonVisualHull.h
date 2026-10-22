@@ -1193,6 +1193,44 @@ namespace OpenRCT2::Paint
         }
         if (chosenCount < 2)
             return {};
+        // Final reverse coverage proof: remove any candidate beam whose
+        // entire projection is already explained by the other selected
+        // beams in ALL four views. Such a phantom rod has no independent
+        // image evidence; retaining it harms geometry but cannot improve
+        // the source silhouette. Unlike heuristic pruning this changes
+        // exactly zero predicted pixels (including negative/open regions).
+        for (size_t i = 0; i < candidates.size(); ++i)
+        {
+            if (!chosen[i])
+                continue;
+            bool redundant = true;
+            for (uint8_t direction = 0; direction < 4 && redundant; ++direction)
+            {
+                std::unordered_set<uint64_t> others;
+                for (size_t j = 0; j < candidates.size(); ++j)
+                    if (chosen[j] && j != i)
+                    {
+                        const auto& pixels = candidates[j].projected[direction].pixels;
+                        others.insert(pixels.begin(), pixels.end());
+                    }
+                for (const auto pixel : candidates[i].projected[direction].pixels)
+                    if (!others.contains(pixel))
+                    {
+                        redundant = false;
+                        break;
+                    }
+            }
+            if (redundant && chosenCount > 2)
+            {
+                chosen[i] = 0;
+                --chosenCount;
+            }
+        }
+        std::fill(selectedCells.begin(), selectedCells.end(), 0);
+        for (size_t i = 0; i < candidates.size(); ++i)
+            if (chosen[i])
+                for (const auto cell : candidates[i].cells)
+                    selectedCells[cell] = 1;
         FirstPersonVisualHull selected = hull;
         selected.occupied = std::move(selectedCells);
         selected.refinedFaces.clear();
