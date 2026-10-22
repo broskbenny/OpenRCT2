@@ -366,6 +366,7 @@
 
             const size_t surfaceStart = scene.surfaces.size();
             size_t emittedFaces = 0;
+            size_t unsupportedVisibleFaces = 0;
             FirstPersonHullMaterialCoverage materialCoverage(faces);
             for (size_t faceIndex = 0;
                  faceIndex < faces.size(); ++faceIndex)
@@ -731,9 +732,26 @@
                 // leaving an unrelated camera-facing sprite as the only
                 // presentation. Omit this unsupported face and preserve
                 // evidence-backed reconstructed surfaces.
+                ++unsupportedVisibleFaces;
                 if (buildEvidence != nullptr)
                     ++buildEvidence->withoutSourceMaterial;
                 continue;
+            }
+
+            // Four-view silhouette fit alone does not make a physically
+            // coherent textured mesh. If a complex reconstruction leaves
+            // hundreds of non-bottom facets without ANY source material,
+            // publishing the other tiny facets produces exactly the
+            // glittering, partially billboarded geometry seen on ornate
+            // lattice artwork. Reject the whole VISUAL mesh when unsupported
+            // fragments are a substantial fraction of its actual surfaces;
+            // the authoritative collision hull remains entirely unchanged.
+            if (appearance.certifiesHullMaterial
+                && unsupportedVisibleFaces >= 128
+                && unsupportedVisibleFaces > emittedFaces / 2)
+            {
+                scene.surfaces.resize(surfaceStart);
+                return false;
             }
 
             if (appearance.certifiesHullMaterial)
