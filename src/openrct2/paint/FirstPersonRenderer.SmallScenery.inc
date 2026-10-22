@@ -42,8 +42,10 @@
                 if (walkingMask != nullptr)
                     *walkingMask = BuildFirstPersonSmallSceneryWalkingMaskFromHull(ownedHull, metadata.height);
                 if (buildEvidence != nullptr)
+                {
                     buildEvidence->directConvexSurface = hull->directConvexSurface;
                     buildEvidence->structuralBeamSelected = hull->structuralBeamSelected;
+                }
             }
             const auto appearance =
                 BuildFirstPersonSmallSceneryAppearancePlan(
