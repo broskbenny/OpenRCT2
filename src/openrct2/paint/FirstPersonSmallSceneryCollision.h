@@ -644,6 +644,9 @@ namespace OpenRCT2::Paint
                             + correction.y),
                     };
                 };
+            // Widened silhouette support preserves coarse solids; exact
+            // support is reserved for evidence-gated thin-lattice retries.
+            int32_t supportRadius = 1;
             const auto pointSupported =
                 [&](const FirstPersonVisualHullView& view,
                     FirstPersonVec3 point) {
@@ -656,10 +659,10 @@ namespace OpenRCT2::Paint
                     const int32_t py =
                         int32_t(std::lround(
                             projected[1]));
-                    for (int32_t dy = -1;
-                         dy <= 1; ++dy)
-                    for (int32_t dx = -1;
-                         dx <= 1; ++dx)
+                    for (int32_t dy = -supportRadius;
+                         dy <= supportRadius; ++dy)
+                    for (int32_t dx = -supportRadius;
+                         dx <= supportRadius; ++dx)
                     {
                         if (view.observed.contains(
                                 px + dx, py + dy))
@@ -696,6 +699,15 @@ namespace OpenRCT2::Paint
                 && carveAttempt.maximumEdgeError <= 2
                 && carveAttempt.voxelFaces <= 2048)
             {
+                // Test undilated source pixels before spending the fine-grid
+                // budget. Both retries retain the same four-view admission.
+                supportRadius = 0;
+                auto strict = BuildFirstPersonVisualHull(
+                    views, bounds, config,
+                    projectPoint, occupancyPredicate, pointSupported);
+                if (strict.valid)
+                    return strict;
+
                 auto fineBounds = bounds;
                 fineBounds.step = 1.0f;
                 const size_t fineForward = size_t(std::ceil(
