@@ -895,7 +895,14 @@ namespace OpenRCT2::Paint
             return {};
 
         const int32_t minimumRun = std::max(
-            4, int32_t(std::ceil(10.0f / hull.step)));
+            4, int32_t(std::ceil(8.0f / hull.step)));
+        // A straight physical beam can disappear for one or two voxel
+        // centres because integer isometric sprite rasterisation samples
+        // its thin silhouette between pixels. A short enclosed gap is not
+        // a true structural endpoint. Never extrapolate past measured runs;
+        // native reprojection must independently certify every repaired gap.
+        const int32_t maximumInternalGap = std::max(
+            1, int32_t(std::ceil(2.0f / hull.step)));
         std::vector<uint8_t> beams(total, 0);
         const auto index = [&](int32_t f, int32_t r, int32_t u) -> size_t {
             return (size_t(u) * size_t(size[1]) + size_t(r))
@@ -926,11 +933,38 @@ namespace OpenRCT2::Paint
                         continue;
                     }
                     const int32_t start = along;
-                    while (along < alongSize
-                        && hull.occupied[lineIndex(along, a, b)] != 0)
+                    while (along < alongSize)
+                    {
+                        if (hull.occupied[lineIndex(along, a, b)] != 0)
+                        {
+                            ++along;
+                            continue;
+                        }
+                        const int32_t gapStart = along;
+                        while (along < alongSize
+                            && along - gapStart <= maximumInternalGap
+                            && hull.occupied[lineIndex(along, a, b)] == 0)
+                            ++along;
+                        // Do not connect genuine openings or extend a
+                        // beam beyond its last supported endpoint.
+                        if (along >= alongSize
+                            || along - gapStart > maximumInternalGap
+                            || hull.occupied[lineIndex(along, a, b)] == 0)
+                        {
+                            along = gapStart;
+                            break;
+                        }
                         ++along;
+                    }
                     if (along - start < minimumRun)
+                    {
+                        // A short run is not structure. Advance across the
+                        // unsupported separator before scanning a new run.
+                        while (along < alongSize
+                            && hull.occupied[lineIndex(along, a, b)] == 0)
+                            ++along;
                         continue;
+                    }
                     for (int32_t k = start; k < along; ++k)
                         beams[lineIndex(k, a, b)] = 1;
                 }
