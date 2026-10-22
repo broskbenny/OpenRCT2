@@ -704,9 +704,12 @@ namespace OpenRCT2::Paint
                 supportRadius = 0;
                 auto strictConfig = config;
                 strictConfig.preferCertifiedSmoothSurface = true;
+                FirstPersonVisualHullAttempt strictAttempt{};
                 auto strict = BuildFirstPersonVisualHull(
                     views, bounds, strictConfig,
-                    projectPoint, occupancyPredicate, pointSupported);
+                    projectPoint, occupancyPredicate, pointSupported,
+                    &strictAttempt);
+                strict.attempt = strictAttempt;
                 // A strict silhouette is not proof of smooth geometry:
                 // prevent the two-unit retry from publishing another
                 // staircase mesh when its conforming refinement failed.
@@ -738,9 +741,12 @@ namespace OpenRCT2::Paint
                     fineConfig.preferCertifiedSmoothSurface = true;
                     fineConfig.maximumContinuousSurfaceFaces = 8192;
                     fineConfig.continuousSurfaceSearchSteps = 2;
+                    FirstPersonVisualHullAttempt fineAttempt{};
                     auto fine = BuildFirstPersonVisualHull(
                         views, fineBounds, fineConfig,
-                        projectPoint, occupancyPredicate, pointSupported);
+                        projectPoint, occupancyPredicate, pointSupported,
+                        &fineAttempt);
+                    fine.attempt = fineAttempt;
                     if (fine.valid && fine.continuousSurfaceRefined)
                         return fine;
                 }
