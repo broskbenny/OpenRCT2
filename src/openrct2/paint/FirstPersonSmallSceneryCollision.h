@@ -597,6 +597,7 @@ namespace OpenRCT2::Paint
         // projective material path for arbitrary quads, so it may compete a
         // support-field relaxation against the voxel boundary.
         config.allowContinuousSurfaceRefinement = true;
+        config.allowStructuralBeamReconstruction = true;
         config.minimumCandidateCoverage = 0.55f;
         config.minimumObservedCoverage = 0.30f;
         config.maximumEdgeError = 8;
@@ -713,7 +714,8 @@ namespace OpenRCT2::Paint
                 // A strict silhouette is not proof of smooth geometry:
                 // prevent the two-unit retry from publishing another
                 // staircase mesh when its conforming refinement failed.
-                if (strict.valid && strict.continuousSurfaceRefined)
+                if (strict.valid
+                    && (strict.continuousSurfaceRefined || strict.structuralBeamSelected))
                     return strict;
 
                 auto fineBounds = bounds;
@@ -747,7 +749,8 @@ namespace OpenRCT2::Paint
                         projectPoint, occupancyPredicate, pointSupported,
                         &fineAttempt);
                     fine.attempt = fineAttempt;
-                    if (fine.valid && fine.continuousSurfaceRefined)
+                    if (fine.valid
+                        && (fine.continuousSurfaceRefined || fine.structuralBeamSelected))
                         return fine;
                 }
             }
