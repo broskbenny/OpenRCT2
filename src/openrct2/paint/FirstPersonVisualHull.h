@@ -1261,7 +1261,17 @@ namespace OpenRCT2::Paint
                 auto beamCertificate = CertifyFirstPersonReconstruction(
                     TriangulateFirstPersonReconstructionFaces(beamFaces),
                     views, projectPoint);
-                if (passesAdmission(beamCertificate)
+                // Structural meshes must be recognisable and complete,
+                // not merely admissible under the permissive legacy voxel
+                // thresholds. Nearly all native pixels must be explained
+                // without overpainting openings or moving sharp bar edges.
+                const bool highQualityBeamFit =
+                    passesAdmission(beamCertificate)
+                    && beamCertificate.minimumIntersectionOverUnion >= 0.85f
+                    && beamCertificate.minimumCandidateCoverage >= 0.90f
+                    && beamCertificate.minimumObservedCoverage >= 0.90f
+                    && beamCertificate.maximumEdgeError <= 2;
+                if (highQualityBeamFit
                     && (!passesAdmission(selectedCertificate)
                         || FirstPersonRoundTripNonWorse(
                             beamCertificate, selectedCertificate)))
