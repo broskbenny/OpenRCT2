@@ -24,7 +24,7 @@ class AdaptiveSmallSceneryHullTest(unittest.TestCase):
         self.assertIn("supportRadius = 0;", code)
         self.assertIn("auto strict = BuildFirstPersonVisualHull(", code)
         self.assertIn("strictConfig.preferCertifiedSmoothSurface = true;", code)
-        self.assertIn("if (strict.valid && strict.continuousSurfaceRefined)", code)
+        self.assertIn("strict.continuousSurfaceRefined || strict.structuralBeamSelected", code)
         self.assertIn("return strict;", code)
         self.assertLess(code.index("supportRadius = 0;"),
                         code.index("fineBounds.step = 1.0f;"))
@@ -33,7 +33,7 @@ class AdaptiveSmallSceneryHullTest(unittest.TestCase):
         self.assertIn("fineConfig.preferCertifiedSmoothSurface = true;", code)
         self.assertIn("fineConfig.maximumContinuousSurfaceFaces = 8192;", code)
         self.assertIn("fineConfig.continuousSurfaceSearchSteps = 2;", code)
-        self.assertIn("if (fine.valid && fine.continuousSurfaceRefined)", code)
+        self.assertIn("fine.continuousSurfaceRefined || fine.structuralBeamSelected", code)
         hull = (ROOT / "src/openrct2/paint/FirstPersonVisualHull.h").read_text()
         self.assertIn("bool preferCertifiedSmoothSurface = false;", hull)
         self.assertIn("FirstPersonRoundTripNonWorse(", hull)
