@@ -103,6 +103,27 @@ int main() {
     assert(result.refinedFaces.size()==beams.size());
     assert(result.roundTripSymmetricDifference<result.voxelRoundTripSymmetricDifference);
     assert(attempt.stage==6);
+    // Do the real inverse problem as well: obtain occupied 3D samples from
+    // the four 2D silhouettes alone. No 3D ground-truth oracle is available
+    // to this candidate. The independently published surface must still
+    // reproduce every native view.
+    FirstPersonVisualHullAttempt imageAttempt{};
+    auto fromImages=BuildFirstPersonVisualHull(
+        views,bounds,config,project,
+        [](FirstPersonVec3) { return true; },
+        [&](const FirstPersonVisualHullView& view,FirstPersonVec3 point) {
+            const auto uv=project(view.imageDirection,point);
+            const int px=int(std::lround(uv[0])),py=int(std::lround(uv[1]));
+            for(int dy=-1;dy<=1;++dy)
+            for(int dx=-1;dx<=1;++dx)
+                if(view.observed.contains(px+dx,py+dy))
+                    return true;
+            return false;
+        },&imageAttempt);
+    assert(fromImages.valid);
+    assert(fromImages.roundTripViewCount==4);
+    assert(fromImages.minimumObservedCoverage>=0.90f);
+    assert(fromImages.minimumCandidateCoverage>=0.90f);
     // Compact solids and isolated fragments do not get falsely identified
     // as beams merely because a voxel mesh has individual planar faces.
     FirstPersonVisualHull compact{};
