@@ -135,6 +135,45 @@ int main() {
     auto loose=fromObservedMasks(1,looseAttempt);
     auto strict=fromObservedMasks(0,strictAttempt);
     if (!loose.valid && !strict.valid) {
+        for (int radius : {0,1}) {
+            auto candidate = hull;
+            candidate.occupied.assign(16*16*16,0);
+            for(int z=0;z<16;++z)
+            for(int y=0;y<16;++y)
+            for(int x=0;x<16;++x) {
+                const FirstPersonVec3 pt{float(x)+0.5f,float(y)+0.5f,float(z)+0.5f};
+                bool supported=true;
+                for(const auto& view:views) {
+                    const auto uv=project(view.imageDirection,pt);
+                    const int px=int(std::lround(uv[0])),py=int(std::lround(uv[1]));
+                    bool found=false;
+                    for(int dy=-radius;dy<=radius;++dy)
+                    for(int dx=-radius;dx<=radius;++dx)
+                        if(view.observed.contains(px+dx,py+dy))
+                            found=true;
+                    if(!found) {supported=false;break;}
+                }
+                if(supported)
+                    candidate.occupied[(size_t(z)*16+size_t(y))*16+size_t(x)]=1;
+            }
+            const auto boundary=BuildFirstPersonVisualHullVoxelBoundaryFaces(candidate);
+            auto extracted=BuildFirstPersonVisualHullStructuralBeamFaces(
+                candidate,boundary.size());
+            std::fprintf(stderr,"RADIUS=%d original=%zu extracted=%zu\\n",
+                radius,boundary.size(),extracted.size());
+            if(!extracted.empty()) {
+                const auto quality=CertifyFirstPersonReconstruction(
+                    TriangulateFirstPersonReconstructionFaces(extracted),
+                    views,project);
+                std::fprintf(stderr,
+                    "BEAM valid=%d iou=%.3f candidate=%.3f observed=%.3f edge=%d disagreement=%zu\\n",
+                    quality.valid ? 1 : 0,
+                    double(quality.minimumIntersectionOverUnion),
+                    double(quality.minimumCandidateCoverage),
+                    double(quality.minimumObservedCoverage),
+                    quality.maximumEdgeError,quality.symmetricDifferencePixels);
+            }
+        }
         const auto report=[](const char* label,const FirstPersonVisualHullAttempt& attempt) {
             std::fprintf(stderr,
                 "%s: stage=%u cells=%u faces=%u iou=%.3f cand=%.3f obs=%.3f edge=%d diff=%zu\\n",
