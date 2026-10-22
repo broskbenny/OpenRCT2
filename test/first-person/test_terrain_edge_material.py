@@ -53,144 +53,19 @@ int main() {
             result=subprocess.run([str(exe)],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
 
-    def test_flat_native_palette_tiles_have_matching_opposite_edges(self):
-        compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
-        if not compiler:
-            self.skipTest("C++ compiler not installed")
-        code = r"""
-#include "src/openrct2/paint/FirstPersonTerrainEdgeMaterial.h"
-#include <array>
-#include <cassert>
-#include <vector>
-using namespace OpenRCT2::Paint;
-struct UV { float u, v; };
-int main() {
-    std::vector<uint8_t> source(64 * 40, 0);
-    for (int y = 0; y < 40; ++y)
-    for (int x = 0; x < 64; ++x)
-        source[size_t(y)*64+size_t(x)] = uint8_t(3 + ((x*7+y*3) % 120));
-    auto expanded = BuildFirstPersonTerrainEdgeMaterial(source, 64, 40, 4);
-    assert(expanded);
-    const auto originalPalette = expanded->pixels;
-    const std::array<UV,4> quad{{ {8,8}, {56,8}, {56,32}, {8,32} }};
-    assert(PeriodizeFirstPersonFlatTileMaterial(*expanded, quad));
-    // Physical edge stitching must never resample or dither interior
-    // native texels, even if a periodic edge colour differs substantially.
-    for (int y=12;y<28;++y)
-    for (int x=16;x<48;++x)
-      assert(expanded->pixels[size_t(y+4)*expanded->width+size_t(x+4)]
-          == originalPalette[size_t(y+4)*expanded->width+size_t(x+4)]);
-    const auto sample = [&](int x,int y) {
-        return expanded->pixels[size_t(y+4)*size_t(expanded->width)+size_t(x+4)];
-    };
-    // Repeated tile geometry samples equal palette colours at both physical
-    // sides: no colour jump at the boundary between identical surfaces.
-    for (int y=8;y<32;++y)
-        assert(sample(8,y) == sample(55,y));
-    for (int x=8;x<56;++x)
-        assert(sample(x,8) == sample(x,31));
-    for (const auto pixel : expanded->pixels) assert(pixel != 0);
-    const std::array<UV,4> collapsed{{ {8,8}, {8,8}, {8,8}, {8,8} }};
-    assert(!PeriodizeFirstPersonFlatTileMaterial(*expanded, collapsed));
-
-    // Native terrain is an isometric diamond, not an axis-aligned UV quad.
-    // This catches opposite-edge mismatches introduced by raster inversion
-    // when projected texture coordinates have both X and Y components.
-    auto diamond = BuildFirstPersonTerrainEdgeMaterial(source,64,40,4);
-    assert(diamond);
-    const std::array<UV,4> iso{{
-        {32,4}, {63,20}, {32,36}, {1,20}
-    }};
-    const auto originalDiamond = diamond->pixels;
-    assert(PeriodizeFirstPersonFlatTileMaterial(*diamond, iso));
-    const auto isoSample = [&](float s, float t) {
-        const float u = iso[0].u + (iso[1].u-iso[0].u)*s
-            + (iso[3].u-iso[0].u)*t;
-        const float v = iso[0].v + (iso[1].v-iso[0].v)*s
-            + (iso[3].v-iso[0].v)*t;
-        return diamond->pixels[
-            size_t(int(std::floor(v+4)))*diamond->width
-            + size_t(int(std::floor(u+4)))];
-    };
-    for (int i=0;i<32;++i) {
-        const float n = (float(i)+0.5f)/32.0f;
-        assert(isoSample(0.0f,n)==isoSample(1.0f,n));
-        assert(isoSample(n,0.0f)==isoSample(n,1.0f));
-    }
-    // The full central native image survives without reprojecting its
-    // original palette texels through a low-resolution 32x32 grid.
-    for (int y=17;y<24;++y)
-    for (int x=27;x<38;++x)
-        assert(diamond->pixels[size_t(y+4)*diamond->width+x+4]
-            == originalDiamond[size_t(y+4)*diamond->width+x+4]);
-}
-"""
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp)/"test.cpp"
-            exe = Path(tmp)/"test"
-            source.write_text(code, encoding="utf-8")
-            built = subprocess.run(
-                [compiler, "-std=c++20", "-I", str(ROOT),
-                 str(source), "-o", str(exe)], capture_output=True, text=True)
-            self.assertEqual(built.returncode, 0, built.stderr)
-            checked = subprocess.run([str(exe)], capture_output=True, text=True)
-            self.assertEqual(checked.returncode, 0, checked.stderr)
-
-    def test_partial_axis_preserves_unconnected_native_border(self):
-        compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
-        if not compiler:
-            self.skipTest("C++ compiler not installed")
-        code = r"""
-#include "src/openrct2/paint/FirstPersonTerrainEdgeMaterial.h"
-#include <array>
-#include <cassert>
-#include <vector>
-using namespace OpenRCT2::Paint;
-struct UV { float u, v; };
-int main() {
-    std::vector<uint8_t> native(64*40, 0);
-    for(int y=0;y<40;++y)
-    for(int x=0;x<64;++x)
-        native[size_t(y)*64+x] = uint8_t(8 + y);
-    auto tile = BuildFirstPersonTerrainEdgeMaterial(native,64,40,4);
-    assert(tile);
-    const std::array<UV,4> uv{{ {8,8}, {56,8}, {56,32}, {8,32} }};
-    assert(PeriodizeFirstPersonFlatTileMaterial(*tile,uv,1));
-    const auto sample = [&](int x,int y) {
-        return tile->pixels[size_t(y+4)*tile->width+size_t(x+4)];
-    };
-    for(int y=8;y<32;++y) assert(sample(8,y) == sample(55,y));
-    // Only the connected X faces repeat. Y borders still use the native
-    // entrance/edge art and have not been forced into a tiled plaza.
-    assert(sample(30,8) != sample(30,31));
-}
-"""
-        with tempfile.TemporaryDirectory() as tmp:
-            source=Path(tmp)/"test.cpp"
-            binary=Path(tmp)/"test"
-            source.write_text(code,encoding="utf-8")
-            built=subprocess.run(
-                [compiler,"-std=c++20","-I",str(ROOT),str(source),
-                 "-o",str(binary)], capture_output=True,text=True)
-            self.assertEqual(built.returncode,0,built.stderr)
-            checked=subprocess.run([str(binary)],capture_output=True,text=True)
-            self.assertEqual(checked.returncode,0,checked.stderr)
-
-    def test_flat_terrain_and_full_plazas_are_periodized_once_per_image(self):
-        world=(ROOT/"src/openrct2/paint/FirstPersonRenderer.World.inc").read_text()
-        path=(ROOT/"src/openrct2/paint/FirstPersonRenderer.MapPath.inc").read_text()
-        self.assertIn("if (slope == kTileSlopeFlat)", world)
-        self.assertIn("PeriodizeFirstPersonFlatTileMaterial(*expanded, v)", world)
-        self.assertIn("if (FirstPersonPathUsesFullTileDeck(path))", path)
-        self.assertIn("PeriodizeFirstPersonFlatTileMaterial(", path)
-        self.assertIn("*expanded, wholeTile, periodicAxes", path)
-        self.assertIn("(connected & 0x05u) == 0x05u", path)
-        self.assertIn("(connected & 0x0Au) == 0x0Au", path)
-        self.assertIn("path.isSloped() ? 0u", path)
-        self.assertIn("bool deckMaterialResolved = false;", path)
-        self.assertEqual(path.count("const FirstPersonTerrainResidentMaterial* deckMaterial"), 1)
-        self.assertIn("if (!deckMaterialResolved)", path)
-        self.assertIn("surface.coplanarOwner = true;", path)
+    def test_native_terrain_and_path_materials_do_not_rewrite_source_artwork(self):
+        terrain=(ROOT / "src/openrct2/paint/FirstPersonRenderer.World.inc").read_text()
+        path=(ROOT / "src/openrct2/paint/FirstPersonRenderer.MapPath.inc").read_text()
+        material=(ROOT / "src/openrct2/paint/FirstPersonTerrainEdgeMaterial.h").read_text()
+        self.assertNotIn("PeriodizeFirstPersonFlatTileMaterial", terrain)
+        self.assertNotIn("PeriodizeFirstPersonFlatTileMaterial", path)
+        self.assertNotIn("PeriodizeFirstPersonFlatTileMaterial", material)
+        self.assertIn("BuildFirstPersonTerrainEdgeMaterial(", terrain)
+        self.assertIn("BuildFirstPersonTerrainEdgeMaterial(", path)
+        self.assertIn("FillFirstPersonOpaqueStructuralMaterial(", material)
+        # The footprint, UV origin and sprite crop remain authoritative.
+        self.assertIn("GetFirstPersonPathDeckImageOffset(path, sourceRotation)", path)
+        self.assertIn("EmitQuad(surface, vertices)", path)
 
     def test_live_terrain_only_uses_shared_immutable_material(self):
         world=(ROOT/"src/openrct2/paint/FirstPersonRenderer.World.inc").read_text()
