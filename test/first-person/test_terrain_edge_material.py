@@ -67,6 +67,19 @@ int main() {
         self.assertIn("GetFirstPersonPathDeckImageOffset(path, sourceRotation)", path)
         self.assertIn("EmitQuad(surface, vertices)", path)
 
+    def test_collision_occupancy_is_never_promoted_as_uncertified_visible_geometry(self):
+        appearance=(ROOT/"src/openrct2/paint/FirstPersonSmallSceneryAppearance.h").read_text()
+        collision=(ROOT/"src/openrct2/paint/FirstPersonSmallSceneryCollision.h").read_text()
+        self.assertIn("if (reconstructedHull->roundTripViewCount < 4)", appearance)
+        self.assertNotIn(
+            "FirstPersonSmallSceneryCanUseSilhouetteRefinement(entry)\\n"
+            "            && reconstructedHull->roundTripViewCount < 4",
+            appearance)
+        self.assertIn("BuildFirstPersonOccupancyHull(", collision)
+        # The low-quality physical occupancy volume remains available to
+        # walking collision, never an artwork-bearing public 3D shell.
+        self.assertIn("BuildFirstPersonVisualHullBoundaryFaces(", appearance)
+
     def test_live_terrain_only_uses_shared_immutable_material(self):
         world=(ROOT/"src/openrct2/paint/FirstPersonRenderer.World.inc").read_text()
         core=(ROOT/"src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text()
