@@ -74,7 +74,8 @@ namespace OpenRCT2::Paint
     template<typename Vertex>
     [[nodiscard]] inline bool PeriodizeFirstPersonFlatTileMaterial(
         FirstPersonTerrainEdgeMaterial& material,
-        const std::array<Vertex, 4>& corners)
+        const std::array<Vertex, 4>& corners,
+        uint8_t periodicAxes = 3u)
     {
         constexpr int32_t side = 32;
         constexpr float invSide = 1.0f / float(side);
@@ -83,7 +84,7 @@ namespace OpenRCT2::Paint
         const float vx = corners[3].u - corners[0].u;
         const float vy = corners[3].v - corners[0].v;
         const float determinant = ux * vy - uy * vx;
-        if (std::abs(determinant) < 0.01f
+        if ((periodicAxes & 3u) == 0 || std::abs(determinant) < 0.01f
             || material.width <= 0 || material.height <= 0
             || material.pixels.size()
                 != size_t(material.width) * size_t(material.height))
@@ -121,6 +122,7 @@ namespace OpenRCT2::Paint
         const auto hash = [](int32_t x, int32_t y) {
             return uint32_t(x * 73 + y * 151 + (x ^ y) * 31) & 15u;
         };
+        if ((periodicAxes & 1u) != 0)
         for (int32_t y = 0; y < side; ++y)
         {
             const uint8_t seam = (hash(0, y) & 1u) != 0
@@ -134,6 +136,7 @@ namespace OpenRCT2::Paint
                     periodic[index(side - 1 - offset, y)] = seam;
             }
         }
+        if ((periodicAxes & 2u) != 0)
         for (int32_t x = 0; x < side; ++x)
         {
             const int32_t wrappedX = x == side - 1 ? 0 : x;
