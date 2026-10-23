@@ -1986,11 +1986,17 @@ namespace OpenRCT2::Paint
                     && selectedCertificate.minimumCandidateCoverage < 0.80f
                     && selectedCertificate.minimumObservedCoverage >= 0.85f)))
         {
-            auto wireFaces = BuildFirstPersonSourceTriangulatedWireFaces(
-                result, views, projectPoint, voxelFaces.size(),
-                std::min<size_t>(768, config.maximumContinuousSurfaceFaces));
-            if (!wireFaces.empty())
+            // The long-stroke and coverage-ranked candidates explain
+            // different native features. Admit them independently; selecting
+            // a better 2D line set cannot by itself justify 3D promotion.
+            for (bool prioritizeCoverage : { false, true })
             {
+                auto wireFaces = BuildFirstPersonSourceTriangulatedWireFaces(
+                    result, views, projectPoint, voxelFaces.size(),
+                    std::min<size_t>(768, config.maximumContinuousSurfaceFaces),
+                    prioritizeCoverage);
+                if (wireFaces.empty())
+                    continue;
                 const auto wireCertificate = CertifyFirstPersonReconstruction(
                     TriangulateFirstPersonReconstructionFaces(wireFaces),
                     views, projectPoint);

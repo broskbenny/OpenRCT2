@@ -11,7 +11,8 @@ template<typename ProjectPoint>
         const FirstPersonVisualHull& hull,
         const std::vector<FirstPersonVisualHullView>& views,
         ProjectPoint&& projectPoint,
-        size_t originalFaceCount, size_t maximumFaces = 768)
+        size_t originalFaceCount, size_t maximumFaces = 768,
+        bool prioritizeNativeCoverage = false)
 {
     // A zero baseline means voxel carving never produced a candidate.
     // Native stroke triangulation is independently evidence-based, so it
@@ -142,8 +143,19 @@ template<typename ProjectPoint>
             }
             if (!duplicate)
                 distinct.push_back(line);
-            if (distinct.size() >= kMaximumLinePool)
+            if (distinct.size() >= (prioritizeNativeCoverage
+                    ? kMaximumLinePool : kMaximumSelectedLines))
                 break;
+        }
+        // Preserve the previously certified longest-stroke hypothesis. The
+        // coverage-based selection is a distinct competing 3D candidate:
+        // 2D coverage improvement alone must never replace a valid truss.
+        if (!prioritizeNativeCoverage)
+        {
+            lines[d] = std::move(distinct);
+            if (lines[d].size() < 2)
+                return {};
+            continue;
         }
         // Rasterize each proposed centreline ONCE at source-pixel resolution.
         // A line crossing native transparency is penalized, not silently

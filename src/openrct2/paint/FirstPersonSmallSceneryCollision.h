@@ -818,53 +818,68 @@ namespace OpenRCT2::Paint
                     bounds, config, textureViews, occupancyPredicate);
                 if (sourceOnly.valid)
                 {
-                    auto faces = BuildFirstPersonSourceTriangulatedWireFaces(
-                        sourceOnly, views, projectPoint, 0, 768);
-                    if (!faces.empty())
+                    std::vector<FirstPersonVisualHullFace> bestFaces;
+                    FirstPersonRoundTripCertificate bestCertificate{};
+                    for (bool prioritizeCoverage : { false, true })
                     {
+                        auto faces = BuildFirstPersonSourceTriangulatedWireFaces(
+                            sourceOnly, views, projectPoint, 0, 768,
+                            prioritizeCoverage);
+                        if (faces.empty())
+                            continue;
                         const auto certificate = CertifyFirstPersonReconstruction(
                             TriangulateFirstPersonReconstructionFaces(faces),
                             views, projectPoint);
-                        // Without a valid voxel certificate to compare, demand
-                        // stronger absolute four-view support than the ordinary
-                        // relative-improvement fallback before publishing.
+                        // Without a voxel certificate, both independent
+                        // hypotheses must meet the stronger absolute gates.
+                        // Once one qualifies, the other must strictly improve
+                        // that entire four-view certificate to replace it.
                         if (certificate.valid && certificate.viewCount == 4
                             && certificate.minimumIntersectionOverUnion >= 0.60f
                             && certificate.minimumCandidateCoverage >= 0.74f
                             && certificate.minimumObservedCoverage >= 0.66f
-                            && certificate.maximumEdgeError <= 6)
+                            && certificate.maximumEdgeError <= 6
+                            && (!bestCertificate.valid
+                                || FirstPersonRoundTripStrictlyImproves(
+                                    certificate, bestCertificate)))
                         {
-                            sourceOnly.refinedFaces = std::move(faces);
-                            sourceOnly.structuralBeamSelected = true;
-                            sourceOnly.sourceTriangulatedWireSelected = true;
-                            sourceOnly.averageIntersectionOverUnion =
-                                certificate.averageIntersectionOverUnion;
-                            sourceOnly.minimumIntersectionOverUnion =
-                                certificate.minimumIntersectionOverUnion;
-                            sourceOnly.minimumCandidateCoverage =
-                                certificate.minimumCandidateCoverage;
-                            sourceOnly.minimumObservedCoverage =
-                                certificate.minimumObservedCoverage;
-                            sourceOnly.maximumEdgeError = certificate.maximumEdgeError;
-                            sourceOnly.roundTripViewCount = certificate.viewCount;
-                            sourceOnly.roundTripSymmetricDifference =
-                                certificate.symmetricDifferencePixels;
-                            sourceOnly.attempt = carveAttempt;
-                            sourceOnly.attempt.stage = 6;
-                            sourceOnly.attempt.certificateViews =
-                                uint32_t(certificate.viewCount);
-                            sourceOnly.attempt.minimumIoU =
-                                certificate.minimumIntersectionOverUnion;
-                            sourceOnly.attempt.candidateCoverage =
-                                certificate.minimumCandidateCoverage;
-                            sourceOnly.attempt.observedCoverage =
-                                certificate.minimumObservedCoverage;
-                            sourceOnly.attempt.maximumEdgeError =
-                                certificate.maximumEdgeError;
-                            sourceOnly.attempt.disagreementPixels =
-                                certificate.symmetricDifferencePixels;
-                            return sourceOnly;
+                            bestFaces = std::move(faces);
+                            bestCertificate = certificate;
                         }
+                    }
+                    if (!bestFaces.empty())
+                    {
+                        const auto& certificate = bestCertificate;
+                        sourceOnly.refinedFaces = std::move(bestFaces);
+                        sourceOnly.structuralBeamSelected = true;
+                        sourceOnly.sourceTriangulatedWireSelected = true;
+                        sourceOnly.averageIntersectionOverUnion =
+                            certificate.averageIntersectionOverUnion;
+                        sourceOnly.minimumIntersectionOverUnion =
+                            certificate.minimumIntersectionOverUnion;
+                        sourceOnly.minimumCandidateCoverage =
+                            certificate.minimumCandidateCoverage;
+                        sourceOnly.minimumObservedCoverage =
+                            certificate.minimumObservedCoverage;
+                        sourceOnly.maximumEdgeError = certificate.maximumEdgeError;
+                        sourceOnly.roundTripViewCount = certificate.viewCount;
+                        sourceOnly.roundTripSymmetricDifference =
+                            certificate.symmetricDifferencePixels;
+                        sourceOnly.attempt = carveAttempt;
+                        sourceOnly.attempt.stage = 6;
+                        sourceOnly.attempt.certificateViews =
+                            uint32_t(certificate.viewCount);
+                        sourceOnly.attempt.minimumIoU =
+                            certificate.minimumIntersectionOverUnion;
+                        sourceOnly.attempt.candidateCoverage =
+                            certificate.minimumCandidateCoverage;
+                        sourceOnly.attempt.observedCoverage =
+                            certificate.minimumObservedCoverage;
+                        sourceOnly.attempt.maximumEdgeError =
+                            certificate.maximumEdgeError;
+                        sourceOnly.attempt.disagreementPixels =
+                            certificate.symmetricDifferencePixels;
+                        return sourceOnly;
                     }
                 }
             }

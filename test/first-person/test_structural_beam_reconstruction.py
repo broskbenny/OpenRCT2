@@ -324,6 +324,17 @@ int main() {
         nativeWireViews,wireProject);
     assert(wireCert.valid && wireCert.viewCount==4);
     assert(wireCert.minimumObservedCoverage>.3f);
+    // Coverage ranking is a separate optional geometric hypothesis; the
+    // original longest-stroke reconstruction must remain available even
+    // when a coverage-biased set has no consistent 3D interpretation.
+    const auto coverageWire=BuildFirstPersonSourceTriangulatedWireFaces(
+        wire,nativeWireViews,wireProject,originalWire.size(),768,true);
+    if (!coverageWire.empty()) {
+        const auto coverageCert=CertifyFirstPersonReconstruction(
+            TriangulateFirstPersonReconstructionFaces(coverageWire),
+            nativeWireViews,wireProject);
+        assert(coverageCert.valid && coverageCert.viewCount==4);
+    }
     // This reconstruction uses only native strokes: it must also be
     // constructible when the voxel-boundary candidate is entirely missing.
     const auto sourceOnlyWire=BuildFirstPersonSourceTriangulatedWireFaces(
@@ -433,6 +444,8 @@ int main() {
         self.assertIn("sourceOnly.sourceTriangulatedWireSelected = true;", collision)
         self.assertIn("certificate.minimumIntersectionOverUnion >= 0.60f", collision)
         self.assertIn("certificate.minimumObservedCoverage >= 0.66f", collision)
+        self.assertIn("for (bool prioritizeCoverage : { false, true })", hull)
+        self.assertIn("FirstPersonRoundTripStrictlyImproves(", collision)
 
 
 if __name__ == "__main__":
