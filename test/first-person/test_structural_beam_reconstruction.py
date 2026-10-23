@@ -20,6 +20,7 @@ class StructuralBeamReconstructionTest(unittest.TestCase):
 #include <cassert>
 #include <cstdio>
 #include <cstddef>
+#include <unordered_map>
 #include <vector>
 using namespace OpenRCT2::Paint;
 
@@ -323,6 +324,36 @@ int main() {
         nativeWireViews,wireProject);
     assert(wireCert.valid && wireCert.viewCount==4);
     assert(wireCert.minimumObservedCoverage>.3f);
+    // Every surviving prism must contribute a distinct native-view pixel.
+    // Otherwise a phantom rod can be deleted without changing the art in
+    // any authored direction, while still appearing from arbitrary viewpoints.
+    assert(inferredWire.size()%6==0);
+    std::array<std::unordered_map<uint64_t, unsigned>,4> wirePixelUses{};
+    std::vector<std::array<FirstPersonSilhouette,4>> prismImages;
+    for(size_t face=0;face<inferredWire.size();face+=6) {
+        const std::vector<FirstPersonVisualHullFace> prism(
+            inferredWire.begin()+face,inferredWire.begin()+face+6);
+        const auto prismTriangles=TriangulateFirstPersonReconstructionFaces(prism);
+        std::array<FirstPersonSilhouette,4> projected{};
+        for(uint8_t d=0;d<4;++d) {
+            projected[d]=RenderFirstPersonReconstructionSilhouette(
+                prismTriangles,d,wireProject);
+            assert(!projected[d].empty());
+            for(uint64_t pixel:projected[d].pixels)
+                ++wirePixelUses[d][pixel];
+        }
+        prismImages.push_back(std::move(projected));
+    }
+    for(const auto& projected:prismImages) {
+        bool unique=false;
+        for(uint8_t d=0;d<4 && !unique;++d)
+            for(uint64_t pixel:projected[d].pixels)
+                if(wirePixelUses[d].at(pixel)==1) {
+                    unique=true;
+                    break;
+                }
+        assert(unique);
+    }
     // Translate every native source pixel together with the independent
     // projector. This must NOT destroy the physical 3D inference: imported
     // artwork can have arbitrary sprite x/y drawing offsets.

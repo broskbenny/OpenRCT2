@@ -423,6 +423,56 @@ template<typename ProjectPoint>
     }
     if (count<8)
         return {};
+
+    // Identical native-view projections do not imply identical geometry.
+    // Remove each selected rod that contributes no unique silhouette pixel:
+    // such rods can create phantom structure from novel camera directions.
+    // Count unsupported projections too, preserving the exact four-view
+    // silhouette union (and thus the independent admission certificate).
+    std::array<std::unordered_map<uint64_t, uint16_t>, 4> projectedUses{};
+    for (size_t i = 0; i < candidates.size(); ++i)
+    {
+        if (!chosen[i])
+            continue;
+        for (int d = 0; d < 4; ++d)
+        {
+            for (uint64_t pixel : candidates[i].projected[d].pixels)
+                ++projectedUses[d][pixel];
+        }
+    }
+    // Reverse proposal quality order: prefer retaining the better-supported
+    // hypothesis when multiple rods explain precisely the same native pixels.
+    for (size_t i = candidates.size(); i-- > 0;)
+    {
+        if (!chosen[i])
+            continue;
+        bool hasUniqueProjection = false;
+        for (int d = 0; d < 4 && !hasUniqueProjection; ++d)
+        {
+            for (uint64_t pixel : candidates[i].projected[d].pixels)
+            {
+                if (projectedUses[d].at(pixel) == 1)
+                {
+                    hasUniqueProjection = true;
+                    break;
+                }
+            }
+        }
+        if (hasUniqueProjection)
+            continue;
+        chosen[i] = 0;
+        --count;
+        for (int d = 0; d < 4; ++d)
+        {
+            for (uint64_t pixel : candidates[i].projected[d].pixels)
+            {
+                auto it = projectedUses[d].find(pixel);
+                if (--it->second == 0)
+                    projectedUses[d].erase(it);
+            }
+        }
+    }
+
     std::vector<FirstPersonVisualHullFace> result;
     result.reserve(count*6);
     for (size_t i=0;i<candidates.size();++i)
