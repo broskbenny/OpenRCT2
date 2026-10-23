@@ -81,5 +81,100 @@ int main() {
         if (walkingMask) assert(!walkingMask->valid);
     }
     std::cout << "Missing-view and observed-empty collision publication checks passed\n";
+    // Full production fixture: independent four-view source masks derived
+    // from an open scaffold. Unlike the cuboid/roof cases above, no solid
+    // convex envelope can explain its open regions. These are synthetic
+    // palette indices, never proprietary RCT2 artwork.
+    {
+        SmallSceneryEntry entry{};
+        entry.image = 200;
+        entry.height = 48;
+        entry.flags.set(SmallSceneryFlag::occupiesFullTile);
+        entry.flags.set(SmallSceneryFlag::vOffsetCentre);
+        entry.flags.set(SmallSceneryFlag::isRotatable);
+        SmallSceneryElement element{};
+        element.setOccupiedQuadrants(15);
+        element.setDirection(0);
+        FirstPersonVisualHull scaffold{};
+        scaffold.valid = true;
+        scaffold.step = 2;
+        scaffold.sizeForward = 16;
+        scaffold.sizeRight = 16;
+        scaffold.sizeUp = 24;
+        scaffold.occupied.assign(16 * 16 * 24, 0);
+        const auto mark = [&](int f,int r,int u) {
+            scaffold.occupied[(size_t(u)*16+size_t(r))*16+size_t(f)] = 1;
+        };
+        for (int u = 1; u < 23; ++u)
+        for (int f : {1, 6, 11, 14})
+        for (int r : {1, 14})
+            mark(f, r, u);
+        for (int f = 1; f < 15; ++f)
+        for (int r : {1, 14})
+        for (int u : {2, 9, 16, 22})
+            mark(f, r, u);
+        for (int f = 1; f < 15; ++f)
+        for (int r : {1, 14}) {
+            mark(f,r,f + 4);
+            mark(f,r,19 - f);
+        }
+        const auto original = BuildFirstPersonVisualHullVoxelBoundaryFaces(scaffold);
+        assert(original.size() >= 64);
+        const auto triangles = TriangulateFirstPersonReconstructionFaces(original);
+        const auto project = [&](uint8_t rotation, FirstPersonVec3 point) {
+            const CoordsXYZ p{
+                int32_t(std::lround(point.x)), int32_t(std::lround(point.y)),
+                int32_t(std::lround(point.z)) };
+            const auto uv = FirstPersonSmallSceneryArtworkPoint(entry, rotation, p);
+            const auto offset = FirstPersonSmallSceneryPaintOffset(entry, element, rotation);
+            const auto origin = Translate3DTo2DWithZ(rotation, { offset, 0 });
+            return std::array<float,2>{
+                float(uv.x - origin.x), float(uv.y - origin.y) };
+        };
+        FirstPersonSpriteSnapshot snapshot;
+        FirstPersonFrameBudget budget(4, std::chrono::seconds(8));
+        for (uint8_t rotation=0; rotation<4; ++rotation)
+        {
+            const auto mask = RenderFirstPersonReconstructionSilhouette(
+                triangles, rotation, project);
+            assert(mask.size() >= 250 && !mask.overflowed);
+            G1Element g1{};
+            g1.width = mask.maxX - mask.minX;
+            g1.height = mask.maxY - mask.minY;
+            g1.xOffset = mask.minX;
+            g1.yOffset = mask.minY;
+            g1.flags.set(G1Flag::hasTransparency);
+            std::vector<uint8_t> pixels(size_t(g1.width)*size_t(g1.height),0);
+            for (uint64_t pixel : mask.pixels)
+            {
+                const int32_t x=FirstPersonSilhouettePixelX(pixel)-g1.xOffset;
+                const int32_t y=FirstPersonSilhouettePixelY(pixel)-g1.yOffset;
+                pixels[size_t(y)*size_t(g1.width)+size_t(x)] =
+                    uint8_t(150 + ((x+y)&7));
+            }
+            g1.offset = pixels.data();
+            assert(snapshot.capture(entry.image+rotation,&g1,budget));
+        }
+        FirstPersonScene scene;
+        FirstPersonVisualHullAttempt attempt{};
+        SmallSceneryBuildEvidence evidence{};
+        std::optional<FirstPersonSmallSceneryWalkingMask> mask{};
+        const auto start=std::chrono::steady_clock::now();
+        const bool built=BuildSmallSceneryGeometry(
+            scene,element,entry,ImageId(entry.image),snapshot,
+            &attempt,&evidence,&mask);
+        const double elapsed=std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-start).count();
+        std::cout<<"scaffold built="<<built<<" faces="<<evidence.hullFaces
+            <<" material="<<evidence.materialFaces
+            <<" missing="<<evidence.withoutSourceMaterial
+            <<" empty="<<evidence.withoutOpaqueSamples
+            <<" methodWire="<<evidence.sourceTriangulatedWireSelected
+            <<" stage="<<int(attempt.stage)<<" IoU="<<attempt.minimumIoU
+            <<" ms="<<elapsed<<"\n";
+        assert(mask.has_value() && mask->valid);
+        assert(built && !scene.surfaces.empty());
+        assert(evidence.materialFaces>0);
+    }
 
 }
