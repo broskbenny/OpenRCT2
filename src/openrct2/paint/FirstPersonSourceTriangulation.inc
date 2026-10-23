@@ -43,11 +43,18 @@ template<typename ProjectPoint>
         float along{};
     };
     constexpr int kAngles = 36;
-    constexpr int kRhoBins = 512;
+    constexpr int kRhoBins = 256;
     constexpr float kPi = 3.14159265358979323846f;
     std::array<std::vector<Line>, 4> lines{};
     for (int d = 0; d < 4; ++d)
     {
+        // Bin relative to the native image bounds, not its arbitrary
+        // drawing offset. This makes stroke inference invariant under
+        // screen-space registration and halves the bounded Hough storage.
+        const int32_t centreX = native[d]->observed.minX
+            + (native[d]->observed.maxX - native[d]->observed.minX) / 2;
+        const int32_t centreY = native[d]->observed.minY
+            + (native[d]->observed.maxY - native[d]->observed.minY) / 2;
         std::vector<std::vector<Pixel>> buckets(size_t(kAngles * kRhoBins));
         for (uint64_t id : native[d]->observed.pixels)
         {
@@ -57,10 +64,11 @@ template<typename ProjectPoint>
             {
                 const float angle = float(a) * kPi / float(kAngles);
                 const float c = std::cos(angle), s = std::sin(angle);
-                const int32_t rho = int32_t(std::lround(float(x)*c + float(y)*s));
-                if (rho <= -256 || rho >= 256)
+                const int32_t rho = int32_t(std::lround(
+                    float(x - centreX) * c + float(y - centreY) * s));
+                if (rho <= -128 || rho >= 128)
                     continue;
-                buckets[size_t(a*kRhoBins + rho + 256)]
+                buckets[size_t(a*kRhoBins + rho + 128)]
                     .push_back({ x, y, -float(x)*s + float(y)*c });
             }
         }
