@@ -804,6 +804,70 @@ namespace OpenRCT2::Paint
                     carveAttempt = alignedAttempt;
                 }
             }
+
+            // The four silhouettes can describe a physical truss even when
+            // their coarse voxel-centre intersection contains too few cells
+            // to construct a usable boundary. Only in that pre-certificate
+            // failure case try native stroke inference independently.
+            // Preserve the separate occupancy envelope for collision.
+            if (config.allowSourceTriangulatedWireFallback
+                && carveAttempt.nativeViews == 4
+                && carveAttempt.stage >= 3 && carveAttempt.stage < 5)
+            {
+                auto sourceOnly = BuildFirstPersonOccupancyHull(
+                    bounds, config, textureViews, occupancyPredicate);
+                if (sourceOnly.valid)
+                {
+                    auto faces = BuildFirstPersonSourceTriangulatedWireFaces(
+                        sourceOnly, views, projectPoint, 0, 768);
+                    if (!faces.empty())
+                    {
+                        const auto certificate = CertifyFirstPersonReconstruction(
+                            TriangulateFirstPersonReconstructionFaces(faces),
+                            views, projectPoint);
+                        // Without a valid voxel certificate to compare, demand
+                        // stronger absolute four-view support than the ordinary
+                        // relative-improvement fallback before publishing.
+                        if (certificate.valid && certificate.viewCount == 4
+                            && certificate.minimumIntersectionOverUnion >= 0.60f
+                            && certificate.minimumCandidateCoverage >= 0.74f
+                            && certificate.minimumObservedCoverage >= 0.66f
+                            && certificate.maximumEdgeError <= 6)
+                        {
+                            sourceOnly.refinedFaces = std::move(faces);
+                            sourceOnly.structuralBeamSelected = true;
+                            sourceOnly.sourceTriangulatedWireSelected = true;
+                            sourceOnly.averageIntersectionOverUnion =
+                                certificate.averageIntersectionOverUnion;
+                            sourceOnly.minimumIntersectionOverUnion =
+                                certificate.minimumIntersectionOverUnion;
+                            sourceOnly.minimumCandidateCoverage =
+                                certificate.minimumCandidateCoverage;
+                            sourceOnly.minimumObservedCoverage =
+                                certificate.minimumObservedCoverage;
+                            sourceOnly.maximumEdgeError = certificate.maximumEdgeError;
+                            sourceOnly.roundTripViewCount = certificate.viewCount;
+                            sourceOnly.roundTripSymmetricDifference =
+                                certificate.symmetricDifferencePixels;
+                            sourceOnly.attempt = carveAttempt;
+                            sourceOnly.attempt.stage = 6;
+                            sourceOnly.attempt.certificateViews =
+                                uint32_t(certificate.viewCount);
+                            sourceOnly.attempt.minimumIoU =
+                                certificate.minimumIntersectionOverUnion;
+                            sourceOnly.attempt.candidateCoverage =
+                                certificate.minimumCandidateCoverage;
+                            sourceOnly.attempt.observedCoverage =
+                                certificate.minimumObservedCoverage;
+                            sourceOnly.attempt.maximumEdgeError =
+                                certificate.maximumEdgeError;
+                            sourceOnly.attempt.disagreementPixels =
+                                certificate.symmetricDifferencePixels;
+                            return sourceOnly;
+                        }
+                    }
+                }
+            }
         }
 
         // Collision/footprint data remains physically authoritative, but

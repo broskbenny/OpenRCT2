@@ -13,7 +13,11 @@ template<typename ProjectPoint>
         ProjectPoint&& projectPoint,
         size_t originalFaceCount, size_t maximumFaces = 768)
 {
-    if (!hull.valid || views.size() != 4 || originalFaceCount < 200
+    // A zero baseline means voxel carving never produced a candidate.
+    // Native stroke triangulation is independently evidence-based, so it
+    // may still infer a mesh; there is then no voxel face count to beat.
+    if (!hull.valid || views.size() != 4
+        || (originalFaceCount != 0 && originalFaceCount < 200)
         || maximumFaces < 24 || hull.occupied.empty())
         return {};
 
@@ -480,7 +484,8 @@ template<typename ProjectPoint>
             result.insert(result.end(),
                 candidates[i].faces.begin(),candidates[i].faces.end());
     if (result.size()>maximumFaces
-        || result.size()*3>=originalFaceCount*2)
+        || (originalFaceCount != 0
+            && result.size()*3>=originalFaceCount*2))
         return {};
     return result;
 }

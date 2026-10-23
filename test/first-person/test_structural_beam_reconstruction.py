@@ -324,6 +324,12 @@ int main() {
         nativeWireViews,wireProject);
     assert(wireCert.valid && wireCert.viewCount==4);
     assert(wireCert.minimumObservedCoverage>.3f);
+    // This reconstruction uses only native strokes: it must also be
+    // constructible when the voxel-boundary candidate is entirely missing.
+    const auto sourceOnlyWire=BuildFirstPersonSourceTriangulatedWireFaces(
+        wire,nativeWireViews,wireProject,0,768);
+    assert(!sourceOnlyWire.empty());
+    assert(sourceOnlyWire.size()==inferredWire.size());
     // Every surviving prism must contribute a distinct native-view pixel.
     // Otherwise a phantom rod can be deleted without changing the art in
     // any authored direction, while still appearing from arbitrary viewpoints.
@@ -420,6 +426,13 @@ int main() {
         self.assertIn("fine.structuralBeamSelected", collision)
         self.assertIn('"structural-beam"', renderer)
         self.assertIn("|| buildEvidence.structuralBeamSelected", renderer)
+        # A source-only candidate may rescue a failed voxel intersection,
+        # but cannot bypass the independent projection quality certificate.
+        self.assertIn("carveAttempt.stage < 5", collision)
+        self.assertIn("sourceOnly, views, projectPoint, 0, 768", collision)
+        self.assertIn("sourceOnly.sourceTriangulatedWireSelected = true;", collision)
+        self.assertIn("certificate.minimumIntersectionOverUnion >= 0.60f", collision)
+        self.assertIn("certificate.minimumObservedCoverage >= 0.66f", collision)
 
 
 if __name__ == "__main__":
