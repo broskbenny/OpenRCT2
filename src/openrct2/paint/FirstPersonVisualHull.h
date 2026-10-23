@@ -1968,17 +1968,22 @@ namespace OpenRCT2::Paint
             }
         }
 
-        // Full native-asset trusses sometimes defeat a solid silhouette
-        // hull: their authored strokes do not occupy the same pixel-centre
-        // lattice in every rotation. Before falling back to a flat native
-        // sprite, intersect independently detected stroke back-projection
-        // planes and publish a bounded, genuinely 3D wire graph. This is
-        // intentionally a separate, measurable last resort. Never replace
-        // an already admitted solid, roof, tree or beam reconstruction.
+        // Source-backed trusses may remain broken or severely overpainted
+        // after ordinary visual-hull admission. Independently triangulate
+        // their authored strokes only when the selected conventional model
+        // is rejected or demonstrably overpainted. Keep previously certified
+        // structures unless the candidate improves total and worst-view
+        // source disagreement. This runs AFTER smooth-surface selection.
         if (config.allowSourceTriangulatedWireFallback
-            && !passesAdmission(selectedCertificate)
             && !result.structuralBeamSelected
-            && voxelFaces.size() >= 200)
+            && voxelFaces.size() >= 200
+            // A fully source-supported solid never pays for expensive
+            // artistic-stroke inference. Perforated, overpainted hulls may
+            // still require replacement even after passing loose admission.
+            && (!passesAdmission(selectedCertificate)
+                || (voxelFaces.size() >= 900
+                    && selectedCertificate.minimumCandidateCoverage < 0.80f
+                    && selectedCertificate.minimumObservedCoverage >= 0.85f)))
         {
             auto wireFaces = BuildFirstPersonSourceTriangulatedWireFaces(
                 result, views, projectPoint, voxelFaces.size(),
@@ -1988,11 +1993,10 @@ namespace OpenRCT2::Paint
                 const auto wireCertificate = CertifyFirstPersonReconstruction(
                     TriangulateFirstPersonReconstructionFaces(wireFaces),
                     views, projectPoint);
-                // A thin artistic lattice may not have an exact volumetric
-                // reprojection, but a standalone 3D fallback must improve
-                // total AND worst-view source disagreement over the rejected
-                // voxel baseline, and still cover most pixels from all
-                // four authoring directions without painting empty openings.
+                // A thin artistic lattice need not project like a solid
+                // occupancy volume. It must improve on the BEST selected
+                // native certificate while retaining observed coverage and
+                // source-supported pixels across all four directions.
                 if (wireCertificate.valid
                     && wireCertificate.viewCount == 4
                     && wireCertificate.minimumIntersectionOverUnion >= 0.43f
@@ -2000,9 +2004,9 @@ namespace OpenRCT2::Paint
                     && wireCertificate.minimumObservedCoverage >= 0.54f
                     && wireCertificate.maximumEdgeError <= 8
                     && wireCertificate.symmetricDifferencePixels
-                        < voxelCertificate.symmetricDifferencePixels
+                        < selectedCertificate.symmetricDifferencePixels
                     && wireCertificate.maximumViewSymmetricDifferencePixels
-                        <= voxelCertificate.maximumViewSymmetricDifferencePixels)
+                        <= selectedCertificate.maximumViewSymmetricDifferencePixels)
                 {
                     result.refinedFaces = std::move(wireFaces);
                     result.structuralBeamSelected = true;
