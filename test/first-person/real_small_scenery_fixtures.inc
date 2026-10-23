@@ -228,6 +228,15 @@ namespace
         size_t surfacesWithoutPixels = 0;
         size_t degenerateFaces = 0;
         size_t outOfBoundsVertices = 0;
+        size_t materialCoordinateSamples = 0;
+        size_t materialSourceObservedSamples = 0;
+        size_t materialExactSourceSamples = 0;
+        // Only native pixel-coordinate evidence; same-colour occurrence
+        // elsewhere in the palette does not count. Hidden surfaces are
+        // unknown, so a mismatch remains a diagnostic, not an admission gate.
+        const bool compareArtwork =
+            !FirstPersonSmallSceneryUsesCrossedTreeAppearance(entry)
+            && hull.valid;
         for (const auto& surface : scene.surfaces)
         {
             if (!surface.persistentPixels)
@@ -244,6 +253,70 @@ namespace
                     if (!observedPalette.contains(pixel))
                         ++offPaletteTexels;
                 }
+            if (compareArtwork
+                && surface.immutableWidth > 0
+                && surface.immutableHeight > 0
+                && pixels.size() == size_t(surface.immutableWidth)
+                    * size_t(surface.immutableHeight))
+            {
+                FirstPersonVisualHullFace face{};
+                face.corners = {
+                    surface.triangles[0].world,
+                    surface.triangles[1].world,
+                    surface.triangles[2].world,
+                    surface.triangles[5].world
+                };
+                for (int32_t y = 0; y < surface.immutableHeight; ++y)
+                for (int32_t x = 0; x < surface.immutableWidth; ++x)
+                {
+                    const uint8_t baked =
+                        pixels[size_t(y) * surface.immutableWidth + x];
+                    if (!baked)
+                        continue;
+                    const auto uv = FirstPersonVisualHullTexelUV(
+                        face, x, y,
+                        surface.immutableWidth, surface.immutableHeight);
+                    if (!uv)
+                        continue;
+                    FirstPersonVec3 world{};
+                    if (!FirstPersonVisualHullSampleFace(
+                            face, (*uv)[0], (*uv)[1], world))
+                        continue;
+                    const CoordsXYZ point{
+                        int32_t(std::lround(world.x)),
+                        int32_t(std::lround(world.y)),
+                        int32_t(std::lround(world.z))
+                    };
+                    ++materialCoordinateSamples;
+                    bool observed = false;
+                    bool matches = false;
+                    for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                    {
+                        const auto* g1 = snapshot.get(entry.image + rotation);
+                        if (!g1)
+                            continue;
+                        const auto original =
+                            FirstPersonSmallScenerySpritePixelForPoint(
+                                entry, element, rotation, point, *g1);
+                        const auto correction = hull.viewPixelOffsets[rotation];
+                        const int32_t sx = original.x + correction.x;
+                        const int32_t sy = original.y + correction.y;
+                        if (sx < 0 || sy < 0
+                            || sx >= g1->width || sy >= g1->height)
+                            continue;
+                        const uint8_t source = sourcePixels[rotation][
+                            size_t(sy) * size_t(g1->width) + size_t(sx)];
+                        if (!source)
+                            continue;
+                        observed = true;
+                        matches |= source == baked;
+                    }
+                    if (observed)
+                        ++materialSourceObservedSamples;
+                    if (matches)
+                        ++materialExactSourceSamples;
+                }
+            }
         }
         for (const auto& face : actualFaces)
         {
@@ -298,6 +371,9 @@ namespace
                   << ",\"baked_texels\":" << bakedTexels
                   << ",\"opaque_baked_texels\":" << opaqueBakedTexels
                   << ",\"off_source_palette_texels\":" << offPaletteTexels
+                  << ",\"material_coordinate_samples\":" << materialCoordinateSamples
+                  << ",\"material_source_observed_samples\":" << materialSourceObservedSamples
+                  << ",\"material_exact_source_samples\":" << materialExactSourceSamples
                   << ",\"untextured_surfaces\":" << surfacesWithoutPixels
                   << ",\"degenerate_faces\":" << degenerateFaces
                   << ",\"out_of_bounds_vertices\":" << outOfBoundsVertices
