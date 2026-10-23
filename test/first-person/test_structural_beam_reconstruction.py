@@ -211,6 +211,19 @@ int main() {
     compact.occupied.assign(125,1);
     auto compactFaces=BuildFirstPersonVisualHullVoxelBoundaryFaces(compact);
     assert(BuildFirstPersonVisualHullStructuralBeamFaces(compact,compactFaces.size()).empty());
+    // Real ornamental DATs have hundreds of source-supported axial runs.
+    // A candidate search that cannot keep within its primitive budget must
+    // reject before costly projection, not render 128 rods and then fail.
+    auto dense = hull;
+    dense.occupied.assign(16*16*16,1);
+    int calls=0;
+    auto noCandidate=BuildFirstPersonVisualHullSourceMatchedBeamFaces(
+        dense,views,[&](uint8_t d,FirstPersonVec3 p){
+            ++calls;
+            return project(d,p);
+        },2048);
+    assert(noCandidate.empty());
+    assert(calls==0);
 }
 """
         with tempfile.TemporaryDirectory() as folder:
