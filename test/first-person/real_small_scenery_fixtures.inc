@@ -71,7 +71,64 @@ namespace
         return input.peek() == std::char_traits<char>::eof();
     }
 
-    void EvaluateRealSmallScenery(int index, const char* path)
+    // Export actual emitted triangles, not just the selected hull.
+    // FPM1 is an internal, little-endian indexed-material diagnostic format:
+    // magic, count, then repeated width/height/length/u8 palette indices.
+    bool ExportEmittedScene(
+        const FirstPersonScene& scene, const std::string& folder, int index)
+    {
+        std::ostringstream stem;
+        stem << folder << "/asset_" << std::setfill('0') << std::setw(4)
+             << index;
+        std::ofstream obj(stem.str() + ".obj");
+        std::ofstream materials(stem.str() + ".fpmat", std::ios::binary);
+        if (!obj || !materials)
+            return false;
+        const char magic[4] = { 'F', 'P', 'M', '1' };
+        const uint32_t count = uint32_t(scene.surfaces.size());
+        materials.write(magic, sizeof(magic));
+        materials.write(reinterpret_cast<const char*>(&count), sizeof(count));
+        obj << "# Exact OpenRCT2 emitted geometry; indexed materials in paired FPM1 file\n";
+        obj << std::fixed << std::setprecision(6);
+        size_t vertex = 1;
+        for (size_t i = 0; i < scene.surfaces.size(); ++i)
+        {
+            const auto& surface = scene.surfaces[i];
+            const uint32_t width = surface.immutableWidth > 0
+                ? uint32_t(surface.immutableWidth) : 0;
+            const uint32_t height = surface.immutableHeight > 0
+                ? uint32_t(surface.immutableHeight) : 0;
+            const uint32_t countBytes =
+                surface.persistentPixels != nullptr
+                ? uint32_t(surface.persistentPixels->size()) : 0;
+            materials.write(reinterpret_cast<const char*>(&width), sizeof(width));
+            materials.write(reinterpret_cast<const char*>(&height), sizeof(height));
+            materials.write(reinterpret_cast<const char*>(&countBytes), sizeof(countBytes));
+            if (countBytes)
+                materials.write(reinterpret_cast<const char*>(
+                    surface.persistentPixels->data()), countBytes);
+            obj << "g surface_" << i << "\n";
+            for (const auto& point : surface.triangles)
+                obj << "v " << point.world.x << " " << point.world.y
+                    << " " << point.world.z << "\n";
+            for (const auto& point : surface.triangles)
+                obj << "vt " << (width ? point.u / float(width) : 0.0f)
+                    << " " << (height ? 1.0f - point.v / float(height) : 0.0f)
+                    << "\n";
+            for (size_t tri = 0; tri < 2; ++tri)
+            {
+                const size_t base = vertex + tri * 3;
+                obj << "f " << base << "/" << base
+                    << " " << base + 1 << "/" << base + 1
+                    << " " << base + 2 << "/" << base + 2 << "\n";
+            }
+            vertex += 6;
+        }
+        return bool(obj) && bool(materials);
+    }
+
+    void EvaluateRealSmallScenery(int index, const char* path,
+                                  const std::string& exportFolder)
     {
         SmallSceneryEntry entry{};
         FirstPersonSpriteSnapshot snapshot;
@@ -207,6 +264,10 @@ namespace
                     ++outOfBoundsVertices;
         }
 
+        if (!exportFolder.empty()
+            && !ExportEmittedScene(scene, exportFolder, index))
+            throw std::runtime_error("Unable to export production scene");
+
         std::cout << std::fixed << std::setprecision(6)
                   << "{\"index\":" << index
                   << ",\"input_valid\":true"
@@ -268,12 +329,19 @@ namespace
 
 int main(int argc, char** argv)
 {
-    if (argc < 2)
+    int firstPacket = 1;
+    std::string exportFolder;
+    if (argc > 1 && std::string(argv[1]).rfind("export:", 0) == 0)
+    {
+        exportFolder = std::string(argv[1]).substr(7);
+        firstPacket = 2;
+    }
+    if (argc <= firstPacket)
     {
         std::cerr << "Provide at least one decoded legacy DAT packet\n";
         return 2;
     }
-    for (int i = 1; i < argc; ++i)
-        EvaluateRealSmallScenery(i - 1, argv[i]);
+    for (int i = firstPacket; i < argc; ++i)
+        EvaluateRealSmallScenery(i - firstPacket, argv[i], exportFolder);
     return 0;
 }
