@@ -1738,36 +1738,6 @@ namespace OpenRCT2::Paint
             || pixel != 0;
     }
 
-    [[nodiscard]] inline bool
-        FirstPersonPerforatedNativeViewsOverfilledByOccupancy(
-            const std::vector<FirstPersonVisualHullView>& views,
-            size_t occupiedCells, size_t gridCells)
-    {
-        if (views.size() != 4 || gridCells == 0
-            || occupiedCells <= gridCells / 2)
-            return false;
-        std::array<bool, 4> seen{};
-        for (const auto& view : views)
-        {
-            if (view.imageDirection >= 4
-                || seen[view.imageDirection]
-                || view.observed.empty() || view.observed.overflowed)
-                return false;
-            seen[view.imageDirection] = true;
-            const int64_t width =
-                int64_t(view.observed.maxX) - view.observed.minX;
-            const int64_t height =
-                int64_t(view.observed.maxY) - view.observed.minY;
-            const int64_t area = width * height;
-            // Solid surfaces are not architectural wires. Avoid the costly
-            // competing hypothesis for densely supported native views.
-            if (area < 400
-                || float(view.observed.size()) >= float(area) * 0.45f)
-                return false;
-        }
-        return true;
-    }
-
     template<
         typename ProjectPoint, typename OccupancyPredicate,
         typename PointSupported>
@@ -1999,12 +1969,6 @@ namespace OpenRCT2::Paint
             }
         }
 
-        // A one-pixel tolerance can make a sparse ornament mostly solid.
-        // Only authorize independent reconstruction, never mesh admission.
-        const bool porousVoxelOverfill =
-            config.allowSourceTriangulatedWireFallback
-            && FirstPersonPerforatedNativeViewsOverfilledByOccupancy(
-                views, occupiedCount, gridCells);
         // Source-backed trusses may remain broken or severely overpainted
         // after ordinary visual-hull admission. Independently triangulate
         // their authored strokes only when the selected conventional model
@@ -2013,12 +1977,12 @@ namespace OpenRCT2::Paint
         // source disagreement. This runs AFTER smooth-surface selection.
         if (config.allowSourceTriangulatedWireFallback
             && !result.structuralBeamSelected
-            && (voxelFaces.size() >= 200 || porousVoxelOverfill)
+            && voxelFaces.size() >= 200
             // A fully source-supported solid never pays for expensive
             // artistic-stroke inference. Perforated, overpainted hulls may
             // still require replacement even after passing loose admission.
             && (!passesAdmission(selectedCertificate)
-                || ((voxelFaces.size() >= 900 || porousVoxelOverfill)
+                || (voxelFaces.size() >= 900
                     && selectedCertificate.minimumCandidateCoverage < 0.80f
                     && selectedCertificate.minimumObservedCoverage >= 0.85f)))
         {
@@ -2028,8 +1992,7 @@ namespace OpenRCT2::Paint
             for (bool prioritizeCoverage : { false, true })
             {
                 auto wireFaces = BuildFirstPersonSourceTriangulatedWireFaces(
-                    result, views, projectPoint,
-                    voxelFaces.size() >= 200 ? voxelFaces.size() : 0,
+                    result, views, projectPoint, voxelFaces.size(),
                     std::min<size_t>(768, config.maximumContinuousSurfaceFaces),
                     prioritizeCoverage);
                 if (wireFaces.empty())
