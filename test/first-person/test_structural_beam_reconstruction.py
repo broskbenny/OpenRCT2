@@ -264,6 +264,65 @@ int main() {
             assert(v.x>=0 && v.x<=16 && v.y>=0 && v.y<=16 && v.z>=0 && v.z<=16);
     }
     assert(hasObliqueNormal);
+    // Native 2D strokes can have arbitrary world directions and still
+    // triangulate back to real 3D, even if the raw voxel hull is incoherent.
+    // Generate FOUR independent source silhouettes from a connected,
+    // asymmetric structural truss; no DAT artwork or object IDs are used.
+    FirstPersonVisualHull wire{};
+    wire.valid=true;wire.step=1;
+    wire.sizeForward=wire.sizeRight=32;wire.sizeUp=48;
+    wire.occupied.assign(32*32*48,0);
+    const auto markWire=[&](int x,int y,int z) {
+        wire.occupied[(size_t(z)*32+size_t(y))*32+size_t(x)]=1;
+    };
+    for (int z=2;z<46;++z)
+    for (int x : {2,8,14,20,26})
+    for (int y : {3,28})
+        markWire(x,y,z);
+    for (int z : {5,15,25,35,44})
+    for (int x=2;x<=26;++x)
+    for (int y : {3,28})
+        markWire(x,y,z);
+    for (int k=0;k<25;++k)
+    for (int y : {3,28}) {
+        markWire(k+2,y,k+8);
+        markWire(k+2,y,40-k);
+    }
+    auto originalWire=BuildFirstPersonVisualHullVoxelBoundaryFaces(wire);
+    assert(originalWire.size()>200);
+    const auto originalTriangles=TriangulateFirstPersonReconstructionFaces(originalWire);
+    std::vector<FirstPersonVisualHullView> nativeWireViews;
+    const auto wireProject=[](uint8_t d,FirstPersonVec3 p) {
+        const int x=int(std::lround(p.x)),y=int(std::lround(p.y)),
+            z=int(std::lround(p.z));
+        switch(d&3) {
+        case 0: return std::array<float,2>{float(y-x),float((x+y)/2-z)};
+        case 1: return std::array<float,2>{float(-x-y),float((y-x)/2-z)};
+        case 2: return std::array<float,2>{float(x-y),float((-x-y)/2-z)};
+        default:return std::array<float,2>{float(x+y),float((x-y)/2-z)};
+        }
+    };
+    for (uint8_t d=0;d<4;++d) {
+        FirstPersonVisualHullView v{};
+        v.imageDirection=d;
+        v.observed=RenderFirstPersonReconstructionSilhouette(
+            originalTriangles,d,wireProject);
+        assert(v.observed.size()>250);
+        nativeWireViews.push_back(std::move(v));
+    }
+    const auto inferredWire=BuildFirstPersonSourceTriangulatedWireFaces(
+        wire,nativeWireViews,wireProject,originalWire.size(),768);
+    if(inferredWire.empty()) {
+        std::fprintf(stderr,
+            "Native line triangulation failed on 4-view connected synthetic truss\n");
+    }
+    assert(!inferredWire.empty());
+    assert(inferredWire.size()<=768);
+    const auto wireCert=CertifyFirstPersonReconstruction(
+        TriangulateFirstPersonReconstructionFaces(inferredWire),
+        nativeWireViews,wireProject);
+    assert(wireCert.valid && wireCert.viewCount==4);
+    assert(wireCert.minimumObservedCoverage>.3f);
 }
 """
         with tempfile.TemporaryDirectory() as folder:
@@ -288,6 +347,9 @@ int main() {
         self.assertIn("FirstPersonRoundTripNonWorse(", hull)
         self.assertIn("if (redundant && chosenCount > 2)", hull)
         self.assertIn("BuildFirstPersonVisualHullSourceMatchedOrientedBeamFaces(", hull)
+        self.assertIn('#include "FirstPersonSourceTriangulation.inc"', hull)
+        self.assertIn("allowSourceTriangulatedWireFallback = false", hull)
+        self.assertIn("result.sourceTriangulatedWireSelected = true;", hull)
         self.assertIn("constexpr int8_t directions[10][3]", hull)
         self.assertIn("kMaximumProjectedRuns = 96", hull)
         self.assertIn("tryStructuralCandidate(BuildFirstPersonVisualHullSourceMatchedOrientedBeamFaces(", hull)
