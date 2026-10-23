@@ -189,6 +189,8 @@ def run(argv=None):
     parser.add_argument("--archive", type=Path, help="ObjData.zip (DATs are not extracted)")
     parser.add_argument("--names", nargs="+", help="Object filenames inside --archive")
     parser.add_argument("--compiler", default="g++")
+    parser.add_argument("--export-dir", type=Path,
+                        help="Save emitted production OBJ/UV meshes and FPM1 indexed material buffers")
     parser.add_argument("--output", type=Path, help="JSON report")
     args = parser.parse_args(argv)
     if bool(args.archive) != bool(args.names):
@@ -213,6 +215,9 @@ def run(argv=None):
             sys.executable, str(runner), "--compiler", args.compiler,
             "--fixture", str(fixture),
         ]
+        if args.export_dir:
+            args.export_dir.mkdir(parents=True, exist_ok=True)
+            command.append("--run-arg=export:" + str(args.export_dir.resolve()))
         for packet in packets:
             command.extend(("--run-arg", str(packet)))
         process = subprocess.run(
@@ -235,6 +240,11 @@ def run(argv=None):
             raise RuntimeError("Production result ordering mismatch")
         report.append({
             "asset": name,
+            "exports": (
+                {"emitted_obj": str(args.export_dir.resolve() / f"asset_{len(report):04d}.obj"),
+                 "indexed_materials": str(args.export_dir.resolve() / f"asset_{len(report):04d}.fpmat")}
+                if args.export_dir and result.get("input_valid") else None
+            ),
             "identifier": asset["identifier"],
             "sha256": asset["sha256"],
             "flags": asset["flags"],
