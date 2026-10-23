@@ -598,6 +598,9 @@ namespace OpenRCT2::Paint
         // support-field relaxation against the voxel boundary.
         config.allowContinuousSurfaceRefinement = true;
         config.allowStructuralBeamReconstruction = true;
+        // Genuine 3D native-stroke triangulation is allowed only for eligible
+        // stationary scenery, after better-certified geometry has failed.
+        config.allowSourceTriangulatedWireFallback = true;
         config.minimumCandidateCoverage = 0.55f;
         config.minimumObservedCoverage = 0.30f;
         config.maximumEdgeError = 8;
