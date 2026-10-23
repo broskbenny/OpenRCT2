@@ -49,10 +49,70 @@ template<typename ProjectPoint>
     for (int d = 0; d < 4; ++d)
     {
         std::vector<std::vector<Pixel>> buckets(size_t(kAngles * kRhoBins));
-        for (uint64_t id : native[d]->observed.pixels)
+        // Thick coloured stroke interiors produce many false Hough lines.
+        // Thin only the ANALYSIS mask, never the native texture or opacity.
+        // Two-pass Zhang-Suen deletion preserves 8-connected branches,
+        // endpoints, and genuinely open silhouette passages.
+        const auto& observed = native[d]->observed;
+        const int32_t width = observed.maxX - observed.minX;
+        const int32_t height = observed.maxY - observed.minY;
+        if (width <= 0 || height <= 0 || width > 128 || height > 128)
+            return {};
+        std::vector<uint8_t> ink(size_t(width) * size_t(height), 0);
+        for (uint64_t pixel : observed.pixels)
         {
-            const int32_t x = FirstPersonSilhouettePixelX(id);
-            const int32_t y = FirstPersonSilhouettePixelY(id);
+            const int32_t x = FirstPersonSilhouettePixelX(pixel) - observed.minX;
+            const int32_t y = FirstPersonSilhouettePixelY(pixel) - observed.minY;
+            ink[size_t(y) * size_t(width) + size_t(x)] = 1;
+        }
+        for (int pass = 0; pass < 24; ++pass)
+        {
+            bool changed = false;
+            for (int phase = 0; phase < 2; ++phase)
+            {
+                std::vector<size_t> removal;
+                for (int32_t y = 1; y + 1 < height; ++y)
+                for (int32_t x = 1; x + 1 < width; ++x)
+                {
+                    const size_t idx = size_t(y) * size_t(width) + size_t(x);
+                    if (!ink[idx])
+                        continue;
+                    const uint8_t p[8] = {
+                        ink[idx - size_t(width)], ink[idx - size_t(width) + 1],
+                        ink[idx + 1], ink[idx + size_t(width) + 1],
+                        ink[idx + size_t(width)], ink[idx + size_t(width) - 1],
+                        ink[idx - 1], ink[idx - size_t(width) - 1]
+                    };
+                    int neighbours = 0, transitions = 0;
+                    for (int k = 0; k < 8; ++k)
+                    {
+                        neighbours += p[k];
+                        transitions += !p[k] && p[(k + 1) & 7];
+                    }
+                    if (neighbours < 2 || neighbours > 6 || transitions != 1)
+                        continue;
+                    const bool canRemove = phase == 0
+                        ? !(p[0] && p[2] && p[4])
+                            && !(p[2] && p[4] && p[6])
+                        : !(p[0] && p[2] && p[6])
+                            && !(p[0] && p[4] && p[6]);
+                    if (canRemove)
+                        removal.push_back(idx);
+                }
+                for (size_t idx : removal)
+                    ink[idx] = 0;
+                changed = changed || !removal.empty();
+            }
+            if (!changed)
+                break;
+        }
+        for (int32_t row = 0; row < height; ++row)
+        for (int32_t col = 0; col < width; ++col)
+        {
+            if (!ink[size_t(row) * size_t(width) + size_t(col)])
+                continue;
+            const int32_t x = col + observed.minX;
+            const int32_t y = row + observed.minY;
             for (int a = 0; a < kAngles; ++a)
             {
                 const float angle = float(a) * kPi / float(kAngles);
