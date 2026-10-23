@@ -8,6 +8,10 @@ import tempfile
 parser = argparse.ArgumentParser(description="Compile and run the production small-scenery bake against synthetic native sprites.")
 parser.add_argument("--compiler", default="g++")
 parser.add_argument("--sanitize", action="store_true", help="Enable undefined-behaviour sanitizer")
+parser.add_argument("--fixture", type=Path, default=Path(__file__).with_name("material_fixtures.inc"),
+                    help="C++ main fixture; default preserves existing synthetic material tests")
+parser.add_argument("--run-arg", action="append", default=[],
+                    help="Forward an argument to the compiled production fixture")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[2]
 paint=root/'src/openrct2/paint'
@@ -44,7 +48,7 @@ for marker in ['void EmitQuad(', 'inline void ExtendStableKey(', '[[nodiscard]] 
     out+=function(core,marker)
 body=(base/'src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc').read_text()
 out+=body[:body.index('        struct SmallSceneryJob')]+'}\n'
-out+=(Path(__file__).with_name('material_fixtures.inc')).read_text()
+out+=args.fixture.read_text()
 # Compile exact production bodies; no copied implementations or mock pixel
 # decoder. Fail on a renamed/missing definition rather than silently testing a
 # stale implementation. This focused harness does not replace the full build.
@@ -58,4 +62,4 @@ with tempfile.TemporaryDirectory(prefix="first-person-bake-", dir=Path.cwd()) as
     if args.sanitize:
         command += ["-fsanitize=undefined", "-fno-sanitize-recover=all"]
     subprocess.run(command, check=True)
-    subprocess.run([str(binary)], check=True)
+    subprocess.run([str(binary), *args.run_arg], check=True)
