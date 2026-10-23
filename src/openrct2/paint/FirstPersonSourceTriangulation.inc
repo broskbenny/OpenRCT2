@@ -112,6 +112,14 @@ template<typename ProjectPoint>
         }
         std::stable_sort(lines[d].begin(), lines[d].end(),
             [](const Line& a, const Line& b) { return a.length > b.length; });
+        // Native ornament masks contain thousands of overlapping Hough
+        // strokes. Choosing the longest 80 can spend most of the budget on
+        // the same thick bar and miss genuine cross-members. First build a
+        // bounded, nonduplicate pool, then retain strokes by the NEW native
+        // pixels they explain. The subsequent 3D inference and four-view
+        // admission remain authoritative.
+        constexpr size_t kMaximumLinePool = 600;
+        constexpr size_t kMaximumSelectedLines = 80;
         std::vector<Line> distinct;
         for (const auto& line : lines[d])
         {
@@ -134,10 +142,82 @@ template<typename ProjectPoint>
             }
             if (!duplicate)
                 distinct.push_back(line);
-            if (distinct.size() >= 80)
+            if (distinct.size() >= kMaximumLinePool)
                 break;
         }
-        lines[d] = std::move(distinct);
+        // Rasterize each proposed centreline ONCE at source-pixel resolution.
+        // A line crossing native transparency is penalized, not silently
+        // filled; no indexed artwork pixels are changed by this selection.
+        std::vector<std::vector<uint64_t>> footprints(distinct.size());
+        for (size_t i = 0; i < distinct.size(); ++i)
+        {
+            const auto& line = distinct[i];
+            int32_t x = int32_t(std::lround(line.p[0]));
+            int32_t y = int32_t(std::lround(line.p[1]));
+            const int32_t endX = int32_t(std::lround(line.q[0]));
+            const int32_t endY = int32_t(std::lround(line.q[1]));
+            const int32_t dx = std::abs(endX - x);
+            const int32_t dy = -std::abs(endY - y);
+            const int32_t sx = x < endX ? 1 : -1;
+            const int32_t sy = y < endY ? 1 : -1;
+            int32_t error = dx + dy;
+            for (;;)
+            {
+                footprints[i].push_back(FirstPersonSilhouettePixelKey(x, y));
+                if (x == endX && y == endY)
+                    break;
+                const int32_t twiceError = 2 * error;
+                if (twiceError >= dy)
+                {
+                    error += dy;
+                    x += sx;
+                }
+                if (twiceError <= dx)
+                {
+                    error += dx;
+                    y += sy;
+                }
+            }
+        }
+        std::vector<uint8_t> selected(distinct.size(), 0);
+        std::unordered_set<uint64_t> coveredStrokes;
+        std::vector<Line> selectedLines;
+        selectedLines.reserve(kMaximumSelectedLines);
+        for (size_t count = 0; count < kMaximumSelectedLines; ++count)
+        {
+            size_t best = distinct.size();
+            int32_t bestScore = 0;
+            for (size_t i = 0; i < distinct.size(); ++i)
+            {
+                if (selected[i])
+                    continue;
+                int32_t observedPixels = 0;
+                int32_t unobservedPixels = 0;
+                for (uint64_t pixel : footprints[i])
+                {
+                    if (coveredStrokes.contains(pixel))
+                        continue;
+                    if (native[d]->observed.pixels.contains(pixel))
+                        ++observedPixels;
+                    else
+                        ++unobservedPixels;
+                }
+                const int32_t score =
+                    5 * observedPixels - 2 * unobservedPixels;
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = i;
+                }
+            }
+            if (best == distinct.size())
+                break;
+            selected[best] = 1;
+            selectedLines.push_back(distinct[best]);
+            coveredStrokes.insert(
+                footprints[best].begin(), footprints[best].end());
+        }
+        lines[d] = std::move(selectedLines);
         if (lines[d].size() < 2)
             return {};
     }
