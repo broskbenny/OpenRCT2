@@ -8,6 +8,51 @@ that architectural openings are correct.
 All source art remains local. **Do not commit DATs, screenshots, models generated
 from proprietary DATs, or copied palette art.**
 
+## Exact production small-scenery DAT laboratory
+
+Unlike the independent large-scenery mesh comparator below,
+`real_small_scenery_eval.py` compiles and calls the actual
+`BuildSmallSceneryGeometry`, native silhouette certification and
+indexed material-bake functions. No Python reconstruction copy is used.
+
+From the repository checkout (Python 3.10+ and a C++20 compiler):
+
+```sh
+python3 test/first-person/real_small_scenery_eval.py \
+  --archive /private/ObjData.zip \
+  --names MMENT1.DAT MMENT2.DAT MMENT3.DAT \
+  --output /private/mment-production.json \
+  --export-dir /private/mment-reconstructed
+```
+
+Loose DATs can be supplied as positional paths instead. The script does not
+unpack the archive or upload artwork to CI. A single focused C++ harness
+processes all selected assets with bounded native sprite packets.
+
+The JSON report contains accepted production geometry, four-view native
+silhouette metrics, output surface and material counts, degeneracy,
+registration shifts, native-coordinate material matches and production
+execution time. Reconstruction is performed a second time outside the
+production-cost timer solely to inspect its exact geometry decision.
+
+`--export-dir` additionally writes `asset_NNNN.obj` (the *emitted* world
+triangles with UVs) and `asset_NNNN.fpmat` (indexed palette pixels). FPM1
+binary layout: magic `FPM1`, little-endian uint32 surface count, then per
+surface little-endian uint32 width, height and data length followed by raw
+indexed pixel bytes. OBJ group `surface_N` matches FPM1 surface record N.
+
+**Limits:** This assumes a direction-zero element occupying all quadrants;
+other animation and occupancy states need separate fixtures. Four native
+views are in-sample and cannot establish unseen 3D geometry. Exact palette
+matches at projected native coordinates are diagnostics, not proof of
+frontmost visibility or perfect material ownership. The fixture does not
+exercise the final OpenGL frame. Proprietary assets are kept local.
+
+Synthetic-only validation of the adapter:
+
+```sh
+python3 -m unittest discover -s test/first-person -p 'test_real_small_scenery_eval.py' -v
+```
 ## Install and run
 
 Python 3.10+ is required. DAT inspection uses only the Python standard library.
