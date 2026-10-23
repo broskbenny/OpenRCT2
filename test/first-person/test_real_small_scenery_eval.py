@@ -86,11 +86,15 @@ class RealSmallSceneryDatTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             packet = Path(tmp) / "synthetic.bin"
             write_packet(asset, packet)
+            exports = Path(tmp) / "production_exports"
+            exports.mkdir()
             verify = Path(__file__).with_name("verify_material_bake.py")
             fixture = Path(__file__).with_name("real_small_scenery_fixtures.inc")
             process = subprocess.run([
                 sys.executable, str(verify),
-                "--fixture", str(fixture), "--run-arg", str(packet)
+                "--fixture", str(fixture),
+                "--run-arg=export:" + str(exports),
+                "--run-arg", str(packet)
             ], capture_output=True, text=True, timeout=180)
             self.assertEqual(process.returncode, 0, process.stderr[-5000:])
             records = [json.loads(line) for line in process.stdout.splitlines()
@@ -104,6 +108,13 @@ class RealSmallSceneryDatTest(unittest.TestCase):
             self.assertEqual(record["native_palette_entries"], 4)
             self.assertIn("production_elapsed_ms", record)
             self.assertEqual(len(record["registered_offsets"]), 4)
+            self.assertIn("material_exact_source_samples", record)
+            mesh = exports / "asset_0000.obj"
+            materials = exports / "asset_0000.fpmat"
+            self.assertTrue(mesh.is_file())
+            self.assertTrue(materials.is_file())
+            self.assertIn("Exact OpenRCT2", mesh.read_text())
+            self.assertEqual(materials.read_bytes()[:4], b"FPM1")
 
 
 if __name__ == "__main__":
