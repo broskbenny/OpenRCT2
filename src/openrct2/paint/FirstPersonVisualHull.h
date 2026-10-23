@@ -1047,6 +1047,11 @@ namespace OpenRCT2::Paint
             std::array<FirstPersonSilhouette,4> projected{};
         };
         std::vector<Candidate> candidates;
+        struct AxialRun
+        {
+            int32_t axis, start, end, a, b;
+        };
+        std::vector<AxialRun> runs;
         for (int32_t axis = 0; axis < 3; ++axis)
         {
             const int32_t alongSize = dims[axis];
@@ -1094,42 +1099,12 @@ namespace OpenRCT2::Paint
                     }
                     if (along - start >= minLength)
                     {
-                        if (candidates.size() >= kMaximumLines)
+                        // Most candidate runs in dense native lattice art
+                        // are ambiguous. Reject unbounded source hypotheses
+                        // before rasterising 128 individual voxel primitives.
+                        if (runs.size() >= kMaximumLines * 2)
                             return {};
-                        Candidate line{};
-                        line.cells.reserve(size_t(along - start));
-                        FirstPersonVisualHull primitive = hull;
-                        primitive.occupied.assign(cellCount, 0);
-                        primitive.refinedFaces.clear();
-                        for (int32_t k = start; k < along; ++k)
-                        {
-                            const auto cell = lineIndex(k, a, b);
-                            primitive.occupied[cell] = 1;
-                            line.cells.push_back(cell);
-                        }
-                        const auto primitiveFaces =
-                            BuildFirstPersonVisualHullVoxelBoundaryFaces(primitive);
-                        const auto triangles =
-                            TriangulateFirstPersonReconstructionFaces(primitiveFaces);
-                        if (!triangles.empty())
-                        {
-                            bool valid = true;
-                            for (const auto& view : views)
-                            {
-                                auto predicted =
-                                    RenderFirstPersonReconstructionSilhouette(
-                                        triangles, view.imageDirection, projectPoint);
-                                if (predicted.empty() || predicted.overflowed)
-                                {
-                                    valid = false;
-                                    break;
-                                }
-                                line.projected[view.imageDirection] =
-                                    std::move(predicted);
-                            }
-                            if (valid)
-                                candidates.push_back(std::move(line));
-                        }
+                        runs.push_back({ axis, start, along, a, b });
                     }
                     // An enclosed gap that was too long to bridge is the
                     // start of another run; do not loop on the same cell.
@@ -1138,6 +1113,49 @@ namespace OpenRCT2::Paint
                         ++along;
                 }
             }
+        }
+        // Scan the inexpensive occupancy runs before any primitive
+        // allocations or four-view raster work. Preserve the normal 128
+        // projected-candidate limit for less ambiguous native artwork.
+        for (const auto& run : runs)
+        {
+            const auto lineIndex = [&](int32_t along) {
+                const int32_t f = run.axis == 0 ? along : run.a;
+                const int32_t r = run.axis == 1 ? along : (run.axis == 0 ? run.a : run.b);
+                const int32_t u = run.axis == 2 ? along : run.b;
+                return index(f, r, u);
+            };
+            if (candidates.size() >= kMaximumLines)
+                return {};
+            Candidate line{};
+            line.cells.reserve(size_t(run.end - run.start));
+            FirstPersonVisualHull primitive = hull;
+            primitive.occupied.assign(cellCount, 0);
+            primitive.refinedFaces.clear();
+            for (int32_t k = run.start; k < run.end; ++k)
+            {
+                const auto cell = lineIndex(k);
+                primitive.occupied[cell] = 1;
+                line.cells.push_back(cell);
+            }
+            const auto primitiveFaces = BuildFirstPersonVisualHullVoxelBoundaryFaces(primitive);
+            const auto triangles = TriangulateFirstPersonReconstructionFaces(primitiveFaces);
+            if (triangles.empty())
+                continue;
+            bool valid = true;
+            for (const auto& view : views)
+            {
+                auto predicted = RenderFirstPersonReconstructionSilhouette(
+                    triangles, view.imageDirection, projectPoint);
+                if (predicted.empty() || predicted.overflowed)
+                {
+                    valid = false;
+                    break;
+                }
+                line.projected[view.imageDirection] = std::move(predicted);
+            }
+            if (valid)
+                candidates.push_back(std::move(line));
         }
         if (candidates.size() < 2)
             return {};
