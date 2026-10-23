@@ -7,6 +7,7 @@ on:
     paths:
       - test/first-person/**
       - src/openrct2/paint/FirstPerson*.h
+      - src/openrct2/paint/FirstPerson*.inc
       - src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc
       - src/openrct2/paint/FirstPersonRenderer.Core.inc
       - src/openrct2/paint/FirstPersonRenderer.World.inc
@@ -24,6 +25,7 @@ on:
     paths:
       - test/first-person/**
       - src/openrct2/paint/FirstPerson*.h
+      - src/openrct2/paint/FirstPerson*.inc
       - src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc
       - src/openrct2/paint/FirstPersonRenderer.Core.inc
       - src/openrct2/paint/FirstPersonRenderer.World.inc
