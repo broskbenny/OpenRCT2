@@ -323,6 +323,32 @@ int main() {
         nativeWireViews,wireProject);
     assert(wireCert.valid && wireCert.viewCount==4);
     assert(wireCert.minimumObservedCoverage>.3f);
+    // Translate every native source pixel together with the independent
+    // projector. This must NOT destroy the physical 3D inference: imported
+    // artwork can have arbitrary sprite x/y drawing offsets.
+    auto shiftedViews=nativeWireViews;
+    constexpr int32_t shiftX=500,shiftY=-300;
+    for(auto& view:shiftedViews) {
+        FirstPersonSilhouette moved{};
+        for(uint64_t id:view.observed.pixels)
+            moved.add(FirstPersonSilhouettePixelX(id)+shiftX,
+                FirstPersonSilhouettePixelY(id)+shiftY);
+        view.observed=std::move(moved);
+    }
+    const auto shiftedProjection=[&](uint8_t d,FirstPersonVec3 p) {
+        auto uv=wireProject(d,p);
+        uv[0]+=shiftX;
+        uv[1]+=shiftY;
+        return uv;
+    };
+    const auto shiftedWire=BuildFirstPersonSourceTriangulatedWireFaces(
+        wire,shiftedViews,shiftedProjection,originalWire.size(),768);
+    assert(!shiftedWire.empty());
+    const auto shiftedCert=CertifyFirstPersonReconstruction(
+        TriangulateFirstPersonReconstructionFaces(shiftedWire),
+        shiftedViews,shiftedProjection);
+    assert(shiftedCert.valid && shiftedCert.viewCount==4);
+    assert(shiftedCert.minimumObservedCoverage>.3f);
 }
 """
         with tempfile.TemporaryDirectory() as folder:
