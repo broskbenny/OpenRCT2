@@ -1409,15 +1409,15 @@ namespace OpenRCT2::Paint
             // One native 2-unit cell wide. These are geometric side faces,
             // not semi-transparent crossed sprite planes.
             const float radius = 0.5f * hull.step;
-            std::array<FirstPersonVec3, 4> near{}, far{};
+            std::array<FirstPersonVec3, 4> startRing{}, endRing{};
             for (int i = 0; i < 4; ++i)
             {
                 const float sx = i == 0 || i == 3 ? 1.0f : -1.0f;
                 const float sy = i < 2 ? 1.0f : -1.0f;
                 const auto offset = add(
                     scale(side, sx * radius), scale(across, sy * radius));
-                near[i] = add(start, offset);
-                far[i] = add(end, offset);
+                startRing[i] = add(start, offset);
+                endRing[i] = add(end, offset);
             }
             const auto appendQuad =
                 [&](std::array<FirstPersonVec3, 4> corners,
@@ -1448,15 +1448,15 @@ namespace OpenRCT2::Paint
                                     : FirstPersonVisualHullFaceKind::maxRight);
                     result.push_back(face);
                 };
-            appendQuad({ near[3], near[2], near[1], near[0] },
+            appendQuad({ startRing[3], startRing[2], startRing[1], startRing[0] },
                 scale(direction, -1.0f));
-            appendQuad({ far[0], far[1], far[2], far[3] }, direction);
+            appendQuad({ endRing[0], endRing[1], endRing[2], endRing[3] }, direction);
             for (int i = 0; i < 4; ++i)
             {
                 const int j = (i + 1) % 4;
                 const auto outward = add(
-                    sub(near[i], start), sub(near[j], start));
-                appendQuad({ near[i], near[j], far[j], far[i] }, outward);
+                    sub(startRing[i], start), sub(startRing[j], start));
+                appendQuad({ startRing[i], startRing[j], endRing[j], endRing[i] }, outward);
             }
             return result;
         };
