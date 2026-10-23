@@ -224,6 +224,46 @@ int main() {
         },2048);
     assert(noCandidate.empty());
     assert(calls==0);
+    // Independent diagonal truss support: no axial line can explain either
+    // sloped bar, but the image-constrained inferred surfaces must have
+    // continuous oblique normals and use genuine world-space geometry.
+    FirstPersonVisualHull diagonal{};
+    diagonal.valid=true;
+    diagonal.step=1;
+    diagonal.sizeForward=diagonal.sizeRight=diagonal.sizeUp=16;
+    diagonal.occupied.assign(16*16*16,0);
+    auto addDiagonal=[&](int x,int y,int z) {
+        diagonal.occupied[(size_t(z)*16+size_t(y))*16+size_t(x)]=1;
+    };
+    for (int k=1;k<15;++k) {
+        addDiagonal(k,4,k);
+        addDiagonal(k,11,15-k);
+    }
+    const auto voxelDiagonal=BuildFirstPersonVisualHullVoxelBoundaryFaces(diagonal);
+    assert(voxelDiagonal.size()>64);
+    const auto nativeTriangles=TriangulateFirstPersonReconstructionFaces(voxelDiagonal);
+    std::vector<FirstPersonVisualHullView> diagonalViews;
+    for (uint8_t direction=0;direction<4;++direction) {
+        FirstPersonVisualHullView view{};
+        view.imageDirection=direction;
+        view.observed=RenderFirstPersonReconstructionSilhouette(
+            nativeTriangles,direction,project);
+        assert(!view.observed.empty());
+        diagonalViews.push_back(std::move(view));
+    }
+    const auto diagonalFaces=BuildFirstPersonVisualHullSourceMatchedOrientedBeamFaces(
+        diagonal,diagonalViews,project,voxelDiagonal.size());
+    assert(!diagonalFaces.empty());
+    assert(diagonalFaces.size()<voxelDiagonal.size()*2/3);
+    bool hasObliqueNormal=false;
+    for (const auto& face:diagonalFaces) {
+        const auto n=face.normal;
+        if (std::abs(n.x)>.2f && std::abs(n.z)>.2f)
+            hasObliqueNormal=true;
+        for (const auto& v:face.corners)
+            assert(v.x>=0 && v.x<=16 && v.y>=0 && v.y<=16 && v.z>=0 && v.z<=16);
+    }
+    assert(hasObliqueNormal);
 }
 """
         with tempfile.TemporaryDirectory() as folder:
@@ -247,6 +287,10 @@ int main() {
         self.assertIn("CertifyFirstPersonReconstruction(", hull)
         self.assertIn("FirstPersonRoundTripNonWorse(", hull)
         self.assertIn("if (redundant && chosenCount > 2)", hull)
+        self.assertIn("BuildFirstPersonVisualHullSourceMatchedOrientedBeamFaces(", hull)
+        self.assertIn("constexpr int8_t directions[10][3]", hull)
+        self.assertIn("kMaximumProjectedRuns = 96", hull)
+        self.assertIn("tryStructuralCandidate(BuildFirstPersonVisualHullSourceMatchedOrientedBeamFaces(", hull)
         self.assertIn("result.structuralBeamSelected = true;", hull)
         self.assertIn("certificate.minimumIntersectionOverUnion >= 0.85f", hull)
         self.assertIn("certificate.minimumCandidateCoverage >= 0.90f", hull)
