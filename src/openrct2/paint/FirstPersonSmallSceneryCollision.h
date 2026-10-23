@@ -600,7 +600,13 @@ namespace OpenRCT2::Paint
         config.allowStructuralBeamReconstruction = true;
         // Genuine 3D native-stroke triangulation is allowed only for eligible
         // stationary scenery, after better-certified geometry has failed.
-        config.allowSourceTriangulatedWireFallback = true;
+        config.allowSourceTriangulatedWireFallback =
+            entry.flags.hasAll(SmallSceneryFlag::occupiesFullTile,
+                SmallSceneryFlag::isRotatable)
+            && !entry.flags.hasAny(SmallSceneryFlag::isTree,
+                SmallSceneryFlag::hasOverlayImage,
+                SmallSceneryFlag::isDiagonal)
+            && entry.height >= 12 && entry.height <= 64;
         config.minimumCandidateCoverage = 0.55f;
         config.minimumObservedCoverage = 0.30f;
         config.maximumEdgeError = 8;
