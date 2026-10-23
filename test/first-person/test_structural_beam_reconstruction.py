@@ -25,6 +25,28 @@ class StructuralBeamReconstructionTest(unittest.TestCase):
 using namespace OpenRCT2::Paint;
 
 int main() {
+    // A sparse four-view silhouette with inflated occupancy merits a
+    // competing native 3D hypothesis; dense or mostly empty sources do not.
+    std::vector<FirstPersonVisualHullView> porousViews;
+    for (uint8_t rotation = 0; rotation < 4; ++rotation) {
+        FirstPersonVisualHullView view{};
+        view.imageDirection = rotation;
+        for (int y = 0; y < 32; ++y)
+        for (int x = 0; x < 32; ++x)
+            if ((x + 3 * y) % 3 == 0 || (x == 31 && y == 31))
+                view.observed.add(x, y);
+        porousViews.push_back(std::move(view));
+    }
+    assert(FirstPersonPerforatedNativeViewsOverfilledByOccupancy(
+        porousViews, 580, 1024));
+    assert(!FirstPersonPerforatedNativeViewsOverfilledByOccupancy(
+        porousViews, 490, 1024));
+    for (int y = 0; y < 32; ++y)
+    for (int x = 0; x < 32; ++x)
+        if ((x + 3 * y) % 3 == 1)
+            porousViews[0].observed.add(x, y);
+    assert(!FirstPersonPerforatedNativeViewsOverfilledByOccupancy(
+        porousViews, 580, 1024));
     FirstPersonVisualHull hull{};
     hull.valid = true;
     hull.step = 1.0f;
@@ -445,6 +467,9 @@ int main() {
         self.assertIn("certificate.minimumIntersectionOverUnion >= 0.60f", collision)
         self.assertIn("certificate.minimumObservedCoverage >= 0.66f", collision)
         self.assertIn("for (bool prioritizeCoverage : { false, true })", hull)
+        self.assertIn("FirstPersonPerforatedNativeViewsOverfilledByOccupancy(", hull)
+        self.assertIn("voxelFaces.size() >= 200 || porousVoxelOverfill", hull)
+        self.assertIn("voxelFaces.size() >= 900 || porousVoxelOverfill", hull)
         self.assertIn("FirstPersonRoundTripStrictlyImproves(", collision)
 
 
