@@ -1259,6 +1259,335 @@ namespace OpenRCT2::Paint
         return output;
     }
 
+
+    // Extract connected diagonal members from the four-view intersection
+    // field. A visual hull is a set of POSSIBLE solid cells; a long line
+    // through it is not sufficient evidence of a physical beam. Rank every
+    // lattice diagonal against the *source images* before projecting bounded
+    // continuous prism candidates and publishing only a certified union.
+    //
+    // Unlike a chain of voxel cubes, these faces are six genuinely planar
+    // quads with a continuous world-space axis. Material is still painted
+    // from the native source projections, and the occupancy/collision body
+    // is never changed.
+    template<typename ProjectPoint>
+    [[nodiscard]] inline std::vector<FirstPersonVisualHullFace>
+        BuildFirstPersonVisualHullSourceMatchedOrientedBeamFaces(
+            const FirstPersonVisualHull& hull,
+            const std::vector<FirstPersonVisualHullView>& views,
+            ProjectPoint&& projectPoint,
+            size_t originalFaceCount, size_t maximumFaces = 512)
+    {
+        if (!hull.valid || hull.occupied.empty()
+            || !(hull.step > 0.0f) || views.size() != 4
+            || originalFaceCount < 64 || maximumFaces < 12)
+            return {};
+        const int32_t dims[3] = {
+            int32_t(hull.sizeForward), int32_t(hull.sizeRight),
+            int32_t(hull.sizeUp)
+        };
+        const size_t cells = size_t(dims[0]) * size_t(dims[1]) * size_t(dims[2]);
+        if (cells != hull.occupied.size() || cells > 65536)
+            return {};
+        std::array<bool, 4> seen{};
+        for (const auto& view : views)
+        {
+            if (view.imageDirection > 3 || seen[view.imageDirection]
+                || view.observed.empty())
+                return {};
+            seen[view.imageDirection] = true;
+        }
+        constexpr int8_t directions[10][3] = {
+            { 0, 1, 1 }, { 0, 1, -1 },
+            { 1, 0, 1 }, { 1, 0, -1 },
+            { 1, 1, 0 }, { 1, -1, 0 },
+            { 1, 1, 1 }, { 1, 1, -1 },
+            { 1, -1, 1 }, { 1, -1, -1 }
+        };
+        struct Run
+        {
+            int32_t start[3]{};
+            int32_t delta[3]{};
+            int32_t length{};
+            float score{};
+        };
+        const auto contains = [&](int32_t f, int32_t r, int32_t u) {
+            return hull.contains(f, r, u);
+        };
+        std::vector<Run> ranked;
+        // This pass makes no individual triangle meshes or pixel rasters:
+        // large ornamental objects have thousands of false intersection
+        // lines. A cheap centre-line check cuts the expensive hypotheses.
+        for (const auto& d : directions)
+        for (int32_t u = 0; u < dims[2]; ++u)
+        for (int32_t r = 0; r < dims[1]; ++r)
+        for (int32_t f = 0; f < dims[0]; ++f)
+        {
+            if (!contains(f, r, u)
+                || contains(f - d[0], r - d[1], u - d[2]))
+                continue;
+            int32_t length = 0;
+            while (contains(f + length * d[0], r + length * d[1],
+                       u + length * d[2]))
+                ++length;
+            if (length < 4)
+                continue;
+            int32_t minimumExact = length;
+            int32_t exactTotal = 0;
+            for (const auto& view : views)
+            {
+                int32_t exact = 0;
+                for (int32_t i = 0; i < length; ++i)
+                {
+                    const auto point = hull.centre(
+                        f + i * d[0], r + i * d[1], u + i * d[2]);
+                    const auto uv = projectPoint(view.imageDirection, point);
+                    if (view.observed.contains(
+                            int32_t(std::lround(uv[0])),
+                            int32_t(std::lround(uv[1]))))
+                        ++exact;
+                }
+                minimumExact = std::min(minimumExact, exact);
+                exactTotal += exact;
+            }
+            if (minimumExact * 2 < length
+                || exactTotal * 5 < length * 12)
+                continue;
+            Run run{};
+            run.start[0] = f;
+            run.start[1] = r;
+            run.start[2] = u;
+            for (int32_t k = 0; k < 3; ++k)
+                run.delta[k] = d[k];
+            run.length = length;
+            run.score = float(minimumExact) / float(length) * 3.0f
+                + float(exactTotal) / float(length * 4)
+                + float(length) * 0.02f;
+            ranked.push_back(run);
+        }
+        if (ranked.size() < 2)
+            return {};
+        std::sort(ranked.begin(), ranked.end(), [](const Run& a, const Run& b) {
+            // Stable lattice-scan order breaks equal-score ties.
+            return a.score > b.score;
+        });
+        constexpr size_t kMaximumProjectedRuns = 96;
+        if (ranked.size() > kMaximumProjectedRuns)
+            ranked.resize(kMaximumProjectedRuns);
+
+        const auto add = [](FirstPersonVec3 a, FirstPersonVec3 b) {
+            return FirstPersonVec3{ a.x + b.x, a.y + b.y, a.z + b.z };
+        };
+        const auto sub = [](FirstPersonVec3 a, FirstPersonVec3 b) {
+            return FirstPersonVec3{ a.x - b.x, a.y - b.y, a.z - b.z };
+        };
+        const auto scale = [](FirstPersonVec3 a, float k) {
+            return FirstPersonVec3{ a.x * k, a.y * k, a.z * k };
+        };
+        const auto unit = [&](FirstPersonVec3 v) {
+            const float n = std::sqrt(FpDot(v, v));
+            return n > 1.0e-6f ? scale(v, 1.0f / n) : FirstPersonVec3{};
+        };
+        const auto makeFaces = [&](const Run& run) {
+            std::vector<FirstPersonVisualHullFace> result;
+            const auto direction = unit({
+                float(run.delta[0]), float(run.delta[1]), float(run.delta[2])
+            });
+            auto start = hull.centre(
+                run.start[0], run.start[1], run.start[2]);
+            auto end = hull.centre(
+                run.start[0] + (run.length - 1) * run.delta[0],
+                run.start[1] + (run.length - 1) * run.delta[1],
+                run.start[2] + (run.length - 1) * run.delta[2]);
+            start = sub(start, scale(direction, 0.5f * hull.step));
+            end = add(end, scale(direction, 0.5f * hull.step));
+            const auto reference = std::abs(direction.z) < 0.8f
+                ? FirstPersonVec3{ 0, 0, 1 }
+                : FirstPersonVec3{ 0, 1, 0 };
+            const auto side = unit(FpCross(direction, reference));
+            const auto across = unit(FpCross(direction, side));
+            // One native 2-unit cell wide. These are geometric side faces,
+            // not semi-transparent crossed sprite planes.
+            const float radius = 0.5f * hull.step;
+            std::array<FirstPersonVec3, 4> near{}, far{};
+            for (int i = 0; i < 4; ++i)
+            {
+                const float sx = i == 0 || i == 3 ? 1.0f : -1.0f;
+                const float sy = i < 2 ? 1.0f : -1.0f;
+                const auto offset = add(
+                    scale(side, sx * radius), scale(across, sy * radius));
+                near[i] = add(start, offset);
+                far[i] = add(end, offset);
+            }
+            const auto appendQuad =
+                [&](std::array<FirstPersonVec3, 4> corners,
+                    FirstPersonVec3 outward) {
+                    auto normal = unit(FpCross(
+                        sub(corners[1], corners[0]),
+                        sub(corners[2], corners[0])));
+                    if (FpDot(normal, normal) < 0.5f)
+                        return;
+                    if (FpDot(normal, outward) < 0.0f)
+                    {
+                        std::swap(corners[1], corners[3]);
+                        normal = scale(normal, -1.0f);
+                    }
+                    FirstPersonVisualHullFace face{};
+                    face.corners = corners;
+                    face.normal = normal;
+                    face.kind = normal.z < -0.70f
+                        ? FirstPersonVisualHullFaceKind::bottom
+                        : normal.z > 0.70f
+                            ? FirstPersonVisualHullFaceKind::top
+                            : std::abs(normal.x) > std::abs(normal.y)
+                                ? (normal.x < 0.0f
+                                    ? FirstPersonVisualHullFaceKind::minForward
+                                    : FirstPersonVisualHullFaceKind::maxForward)
+                                : (normal.y < 0.0f
+                                    ? FirstPersonVisualHullFaceKind::minRight
+                                    : FirstPersonVisualHullFaceKind::maxRight);
+                    result.push_back(face);
+                };
+            appendQuad({ near[3], near[2], near[1], near[0] },
+                scale(direction, -1.0f));
+            appendQuad({ far[0], far[1], far[2], far[3] }, direction);
+            for (int i = 0; i < 4; ++i)
+            {
+                const int j = (i + 1) % 4;
+                const auto outward = add(
+                    sub(near[i], start), sub(near[j], start));
+                appendQuad({ near[i], near[j], far[j], far[i] }, outward);
+            }
+            return result;
+        };
+
+        struct Candidate
+        {
+            std::vector<FirstPersonVisualHullFace> faces;
+            std::array<FirstPersonSilhouette, 4> projected{};
+        };
+        std::vector<Candidate> candidates;
+        for (const auto& run : ranked)
+        {
+            auto faces = makeFaces(run);
+            if (faces.size() != 6)
+                continue;
+            auto triangles = TriangulateFirstPersonReconstructionFaces(faces);
+            if (triangles.empty())
+                continue;
+            Candidate c{};
+            c.faces = std::move(faces);
+            bool valid = true;
+            for (const auto& view : views)
+            {
+                auto pixels = RenderFirstPersonReconstructionSilhouette(
+                    triangles, view.imageDirection, projectPoint);
+                if (pixels.empty() || pixels.overflowed)
+                {
+                    valid = false;
+                    break;
+                }
+                c.projected[view.imageDirection] = std::move(pixels);
+            }
+            if (valid)
+                candidates.push_back(std::move(c));
+        }
+        if (candidates.size() < 2)
+            return {};
+        std::array<std::unordered_set<uint64_t>, 4> covered{};
+        std::vector<uint8_t> chosen(candidates.size(), 0);
+        size_t chosenCount = 0;
+        constexpr size_t kMaximumBeams = 64;
+        for (; chosenCount < kMaximumBeams
+                 && (chosenCount + 1) * 6 <= maximumFaces; ++chosenCount)
+        {
+            size_t best = candidates.size();
+            int64_t bestScore = 0;
+            for (size_t i = 0; i < candidates.size(); ++i)
+            {
+                if (chosen[i])
+                    continue;
+                int64_t observed = 0, unsupported = 0;
+                for (const auto& view : views)
+                {
+                    const auto d = view.imageDirection;
+                    for (uint64_t px : candidates[i].projected[d].pixels)
+                    {
+                        if (covered[d].contains(px))
+                            continue;
+                        if (view.observed.pixels.contains(px))
+                            ++observed;
+                        else
+                            ++unsupported;
+                    }
+                }
+                const int64_t value = 2 * observed - 5 * unsupported;
+                if (value > bestScore)
+                {
+                    bestScore = value;
+                    best = i;
+                }
+            }
+            if (best == candidates.size())
+                break;
+            chosen[best] = 1;
+            for (const auto& view : views)
+            {
+                const auto d = view.imageDirection;
+                const auto& pixels = candidates[best].projected[d].pixels;
+                covered[d].insert(pixels.begin(), pixels.end());
+            }
+        }
+        if (chosenCount < 2)
+            return {};
+        // Remove rods that contribute zero unique source-view pixels.
+        // Otherwise a long intersection filament may survive despite
+        // never being visible in any of the four authored directions.
+        for (size_t i = 0; i < candidates.size(); ++i)
+        {
+            if (!chosen[i] || chosenCount <= 2)
+                continue;
+            bool redundant = true;
+            for (const auto& view : views)
+            {
+                if (!redundant)
+                    break;
+                std::unordered_set<uint64_t> others;
+                const auto d = view.imageDirection;
+                for (size_t j = 0; j < candidates.size(); ++j)
+                {
+                    if (chosen[j] && j != i)
+                    {
+                        const auto& px = candidates[j].projected[d].pixels;
+                        others.insert(px.begin(), px.end());
+                    }
+                }
+                for (uint64_t px : candidates[i].projected[d].pixels)
+                {
+                    if (!others.contains(px))
+                    {
+                        redundant = false;
+                        break;
+                    }
+                }
+            }
+            if (redundant)
+            {
+                chosen[i] = 0;
+                --chosenCount;
+            }
+        }
+        std::vector<FirstPersonVisualHullFace> output;
+        for (size_t i = 0; i < candidates.size(); ++i)
+            if (chosen[i])
+                output.insert(output.end(),
+                    candidates[i].faces.begin(), candidates[i].faces.end());
+        if (output.empty() || output.size() > maximumFaces
+            || output.size() * 3 >= originalFaceCount * 2)
+            return {};
+        return output;
+    }
+
     struct FirstPersonVisualHullBounds
     {
         float minForward{};
@@ -1576,6 +1905,10 @@ namespace OpenRCT2::Paint
                 std::min<size_t>(512, config.maximumContinuousSurfaceFaces)));
             if (!result.structuralBeamSelected)
                 tryStructuralCandidate(BuildFirstPersonVisualHullSourceMatchedBeamFaces(
+                    result, views, projectPoint, voxelFaces.size(),
+                    std::min<size_t>(512, config.maximumContinuousSurfaceFaces)));
+            if (!result.structuralBeamSelected)
+                tryStructuralCandidate(BuildFirstPersonVisualHullSourceMatchedOrientedBeamFaces(
                     result, views, projectPoint, voxelFaces.size(),
                     std::min<size_t>(512, config.maximumContinuousSurfaceFaces)));
         }
