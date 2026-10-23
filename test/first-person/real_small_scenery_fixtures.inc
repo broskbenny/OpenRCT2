@@ -38,6 +38,10 @@ namespace
         for (int bit = 0; bit < 28; ++bit)
             if (flags & (1u << bit))
                 entry.flags.set(static_cast<SmallSceneryFlag>(bit));
+        // Match SmallSceneryObject::ReadLegacy: tall legacy objects are
+        // classified as trees even when the file does not carry that new flag.
+        if (entry.height > 64)
+            entry.flags.set(SmallSceneryFlag::isTree);
 
         FirstPersonFrameBudget budget(4, std::chrono::seconds(10));
         for (uint32_t rotation = 0; rotation < 4; ++rotation)
