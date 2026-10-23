@@ -156,6 +156,7 @@ namespace OpenRCT2::Paint
         bool planarSurfaceSelected = false;
         bool directConvexSurface = false;
         bool structuralBeamSelected = false;
+        bool sourceTriangulatedWireSelected = false;
         // Exact surface-level round-trip evidence. The legacy coverage fields
         // remain directly readable because reconstruction policies use them as
         // conservative admission gates.
@@ -1588,6 +1589,9 @@ namespace OpenRCT2::Paint
         return output;
     }
 
+    // Native stroke triangulation is implemented after four-view hull types.
+#include "FirstPersonSourceTriangulation.inc"
+
     struct FirstPersonVisualHullBounds
     {
         float minForward{};
@@ -1616,6 +1620,8 @@ namespace OpenRCT2::Paint
         // other families continue to demand a strictly better certificate.
         bool preferCertifiedSmoothSurface = false;
         bool allowStructuralBeamReconstruction = false;
+        // Strictly isolated last resort for sparse source-backed truss artwork.
+        bool allowSourceTriangulatedWireFallback = false;
         size_t maximumContinuousSurfaceFaces = 8192;
         uint8_t continuousSurfaceSearchSteps = 3;
         // Kept at zero by default until asset-wide calibration establishes a
@@ -1962,6 +1968,50 @@ namespace OpenRCT2::Paint
             }
         }
 
+        // Full native-asset trusses sometimes defeat a solid silhouette
+        // hull: their authored strokes do not occupy the same pixel-centre
+        // lattice in every rotation. Before falling back to a flat native
+        // sprite, intersect independently detected stroke back-projection
+        // planes and publish a bounded, genuinely 3D wire graph. This is
+        // intentionally a separate, measurable last resort. Never replace
+        // an already admitted solid, roof, tree or beam reconstruction.
+        if (config.allowSourceTriangulatedWireFallback
+            && !passesAdmission(selectedCertificate)
+            && !result.structuralBeamSelected
+            && voxelFaces.size() >= 200)
+        {
+            auto wireFaces = BuildFirstPersonSourceTriangulatedWireFaces(
+                result, views, projectPoint, voxelFaces.size(),
+                std::min<size_t>(768, config.maximumContinuousSurfaceFaces));
+            if (!wireFaces.empty())
+            {
+                const auto wireCertificate = CertifyFirstPersonReconstruction(
+                    TriangulateFirstPersonReconstructionFaces(wireFaces),
+                    views, projectPoint);
+                // A thin artistic lattice may not have an exact volumetric
+                // reprojection, but a standalone 3D fallback must improve
+                // total AND worst-view source disagreement over the rejected
+                // voxel baseline, and still cover most pixels from all
+                // four authoring directions without painting empty openings.
+                if (wireCertificate.valid
+                    && wireCertificate.viewCount == 4
+                    && wireCertificate.minimumIntersectionOverUnion >= 0.43f
+                    && wireCertificate.minimumCandidateCoverage >= 0.64f
+                    && wireCertificate.minimumObservedCoverage >= 0.54f
+                    && wireCertificate.maximumEdgeError <= 8
+                    && wireCertificate.symmetricDifferencePixels
+                        < voxelCertificate.symmetricDifferencePixels
+                    && wireCertificate.maximumViewSymmetricDifferencePixels
+                        <= voxelCertificate.maximumViewSymmetricDifferencePixels)
+                {
+                    result.refinedFaces = std::move(wireFaces);
+                    result.structuralBeamSelected = true;
+                    result.sourceTriangulatedWireSelected = true;
+                    selectedCertificate = wireCertificate;
+                }
+            }
+        }
+
         if (attempt != nullptr)
         {
             attempt->certificateViews = uint32_t(selectedCertificate.viewCount);
@@ -1971,7 +2021,8 @@ namespace OpenRCT2::Paint
             attempt->maximumEdgeError = selectedCertificate.maximumEdgeError;
             attempt->disagreementPixels = selectedCertificate.symmetricDifferencePixels;
         }
-        if (!passesAdmission(selectedCertificate))
+        if (!passesAdmission(selectedCertificate)
+            && !result.sourceTriangulatedWireSelected)
             return {};
         if (attempt != nullptr)
             attempt->stage = 6;
