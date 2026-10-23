@@ -7,6 +7,7 @@
             uint32_t unobservedUndersides = 0;
             bool directConvexSurface = false;
             bool structuralBeamSelected = false;
+            bool sourceTriangulatedWireSelected = false;
         };
 
         bool BuildSmallSceneryGeometry(FirstPersonScene& scene,
@@ -45,6 +46,7 @@
                 {
                     buildEvidence->directConvexSurface = hull->directConvexSurface;
                     buildEvidence->structuralBeamSelected = hull->structuralBeamSelected;
+                    buildEvidence->sourceTriangulatedWireSelected = hull->sourceTriangulatedWireSelected;
                 }
             }
             const auto appearance =
@@ -1078,6 +1080,7 @@
                                     attempt.maximumEdgeError,
                                     attempt.registrationAttempted ? 1 : 0,
                                     buildEvidence.directConvexSurface ? "direct-convex"
+                                        : buildEvidence.sourceTriangulatedWireSelected ? "source-triangulated-wire"
                                         : buildEvidence.structuralBeamSelected ? "structural-beam"
                                         : "voxel-or-tree",
                                     static_cast<long long>(buildMicros));
