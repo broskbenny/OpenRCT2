@@ -1,0 +1,31 @@
+name: Historical first-person Windows comparison
+
+on:
+  push:
+    branches:
+      - first-person/regression-reference-20261010
+    paths:
+      - .github/workflows/first-person-historical-compare.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-release-x64:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      PLATFORM: x64
+      OPENRCT2_CL_ADDITIONALOPTIONS: /D_SILENCE_CXX20_U8PATH_DEPRECATION_WARNING /wd4267 /U__ENABLE_DISCORD__
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile historical production renderer
+        shell: cmd
+        run: scripts\vstool.cmd msbuild src\openrct2-win\openrct2-win.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /m:1 /p:BuildInParallel=false /p:CL_MPCount=1 /verbosity:minimal
+      - name: Archive historical comparison executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-person-windows-x64-oct10-reference
+          path: bin/openrct2.exe
+          if-no-files-found: error
