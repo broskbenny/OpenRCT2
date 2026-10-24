@@ -303,6 +303,21 @@ int main() {
             <<" stage="<<int(attempt.stage)<<" IoU="<<attempt.minimumIoU
             <<" ms="<<elapsed<<"\n";
         assert(mask.has_value() && mask->valid);
+        std::cerr<<"SC_SOURCE_ORIGIN_TEST shifted="<<shiftedOrigins
+            <<" built="<<built<<" surfaces="<<scene.surfaces.size()
+            <<" faces="<<evidence.hullFaces
+            <<" materials="<<evidence.materialFaces
+            <<" missing="<<evidence.withoutSourceMaterial
+            <<" empty="<<evidence.withoutOpaqueSamples
+            <<" sourceOnly="<<evidence.sourceTriangulatedWireSelected
+            <<" stage="<<int(attempt.stage)
+            <<" cells="<<attempt.occupiedCells
+            <<" IoU="<<attempt.minimumIoU
+            <<" cand="<<attempt.candidateCoverage
+            <<" obs="<<attempt.observedCoverage
+            <<" reg="<<attempt.registrationAttempted
+            <<" views="<<int(attempt.nativeViews)
+            <<std::endl;
         assert(built && !scene.surfaces.empty());
         assert(evidence.materialFaces>0);
         assert(evidence.sourceTriangulatedWireSelected);
