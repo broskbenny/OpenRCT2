@@ -55,10 +55,15 @@ int main() {
     TileInspector::selected = &element;
     assert(!FirstPersonMapSmallSceneryEligible(entry,element,0));
     TileInspector::selected = nullptr;
-    for (int bit=0; bit<6; ++bit) {
+    for (int bit=0; bit<5; ++bit) {
         entry.flags.bits=1u<<bit;
         assert(!FirstPersonMapSmallSceneryEligible(entry,element,0));
     }
+    // Static legacy flag17 is not a dynamic paint contract.
+    entry.flags.bits=1u<<5;
+    assert(FirstPersonMapSmallSceneryEligible(entry,element,0));
+    entry.flags.bits=(1u<<5)|(1u<<1);
+    assert(!FirstPersonMapSmallSceneryEligible(entry,element,0));
     entry.flags.bits=0;
     element.ghost=true;
     assert(!FirstPersonMapSmallSceneryEligible(entry,element,0));
@@ -80,7 +85,7 @@ int main() {
         element.supports = (rng() & 1)!=0;
         uint32_t viewFlags = rng() & 3;
         gTrackDesignSaveMode = (rng() & 1)!=0;
-        const bool expected = entry.flags.bits==0
+        const bool expected = (entry.flags.bits & 31u)==0
             && !element.ghost && !element.invisible
             && !element.supports && viewFlags==0 && !gTrackDesignSaveMode;
         assert(FirstPersonMapSmallSceneryEligible(

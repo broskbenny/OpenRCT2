@@ -954,8 +954,13 @@
                     SmallSceneryFlag::hasFrameOffsets,
                     SmallSceneryFlag::hasGlass,
                     SmallSceneryFlag::hasOverlayImage,
-                    SmallSceneryFlag::isVisibleWhenZoomed,
-                    SmallSceneryFlag::flag17);
+                    SmallSceneryFlag::isVisibleWhenZoomed);
+                // flag17 alone does not alter the static body sprite.
+                // Native painting consults it only when animated frame
+                // offsets are emitted; isAnimated and hasFrameOffsets already
+                // exclude those cases. Static legacy ornaments with flag17
+                // can therefore publish the same four-view 3D model via
+                // the authoritative map path.
         }
 
         [[nodiscard]] bool FirstPersonMapSmallSceneryCanPublish(

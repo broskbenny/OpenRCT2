@@ -57,10 +57,13 @@ class MapSmallSceneryTest(unittest.TestCase):
         self.assertIn("InvalidateReadyFirstPersonSmallSceneryCells(*job);", small)
         self.assertIn("MarkLocalSceneryDirtyForTile(cx * 8, cy * 8);", small)
         self.assertIn("void MarkLocalSceneryDirtyForTile(int32_t tileX, int32_t tileY);", core)
-        # Eligibility excludes opaque-source deviations needing native paint.
+        # Eligibility excludes states that genuinely require native paint.
         for flag in ("isAnimated", "hasFrameOffsets", "hasGlass", "hasOverlayImage",
-                     "isVisibleWhenZoomed", "flag17"):
+                     "isVisibleWhenZoomed"):
             self.assertIn("SmallSceneryFlag::" + flag, small)
+        begin = small.index("bool FirstPersonMapSmallSceneryEligible(")
+        end = small.index("bool FirstPersonMapSmallSceneryCanPublish(", begin)
+        self.assertNotIn("SmallSceneryFlag::flag17", small[begin:end])
         for guard in ("!gTrackDesignSaveMode", "!small.isGhost()",
                       "!small.isInvisible()", "!small.needsSupports()"):
             self.assertIn(guard, small)
