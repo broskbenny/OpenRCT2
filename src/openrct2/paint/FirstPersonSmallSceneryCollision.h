@@ -781,8 +781,7 @@ namespace OpenRCT2::Paint
                     fine.attempt = fineAttempt;
                     if (fine.valid
                         && (kFirstPersonHistoricalOct21SceneryPolicy
-                            || fine.continuousSurfaceRefined
-                            || fine.structuralBeamSelected))
+                            || (fine.continuousSurfaceRefined || fine.structuralBeamSelected)))
                         return fine;
                 }
             }
