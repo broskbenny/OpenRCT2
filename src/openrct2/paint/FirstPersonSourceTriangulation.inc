@@ -677,16 +677,16 @@ template<typename ProjectPoint>
         bool supported=true;
         for (int d=0;d<4 && supported;++d)
         {
-            const auto projection=RenderFirstPersonReconstructionSilhouette(
+            const auto junctionProjection=RenderFirstPersonReconstructionSilhouette(
                 triangles,uint8_t(d),projectPoint);
             // All four projected source views must witness the connector;
             // a wholly invisible tube has no trustworthy native material.
-            if (projection.empty() || projection.overflowed)
+            if (junctionProjection.empty() || junctionProjection.overflowed)
             {
                 supported=false;
                 break;
             }
-            for (uint64_t pixel : projection.pixels)
+            for (uint64_t pixel : junctionProjection.pixels)
             {
                 if (!native[d]->observed.pixels.contains(pixel)
                     || !projectedUses[d].contains(pixel))
