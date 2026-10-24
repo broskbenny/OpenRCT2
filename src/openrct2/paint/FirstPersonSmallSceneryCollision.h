@@ -788,6 +788,23 @@ namespace OpenRCT2::Paint
                 && EstimateFirstPersonSmallSceneryNativeRegistration(
                     views, bounds, projectPoint, registrationPixels))
             {
+                // Re-evaluate the already validated compact-solid solver in
+                // the corrected native coordinates. It runs before voxel
+                // carving on the initial path; until now the registration
+                // retry skipped it, turning simple shifted solids into
+                // thousands of fragmented one-/two-unit facets.
+                if (FirstPersonSmallSceneryCanShareRotatedAsset(entry, element))
+                {
+                    auto compact = BuildFirstPersonConvexVisualHull(
+                        views, bounds, config, projectPoint);
+                    if (compact.valid)
+                    {
+                        compact.viewPixelOffsets = registrationPixels;
+                        compact.attempt.registrationAttempted = true;
+                        compact.attempt.registrationPixels = registrationPixels;
+                        return compact;
+                    }
+                }
                 FirstPersonVisualHullAttempt alignedAttempt{};
                 auto aligned = BuildFirstPersonVisualHull(
                     views, bounds, config,
