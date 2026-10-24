@@ -54,19 +54,10 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
         return true;
     };
 
-    const auto considerPatch = [&](int family, int32_t planeCoordinate,
-                                   int32_t along, int32_t startZ,
-                                   int32_t endZ)
+    const auto considerFace = [&](FirstPersonVisualHullFace face)
     {
-        if (endZ - startZ < 2 || patches.size() >= kMaximumSourcePatchPool)
+        if (patches.size() >= kMaximumSourcePatchPool)
             return;
-        FirstPersonVisualHullFace face{};
-        face.corners = {{
-            planePoint(family, planeCoordinate, float(along), float(startZ)),
-            planePoint(family, planeCoordinate, float(along + 1), float(startZ)),
-            planePoint(family, planeCoordinate, float(along + 1), float(endZ)),
-            planePoint(family, planeCoordinate, float(along), float(endZ))
-        }};
         for (const auto& v : face.corners)
             if (!withinXY(v))
                 return;
@@ -75,11 +66,13 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
             sub(face.corners[2], face.corners[0])));
         if (FpDot(face.normal, face.normal) < .5f)
             return;
-        face.kind = std::abs(face.normal.x) > std::abs(face.normal.y)
-            ? (face.normal.x < 0 ? FirstPersonVisualHullFaceKind::minForward
-                                 : FirstPersonVisualHullFaceKind::maxForward)
-            : (face.normal.y < 0 ? FirstPersonVisualHullFaceKind::minRight
-                                 : FirstPersonVisualHullFaceKind::maxRight);
+        face.kind = face.normal.z > .7f ? FirstPersonVisualHullFaceKind::top
+            : face.normal.z < -.7f ? FirstPersonVisualHullFaceKind::bottom
+            : std::abs(face.normal.x) > std::abs(face.normal.y)
+                ? (face.normal.x < 0 ? FirstPersonVisualHullFaceKind::minForward
+                                     : FirstPersonVisualHullFaceKind::maxForward)
+                : (face.normal.y < 0 ? FirstPersonVisualHullFaceKind::minRight
+                                     : FirstPersonVisualHullFaceKind::maxRight);
 
         SourcePatch candidate{};
         candidate.face = face;
@@ -123,6 +116,21 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
             return;
         candidate.initialGain = totalGain;
         patches.push_back(std::move(candidate));
+    };
+    const auto considerPatch = [&](int family, int32_t planeCoordinate,
+                                   int32_t along, int32_t startZ,
+                                   int32_t endZ)
+    {
+        if (endZ - startZ < 2)
+            return;
+        FirstPersonVisualHullFace face{};
+        face.corners = {{
+            planePoint(family, planeCoordinate, float(along), float(startZ)),
+            planePoint(family, planeCoordinate, float(along + 1), float(startZ)),
+            planePoint(family, planeCoordinate, float(along + 1), float(endZ)),
+            planePoint(family, planeCoordinate, float(along), float(endZ))
+        }};
+        considerFace(face);
     };
 
     // Four generic vertical plane families, including two diagonals.
@@ -171,6 +179,64 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
                     if (!supported && runStart >= 0)
                     {
                         considerPatch(family, planeCoordinate, along, runStart, z);
+                        runStart = -1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Source-observed long horizontal ornament strips: flat lintels, caps
+    // and ornament ledges are not reproducible as only vertical panels or
+    // straight Hough beams. Search for continuous two-unit or longer spans
+    // at integer heights, with one world-unit lateral thickness. As with
+    // vertical sheets, each actual quad is independently raster-checked in
+    // all four native source views; ground/bottom faces are not invented.
+    for (int family = 0; family < 2; ++family)
+    {
+        for (int32_t height = minZ + 1; height <= maxZ; ++height)
+        {
+            for (int32_t fixedCoordinate = firstAlong;
+                 fixedCoordinate < lastAlong; ++fixedCoordinate)
+            {
+                int32_t runStart = -1;
+                for (int32_t along = firstAlong;
+                     along <= lastAlong; ++along)
+                {
+                    const FirstPersonVec3 sample = family == 0
+                        ? FirstPersonVec3{float(along) + .5f,
+                            float(fixedCoordinate) + .5f,float(height)}
+                        : FirstPersonVec3{float(fixedCoordinate) + .5f,
+                            float(along) + .5f,float(height)};
+                    const bool supported = along < lastAlong
+                        && withinXY(sample) && supportedPoint(sample);
+                    if (supported && runStart < 0)
+                        runStart = along;
+                    if (!supported && runStart >= 0)
+                    {
+                        if (along - runStart >= 2)
+                        {
+                            FirstPersonVisualHullFace face{};
+                            const float low = float(runStart);
+                            const float high = float(along);
+                            const float fixed = float(fixedCoordinate);
+                            const float up = float(height);
+                            if (family == 0)
+                                face.corners = {{
+                                    {low, fixed, up},
+                                    {high, fixed, up},
+                                    {high, fixed + 1.0f, up},
+                                    {low, fixed + 1.0f, up}
+                                }};
+                            else
+                                face.corners = {{
+                                    {fixed, low, up},
+                                    {fixed + 1.0f, low, up},
+                                    {fixed + 1.0f, high, up},
+                                    {fixed, high, up}
+                                }};
+                            considerFace(face);
+                        }
                         runStart = -1;
                     }
                 }
