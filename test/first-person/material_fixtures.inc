@@ -18,6 +18,93 @@ int main() {
         }};
         assert(!FirstPersonSubpixelFaceSourceSample(large).has_value());
     }
+    // Source registration must also rescue a completely empty four-view
+    // voxel intersection. All four sprites below depict the same valid
+    // 16x16x24 source-backed cuboid, with independently shifted drawing
+    // origins. No guessed/uncertified occupancy may become visible.
+    {
+        SmallSceneryEntry entry{};
+        entry.image = 700;
+        entry.height = 32;
+        entry.flags.set(SmallSceneryFlag::occupiesFullTile);
+        entry.flags.set(SmallSceneryFlag::isRotatable);
+        SmallSceneryElement element{};
+        element.setOccupiedQuadrants(15);
+        element.setDirection(0);
+        const std::array<FirstPersonVec3, 8> p{{
+            {8, 8, 4}, {24, 8, 4}, {24, 24, 4}, {8, 24, 4},
+            {8, 8, 28}, {24, 8, 28}, {24, 24, 28}, {8, 24, 28}
+        }};
+        std::vector<FirstPersonVisualHullFace> cuboid;
+        const auto side = [&](size_t a, size_t b, size_t c, size_t d) {
+            cuboid.push_back({ { p[a], p[b], p[c], p[d] }, {}, {} });
+        };
+        side(0, 3, 2, 1);
+        side(4, 5, 6, 7);
+        side(0, 1, 5, 4);
+        side(1, 2, 6, 5);
+        side(2, 3, 7, 6);
+        side(3, 0, 4, 7);
+        const auto project = [&](uint8_t rotation, FirstPersonVec3 point) {
+            const CoordsXYZ xyz{
+                int32_t(std::lround(point.x)),
+                int32_t(std::lround(point.y)),
+                int32_t(std::lround(point.z)) };
+            const auto uv = FirstPersonSmallSceneryArtworkPoint(
+                entry, rotation, xyz);
+            const auto offset = FirstPersonSmallSceneryPaintOffset(
+                entry, element, rotation);
+            const auto origin = Translate3DTo2DWithZ(rotation, { offset, 0 });
+            return std::array<float, 2>{
+                float(uv.x - origin.x), float(uv.y - origin.y) };
+        };
+        const auto tris = TriangulateFirstPersonReconstructionFaces(cuboid);
+        FirstPersonSpriteSnapshot snapshot;
+        FirstPersonFrameBudget budget(4, std::chrono::seconds(8));
+        constexpr std::array<int32_t, 4> xShifts{{23, -23, 23, -23}};
+        for (uint8_t rotation = 0; rotation < 4; ++rotation)
+        {
+            const auto source = RenderFirstPersonReconstructionSilhouette(
+                tris, rotation, project);
+            assert(source.size() > 100);
+            G1Element sprite{};
+            sprite.width = source.maxX - source.minX;
+            sprite.height = source.maxY - source.minY;
+            sprite.xOffset = source.minX + xShifts[rotation];
+            sprite.yOffset = source.minY;
+            sprite.flags.set(G1Flag::hasTransparency);
+            std::vector<uint8_t> pixels(
+                size_t(sprite.width) * size_t(sprite.height), 0);
+            for (const auto key : source.pixels)
+            {
+                const int32_t x = FirstPersonSilhouettePixelX(key) - source.minX;
+                const int32_t y = FirstPersonSilhouettePixelY(key) - source.minY;
+                pixels[size_t(y) * size_t(sprite.width) + size_t(x)] = 180;
+            }
+            sprite.offset = pixels.data();
+            assert(snapshot.capture(entry.image + rotation, &sprite, budget));
+        }
+        const auto hull = BuildFirstPersonSmallSceneryVisualHullFromSnapshot(
+            entry, element, [&](ImageIndex id) { return snapshot.get(id); });
+        assert(hull.valid && hull.roundTripViewCount == 4);
+        assert(hull.attempt.registrationAttempted);
+        for (uint8_t rotation = 0; rotation < 4; ++rotation)
+            assert(std::abs(hull.viewPixelOffsets[rotation].x) >= 15);
+        const auto appearance =
+            BuildFirstPersonSmallSceneryAppearancePlan(entry, element, &hull);
+        assert(appearance.valid() && !appearance.faces.empty());
+        FirstPersonScene scene;
+        FirstPersonVisualHullAttempt attempt{};
+        SmallSceneryBuildEvidence evidence{};
+        const bool built = BuildSmallSceneryGeometry(
+            scene, element, entry, ImageId(entry.image), snapshot,
+            &attempt, &evidence);
+        assert(built && !scene.surfaces.empty());
+        assert(attempt.registrationAttempted && attempt.certificateViews == 4);
+        std::cout << "Four-view zero-overlap registration rescue passed"
+                  << " faces=" << appearance.faces.size()
+                  << " material=" << evidence.materialFaces << "\\n";
+    }
     for(int shape=0;shape<4;++shape) for (const float base : {0.0f, 4.0f}) {
         SmallSceneryEntry entry{};entry.image=100;entry.height=32;
         entry.flags.set(SmallSceneryFlag::occupiesFullTile);
