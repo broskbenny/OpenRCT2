@@ -307,7 +307,15 @@ template<typename ProjectPoint>
         float score{};
     };
     std::vector<Hypothesis> proposals;
-    constexpr int pairs[4][2]={{0,1},{0,2},{1,3},{2,3}};
+    // Every unordered pair of independent native orthographic directions
+    // can constrain a 3D source stroke. The previous four-pair subset
+    // omitted (0,3) and (1,2), arbitrarily excluding real diagonal
+    // members. Preserve the prior four first for stable tie ordering.
+    // Proposal evaluation is still bounded by the existing four-view
+    // support checks and the 400-rod projection-candidate cap below.
+    constexpr int pairs[6][2]={
+        {0,1},{0,2},{1,3},{2,3},{0,3},{1,2}
+    };
     const FirstPersonVec3 centre{
         hull.minForward+float(hull.sizeForward)*hull.step*.5f,
         hull.minRight+float(hull.sizeRight)*hull.step*.5f,
