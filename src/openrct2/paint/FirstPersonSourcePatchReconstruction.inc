@@ -392,15 +392,15 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
                 || a.min.y>b.max.y+margin || b.min.y>a.max.y+margin
                 || a.min.z>b.max.z+margin || b.min.z>a.max.z+margin)
                 continue;
-            bool near=false;
+            bool patchesAdjacent=false;
             for (const auto& pa : a.points)
             for (const auto& pb : b.points)
             {
                 const auto delta=sub(pa,pb);
                 if (FpDot(delta,delta)<=kConnectionDistanceSquared)
-                    near=true;
+                    patchesAdjacent=true;
             }
-            if (near)
+            if (patchesAdjacent)
             {
                 adjacent[i].push_back(uint16_t(j));
                 adjacent[j].push_back(uint16_t(i));
