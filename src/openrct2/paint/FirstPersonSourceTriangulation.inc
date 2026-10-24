@@ -393,14 +393,14 @@ template<typename ProjectPoint>
     if (proposals.size()>kMaximumProjections)
         proposals.resize(kMaximumProjections);
 
-    const auto makeFaces = [&](FirstPersonVec3 start,FirstPersonVec3 end) {
+    const auto makeFaces = [&](FirstPersonVec3 start,FirstPersonVec3 end,
+                               float radius=.45f) {
         std::vector<FirstPersonVisualHullFace> out;
         const auto direction=unit(sub(end,start));
         const auto vertical=std::abs(direction.z)<.8f
             ? FirstPersonVec3{0,0,1} : FirstPersonVec3{0,1,0};
         const auto side=unit(FpCross(direction,vertical));
         const auto across=unit(FpCross(direction,side));
-        constexpr float radius=.45f;
         std::array<FirstPersonVec3,4> startRing{},endRing{};
         for (int i=0;i<4;++i)
         {
@@ -447,6 +447,9 @@ template<typename ProjectPoint>
     {
         std::vector<FirstPersonVisualHullFace> faces;
         std::array<FirstPersonSilhouette,4> projected{};
+        // Preserve the inferred world-space centreline for bounded junction
+        // inference after the independently certified member selection.
+        FirstPersonVec3 p{}, q{};
     };
     std::vector<Candidate> candidates;
     for (const auto& proposal : proposals)
@@ -459,6 +462,8 @@ template<typename ProjectPoint>
             continue;
         Candidate c{};
         c.faces=std::move(faces);
+        c.p=proposal.p;
+        c.q=proposal.q;
         bool valid=true;
         for (int d=0;d<4;++d)
         {
@@ -579,5 +584,107 @@ template<typename ProjectPoint>
         || (originalFaceCount != 0
             && result.size()*3>=originalFaceCount*2))
         return {};
+
+    // The selected world-space members are independently inferred, but
+    // treating each as a closed prism leaves many near T-junctions floating.
+    // Connect nearby rod ENDPOINTS to neighbouring world-space centreline
+    // segments without ever moving the authored, selected rod geometry.
+    //
+    // Project every proposed junction through all four real native source
+    // views. Admit only if EVERY pixel is simultaneously covered by the
+    // selected rod union and by opaque native artwork. Thus a connector
+    // introduces zero new silhouette pixels, cannot worsen the certificate,
+    // and cannot justify promoting an otherwise rejected reconstruction.
+    // This is a real 3D connection, not a camera-facing sprite or an
+    // independently invented source colour.
+    const size_t faceLimit = originalFaceCount == 0
+        ? maximumFaces
+        : std::min(maximumFaces,(originalFaceCount*2-1)/3);
+    if (result.size()+6>faceLimit)
+        return result;
+    struct Junction
+    {
+        FirstPersonVec3 start{},end{};
+        float distanceSquared{};
+    };
+    std::vector<Junction> junctions;
+    constexpr float kJoinDistanceSquared=2.25f;
+    constexpr float kMinimumJoinDistanceSquared=.0625f;
+    for (size_t i=0;i<candidates.size();++i)
+    {
+        if (!chosen[i])
+            continue;
+        for (const FirstPersonVec3 start :
+             { candidates[i].p,candidates[i].q })
+        {
+            float best=kJoinDistanceSquared;
+            FirstPersonVec3 target{};
+            bool found=false;
+            for (size_t j=0;j<candidates.size();++j)
+            {
+                if (i==j || !chosen[j])
+                    continue;
+                const auto& a=candidates[j].p;
+                const auto span=sub(candidates[j].q,a);
+                const float lengthSquared=FpDot(span,span);
+                if (lengthSquared<1.0f)
+                    continue;
+                const float along=std::clamp(
+                    FpDot(sub(start,a),span)/lengthSquared,0.0f,1.0f);
+                const auto projected=add(a,mul(span,along));
+                const auto delta=sub(start,projected);
+                const float distanceSquared=FpDot(delta,delta);
+                if (distanceSquared<best
+                    && distanceSquared>=kMinimumJoinDistanceSquared)
+                {
+                    best=distanceSquared;
+                    target=projected;
+                    found=true;
+                }
+            }
+            if (found)
+                junctions.push_back({start,target,best});
+        }
+    }
+    std::stable_sort(junctions.begin(),junctions.end(),
+        [](const Junction& a,const Junction& b) {
+            return a.distanceSquared<b.distanceSquared;
+        });
+    for (const auto& joint : junctions)
+    {
+        if (result.size()+6>faceLimit)
+            break;
+        auto faces=makeFaces(joint.start,joint.end,.35f);
+        if (faces.size()!=6)
+            continue;
+        const auto triangles=TriangulateFirstPersonReconstructionFaces(faces);
+        if (triangles.empty())
+            continue;
+        bool supported=true;
+        for (int d=0;d<4 && supported;++d)
+        {
+            const auto projection=RenderFirstPersonReconstructionSilhouette(
+                triangles,uint8_t(d),projectPoint);
+            // All four projected source views must witness the connector;
+            // a wholly invisible tube has no trustworthy native material.
+            if (projection.empty() || projection.overflowed)
+            {
+                supported=false;
+                break;
+            }
+            for (uint64_t pixel : projection.pixels)
+            {
+                if (!native[d]->observed.pixels.contains(pixel)
+                    || !projectedUses[d].contains(pixel))
+                {
+                    supported=false;
+                    break;
+                }
+            }
+        }
+        if (!supported)
+            continue;
+        result.insert(result.end(),faces.begin(),faces.end());
+    }
     return result;
 }
