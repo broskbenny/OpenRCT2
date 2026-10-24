@@ -355,6 +355,67 @@ int main() {
         assert(extraCert.valid && extraCert.viewCount==4);
         assert(allPairsWire.size()<=768);
     }
+    // Decorative cutouts can be actual thin 3D panels rather than
+    // straight structural bars. The independent source silhouettes for this
+    // synthetic fixture are produced from 3D strips, then passed to both
+    // native reconstruction methods: no privileged original geometry is
+    // supplied to either inference method.
+    {
+        auto ornamentViews=nativeWireViews;
+        std::vector<FirstPersonVisualHullFace> ornamentSheets;
+        for (int x=4;x<28;x+=4)
+        for (int z=7;z<38;z+=5)
+        {
+            FirstPersonVisualHullFace panel{};
+            panel.corners={{
+                {float(x),14.0f,float(z)},
+                {float(x+1),14.0f,float(z)},
+                {float(x+1),14.0f,float(z+3)},
+                {float(x),14.0f,float(z+3)}
+            }};
+            panel.normal={0,1,0};
+            panel.kind=FirstPersonVisualHullFaceKind::maxRight;
+            ornamentSheets.push_back(panel);
+        }
+        auto sheetTriangles=TriangulateFirstPersonReconstructionFaces(
+            ornamentSheets);
+        for (uint8_t d=0;d<4;++d)
+        {
+            const auto paint=RenderFirstPersonReconstructionSilhouette(
+                sheetTriangles,d,wireProject);
+            for (uint64_t pixel:paint.pixels)
+                ornamentViews[d].observed.add(
+                    FirstPersonSilhouettePixelX(pixel),
+                    FirstPersonSilhouettePixelY(pixel));
+        }
+        const auto sourceOnlyRods=BuildFirstPersonSourceTriangulatedWireFaces(
+            wire,ornamentViews,wireProject,0,768,false,false,false);
+        const auto sourceWithPanels=BuildFirstPersonSourceTriangulatedWireFaces(
+            wire,ornamentViews,wireProject,0,768,false,false,true);
+        assert(!sourceOnlyRods.empty() && !sourceWithPanels.empty());
+        assert(sourceWithPanels.size()<=768);
+        assert(sourceWithPanels.size()>=sourceOnlyRods.size());
+        const auto rodCert=CertifyFirstPersonReconstruction(
+            TriangulateFirstPersonReconstructionFaces(sourceOnlyRods),
+            ornamentViews,wireProject);
+        const auto patchCert=CertifyFirstPersonReconstruction(
+            TriangulateFirstPersonReconstructionFaces(sourceWithPanels),
+            ornamentViews,wireProject);
+        assert(rodCert.valid && patchCert.valid);
+        assert(rodCert.viewCount==4 && patchCert.viewCount==4);
+        // A quad is kept only after its exact source-view raster adds more
+        // observed than invented pixels in EACH direction. Thus the 4-view
+        // silhouette IoU must not worsen.
+        for(size_t d=0;d<4;++d)
+            assert(patchCert.views[d].fit.intersectionOverUnion + 1e-5f
+                >= rodCert.views[d].fit.intersectionOverUnion);
+        std::fprintf(stderr,
+            "Source-surface fixture rods=%zu augmented=%zu"
+            " IoU=%.4f->%.4f\\n",
+            sourceOnlyRods.size(),sourceWithPanels.size(),
+            double(rodCert.minimumIntersectionOverUnion),
+            double(patchCert.minimumIntersectionOverUnion));
+    }
     // Every independently inferred member contributes native pixels.
     // Extra prisms are allowed only as evidence-backed structural joints:
     // their pixels must already be covered by native art AND other members.
