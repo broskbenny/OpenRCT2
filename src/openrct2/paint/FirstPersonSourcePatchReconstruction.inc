@@ -321,15 +321,53 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
         const size_t patchBudget = std::min<size_t>(
             240, faceLimit - result.size());
         std::vector<uint8_t> used(patches.size(), 0);
+
+        // Greedy total pixel count was biased towards already well-explained
+        // source views. A patch that repairs the weakest authored rotation
+        // matters more than the same number of pixels in a stronger view.
+        // Keep the exact same per-view nonnegative source-support rule; only
+        // the selection priority changes. Update projected counts alongside
+        // the actual source-projection union to avoid re-rasterizing rods.
+        std::array<size_t,4> predictedCounts{};
+        std::array<size_t,4> observedMatches{};
+        for (uint8_t d = 0; d < 4; ++d)
+        {
+            for (const auto& [pixel,uses] : projectedUses[d])
+            {
+                if (uses == 0)
+                    continue;
+                ++predictedCounts[d];
+                if (native[d]->observed.pixels.contains(pixel))
+                    ++observedMatches[d];
+            }
+        }
         for (size_t selected = 0; selected < patchBudget; ++selected)
         {
+            std::array<float,4> sourceIoU{};
+            float strongestIoU = 0.0f;
+            for (uint8_t d = 0; d < 4; ++d)
+            {
+                const size_t unionPixels = native[d]->observed.size()
+                    + predictedCounts[d] - observedMatches[d];
+                sourceIoU[d] = unionPixels == 0 ? 0.0f
+                    : float(observedMatches[d]) / float(unionPixels);
+                strongestIoU = std::max(strongestIoU,sourceIoU[d]);
+            }
+            // The source-only admission gate judges the WEAKEST view.
+            // Small per-view weights keep all source-covered pixels useful
+            // while preferentially recovering the least complete view.
+            std::array<float,4> viewWeights{};
+            for (uint8_t d = 0; d < 4; ++d)
+                viewWeights[d] = 1.0f
+                    + 8.0f * (strongestIoU - sourceIoU[d]);
+
             size_t best = patches.size();
-            int32_t bestGain = 0;
+            float bestGain = 0.0f;
             for (size_t i = 0; i < patches.size(); ++i)
             {
                 if (used[i])
                     continue;
-                int32_t gain = 0;
+                float gain = 0.0f;
                 bool admissible = true;
                 for (uint8_t d = 0; d < 4 && admissible; ++d)
                 {
@@ -343,7 +381,7 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
                     }
                     if (viewGain < 0)
                         admissible = false;
-                    gain += viewGain;
+                    gain += float(viewGain) * viewWeights[d];
                 }
                 if (admissible && gain > bestGain)
                 {
@@ -357,7 +395,15 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
             result.push_back(patches[best].face);
             for (uint8_t d = 0; d < 4; ++d)
                 for (uint64_t pixel : patches[best].projected[d])
+                {
+                    if (!projectedUses[d].contains(pixel))
+                    {
+                        ++predictedCounts[d];
+                        if (native[d]->observed.pixels.contains(pixel))
+                            ++observedMatches[d];
+                    }
                     ++projectedUses[d][pixel];
+                }
         }
     }
 }
