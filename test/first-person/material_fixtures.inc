@@ -22,6 +22,7 @@ int main() {
     // voxel intersection. All four sprites below depict the same valid
     // 16x16x24 source-backed cuboid, with independently shifted drawing
     // origins. No guessed/uncertified occupancy may become visible.
+    for (const bool inset : { true, false })
     {
         SmallSceneryEntry entry{};
         entry.image = 700;
@@ -31,9 +32,15 @@ int main() {
         SmallSceneryElement element{};
         element.setOccupiedQuadrants(15);
         element.setDirection(0);
+        const float lo = inset ? 8.0f : 0.0f;
+        const float hi = inset ? 24.0f : 32.0f;
+        const float bottom = inset ? 4.0f : 0.0f;
+        const float top = inset ? 28.0f : 32.0f;
         const std::array<FirstPersonVec3, 8> p{{
-            {8, 8, 4}, {24, 8, 4}, {24, 24, 4}, {8, 24, 4},
-            {8, 8, 28}, {24, 8, 28}, {24, 24, 28}, {8, 24, 28}
+            {lo, lo, bottom}, {hi, lo, bottom},
+            {hi, hi, bottom}, {lo, hi, bottom},
+            {lo, lo, top}, {hi, lo, top},
+            {hi, hi, top}, {lo, hi, top}
         }};
         std::vector<FirstPersonVisualHullFace> cuboid;
         const auto side = [&](size_t a, size_t b, size_t c, size_t d) {
@@ -93,6 +100,13 @@ int main() {
         const auto appearance =
             BuildFirstPersonSmallSceneryAppearancePlan(entry, element, &hull);
         assert(appearance.valid() && !appearance.faces.empty());
+        // Compact full-tile solids should never be turned into a highly
+        // fragmented voxel mesh merely because sprite origins differ.
+        if (!inset)
+        {
+            assert(hull.directConvexSurface);
+            assert(appearance.faces.size() <= 6);
+        }
         FirstPersonScene scene;
         FirstPersonVisualHullAttempt attempt{};
         SmallSceneryBuildEvidence evidence{};
@@ -102,8 +116,10 @@ int main() {
         assert(built && !scene.surfaces.empty());
         assert(attempt.registrationAttempted && attempt.certificateViews == 4);
         std::cout << "Four-view zero-overlap registration rescue passed"
+                  << " inset=" << inset
+                  << " directConvex=" << hull.directConvexSurface
                   << " faces=" << appearance.faces.size()
-                  << " material=" << evidence.materialFaces << "\\n";
+                  << " material=" << evidence.materialFaces << "\n";
     }
     for(int shape=0;shape<4;++shape) for (const float base : {0.0f, 4.0f}) {
         SmallSceneryEntry entry{};entry.image=100;entry.height=32;
