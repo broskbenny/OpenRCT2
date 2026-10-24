@@ -244,6 +244,71 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
         }
     }
 
+    // Diagonal horizontal lintels and cross-members belong to the same
+    // native source surface family as axis-aligned ledges. Restrict them to
+    // two simple x+y and x-y planes, in a top-facing orientation, using
+    // the identical four-view pixel support and face-budget certificate.
+    // Restricting strips to length >= 2 avoids a spray of voxel-like 1x1
+    // decorative tessellation.
+    for (int family = 0; family < 2; ++family)
+    {
+        const int32_t firstPlane = family == 0
+            ? int32_t(std::ceil(minX + minY))
+            : int32_t(std::ceil(minX - maxY));
+        const int32_t lastPlane = family == 0
+            ? int32_t(std::floor(maxX + maxY))
+            : int32_t(std::floor(maxX - minY));
+        for (int32_t level = minZ + 1; level <= maxZ; ++level)
+        {
+            for (int32_t planeCoordinate = firstPlane;
+                 planeCoordinate <= lastPlane; ++planeCoordinate)
+            {
+                int32_t runStart = -1;
+                for (int32_t along = firstAlong;
+                     along <= lastAlong; ++along)
+                {
+                    const float alongY = family == 0
+                        ? float(planeCoordinate - along)
+                        : float(along - planeCoordinate);
+                    const FirstPersonVec3 sample{
+                        float(along) + .5f, alongY + .5f,
+                        float(level)
+                    };
+                    const bool supported = along < lastAlong
+                        && withinXY(sample) && supportedPoint(sample);
+                    if (supported && runStart < 0)
+                        runStart = along;
+                    if (!supported && runStart >= 0)
+                    {
+                        if (along - runStart >= 2)
+                        {
+                            const auto diagonalPoint = [&](
+                                int32_t x, float lateral)
+                            {
+                                const float y = family == 0
+                                    ? float(planeCoordinate - x)
+                                    : float(x - planeCoordinate);
+                                return FirstPersonVec3{
+                                    float(x), y + lateral,
+                                    float(level)
+                                };
+                            };
+                            FirstPersonVisualHullFace face{};
+                            face.corners = {{
+                                diagonalPoint(runStart, 0.0f),
+                                diagonalPoint(along, 0.0f),
+                                diagonalPoint(along, 1.0f),
+                                diagonalPoint(runStart, 1.0f)
+                            }};
+                            considerFace(face);
+                        }
+                        runStart = -1;
+                    }
+                }
+            }
+        }
+    }
+
     if (!patches.empty())
     {
         std::stable_sort(patches.begin(), patches.end(),
