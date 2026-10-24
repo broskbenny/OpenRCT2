@@ -583,6 +583,19 @@ int main() {
         self.assertIn("certificate.minimumObservedCoverage >= 0.66f", collision)
         self.assertIn("sourceOnly, views, projectPoint, 0, 768", collision)
         self.assertIn("sourceOnly.sourceTriangulatedWireSelected = true;", collision)
+        # A registered source-only mesh must pass its native-origin offset
+        # to production material baking, exactly like convex and carved
+        # hulls. Without this, four-view mesh certification can pass while
+        # the actual G1 material lookup reads unrelated transparent pixels.
+        source_return = collision.split(
+            "sourceOnly.refinedFaces = std::move(bestFaces);", 1)[1].split(
+            "return sourceOnly;", 1)[0]
+        self.assertIn("sourceOnly.viewPixelOffsets = registrationPixels;", source_return)
+        self.assertIn("compact.viewPixelOffsets = registrationPixels;", collision)
+        self.assertIn("aligned.viewPixelOffsets = registrationPixels;", collision)
+        material = (ROOT/"src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc").read_text()
+        self.assertIn("hull->viewPixelOffsets[view.imageDirection & 3u].x", material)
+        self.assertIn("hull->viewPixelOffsets[view.imageDirection & 3u].y", material)
         self.assertIn("certificate.minimumIntersectionOverUnion >= 0.60f", collision)
         self.assertIn("certificate.minimumObservedCoverage >= 0.66f", collision)
         self.assertIn("for (bool prioritizeCoverage : { false, true })", hull)

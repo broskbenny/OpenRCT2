@@ -890,6 +890,15 @@ namespace OpenRCT2::Paint
                     {
                         const auto& certificate = bestCertificate;
                         sourceOnly.refinedFaces = std::move(bestFaces);
+                        // The source-stroke solver projects with the same
+                        // registrationPixels correction as the carving retry.
+                        // Carry that correction into the returned visual hull:
+                        // material baking subtracts hull.viewPixelOffsets
+                        // when sampling the original G1 pixels. Previously
+                        // this source-only return discarded the corrections
+                        // (unlike the registered convex/voxel paths), making
+                        // certified world-space geometry lose its materials.
+                        sourceOnly.viewPixelOffsets = registrationPixels;
                         sourceOnly.structuralBeamSelected = true;
                         sourceOnly.sourceTriangulatedWireSelected = true;
                         sourceOnly.averageIntersectionOverUnion =
