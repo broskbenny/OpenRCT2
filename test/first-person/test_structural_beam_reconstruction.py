@@ -479,7 +479,13 @@ int main() {
         self.assertIn("|| buildEvidence.structuralBeamSelected", renderer)
         # A source-only candidate may rescue a failed voxel intersection,
         # but cannot bypass the independent projection quality certificate.
-        self.assertIn("carveAttempt.stage < 5", collision)
+        # Failure at stage 5 must not block an independently certified
+        # native-stroke mesh; the original absolute source-only gates remain.
+        self.assertIn("carveAttempt.stage <= 5", collision)
+        self.assertIn("carveAttempt.stage >= 3", collision)
+        self.assertIn("certificate.minimumIntersectionOverUnion >= 0.60f", collision)
+        self.assertIn("certificate.minimumCandidateCoverage >= 0.74f", collision)
+        self.assertIn("certificate.minimumObservedCoverage >= 0.66f", collision)
         self.assertIn("sourceOnly, views, projectPoint, 0, 768", collision)
         self.assertIn("sourceOnly.sourceTriangulatedWireSelected = true;", collision)
         self.assertIn("certificate.minimumIntersectionOverUnion >= 0.60f", collision)

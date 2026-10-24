@@ -831,14 +831,20 @@ namespace OpenRCT2::Paint
                 }
             }
 
-            // The four silhouettes can describe a physical truss even when
-            // their coarse voxel-centre intersection contains too few cells
-            // to construct a usable boundary. Only in that pre-certificate
-            // failure case try native stroke inference independently.
-            // Preserve the separate occupancy envelope for collision.
+            // Native strokes are an independent geometric explanation of
+            // the four silhouettes, not a refinement of the voxel candidate.
+            // Previously an overfilled carved hull rejected at admission
+            // (stage 5) prevented source-only inference entirely, although
+            // sparse, perforated scenery is exactly where voxel overfill is
+            // most common. Permit both carving (stage 3/4) AND admission
+            // (stage 5) failures to compete under the existing STRONGER
+            // four-view source-only certificate below.
+            //
+            // This never promotes rejected voxel geometry, and the separate
+            // authoritative occupancy envelope remains collision-only.
             if (config.allowSourceTriangulatedWireFallback
                 && carveAttempt.nativeViews == 4
-                && carveAttempt.stage >= 3 && carveAttempt.stage < 5)
+                && carveAttempt.stage >= 3 && carveAttempt.stage <= 5)
             {
                 auto sourceOnly = BuildFirstPersonOccupancyHull(
                     bounds, config, textureViews, occupancyPredicate);
