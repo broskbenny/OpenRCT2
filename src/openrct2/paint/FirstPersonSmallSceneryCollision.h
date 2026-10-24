@@ -24,6 +24,11 @@
 
 namespace OpenRCT2::Paint
 {
+    // EXPERIMENTAL REGRESSION COMPARISON ONLY. This branch deliberately
+    // restores October 21 geometry admission while retaining today's async,
+    // GPU packet, and material infrastructure. Never merge this switch as
+    // a rendering improvement without comparing real source-artwork meshes.
+    inline constexpr bool kFirstPersonHistoricalOct21SceneryPolicy = true;
     inline constexpr int32_t kFirstPersonSmallSceneryCollisionMaxHeight = 20;
 
     [[nodiscard]] inline bool
@@ -607,6 +612,12 @@ namespace OpenRCT2::Paint
                 SmallSceneryFlag::hasOverlayImage,
                 SmallSceneryFlag::isDiagonal)
             && entry.height >= 12 && entry.height <= 64;
+        if (kFirstPersonHistoricalOct21SceneryPolicy)
+        {
+            // No native-stroke/structural candidate existed on October 21.
+            config.allowStructuralBeamReconstruction = false;
+            config.allowSourceTriangulatedWireFallback = false;
+        }
         config.minimumCandidateCoverage = 0.55f;
         config.minimumObservedCoverage = 0.30f;
         config.maximumEdgeError = 8;
@@ -711,6 +722,8 @@ namespace OpenRCT2::Paint
             {
                 // Test undilated source pixels before spending the fine-grid
                 // budget. Both retries retain the same four-view admission.
+                if (!kFirstPersonHistoricalOct21SceneryPolicy)
+                {
                 supportRadius = 0;
                 auto strictConfig = config;
                 strictConfig.preferCertifiedSmoothSurface = true;
@@ -726,6 +739,7 @@ namespace OpenRCT2::Paint
                 if (strict.valid
                     && (strict.continuousSurfaceRefined || strict.structuralBeamSelected))
                     return strict;
+                }
 
                 auto fineBounds = bounds;
                 fineBounds.step = 1.0f;
@@ -752,6 +766,13 @@ namespace OpenRCT2::Paint
                     fineConfig.preferCertifiedSmoothSurface = true;
                     fineConfig.maximumContinuousSurfaceFaces = 8192;
                     fineConfig.continuousSurfaceSearchSteps = 2;
+                    if (kFirstPersonHistoricalOct21SceneryPolicy)
+                    {
+                        // The October 21 retry published certified raw
+                        // one-unit faces, regardless of surface refinement.
+                        fineConfig.allowContinuousSurfaceRefinement = false;
+                        fineConfig.preferCertifiedSmoothSurface = false;
+                    }
                     FirstPersonVisualHullAttempt fineAttempt{};
                     auto fine = BuildFirstPersonVisualHull(
                         views, fineBounds, fineConfig,
@@ -759,7 +780,9 @@ namespace OpenRCT2::Paint
                         &fineAttempt);
                     fine.attempt = fineAttempt;
                     if (fine.valid
-                        && (fine.continuousSurfaceRefined || fine.structuralBeamSelected))
+                        && (kFirstPersonHistoricalOct21SceneryPolicy
+                            || fine.continuousSurfaceRefined
+                            || fine.structuralBeamSelected))
                         return fine;
                 }
             }

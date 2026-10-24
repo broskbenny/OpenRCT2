@@ -753,6 +753,7 @@
             // fragments are a substantial fraction of its actual surfaces;
             // the authoritative collision hull remains entirely unchanged.
             if (appearance.certifiesHullMaterial
+                && !kFirstPersonHistoricalOct21SceneryPolicy
                 && unsupportedVisibleFaces >= 128
                 && unsupportedVisibleFaces > emittedFaces / 2)
             {
