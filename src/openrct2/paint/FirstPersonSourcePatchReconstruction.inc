@@ -322,6 +322,92 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
             240, faceLimit - result.size());
         std::vector<uint8_t> used(patches.size(), 0);
 
+        // A four-view silhouette fit does not certify a coherent structure
+        // from novel viewpoints: isolated plane fragments may match the
+        // original sprites while floating in 3D. Prefer source-supported
+        // strips that physically touch already inferred world-space members,
+        // or touch other strips connected to those members. This only
+        // changes greedy priority; no unsupported geometry is invented and
+        // the exact four-view certificate remains authoritative.
+        //
+        // Bounded to 1200 patches and 5 contact points per patch. Reject
+        // separated bounding boxes before geometric proximity checks.
+        struct PatchContact
+        {
+            std::array<FirstPersonVec3,5> points{};
+            FirstPersonVec3 min{}, max{};
+        };
+        std::vector<PatchContact> contact(patches.size());
+        std::vector<uint8_t> directMemberContact(patches.size(),0);
+        std::vector<std::vector<uint16_t>> adjacent(patches.size());
+        constexpr float kConnectionDistanceSquared=1.0f;
+        for (size_t i=0;i<patches.size();++i)
+        {
+            const auto& corners=patches[i].face.corners;
+            auto& out=contact[i];
+            for (size_t k=0;k<4;++k)
+                out.points[k]=corners[k];
+            out.points[4]=mul(add(add(corners[0],corners[1]),
+                                  add(corners[2],corners[3])),.25f);
+            out.min=out.max=corners[0];
+            for (const auto& point : corners)
+            {
+                out.min.x=std::min(out.min.x,point.x);
+                out.min.y=std::min(out.min.y,point.y);
+                out.min.z=std::min(out.min.z,point.z);
+                out.max.x=std::max(out.max.x,point.x);
+                out.max.y=std::max(out.max.y,point.y);
+                out.max.z=std::max(out.max.z,point.z);
+            }
+            for (size_t j=0;j<candidates.size() && !directMemberContact[i];++j)
+            {
+                if (!chosen[j])
+                    continue;
+                const auto& start=candidates[j].p;
+                const auto axis=sub(candidates[j].q,start);
+                const float axisLengthSquared=FpDot(axis,axis);
+                if (axisLengthSquared<1.0f)
+                    continue;
+                for (const auto& point : out.points)
+                {
+                    const float t=std::clamp(
+                        FpDot(sub(point,start),axis)/axisLengthSquared,
+                        0.0f,1.0f);
+                    const auto delta=sub(point,add(start,mul(axis,t)));
+                    if (FpDot(delta,delta)<=kConnectionDistanceSquared)
+                    {
+                        directMemberContact[i]=1;
+                        break;
+                    }
+                }
+            }
+        }
+        for (size_t i=0;i<patches.size();++i)
+        for (size_t j=i+1;j<patches.size();++j)
+        {
+            const auto& a=contact[i];
+            const auto& b=contact[j];
+            constexpr float margin=1.0f;
+            if (a.min.x>b.max.x+margin || b.min.x>a.max.x+margin
+                || a.min.y>b.max.y+margin || b.min.y>a.max.y+margin
+                || a.min.z>b.max.z+margin || b.min.z>a.max.z+margin)
+                continue;
+            bool near=false;
+            for (const auto& pa : a.points)
+            for (const auto& pb : b.points)
+            {
+                const auto delta=sub(pa,pb);
+                if (FpDot(delta,delta)<=kConnectionDistanceSquared)
+                    near=true;
+            }
+            if (near)
+            {
+                adjacent[i].push_back(uint16_t(j));
+                adjacent[j].push_back(uint16_t(i));
+            }
+        }
+        std::vector<uint8_t> connectedToMembers(patches.size(),0);
+
         // Greedy total pixel count was biased towards already well-explained
         // source views. A patch that repairs the weakest authored rotation
         // matters more than the same number of pixels in a stronger view.
@@ -400,16 +486,57 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
                         admissible = false;
                     gain += float(viewGain) * viewWeights[d];
                 }
-                if (admissible && gain > bestGain)
+                if (admissible)
                 {
-                    bestGain = gain;
-                    best = i;
+                    bool attached=directMemberContact[i]!=0;
+                    if (!attached)
+                        for (uint16_t neighbour : adjacent[i])
+                            if (used[neighbour] && connectedToMembers[neighbour])
+                            {
+                                attached=true;
+                                break;
+                            }
+                    // Exactly the same four-view-supported candidates and
+                    // per-view gains: prefer connected geometry, not extra
+                    // source-silhouette pixels detached in world space.
+                    if (attached)
+                        gain*=2.0f;
+                    if (gain>bestGain)
+                    {
+                        bestGain=gain;
+                        best=i;
+                    }
                 }
             }
             if (best == patches.size())
                 break;
             used[best] = 1;
             result.push_back(patches[best].face);
+            bool attached=directMemberContact[best]!=0;
+            if (!attached)
+                for (uint16_t neighbour : adjacent[best])
+                    if (used[neighbour] && connectedToMembers[neighbour])
+                    {
+                        attached=true;
+                        break;
+                    }
+            if (attached)
+            {
+                // A newly attached strip can connect previously selected
+                // floating patches. Propagate only across SELECTED edges.
+                std::vector<uint16_t> pending{uint16_t(best)};
+                while (!pending.empty())
+                {
+                    const uint16_t connected=pending.back();
+                    pending.pop_back();
+                    if (connectedToMembers[connected])
+                        continue;
+                    connectedToMembers[connected]=1;
+                    for (uint16_t neighbour : adjacent[connected])
+                        if (used[neighbour] && !connectedToMembers[neighbour])
+                            pending.push_back(neighbour);
+                }
+            }
             for (uint8_t d = 0; d < 4; ++d)
                 for (uint64_t pixel : patches[best].projected[d])
                 {
