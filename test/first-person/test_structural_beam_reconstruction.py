@@ -426,10 +426,10 @@ int main() {
     def test_native_stroke_pairs_cover_all_unordered_source_views(self):
         source = (ROOT/"src/openrct2/paint/FirstPersonSourceTriangulation.inc").read_text()
         import re
-        pairs = re.search(r"constexpr int pairs\\[6\\]\\[2\\]\\s*=\\s*\\{(.*?)\\};", source, re.S)
+        pairs = re.search(r"constexpr int pairs\[6\]\[2\]\s*=\s*\{(.*?)\};", source, re.S)
         self.assertIsNotNone(pairs)
         extracted = {tuple(map(int, pair)) for pair in
-                     re.findall(r"\\{([0-3]),([0-3])\\}", pairs.group(1))}
+                     re.findall(r"\{([0-3]),([0-3])\}", pairs.group(1))}
         self.assertEqual(extracted, {(a, b) for a in range(4) for b in range(a+1, 4)})
         self.assertIn("constexpr size_t kMaximumProjections=400", source)
         self.assertIn("minimumNear<0.80f", source)
