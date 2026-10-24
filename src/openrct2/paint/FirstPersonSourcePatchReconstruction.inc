@@ -341,6 +341,30 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
                     ++observedMatches[d];
             }
         }
+
+        // Exact incremental gain cache. After a source pixel becomes part
+        // of the selected union, its contribution changes exactly once.
+        // Rescanning all four rasters of all 1200 candidates after each
+        // selection performed millions of redundant lookups. The reverse
+        // pixel-to-candidate dependency index preserves the previous
+        // greedy result, including candidates whose negative support is
+        // subsequently covered by a different approved surface.
+        std::vector<std::array<int32_t,4>> remainingGain(patches.size());
+        std::array<std::unordered_map<uint64_t,std::vector<uint16_t>>,4>
+            dependentCandidates{};
+        for (size_t i = 0; i < patches.size(); ++i)
+        for (uint8_t d = 0; d < 4; ++d)
+        {
+            for (uint64_t pixel : patches[i].projected[d])
+            {
+                if (projectedUses[d].contains(pixel))
+                    continue;
+                remainingGain[i][d] +=
+                    native[d]->observed.pixels.contains(pixel) ? 1 : -1;
+                // Candidate indices cannot exceed the 1200-patch bound.
+                dependentCandidates[d][pixel].push_back(uint16_t(i));
+            }
+        }
         for (size_t selected = 0; selected < patchBudget; ++selected)
         {
             std::array<float,4> sourceIoU{};
@@ -371,14 +395,7 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
                 bool admissible = true;
                 for (uint8_t d = 0; d < 4 && admissible; ++d)
                 {
-                    int32_t viewGain = 0;
-                    for (uint64_t pixel : patches[i].projected[d])
-                    {
-                        if (projectedUses[d].contains(pixel))
-                            continue;
-                        viewGain += native[d]->observed.pixels.contains(pixel)
-                            ? 1 : -1;
-                    }
+                    const int32_t viewGain = remainingGain[i][d];
                     if (viewGain < 0)
                         admissible = false;
                     gain += float(viewGain) * viewWeights[d];
@@ -399,8 +416,15 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
                     if (!projectedUses[d].contains(pixel))
                     {
                         ++predictedCounts[d];
-                        if (native[d]->observed.pixels.contains(pixel))
+                        const bool nativePixel =
+                            native[d]->observed.pixels.contains(pixel);
+                        if (nativePixel)
                             ++observedMatches[d];
+                        const int32_t contribution = nativePixel ? 1 : -1;
+                        const auto affected = dependentCandidates[d].find(pixel);
+                        if (affected != dependentCandidates[d].end())
+                            for (uint16_t index : affected->second)
+                                remainingGain[index][d] -= contribution;
                     }
                     ++projectedUses[d][pixel];
                 }
