@@ -784,9 +784,43 @@ namespace OpenRCT2::Paint
                 carveAttempt.stage == 5
                 && carveAttempt.candidateCoverage >= 0.50f
                 && carveAttempt.observedCoverage < 0.25f;
-            if ((missingIntersection || rejectedRegisteredHull)
+            // A misregistered lattice may still have hundreds of shared
+            // carving cells and moderate per-view coverage. Example: a
+            // four-view synthetic scaffold with alternately shifted native
+            // origins failed at stage 5 (IoU .428, observed .543, candidate
+            // .667); the previous <.25 observed-coverage gate never tested
+            // source registration. This narrow low-IoU hypothesis is only
+            // retried when the *independent* artwork envelopes also show
+            // substantially DIFFERENT shifts between authored rotations.
+            // A common small offset or a merely intricate hull is not enough.
+            const bool suspectDifferentialRegistration =
+                carveAttempt.stage == 5
+                && carveAttempt.nativeViews == 4
+                && carveAttempt.minimumIoU < 0.50f
+                && carveAttempt.candidateCoverage < 0.80f
+                && carveAttempt.observedCoverage < 0.75f;
+            const auto hasDifferentialRegistration = [&]() {
+                int32_t minimumX = registrationPixels[0].x;
+                int32_t maximumX = minimumX;
+                int32_t minimumY = registrationPixels[0].y;
+                int32_t maximumY = minimumY;
+                for (const auto& shift : registrationPixels)
+                {
+                    minimumX = std::min(minimumX, shift.x);
+                    maximumX = std::max(maximumX, shift.x);
+                    minimumY = std::min(minimumY, shift.y);
+                    maximumY = std::max(maximumY, shift.y);
+                }
+                constexpr int32_t kMinimumDifferentialOriginPixels = 8;
+                return maximumX - minimumX >= kMinimumDifferentialOriginPixels
+                    || maximumY - minimumY >= kMinimumDifferentialOriginPixels;
+            };
+            if ((missingIntersection || rejectedRegisteredHull
+                    || suspectDifferentialRegistration)
                 && EstimateFirstPersonSmallSceneryNativeRegistration(
-                    views, bounds, projectPoint, registrationPixels))
+                    views, bounds, projectPoint, registrationPixels)
+                && (missingIntersection || rejectedRegisteredHull
+                    || hasDifferentialRegistration()))
             {
                 // Re-evaluate the already validated compact-solid solver in
                 // the corrected native coordinates. It runs before voxel

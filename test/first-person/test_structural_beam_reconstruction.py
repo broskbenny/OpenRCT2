@@ -578,6 +578,13 @@ int main() {
         # native-stroke mesh; the original absolute source-only gates remain.
         self.assertIn("carveAttempt.stage <= 5", collision)
         self.assertIn("carveAttempt.stage >= 3", collision)
+        # Moderately overlapping but misregistered four-view lattices must
+        # reach the bounded origin estimator. The expanded hypothesis
+        # requires a measured differential shift before another voxel pass.
+        self.assertIn("suspectDifferentialRegistration", collision)
+        self.assertIn("hasDifferentialRegistration()", collision)
+        self.assertIn("kMinimumDifferentialOriginPixels = 8", collision)
+        self.assertIn("carveAttempt.minimumIoU < 0.50f", collision)
         self.assertIn("certificate.minimumIntersectionOverUnion >= 0.60f", collision)
         self.assertIn("certificate.minimumCandidateCoverage >= 0.74f", collision)
         self.assertIn("certificate.minimumObservedCoverage >= 0.66f", collision)
