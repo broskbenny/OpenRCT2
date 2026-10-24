@@ -27,14 +27,14 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
     const int32_t maxZ = int32_t(std::floor(
         hull.minUp + float(hull.sizeUp) * hull.step));
 
-    const auto planePoint = [](int family, int32_t plane,
+    const auto planePoint = [](int family, int32_t planeCoordinate,
                                float along, float up) {
         switch (family)
         {
-            case 0: return FirstPersonVec3{float(plane), along, up};
-            case 1: return FirstPersonVec3{along, float(plane), up};
-            case 2: return FirstPersonVec3{along, float(plane) - along, up};
-            default: return FirstPersonVec3{along, along - float(plane), up};
+            case 0: return FirstPersonVec3{float(planeCoordinate), along, up};
+            case 1: return FirstPersonVec3{along, float(planeCoordinate), up};
+            case 2: return FirstPersonVec3{along, float(planeCoordinate) - along, up};
+            default: return FirstPersonVec3{along, along - float(planeCoordinate), up};
         }
     };
     const auto withinXY = [&](FirstPersonVec3 p) {
@@ -54,7 +54,7 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
         return true;
     };
 
-    const auto considerPatch = [&](int family, int32_t plane,
+    const auto considerPatch = [&](int family, int32_t planeCoordinate,
                                    int32_t along, int32_t startZ,
                                    int32_t endZ)
     {
@@ -62,10 +62,10 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
             return;
         FirstPersonVisualHullFace face{};
         face.corners = {{
-            planePoint(family, plane, float(along), float(startZ)),
-            planePoint(family, plane, float(along + 1), float(startZ)),
-            planePoint(family, plane, float(along + 1), float(endZ)),
-            planePoint(family, plane, float(along), float(endZ))
+            planePoint(family, planeCoordinate, float(along), float(startZ)),
+            planePoint(family, planeCoordinate, float(along + 1), float(startZ)),
+            planePoint(family, planeCoordinate, float(along + 1), float(endZ)),
+            planePoint(family, planeCoordinate, float(along), float(endZ))
         }};
         for (const auto& v : face.corners)
             if (!withinXY(v))
@@ -154,7 +154,7 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
             firstPlane = int32_t(std::ceil(minX - maxY));
             lastPlane = int32_t(std::floor(maxX - minY));
         }
-        for (int32_t plane = firstPlane; plane <= lastPlane; ++plane)
+        for (int32_t planeCoordinate = firstPlane; planeCoordinate <= lastPlane; ++planeCoordinate)
         {
             for (int32_t along = firstAlong; along < lastAlong; ++along)
             {
@@ -162,7 +162,7 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
                 for (int32_t z = minZ; z <= maxZ; ++z)
                 {
                     const auto sample = planePoint(
-                        family, plane, float(along) + .5f,
+                        family, planeCoordinate, float(along) + .5f,
                         float(z) + .5f);
                     const bool supported = z < maxZ
                         && withinXY(sample) && supportedPoint(sample);
@@ -170,7 +170,7 @@ if (includeSourceSupportedPatches && result.size() + 12 < faceLimit)
                         runStart = z;
                     if (!supported && runStart >= 0)
                     {
-                        considerPatch(family, plane, along, runStart, z);
+                        considerPatch(family, planeCoordinate, along, runStart, z);
                         runStart = -1;
                     }
                 }
