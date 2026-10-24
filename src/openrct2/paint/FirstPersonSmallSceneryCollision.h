@@ -862,7 +862,7 @@ namespace OpenRCT2::Paint
                         {
                         auto faces = BuildFirstPersonSourceTriangulatedWireFaces(
                             sourceOnly, views, projectPoint, 0, 768,
-                            prioritizeCoverage, expandedPairs);
+                            prioritizeCoverage, expandedPairs, true);
                         if (faces.empty())
                             continue;
                         const auto certificate = CertifyFirstPersonReconstruction(

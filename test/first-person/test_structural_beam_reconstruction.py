@@ -451,6 +451,21 @@ int main() {
         self.assertIn("result.sourceTriangulatedWireSelected", hull)
         self.assertIn("minimumNear<0.80f", source)
 
+    def test_source_supported_surface_patches_require_fully_certified_source(self):
+        patch = (ROOT/"src/openrct2/paint/FirstPersonSourcePatchReconstruction.inc").read_text()
+        wire = (ROOT/"src/openrct2/paint/FirstPersonSourceTriangulation.inc").read_text()
+        collision = (ROOT/"src/openrct2/paint/FirstPersonSmallSceneryCollision.h").read_text()
+        hull = (ROOT/"src/openrct2/paint/FirstPersonVisualHull.h").read_text()
+        self.assertIn("if (includeSourceSupportedPatches", patch)
+        self.assertIn("for (uint8_t d = 0; d < 4; ++d)", patch)
+        self.assertIn("kMaximumSourcePatchCandidates = 1200", patch)
+        self.assertIn("240, faceLimit - result.size()", patch)
+        self.assertIn("if (viewGain < 0)", patch)
+        self.assertIn("AddFirstPersonSilhouetteQuad(silhouette, screen)", patch)
+        self.assertIn("FirstPersonSourcePatchReconstruction.inc", wire)
+        self.assertIn("prioritizeCoverage, expandedPairs, true", collision)
+        self.assertIn("prioritizeCoverage, expandedPairs, true", hull)
+
     def test_beam_candidate_is_opt_in_and_diagnostics_are_grounded(self):
         hull = (ROOT/"src/openrct2/paint/FirstPersonVisualHull.h").read_text()
         collision = (ROOT/"src/openrct2/paint/FirstPersonSmallSceneryCollision.h").read_text()

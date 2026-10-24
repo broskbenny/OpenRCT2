@@ -2002,7 +2002,7 @@ namespace OpenRCT2::Paint
                 auto wireFaces = BuildFirstPersonSourceTriangulatedWireFaces(
                     result, views, projectPoint, voxelFaces.size(),
                     std::min<size_t>(768, config.maximumContinuousSurfaceFaces),
-                    prioritizeCoverage, expandedPairs);
+                    prioritizeCoverage, expandedPairs, true);
                 if (wireFaces.empty())
                     continue;
                 const auto wireCertificate = CertifyFirstPersonReconstruction(

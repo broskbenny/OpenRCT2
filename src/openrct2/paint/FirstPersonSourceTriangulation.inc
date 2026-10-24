@@ -13,7 +13,8 @@ template<typename ProjectPoint>
         ProjectPoint&& projectPoint,
         size_t originalFaceCount, size_t maximumFaces = 768,
         bool prioritizeNativeCoverage = false,
-        bool includeAllSourceViewPairs = false)
+        bool includeAllSourceViewPairs = false,
+        bool includeSourceSupportedPatches = false)
 {
     // A zero baseline means voxel carving never produced a candidate.
     // Native stroke triangulation is independently evidence-based, so it
@@ -614,6 +615,11 @@ template<typename ProjectPoint>
     const size_t faceLimit = originalFaceCount == 0
         ? maximumFaces
         : std::min(maximumFaces,(originalFaceCount*2-1)/3);
+    // Thin perforated artwork contains curved and planar details that no
+    // collection of straight Hough rods can reproduce. After selecting the
+    // independently inferred members, let the native source constrain
+    // narrow 3D surface strips. They do not inherit occupancy voxels.
+    #include "FirstPersonSourcePatchReconstruction.inc"
     if (result.size()+6>faceLimit)
         return result;
     struct Junction
