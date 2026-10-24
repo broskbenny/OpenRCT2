@@ -1,0 +1,35 @@
+name: Export first-person production evaluator source
+
+on:
+  push:
+    branches:
+      - first-person/source-view-stability-20261018
+    paths:
+      - .github/workflows/first-person-source-export.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evaluator-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive exact committed production source and evaluator
+        shell: bash
+        run: |
+          git archive --format=zip \
+            --output="$RUNNER_TEMP/first-person-production-source.zip" \
+            HEAD src test/first-person
+          unzip -t "$RUNNER_TEMP/first-person-production-source.zip" >/dev/null
+      - name: Upload reusable source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-person-production-source
+          path: ${{ runner.temp }}/first-person-production-source.zip
+          if-no-files-found: error
+          retention-days: 3
