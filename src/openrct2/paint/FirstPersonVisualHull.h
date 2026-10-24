@@ -1989,12 +1989,20 @@ namespace OpenRCT2::Paint
             // The long-stroke and coverage-ranked candidates explain
             // different native features. Admit them independently; selecting
             // a better 2D line set cannot by itself justify 3D promotion.
-            for (bool prioritizeCoverage : { false, true })
+            for (bool expandedPairs : { false, true })
             {
+                // Never replace a previously selected or already admitted
+                // four-pair hypothesis just to search more stereo pairs.
+                if (expandedPairs
+                    && (result.sourceTriangulatedWireSelected
+                        || passesAdmission(selectedCertificate)))
+                    break;
+                for (bool prioritizeCoverage : { false, true })
+                {
                 auto wireFaces = BuildFirstPersonSourceTriangulatedWireFaces(
                     result, views, projectPoint, voxelFaces.size(),
                     std::min<size_t>(768, config.maximumContinuousSurfaceFaces),
-                    prioritizeCoverage);
+                    prioritizeCoverage, expandedPairs);
                 if (wireFaces.empty())
                     continue;
                 const auto wireCertificate = CertifyFirstPersonReconstruction(
@@ -2019,6 +2027,7 @@ namespace OpenRCT2::Paint
                     result.structuralBeamSelected = true;
                     result.sourceTriangulatedWireSelected = true;
                     selectedCertificate = wireCertificate;
+                }
                 }
             }
         }

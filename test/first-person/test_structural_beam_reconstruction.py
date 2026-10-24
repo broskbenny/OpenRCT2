@@ -343,6 +343,18 @@ int main() {
     // Source-only mode has a larger relative face budget for optional
     // silhouette-neutral structural junctions.
     assert(sourceOnlyWire.size()>=inferredWire.size());
+    // Independently verify the extra two orthographic pair constraints.
+    // The expanded alternative is admissible only through the same
+    // complete four-view certificate and geometric face budget.
+    const auto allPairsWire=BuildFirstPersonSourceTriangulatedWireFaces(
+        wire,nativeWireViews,wireProject,originalWire.size(),768,false,true);
+    if (!allPairsWire.empty()) {
+        const auto extraCert=CertifyFirstPersonReconstruction(
+            TriangulateFirstPersonReconstructionFaces(allPairsWire),
+            nativeWireViews,wireProject);
+        assert(extraCert.valid && extraCert.viewCount==4);
+        assert(allPairsWire.size()<=768);
+    }
     // Every independently inferred member contributes native pixels.
     // Extra prisms are allowed only as evidence-backed structural joints:
     // their pixels must already be covered by native art AND other members.
@@ -432,6 +444,11 @@ int main() {
                      re.findall(r"\{([0-3]),([0-3])\}", pairs.group(1))}
         self.assertEqual(extracted, {(a, b) for a in range(4) for b in range(a+1, 4)})
         self.assertIn("constexpr size_t kMaximumProjections=400", source)
+        self.assertIn("includeAllSourceViewPairs ? 6 : 4", source)
+        collision = (ROOT/"src/openrct2/paint/FirstPersonSmallSceneryCollision.h").read_text()
+        hull = (ROOT/"src/openrct2/paint/FirstPersonVisualHull.h").read_text()
+        self.assertIn("if (expandedPairs && !bestFaces.empty())", collision)
+        self.assertIn("result.sourceTriangulatedWireSelected", hull)
         self.assertIn("minimumNear<0.80f", source)
 
     def test_beam_candidate_is_opt_in_and_diagnostics_are_grounded(self):

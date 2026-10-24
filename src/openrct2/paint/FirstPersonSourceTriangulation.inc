@@ -12,7 +12,8 @@ template<typename ProjectPoint>
         const std::vector<FirstPersonVisualHullView>& views,
         ProjectPoint&& projectPoint,
         size_t originalFaceCount, size_t maximumFaces = 768,
-        bool prioritizeNativeCoverage = false)
+        bool prioritizeNativeCoverage = false,
+        bool includeAllSourceViewPairs = false)
 {
     // A zero baseline means voxel carving never produced a candidate.
     // Native stroke triangulation is independently evidence-based, so it
@@ -321,8 +322,13 @@ template<typename ProjectPoint>
         hull.minRight+float(hull.sizeRight)*hull.step*.5f,
         hull.minUp+float(hull.sizeUp)*hull.step*.5f
     };
-    for (const auto& pair : pairs)
+    // Preserve the historical four-pair winner on the normal path.
+    // The two extra stereo constraints are a fallback for candidates that
+    // fail independent four-view admission, not a source of regressions.
+    for (int pairIndex=0;
+         pairIndex<(includeAllSourceViewPairs ? 6 : 4); ++pairIndex)
     {
+        const auto& pair=pairs[pairIndex];
         const int d0=pair[0],d1=pair[1];
         for (const auto& l0 : lines[d0])
         for (const auto& l1 : lines[d1])

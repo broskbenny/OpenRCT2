@@ -846,11 +846,17 @@ namespace OpenRCT2::Paint
                 {
                     std::vector<FirstPersonVisualHullFace> bestFaces;
                     FirstPersonRoundTripCertificate bestCertificate{};
-                    for (bool prioritizeCoverage : { false, true })
+                    for (bool expandedPairs : { false, true })
                     {
+                        // Preserve the original four-pair winner and avoid
+                        // extra reconstruction cost after successful admission.
+                        if (expandedPairs && !bestFaces.empty())
+                            break;
+                        for (bool prioritizeCoverage : { false, true })
+                        {
                         auto faces = BuildFirstPersonSourceTriangulatedWireFaces(
                             sourceOnly, views, projectPoint, 0, 768,
-                            prioritizeCoverage);
+                            prioritizeCoverage, expandedPairs);
                         if (faces.empty())
                             continue;
                         const auto certificate = CertifyFirstPersonReconstruction(
@@ -871,6 +877,7 @@ namespace OpenRCT2::Paint
                         {
                             bestFaces = std::move(faces);
                             bestCertificate = certificate;
+                        }
                         }
                     }
                     if (!bestFaces.empty())
