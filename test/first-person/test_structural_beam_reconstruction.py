@@ -525,6 +525,8 @@ int main() {
         self.assertIn("for (int32_t height = minZ + 1;", patch)
         self.assertIn("if (along - runStart >= 2)", patch)
         self.assertIn("face.normal.z > .7f", patch)
+        self.assertIn("const auto diagonalPoint = [&](", patch)
+        self.assertIn("two simple x+y and x-y planes", patch)
         self.assertIn("240, faceLimit - result.size()", patch)
         self.assertIn("if (viewGain < 0)", patch)
         self.assertIn("AddFirstPersonSilhouetteQuad(silhouette, screen)", patch)
