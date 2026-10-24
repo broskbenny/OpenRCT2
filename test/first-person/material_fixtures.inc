@@ -207,6 +207,8 @@ int main() {
     // from an open scaffold. Unlike the cuboid/roof cases above, no solid
     // convex envelope can explain its open regions. These are synthetic
     // palette indices, never proprietary RCT2 artwork.
+    uint32_t unshiftedScaffoldMaterials = 0;
+    for (const bool shiftedOrigins : { false, true })
     {
         SmallSceneryEntry entry{};
         entry.image = 200;
@@ -263,14 +265,20 @@ int main() {
             G1Element g1{};
             g1.width = mask.maxX - mask.minX;
             g1.height = mask.maxY - mask.minY;
-            g1.xOffset = mask.minX;
+            // Independent native drawing origins must alter image-space
+            // registration, not the world-space mesh or its G1 material.
+            g1.xOffset = mask.minX
+                + (shiftedOrigins ? ((rotation & 1u) ? -14 : 14) : 0);
             g1.yOffset = mask.minY;
             g1.flags.set(G1Flag::hasTransparency);
             std::vector<uint8_t> pixels(size_t(g1.width)*size_t(g1.height),0);
             for (uint64_t pixel : mask.pixels)
             {
-                const int32_t x=FirstPersonSilhouettePixelX(pixel)-g1.xOffset;
-                const int32_t y=FirstPersonSilhouettePixelY(pixel)-g1.yOffset;
+                // The DATA in each G1 stays fixed; shifting only the
+                // drawing origin is what the native-registration stage
+                // must compensate for.
+                const int32_t x=FirstPersonSilhouettePixelX(pixel)-mask.minX;
+                const int32_t y=FirstPersonSilhouettePixelY(pixel)-mask.minY;
                 pixels[size_t(y)*size_t(g1.width)+size_t(x)] =
                     uint8_t(150 + ((x+y)&7));
             }
@@ -297,6 +305,22 @@ int main() {
         assert(mask.has_value() && mask->valid);
         assert(built && !scene.surfaces.empty());
         assert(evidence.materialFaces>0);
+        assert(evidence.sourceTriangulatedWireSelected);
+        if (!shiftedOrigins)
+            unshiftedScaffoldMaterials=evidence.materialFaces;
+        else
+        {
+            // Actual source-only reconstruction must now preserve the
+            // registration shifts in the returned hull that drives G1
+            // sampling, not just use the shifts while certifying a mesh.
+            const auto registered = BuildFirstPersonSmallSceneryVisualHullFromSnapshot(
+                entry, element, [&](ImageIndex id) { return snapshot.get(id); });
+            assert(registered.sourceTriangulatedWireSelected);
+            assert(registered.attempt.registrationAttempted);
+            for(uint8_t rotation=0;rotation<4;++rotation)
+                assert(std::abs(registered.viewPixelOffsets[rotation].x)>=7);
+            assert(evidence.materialFaces*4>=unshiftedScaffoldMaterials*3);
+        }
     }
 
 }
