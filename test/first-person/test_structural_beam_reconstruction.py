@@ -394,7 +394,7 @@ int main() {
             wire,ornamentViews,wireProject,0,768,false,false,true);
         assert(!sourceOnlyRods.empty() && !sourceWithPanels.empty());
         assert(sourceWithPanels.size()<=768);
-        assert(sourceWithPanels.size()>=sourceOnlyRods.size());
+        assert(sourceWithPanels.size()>sourceOnlyRods.size());
         const auto rodCert=CertifyFirstPersonReconstruction(
             TriangulateFirstPersonReconstructionFaces(sourceOnlyRods),
             ornamentViews,wireProject);
@@ -403,6 +403,8 @@ int main() {
             ornamentViews,wireProject);
         assert(rodCert.valid && patchCert.valid);
         assert(rodCert.viewCount==4 && patchCert.viewCount==4);
+        assert(patchCert.minimumIntersectionOverUnion
+            > rodCert.minimumIntersectionOverUnion + .005f);
         // A quad is kept only after its exact source-view raster adds more
         // observed than invented pixels in EACH direction. Thus the 4-view
         // silhouette IoU must not worsen.
