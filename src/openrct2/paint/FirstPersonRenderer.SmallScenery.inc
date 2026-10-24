@@ -409,6 +409,62 @@
                         auto visibility = BuildFirstPersonDepthVisibility(
                             depthOwners[source.rotation], projected, depth);
                         visibilityCoverage = visibility.coverage();
+                        // Rectangular native-stroke rods can have legitimate
+                        // side faces narrower than one artwork pixel. Their
+                        // quantized triangle raster is empty, even when a
+                        // four-view-certified rod crosses an opaque source
+                        // pixel. Recover only that pixel-sized material
+                        // witness, never invent pixels on ordinary voxel
+                        // hulls or bypass visibility for a larger face.
+                        if (visibilityCoverage == 0.0f
+                            && visibility.projected.empty()
+                            && hull != nullptr
+                            && hull->sourceTriangulatedWireSelected)
+                        {
+                            const auto sample =
+                                FirstPersonSubpixelFaceSourceSample(projected);
+                            if (sample.has_value())
+                            {
+                                const auto paintOffset =
+                                    FirstPersonSmallSceneryPaintOffset(
+                                        *entry, *small, source.rotation);
+                                const auto origin =
+                                    Translate3DTo2DWithZ(
+                                        source.rotation, { paintOffset, 0 });
+                                const int32_t u =
+                                    sample->x - origin.x - source.g1->xOffset
+                                    + source.groundingShiftU;
+                                const int32_t v =
+                                    sample->y - origin.y - source.g1->yOffset
+                                    + source.groundingShiftV;
+                                const auto owned =
+                                    depthOwners[source.rotation].find(
+                                        FirstPersonSilhouettePixelKey(
+                                            sample->x, sample->y));
+                                const float frontDepth =
+                                    *std::max_element(depth.begin(), depth.end());
+                                // Reject independently closer front surfaces;
+                                // a narrow rod's own width is at most about
+                                // one unit in canonical isometric depth.
+                                const bool unoccluded =
+                                    owned == depthOwners[source.rotation].end()
+                                    || owned->second.depth <= frontDepth + 1.0f;
+                                if (u >= 0 && v >= 0
+                                    && u < source.g1->width
+                                    && v < source.g1->height
+                                    && source.pixels[size_t(v)
+                                        * size_t(source.g1->width)
+                                        + size_t(u)] != 0
+                                    && unoccluded)
+                                {
+                                    visibility.projected.add(
+                                        sample->x, sample->y);
+                                    visibility.visible.add(
+                                        sample->x, sample->y);
+                                    visibilityCoverage = 1.0f;
+                                }
+                            }
+                        }
                         if (visibilityCoverage < 0.20f)
                             continue;
                         silhouette = std::move(visibility.projected);

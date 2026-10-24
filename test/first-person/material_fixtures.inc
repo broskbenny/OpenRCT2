@@ -1,4 +1,23 @@
 int main() {
+    // The production rasterizer has zero-area projection for these quads.
+    // A thin rod's real source pixel must remain addressable, while large
+    // or malformed spans must not receive the subpixel material exception.
+    {
+        const std::array<ScreenCoordsXY, 4> collapsed{{
+            { 10, 20 }, { 11, 20 }, { 11, 20 }, { 10, 20 }
+        }};
+        FirstPersonSilhouette empty{};
+        AddFirstPersonSilhouetteQuad(empty, collapsed);
+        assert(empty.empty());
+        const auto sample =
+            FirstPersonSubpixelFaceSourceSample(collapsed);
+        assert(sample.has_value() && sample->x == 11
+            && sample->y == 20);
+        const std::array<ScreenCoordsXY, 4> large{{
+            { 10, 20 }, { 25, 20 }, { 25, 21 }, { 10, 21 }
+        }};
+        assert(!FirstPersonSubpixelFaceSourceSample(large).has_value());
+    }
     for(int shape=0;shape<4;++shape) for (const float base : {0.0f, 4.0f}) {
         SmallSceneryEntry entry{};entry.image=100;entry.height=32;
         entry.flags.set(SmallSceneryFlag::occupiesFullTile);

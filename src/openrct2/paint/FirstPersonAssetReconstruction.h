@@ -477,6 +477,35 @@ namespace OpenRCT2::Paint
         });
     }
 
+    // A certified narrow member can own a real artwork pixel while its
+    // perpendicular side projects to zero raster area. This is an aliasing
+    // case, not evidence that the 3D surface is absent. Only a genuinely
+    // subpixel quad is eligible for a point-support material lookup.
+    [[nodiscard]] inline std::optional<ScreenCoordsXY>
+        FirstPersonSubpixelFaceSourceSample(
+            const std::array<ScreenCoordsXY, 4>& screen)
+    {
+        int32_t minX = screen[0].x, maxX = minX;
+        int32_t minY = screen[0].y, maxY = minY;
+        int64_t sumX = 0, sumY = 0;
+        for (const auto& pixel : screen)
+        {
+            minX = std::min(minX, pixel.x);
+            maxX = std::max(maxX, pixel.x);
+            minY = std::min(minY, pixel.y);
+            maxY = std::max(maxY, pixel.y);
+            sumX += pixel.x;
+            sumY += pixel.y;
+        }
+        if (int64_t(maxX) - minX > 1
+            || int64_t(maxY) - minY > 1)
+            return std::nullopt;
+        return ScreenCoordsXY{
+            int32_t(std::lround(double(sumX) / 4.0)),
+            int32_t(std::lround(double(sumY) / 4.0)),
+        };
+    }
+
     struct FirstPersonDepthVisibility
     {
         FirstPersonSilhouette projected;
