@@ -82,6 +82,7 @@ namespace OpenRCT2::Ui
         uint64_t _frame{};
         uint64_t _sceneEpoch{};
         GLuint _atlasHandle{};
+        const TextureCache* _atlasSource{};
         std::unique_ptr<SwapFramebuffer> _preparedOutput;
         uint64_t _preparedSceneSerial{};
         int32_t _preparedScreenWidth{};
