@@ -4790,7 +4790,7 @@
                 staging.boundaryCandidateCountReady = true;
                 if (staging.boundaryCandidateCount == 0)
                     staging.progress.relationshipsResolved = true;
-                else if (staging.boundaryCandidateCount >= 256)
+                else if (staging.boundaryCandidateCount >= 16)
                 {
                     // All tiles and grouped sources are complete. Present
                     // this unmodified, immutable 3D geometry NOW, without
@@ -4977,8 +4977,7 @@
             }
 
             // Keep nontrivial interface resolution off the frame thread.
-            if (staging.boundaryCandidateCount >= 16
-                || relationshipContext.size() >= 128)
+            if (staging.boundaryCandidateCount >= 16)
             {
                 if (!_regionRelationshipWorker.hasCapacity())
                     return false;
