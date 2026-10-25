@@ -122,6 +122,12 @@ int main()
             rasterMaximum=std::max(rasterMaximum,count);
         }
         assert(bounded>=rasterMaximum);
+        // The adaptive 8px pass is also an exact conservative bound;
+        // the minimum of both cannot lose any real raster fragment.
+        const size_t refined=FirstPersonMaximumPolygonCellOverlap(
+            candidates,0,0,128,128,8);
+        assert(refined>=rasterMaximum);
+        assert(std::min(bounded,refined)>=rasterMaximum);
     }
     Candidate a,b;
     a.projectedPolygons[0]=triangle(0,0,45,0,0,45);
@@ -153,6 +159,8 @@ class TransparencyPolygonBoundTest(unittest.TestCase):
         self.assertIn("FirstPersonMaximumRectangleOverlap(tile.candidates)", src)
         self.assertIn("FirstPersonMaximumPolygonCellOverlap(", src)
         self.assertIn("std::min(rectangleBound, triangleBound)", src)
+        self.assertIn("tile.candidates.size() <= 48", src)
+        self.assertIn("tile.x0, tile.y0, tile.x1, tile.y1, 8", src)
         self.assertIn("projectedPolygons[triangleStart / 3]", src)
         self.assertIn("kRasterMargin = 2.0f", hdr)
         self.assertIn("return true; // Unknown coverage", hdr)
