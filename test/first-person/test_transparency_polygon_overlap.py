@@ -31,9 +31,62 @@ static FirstPersonProjectedScreenPolygon triangle(float ax,float ay,float bx,flo
     p.points[0]={ax,ay};p.points[1]={bx,by};p.points[2]={cx,cy};
     return p;
 }
+// Independent cell-first reference: candidate-first binning must retain
+// exactly the same conservative bounds, even at off-grid cell edges.
+template<typename Candidates>
+size_t cellFirstReference(const Candidates& candidates,
+    int32_t left,int32_t top,int32_t right,int32_t bottom,int32_t cellSize)
+{
+    if(cellSize<=0||right<=left||bottom<=top) return 0;
+    size_t maximum=0;
+    for(int32_t y=top;y<bottom;y+=cellSize)
+    for(int32_t x=left;x<right;x+=cellSize)
+    {
+        const int32_t cellRight=std::min(x+cellSize,right);
+        const int32_t cellBottom=std::min(y+cellSize,bottom);
+        size_t count=0;
+        for(const auto& candidate:candidates)
+        {
+            if(candidate.x1<=x||candidate.x0>=cellRight
+                ||candidate.y1<=y||candidate.y0>=cellBottom) continue;
+            if(FirstPersonProjectedPolygonMayTouchCell(
+                    candidate.projectedPolygons[0],x,y,cellRight,cellBottom)
+                || FirstPersonProjectedPolygonMayTouchCell(
+                    candidate.projectedPolygons[1],x,y,cellRight,cellBottom))
+                ++count;
+        }
+        maximum=std::max(maximum,count);
+    }
+    return maximum;
+}
 int main()
 {
     std::mt19937 rng(20261025);
+    std::uniform_real_distribution<float> general(-60,190);
+    // Full and clipped candidates, arbitrary screen origins, and cells
+    // whose final right/bottom edges are not cell-aligned.
+    for(int n=0;n<1200;++n)
+    {
+        std::vector<Candidate> candidates(1+rng()%30);
+        for(auto& c:candidates)
+        {
+            c.x0=int32_t(rng()%220)-55;
+            c.y0=int32_t(rng()%220)-55;
+            c.x1=c.x0+int32_t(rng()%165);
+            c.y1=c.y0+int32_t(rng()%165);
+            for(auto& p:c.projectedPolygons)
+                p=triangle(general(rng),general(rng),
+                           general(rng),general(rng),
+                           general(rng),general(rng));
+        }
+        const int32_t cellSize=std::array<int32_t,3>{8,16,25}[n%3];
+        const auto expected=cellFirstReference(
+            candidates,-13,7,133,141,cellSize);
+        const auto result=FirstPersonMaximumPolygonCellOverlap(
+            candidates,-13,7,133,141,cellSize);
+        assert(expected==result);
+    }
+
     std::uniform_real_distribution<float> uni(-30,158);
     for (int n=0;n<800;++n)
     {
