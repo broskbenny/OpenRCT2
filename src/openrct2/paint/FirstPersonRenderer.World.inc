@@ -4980,7 +4980,7 @@
             if (staging.boundaryCandidateCount >= 16
                 || relationshipContext.size() >= 128)
             {
-                if (!_reconstructionWorker.hasCapacity())
+                if (!_regionRelationshipWorker.hasCapacity())
                     return false;
                 struct RelationshipInput
                 {
@@ -4997,7 +4997,7 @@
                 const auto mapEditSerial = staging.initialMapEditSerial;
                 const auto epoch = _sceneEpoch;
                 const auto token = staging.buildToken;
-                const bool accepted = _reconstructionWorker.submit(
+                const bool accepted = _regionRelationshipWorker.submit(
                     [input, regionKey, serial, mapEditSerial, epoch, token]() {
                         // Large provisional packets retain their original
                         // visible snapshot; smaller packets move directly.
