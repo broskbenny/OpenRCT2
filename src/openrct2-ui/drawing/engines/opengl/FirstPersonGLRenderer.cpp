@@ -878,6 +878,7 @@ void main() {
                 prepareMaterial(scene.surfaces[(start + examined++) % scene.surfaces.size()]);
             materialCursor = start + examined;
         }
+        const auto materialAdmissionDone = FrameClock::now();
         auto appendVertices = [&](
             std::vector<GPUVertex>& vertices,
             const Paint::FirstPersonSurface& surface,
@@ -1362,6 +1363,7 @@ void main() {
         // away. The memory-budget path above performs LRU eviction only when a
         // new region actually needs space, so ordinary turning does not cause
         // avoidable GPU re-uploads.
+        const auto regionUploadDone = FrameClock::now();
         // Bind sprites AFTER all texture loads; the atlas array may have grown.
         OpenGLAPI::SetTexture(0,GL_TEXTURE_2D_ARRAY,textures.GetAtlasesTexture());
         OpenGLAPI::SetTexture(1,GL_TEXTURE_2D,textures.GetPaletteTexture());
@@ -1387,6 +1389,7 @@ void main() {
             glCall(
                 glDrawArrays,GL_TRIANGLES,0,
                 GLsizei(opaqueOrdinaryVertices.size()));
+        const auto opaqueDrawDone = FrameClock::now();
 
         bool haveOpaqueOwners =
             !opaqueOwnerVertices.empty();
@@ -2291,6 +2294,18 @@ void main() {
                 static_cast<long long>(elapsed(ownerReplayBegin, ownerReplayEnd)),
                 opaqueOwnerDrawCalls, opaqueOwnerSubmittedVertices,
                 hasDirectionalWallOwner ? 1 : 0);
+            if (elapsed(renderStarted, opaqueDone) >= 40000)
+            {
+                // CPU wall times: locate expensive driver calls separately
+                // from material preparation and persistent VBO construction.
+                Console::WriteLine(
+                    "FP_GL_OPAQUE_DETAIL preMaterialUs=%lld materialAndPackUs=%lld"
+                    " regionDrawUs=%lld ownerReplayUs=%lld",
+                    static_cast<long long>(elapsed(renderStarted, materialAdmissionDone)),
+                    static_cast<long long>(elapsed(materialAdmissionDone, regionUploadDone)),
+                    static_cast<long long>(elapsed(regionUploadDone, opaqueDrawDone)),
+                    static_cast<long long>(elapsed(opaqueDrawDone, opaqueDone)));
+            }
         }
     }
 } // namespace OpenRCT2::Ui
