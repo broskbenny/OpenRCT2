@@ -58,7 +58,9 @@ class StagedRelationshipContextTests(unittest.TestCase):
         self.assertIn("pending->second.buildToken != token",s)
         self.assertIn("published = std::move(packet);",s)
         self.assertIn("staging.boundaryCandidateCount >= 16", s)
-        self.assertIn("relationshipContext.size() >= 128", s)
+        self.assertNotIn("relationshipContext.size() >= 128", s)
+        self.assertLess(s.index("published.surfaceStorage = staging.provisionalSurfaces;"),
+                        s.index("_regionRelationshipWorker.submit("))
         self.assertIn("input->surfaces = std::move(packet.surfaces);", s)
         self.assertIn("if (input->source)", s)
         self.assertIn("packet.surfaces = std::move(input->surfaces);", s)
