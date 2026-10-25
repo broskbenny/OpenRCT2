@@ -304,19 +304,12 @@ class ProductionGLOwnerOverlapTest(unittest.TestCase):
         self.assertIn("FirstPersonPaintSemanticRole::wall", shader_source)
         self.assertIn("authoredWall ? 18.0f : 17.0f", shader_source)
 
-    def test_rear_replay_skips_owner_buffers_without_directional_walls(self):
+    def test_rear_replay_never_skips_regions_based_on_coarse_wall_flags(self):
         source = RENDERER.read_text(encoding="utf-8")
-        self.assertIn("sidePass == 1 && !region.hasDirectionalWallOwner", source)
-        self.assertIn("sidePass != 1 || streamedDirectionalWallOwner", source)
-        # The production shader must give the same pixels if a non-wall
-        # owner buffer is submitted for rear replay (and discarded), or
-        # if its draw call is omitted altogether.
-        surfaces = (quad(112, 128, 6, True), quad(120, 136, 9, False))
-        original = self.render_overlap(0, (2640.0, 4500.0, 124.0),
-                                       surfaces=surfaces, side_passes=(1, 2))
-        optimized = self.render_overlap(0, (2640.0, 4500.0, 124.0),
-                                        surfaces=surfaces, side_passes=(2,))
-        np.testing.assert_array_equal(original, optimized)
+        self.assertNotIn("sidePass == 1 && !region.hasDirectionalWallOwner", source)
+        self.assertNotIn("sidePass != 1 || streamedDirectionalWallOwner", source)
+        self.assertIn("if (region.ownerCount <= 0)", source)
+        self.assertIn("if (!opaqueOwnerVertices.empty())", source)
 
     def test_regular_native_owners_do_not_change_material_order_by_view_side(self):
         # Directional replay is restricted to authored wall planes. Generic
