@@ -24,7 +24,7 @@ class StagedRelationshipContextTests(unittest.TestCase):
     def test_interface_evidence_copy_does_not_duplicate_textures(self):
         s=self.stage
         context=s[s.index("auto& relationshipContext = staging.relationshipContext;"):
-                  s.index("// Large occupancy/interface meshes")]
+                  s.index("// Keep nontrivial interface resolution off the frame thread.")]
         self.assertIn("FirstPersonSurface geometry{};",context)
         for field in ["cameraIndependent","reconstructedOccupancyBoundary",
                       "artworkCarrier","reconstructionGroup","diagnosticSemanticGroup",
@@ -52,6 +52,11 @@ class StagedRelationshipContextTests(unittest.TestCase):
         self.assertIn("published.surfaceStorage = staging.provisionalSurfaces;",s)
         self.assertIn("pending->second.buildToken != token",s)
         self.assertIn("published = std::move(packet);",s)
+        self.assertIn("staging.boundaryCandidateCount >= 16", s)
+        self.assertIn("relationshipContext.size() >= 128", s)
+        self.assertIn("input->surfaces = std::move(packet.surfaces);", s)
+        self.assertIn("if (input->source)", s)
+        self.assertIn("packet.surfaces = std::move(input->surfaces);", s)
 
 
 if __name__ == "__main__":
