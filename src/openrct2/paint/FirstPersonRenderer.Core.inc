@@ -703,7 +703,22 @@
                 ImageId image{};
                 const G1Element* g1 = nullptr;
                 uint8_t direction = 0;
+                float towardForward = 0.0f, towardRight = 0.0f;
             };
+            std::vector<VehicleFaceSource> vehicleSources;
+            vehicleSources.reserve(hull.textureViews.size());
+            constexpr float kTwoPi = 6.28318530717958647692f;
+            for (const auto& view : hull.textureViews)
+            {
+                const auto image = bodyImageTemplate.WithIndex(view.image);
+                const auto* g1 = GfxGetG1Element(image);
+                if (g1 == nullptr || g1->width <= 0 || g1->height <= 0)
+                    continue;
+                const float theta = float(view.imageDirection & 31u) * (kTwoPi / 32.0f);
+                const float cosine = std::cos(theta), sine = std::sin(theta);
+                vehicleSources.push_back({ image, g1, view.imageDirection,
+                    -cosine + sine, -sine - cosine });
+            }
 
             const auto sourceForFace =
                 [&](const std::array<FirstPersonVec3, 4>& local,
@@ -727,32 +742,12 @@
                     float bestScore =
                         -std::numeric_limits<float>::infinity();
                     std::optional<VehicleFaceSource> best;
-                    constexpr float kTwoPi =
-                        6.28318530717958647692f;
-
-                    for (const auto& view : hull.textureViews)
+                    for (const auto& view : vehicleSources)
                     {
-                        const auto image =
-                            bodyImageTemplate.WithIndex(view.image);
-                        const auto* g1 = GfxGetG1Element(image);
-                        if (g1 == nullptr || g1->width <= 0
-                            || g1->height <= 0)
-                            continue;
-
-                        const float theta =
-                            float(view.imageDirection & 31u)
-                            * (kTwoPi / 32.0f);
-                        const float cosine = std::cos(theta);
-                        const float sine = std::sin(theta);
-                        // FirstPersonVehicleLocalPoint's native depth
-                        // increases toward this horizontal direction.
-                        const float towardForward =
-                            -cosine + sine;
-                        const float towardRight =
-                            -sine - cosine;
+                        const auto* g1 = view.g1;
                         const float horizontalFacing =
-                            normal.x * towardForward
-                            + normal.y * towardRight;
+                            normal.x * view.towardForward
+                            + normal.y * view.towardRight;
                         const float facing =
                             normal.z > 0.5f
                             ? 1.0f
@@ -813,10 +808,7 @@
                             || score > bestScore)
                         {
                             bestScore = score;
-                            best = VehicleFaceSource{
-                                image, g1,
-                                view.imageDirection
-                            };
+                            best = view;
                         }
                     }
                     return best;
