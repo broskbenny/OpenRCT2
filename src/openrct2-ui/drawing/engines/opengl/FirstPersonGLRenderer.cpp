@@ -823,10 +823,25 @@ void main() {
         const auto imageRevision = [&](auto image) { return textures.GetImageTextureRevision(image); };
         Paint::FirstPersonFrameBudget uploadBudget(512 * 1024, std::chrono::microseconds(2000));
         const GLuint currentAtlas = textures.GetAtlasesTexture();
-        if (_atlasHandle != currentAtlas)
+        if (_atlasSource != &textures || _atlasHandle != currentAtlas)
         {
-            DiscardAllRegionBuffers();
-            _coverageFallbackCache.clear();
+            if (_atlasSource != &textures)
+            {
+                // A different cache may have unrelated sprite-slot coordinates.
+                DiscardAllRegionBuffers();
+                _coverageFallbackCache.clear();
+            }
+            else
+            {
+                // Capacity growth preserves every old R8UI layer in place in
+                // the atlas's coordinate space. Region VBOs contain unchanged
+                // UVs and layer indices; deleting them here causes avoidable
+                // world disappearance during bounded reuploads.
+                Console::WriteLine(
+                    "FP_ATLAS_GROW preservedRegions=%zu residentBytes=%zu",
+                    _staticOpaqueRegions.size(), _staticRegionBytes);
+            }
+            _atlasSource = &textures;
             _atlasHandle = currentAtlas;
         }
         std::unordered_map<uint64_t, BasicTextureInfo> immutableTextures;
