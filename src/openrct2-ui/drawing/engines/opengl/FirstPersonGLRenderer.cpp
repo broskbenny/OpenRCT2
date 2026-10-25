@@ -1819,6 +1819,18 @@ void main() {
                         return rectangleBound;
                     const size_t triangleBound = FirstPersonMaximumPolygonCellOverlap(
                         tile.candidates, tile.x0, tile.y0, tile.x1, tile.y1);
+                    // For a modest number of strongly overlapping sources,
+                    // refine the 16px conservative bound to 8px cells. This
+                    // costs extra CPU tests only in expensive peel-heavy
+                    // tiles, while potentially eliminating full-screen-depth
+                    // GPU passes. Both bounds remain independent upper
+                    // bounds, so no transparent fragment is discarded.
+                    if (triangleBound >= 5 && tile.candidates.size() <= 48)
+                    {
+                        const size_t refinedBound = FirstPersonMaximumPolygonCellOverlap(
+                            tile.candidates, tile.x0, tile.y0, tile.x1, tile.y1, 8);
+                        return std::min({rectangleBound, triangleBound, refinedBound});
+                    }
                     return std::min(rectangleBound, triangleBound);
                 };
 
