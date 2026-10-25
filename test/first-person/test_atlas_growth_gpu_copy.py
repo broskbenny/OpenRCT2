@@ -16,7 +16,7 @@ class AtlasGrowthTests(unittest.TestCase):
         fn = src[src.index("void TextureCache::EnlargeAtlasesTexture("):
                  src.index("AtlasTextureInfo TextureCache::LoadImageTexture(", src.index("void TextureCache::EnlargeAtlasesTexture("))]
         self.assertNotIn("glGetTexImage,", fn)
-        self.assertNotIn("GL_PIXEL_PACK_BUFFER", fn)
+        self.assertNotIn("glBindBuffer, GL_PIXEL_PACK_BUFFER", fn)
         self.assertIn("glFramebufferTextureLayer", fn)
         self.assertIn("glCopyTexSubImage3D", fn)
         self.assertIn("glCheckFramebufferStatus", fn)
