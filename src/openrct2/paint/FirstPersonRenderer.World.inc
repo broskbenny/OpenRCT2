@@ -1211,9 +1211,15 @@
                 {
                     if (!seen.insert(group.key).second)
                         continue;
-                    // Validate the live source element BEFORE reactivating
-                    // cached geometry. The indexed group may have been removed
-                    // or replaced since the bounded structural scan.
+                    // Authoritative edits dirty previously validated geometry.
+                    const auto ready = _largeSceneryGeometryCache.find(group.key);
+                    if (ready != _largeSceneryGeometryCache.end()
+                        && !ready->second.dirty)
+                    {
+                        ready->second.lastSeen = frame;
+                        ActivateLargeSceneryRegions(ready->second);
+                        continue;
+                    }
                     auto* element = MapGetFirstElementAt(group.sourceTile);
                     LargeSceneryElement* large = nullptr;
                     if (element != nullptr)
@@ -1234,14 +1240,6 @@
                     }
                     if (large == nullptr)
                         continue;
-                    const auto ready = _largeSceneryGeometryCache.find(group.key);
-                    if (ready != _largeSceneryGeometryCache.end()
-                        && !ready->second.dirty)
-                    {
-                        ready->second.lastSeen = frame;
-                        ActivateLargeSceneryRegions(ready->second);
-                        continue;
-                    }
                     const auto* entry =
                         large->getEntry();
                     if (large == nullptr || entry == nullptr
