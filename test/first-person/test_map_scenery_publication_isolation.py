@@ -35,7 +35,7 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
         code = PARK.read_text(encoding="utf-8")
         main = MAIN.read_text(encoding="utf-8")
         self.assertIn("FirstPersonFrameBudget budget(", code)
-        self.assertIn("32, std::chrono::microseconds(300)", code)
+        self.assertIn("256, std::chrono::microseconds(300)", code)
         self.assertIn("_parkSceneryScanCursor++", code)
         self.assertIn("_parkSceneryChangedTiles", code)
         self.assertIn("if (moreInitial)", code)
