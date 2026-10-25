@@ -1733,6 +1733,8 @@
             bool hasBounds = false;
             int32_t minTileX{}, minTileY{}, maxTileX{}, maxTileY{};
             std::vector<FirstPersonSurface> surfaces;
+            // One asset may have thousands of faces but few GPU regions.
+            std::vector<uint64_t> gpuRegions;
             std::vector<FirstPersonPhysicalBoxProxy> collisionProxies;
             // Track exactly which authoritative placement tiles supplied the
             // inferred geometry and walking proxies.
@@ -1867,13 +1869,7 @@
                         }
                     });
             }
-            std::unordered_set<uint64_t> regions;
-            for (const auto& surface : cached.surfaces)
-            {
-                if (surface.gpuRegion != 0)
-                    regions.insert(surface.gpuRegion);
-            }
-            for (const auto region : regions)
+            for (const auto region : cached.gpuRegions)
             {
                 const auto found = _largeSceneryGroupsByRegion.find(region);
                 if (found == _largeSceneryGroupsByRegion.end())
@@ -1885,7 +1881,7 @@
         }
 
         void RegisterLargeSceneryRegionMembership(
-            uint64_t groupKey, const LargeSceneryGeometryCacheEntry& cached)
+            uint64_t groupKey, LargeSceneryGeometryCacheEntry& cached)
         {
             PublishFirstPersonLargeSceneryPhysicalProxies(
                 groupKey, cached.collisionProxies);
@@ -1899,21 +1895,20 @@
                             regionKey].insert(groupKey);
                     });
             }
+            std::unordered_set<uint64_t> distinct;
             for (const auto& surface : cached.surfaces)
-            {
                 if (surface.gpuRegion != 0)
-                    _largeSceneryGroupsByRegion[surface.gpuRegion].insert(groupKey);
-            }
+                    distinct.insert(surface.gpuRegion);
+            cached.gpuRegions.assign(distinct.begin(), distinct.end());
+            for (const auto region : cached.gpuRegions)
+                _largeSceneryGroupsByRegion[region].insert(groupKey);
         }
 
         void ActivateLargeSceneryRegions(
             const LargeSceneryGeometryCacheEntry& cached)
         {
-            for (const auto& surface : cached.surfaces)
-            {
-                if (surface.gpuRegion != 0)
-                    _activeLargeSceneryRegions.insert(surface.gpuRegion);
-            }
+            for (const auto region : cached.gpuRegions)
+                _activeLargeSceneryRegions.insert(region);
         }
 
         [[nodiscard]] bool
