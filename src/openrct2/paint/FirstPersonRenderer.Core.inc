@@ -577,6 +577,7 @@
             CarEntry entry{};
             FirstPersonSpriteSnapshot sprites;
             FirstPersonVehicleBodyHull hull;
+            std::vector<FirstPersonVehicleBodyFace> faces;
             bool submitted = false;
             bool ready = false;
         };
@@ -603,8 +604,11 @@
                 job->submitted = _reconstructionWorker.submit([job] {
                     auto hull = BuildFirstPersonVehicleBodyHullFromSnapshot(job->entry,
                         [&](ImageIndex id) { return job->sprites.get(id); });
-                    return [job, hull = std::move(hull)]() mutable {
+                    auto faces = BuildFirstPersonVehicleBodyFaces(hull,
+                        [&](ImageIndex id) { return job->sprites.get(id); });
+                    return [job, hull = std::move(hull), faces = std::move(faces)]() mutable {
                         job->hull = std::move(hull);
+                        job->faces = std::move(faces);
                         job->ready = true;
                     };
                 }, [job] { job->ready = true; });
@@ -666,239 +670,54 @@
 
         void AppendVehicleHull(
             FirstPersonScene& scene, const Vehicle& vehicle,
-            const FirstPersonVehicleBodyHull& hull,
             ImageId bodyImageTemplate)
         {
-            const auto presentation =
-                BuildFirstPersonVehiclePresentationState(
-                    vehicle,
-                    EntityTweener::get().trackedVehicleVisuals(
-                        vehicle.id));
+            // All face source selection and texture UVs are baked by the asset
+            // worker. Dynamic vehicle draws only apply the current carriage
+            // pose and passenger-specific colour remap; they never resample
+            // native RLE images or rebuild the same voxel faces.
+            const auto visual = ResolveVehicleVisualState(vehicle);
+            if (visual.carEntry == nullptr)
+                return;
+            const auto job = _vehicleHullJobs.find(visual.carEntry->baseImageId);
+            if (job == _vehicleHullJobs.end() || !job->second->ready)
+                return;
+
+            const auto presentation = BuildFirstPersonVehiclePresentationState(
+                vehicle, EntityTweener::get().trackedVehicleVisuals(vehicle.id));
             const auto& carriage = presentation.carriage;
-            FirstPersonVec3 origin{
-                presentation.vehicleOrigin.x
-                    + carriage.originOffset.x,
-                presentation.vehicleOrigin.y
-                    + carriage.originOffset.y,
-                presentation.vehicleOrigin.z
-                    + carriage.originOffset.z,
+            const FirstPersonVec3 origin{
+                presentation.vehicleOrigin.x + carriage.originOffset.x,
+                presentation.vehicleOrigin.y + carriage.originOffset.y,
+                presentation.vehicleOrigin.z + carriage.originOffset.z,
             };
             const auto& basis = carriage.basis;
-
-            const auto colourMap =
-                Drawing::getColourMap(vehicle.colours.Body);
-            uint8_t sideColour =
-                static_cast<uint8_t>(colourMap.midDark);
-            uint8_t topColour =
-                static_cast<uint8_t>(colourMap.midLight);
+            const auto colourMap = Drawing::getColourMap(vehicle.colours.Body);
+            uint8_t sideColour = static_cast<uint8_t>(colourMap.midDark);
+            uint8_t topColour = static_cast<uint8_t>(colourMap.midLight);
             if (sideColour == 0)
-                sideColour = static_cast<uint8_t>(
-                    Drawing::PaletteIndex::trackRails1);
+                sideColour = static_cast<uint8_t>(Drawing::PaletteIndex::trackRails1);
             if (topColour == 0)
-                topColour = static_cast<uint8_t>(
-                    Drawing::PaletteIndex::trackRails2);
+                topColour = static_cast<uint8_t>(Drawing::PaletteIndex::trackRails2);
 
-            struct VehicleFaceSource
+            for (const auto& face : job->second->faces)
             {
-                ImageId image{};
-                const G1Element* g1 = nullptr;
-                uint8_t direction = 0;
-                float towardForward = 0.0f, towardRight = 0.0f;
-            };
-            std::vector<VehicleFaceSource> vehicleSources;
-            vehicleSources.reserve(hull.textureViews.size());
-            constexpr float kTwoPi = 6.28318530717958647692f;
-            for (const auto& view : hull.textureViews)
-            {
-                const auto image = bodyImageTemplate.WithIndex(view.image);
-                const auto* g1 = GfxGetG1Element(image);
-                if (g1 == nullptr || g1->width <= 0 || g1->height <= 0)
-                    continue;
-                const float theta = float(view.imageDirection & 31u) * (kTwoPi / 32.0f);
-                const float cosine = std::cos(theta), sine = std::sin(theta);
-                vehicleSources.push_back({ image, g1, view.imageDirection,
-                    -cosine + sine, -sine - cosine });
-            }
+                FirstPersonSurface surface{};
+                if (face.textured)
+                    surface.image = bodyImageTemplate.WithIndex(face.image);
+                else
+                    surface.solidColour = face.top ? topColour : sideColour;
 
-            const auto sourceForFace =
-                [&](const std::array<FirstPersonVec3, 4>& local,
-                    FirstPersonVec3 normal)
-                    -> std::optional<VehicleFaceSource> {
-                    // Native vehicle art is always viewed from above. There is
-                    // no honest source for the underside, so keep the solid
-                    // fallback there rather than reflecting a top texture.
-                    if (normal.z < -0.5f
-                        || hull.textureViews.empty())
-                        return std::nullopt;
-
-                    const FirstPersonVec3 centre{
-                        0.25f * (local[0].x + local[1].x
-                            + local[2].x + local[3].x),
-                        0.25f * (local[0].y + local[1].y
-                            + local[2].y + local[3].y),
-                        0.25f * (local[0].z + local[1].z
-                            + local[2].z + local[3].z),
-                    };
-                    float bestScore =
-                        -std::numeric_limits<float>::infinity();
-                    std::optional<VehicleFaceSource> best;
-                    for (const auto& view : vehicleSources)
-                    {
-                        const auto* g1 = view.g1;
-                        const float horizontalFacing =
-                            normal.x * view.towardForward
-                            + normal.y * view.towardRight;
-                        const float facing =
-                            normal.z > 0.5f
-                            ? 1.0f
-                            : horizontalFacing;
-                        if (facing <= 0.05f)
-                            continue;
-
-                        const auto projectedCentre =
-                            ProjectFirstPersonVehicleLocalPoint(
-                                view.direction, centre);
-                        const int32_t centreX =
-                            int32_t(std::lround(
-                                projectedCentre[0]))
-                            - g1->xOffset;
-                        const int32_t centreY =
-                            int32_t(std::lround(
-                                projectedCentre[1]))
-                            - g1->yOffset;
-                        bool supported = false;
-                        for (int32_t dy = -1; dy <= 1
-                             && !supported; ++dy)
-                        for (int32_t dx = -1; dx <= 1; ++dx)
-                        {
-                            if (FirstPersonVehicleBodyPixelOpaque(
-                                    *g1, centreX + dx,
-                                    centreY + dy))
-                            {
-                                supported = true;
-                                break;
-                            }
-                        }
-                        if (!supported)
-                            continue;
-
-                        std::array<std::array<float, 2>, 4>
-                            projected{};
-                        for (size_t i = 0;
-                             i < projected.size(); ++i)
-                        {
-                            projected[i] =
-                                ProjectFirstPersonVehicleLocalPoint(
-                                    view.direction, local[i]);
-                        }
-                        float twiceArea = 0.0f;
-                        for (size_t i = 0; i < 4; ++i)
-                        {
-                            const size_t j = (i + 1) & 3u;
-                            twiceArea +=
-                                projected[i][0] * projected[j][1]
-                                - projected[j][0]
-                                    * projected[i][1];
-                        }
-                        const float area =
-                            0.5f * std::abs(twiceArea);
-                        const float score =
-                            facing * std::max(0.25f, area);
-                        if (!best.has_value()
-                            || score > bestScore)
-                        {
-                            bestScore = score;
-                            best = view;
-                        }
-                    }
-                    return best;
-                };
-
-            const float half = hull.step * 0.5f;
-            const auto appendFace =
-                [&](const std::array<FirstPersonVec3, 4>& local,
-                    FirstPersonVec3 normal, uint8_t fallbackColour) {
-                    FirstPersonSurface surface{};
-                    const auto source =
-                        sourceForFace(local, normal);
-                    std::array<FirstPersonVertex, 4> vertices{};
-                    for (size_t i = 0; i < vertices.size(); ++i)
-                    {
-                        vertices[i].world =
-                            TransformVehicleLocalPoint(
-                                origin, basis, local[i]);
-                        if (source.has_value())
-                        {
-                            const auto projected =
-                                ProjectFirstPersonVehicleLocalPoint(
-                                    source->direction, local[i]);
-                            vertices[i].u =
-                                projected[0]
-                                - float(source->g1->xOffset);
-                            vertices[i].v =
-                                projected[1]
-                                - float(source->g1->yOffset);
-                        }
-                    }
-                    if (source.has_value())
-                    {
-                        surface.image = source->image;
-                    }
-                    else
-                    {
-                        surface.solidColour = fallbackColour;
-                    }
-                    EmitQuad(surface, vertices);
-                    scene.surfaces.emplace_back(
-                        std::move(surface));
-                };
-
-            for (int32_t up = 0; up < hull.sizeUp; ++up)
-            for (int32_t right = 0; right < hull.sizeRight; ++right)
-            for (int32_t forward = 0;
-                 forward < hull.sizeForward; ++forward)
-            {
-                if (!hull.contains(forward, right, up))
-                    continue;
-                const auto centre =
-                    hull.centre(forward, right, up);
-                const float f0 = centre.x - half;
-                const float f1 = centre.x + half;
-                const float r0 = centre.y - half;
-                const float r1 = centre.y + half;
-                const float u0 = centre.z - half;
-                const float u1 = centre.z + half;
-
-                if (!hull.contains(forward - 1, right, up))
-                    appendFace({ {
-                        { f0, r1, u0 }, { f0, r0, u0 },
-                        { f0, r0, u1 }, { f0, r1, u1 },
-                    } }, { -1.0f, 0.0f, 0.0f }, sideColour);
-                if (!hull.contains(forward + 1, right, up))
-                    appendFace({ {
-                        { f1, r0, u0 }, { f1, r1, u0 },
-                        { f1, r1, u1 }, { f1, r0, u1 },
-                    } }, { 1.0f, 0.0f, 0.0f }, sideColour);
-                if (!hull.contains(forward, right - 1, up))
-                    appendFace({ {
-                        { f0, r0, u0 }, { f1, r0, u0 },
-                        { f1, r0, u1 }, { f0, r0, u1 },
-                    } }, { 0.0f, -1.0f, 0.0f }, sideColour);
-                if (!hull.contains(forward, right + 1, up))
-                    appendFace({ {
-                        { f1, r1, u0 }, { f0, r1, u0 },
-                        { f0, r1, u1 }, { f1, r1, u1 },
-                    } }, { 0.0f, 1.0f, 0.0f }, sideColour);
-                if (!hull.contains(forward, right, up - 1))
-                    appendFace({ {
-                        { f0, r0, u0 }, { f0, r1, u0 },
-                        { f1, r1, u0 }, { f1, r0, u0 },
-                    } }, { 0.0f, 0.0f, -1.0f }, sideColour);
-                if (!hull.contains(forward, right, up + 1))
-                    appendFace({ {
-                        { f0, r1, u1 }, { f0, r0, u1 },
-                        { f1, r0, u1 }, { f1, r1, u1 },
-                    } }, { 0.0f, 0.0f, 1.0f }, topColour);
+                std::array<FirstPersonVertex, 4> vertices{};
+                for (size_t i = 0; i < vertices.size(); ++i)
+                {
+                    vertices[i].world = TransformVehicleLocalPoint(
+                        origin, basis, face.local[i]);
+                    vertices[i].u = face.uv[i][0];
+                    vertices[i].v = face.uv[i][1];
+                }
+                EmitQuad(surface, vertices);
+                scene.surfaces.emplace_back(std::move(surface));
             }
         }
 
@@ -1291,8 +1110,7 @@
                     == AttachedVehicleComponentRole::body)
                 {
                     AppendVehicleHull(
-                        scene, *entityVehicle, *vehicleHull,
-                        colourify(ps.image_id));
+                        scene, *entityVehicle, colourify(ps.image_id));
                     suppressCurrentImage = true;
                 }
                 else if (matchesHiddenEntity
