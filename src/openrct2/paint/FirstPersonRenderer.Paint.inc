@@ -710,11 +710,31 @@
 
             _snapshotBudget = FirstPersonFrameBudget(64, std::chrono::microseconds(1500));
             UpdateLargeSceneryReconstructions(scene, frame);
+            const auto largeSceneryPrepDone = PaintClock::now();
             // Authoritative placement discovery does not depend on a native
             // painter having observed each large-scenery tile first.
             UpdateAuthoritativeLargeScenery(scene, frame);
+            const auto structuralPrepDone = PaintClock::now();
             UpdateParkEntranceReconstructions(scene, frame);
             const auto reconstructionPrepDone = PaintClock::now();
+            // A worker may finish quickly yet a foreground reconstruction
+            // handoff can still exceed the entire frame budget. Attribute
+            // ONLY serious stalls; normal frames do no console I/O.
+            static auto lastReconPrepStall = PaintClock::time_point{};
+            if (reconstructionPrepDone - selectedViewsDone >= std::chrono::microseconds(16667)
+                && reconstructionPrepDone - lastReconPrepStall >= std::chrono::seconds(2))
+            {
+                lastReconPrepStall = reconstructionPrepDone;
+                const auto micros = [](auto start, auto end) {
+                    return std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+                };
+                Console::WriteLine(
+                    "FP_RECON_PREP_STALL totalUs=%lld largeUs=%lld structuralUs=%lld entranceUs=%lld",
+                    static_cast<long long>(micros(selectedViewsDone, reconstructionPrepDone)),
+                    static_cast<long long>(micros(selectedViewsDone, largeSceneryPrepDone)),
+                    static_cast<long long>(micros(largeSceneryPrepDone, structuralPrepDone)),
+                    static_cast<long long>(micros(structuralPrepDone, reconstructionPrepDone)));
+            }
 
             struct PaintWorkItem
             {
