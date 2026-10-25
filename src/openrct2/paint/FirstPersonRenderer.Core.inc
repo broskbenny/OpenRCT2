@@ -1834,15 +1834,24 @@
 
         void MarkLargeSceneryGeometryRegionsDirty(const LargeSceneryGeometryCacheEntry& cached)
         {
-            for (const auto& surface : cached.surfaces)
-            {
-                if (surface.gpuRegion != 0)
-                {
-                    MarkStaticRegionPacketDirty(surface.gpuRegion);
-                    MarkStaticRegionRelationshipNeighboursDirty(
-                        surface.gpuRegion);
-                }
-            }
+            // Invalidate each GPU region only once, not once per textured
+            // face. A building may have thousands of faces in one region;
+            // neighbour relationship invalidation is itself nontrivial.
+            std::unordered_set<uint64_t> newRegions;
+            if (cached.gpuRegions.empty())
+                for (const auto& surface : cached.surfaces)
+                    if (surface.gpuRegion != 0)
+                        newRegions.insert(surface.gpuRegion);
+            const auto dirty = [&](uint64_t region) {
+                MarkStaticRegionPacketDirty(region);
+                MarkStaticRegionRelationshipNeighboursDirty(region);
+            };
+            if (cached.gpuRegions.empty())
+                for (const auto region : newRegions)
+                    dirty(region);
+            else
+                for (const auto region : cached.gpuRegions)
+                    dirty(region);
         }
 
         void UnregisterLargeSceneryRegionMembership(
