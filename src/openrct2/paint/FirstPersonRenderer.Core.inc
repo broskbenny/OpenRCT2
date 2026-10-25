@@ -1,4 +1,7 @@
         static FirstPersonWorkQueue _reconstructionWorker;
+// Region interface resolution needs an independent worker: a burst of
+// occupied scenery interfaces must not starve new sprite/mesh asset jobs.
+static FirstPersonWorkQueue _regionRelationshipWorker;
         static FirstPersonTileRepaintQueue _reconstructionRepaints;
         static FirstPersonFrameBudget _snapshotBudget{0, std::chrono::microseconds(0)};
         static uint64_t _nextReconstructionRequest = 0;
