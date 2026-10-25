@@ -100,13 +100,23 @@ namespace OpenRCT2::Ui
             const int32_t firstY = std::max(top, candidate.y0);
             const int32_t lastX = std::min(right, candidate.x1);
             const int32_t lastY = std::min(bottom, candidate.y1);
-            if (lastX <= firstX || lastY <= firstY)
+            // Generated candidates have non-empty bounds. For malformed
+            // rectangles preserve the original cell-first conservative
+            // behavior rather than assuming that reversed edges imply no
+            // coverage (a large cell can straddle both malformed edges).
+            const bool malformedBounds =
+                candidate.x1 <= candidate.x0 || candidate.y1 <= candidate.y0;
+            if (!malformedBounds && (lastX <= firstX || lastY <= firstY))
                 continue;
 
-            const int32_t firstColumn = (firstX - left) / cellSize;
-            const int32_t lastColumn = (lastX - 1 - left) / cellSize;
-            const int32_t firstRow = (firstY - top) / cellSize;
-            const int32_t lastRow = (lastY - 1 - top) / cellSize;
+            const int32_t firstColumn =
+                malformedBounds ? 0 : (firstX - left) / cellSize;
+            const int32_t lastColumn =
+                malformedBounds ? columns - 1 : (lastX - 1 - left) / cellSize;
+            const int32_t firstRow =
+                malformedBounds ? 0 : (firstY - top) / cellSize;
+            const int32_t lastRow =
+                malformedBounds ? rows - 1 : (lastY - 1 - top) / cellSize;
             for (int32_t row = firstRow; row <= lastRow; ++row)
             for (int32_t column = firstColumn; column <= lastColumn; ++column)
             {
@@ -114,6 +124,9 @@ namespace OpenRCT2::Ui
                 const int32_t cellTop = top + row * cellSize;
                 const int32_t cellRight = std::min(cellLeft + cellSize, right);
                 const int32_t cellBottom = std::min(cellTop + cellSize, bottom);
+                if (candidate.x1 <= cellLeft || candidate.x0 >= cellRight
+                    || candidate.y1 <= cellTop || candidate.y0 >= cellBottom)
+                    continue;
                 if (!FirstPersonProjectedPolygonMayTouchCell(
                         candidate.projectedPolygons[0],
                         cellLeft, cellTop, cellRight, cellBottom)
