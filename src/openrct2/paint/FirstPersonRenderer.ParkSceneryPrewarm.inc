@@ -34,8 +34,14 @@
             if (total == 0)
                 return;
 
+            // Sparse maps can inspect far more than 32 empty tiles
+            // within the existing 300us frame slice. That former hard
+            // count bound made the initial 256x256 park traversal take
+            // at least 2048 frames even without any scenery. Raise ONLY
+            // the unit allowance; the same time deadline and separate
+            // small-scene worker budget still bound foreground work.
             FirstPersonFrameBudget budget(
-                32, std::chrono::microseconds(300));
+                256, std::chrono::microseconds(300));
             // Keep unadmitted assets for a subsequent frame. Requeue after
             // this slice so an exhausted snapshot/worker budget cannot cause
             // a busy loop over the same tile or prevent the initial sweep.

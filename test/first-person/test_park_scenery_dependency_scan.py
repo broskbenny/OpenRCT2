@@ -76,6 +76,19 @@ class ParkSceneryDependencyTest(unittest.TestCase):
             self.assertEqual(model.frame(lambda tile: True), 1)
             self.assertEqual(model.frame(lambda tile: True), 0)
 
+    def test_sparse_map_scan_uses_existing_time_slice_not_32_tile_cap(self):
+        source = SCAN.read_text(encoding="utf-8")
+        self.assertIn("256, std::chrono::microseconds(300)", source)
+        self.assertNotIn("32, std::chrono::microseconds(300)", source)
+        # With a cheap empty tile, the work count must not impose several
+        # thousand extra foreground frames before the rest of the park
+        # can even reach its immutable reconstruction worker.
+        model = Model(256 * 256)
+        for _ in range(256):
+            model.frame(lambda tile: True, limit=256)
+        self.assertEqual(model.cursor, 256 * 256)
+        self.assertEqual(len(model.visited), 256 * 256)
+
     def test_unadmitted_worker_inputs_are_not_lost(self):
         rng = random.Random(20261019)
         for _ in range(2000):
