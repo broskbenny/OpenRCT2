@@ -47,6 +47,11 @@ class StagedRelationshipContextTests(unittest.TestCase):
     def test_failed_submission_restores_both_snapshots(self):
         s=self.stage
         self.assertIn("input->source = staging.provisionalSurfaces;",s)
+        self.assertIn("_regionRelationshipWorker.hasCapacity()", s)
+        self.assertIn("_regionRelationshipWorker.submit(", s)
+        renderer = (ROOT/"src/openrct2/paint/FirstPersonRenderer.cpp").read_text()
+        self.assertIn("_regionRelationshipWorker.publish(", renderer)
+        self.assertIn("_regionRelationshipWorker.cancel();", renderer)
         self.assertIn("pendingPacket.surfaces = std::move(input->surfaces);",s)
         self.assertIn("relationshipContext = std::move(input->context);",s)
         self.assertIn("published.surfaceStorage = staging.provisionalSurfaces;",s)
