@@ -1795,6 +1795,15 @@ void main() {
                 }
             }
 
+            // Nothing intersects the physical viewport: even if native
+            // transparent surfaces were submitted, no GPU peel, framebuffer
+            // blit or composition is required. This is an exact coverage
+            // test on the already binned near-clipped geometry.
+            const bool hasTransparentCoverage = std::any_of(
+                transparencyTiles.begin(), transparencyTiles.end(),
+                [](const auto& tile) { return !tile.candidates.empty(); });
+            if (hasTransparentCoverage)
+            {
             // Rectangle-only overlap overcounts large diagonal native
             // sprites. Intersect their actual near-clipped screen polygons
             // with 16px cells to derive a second independent conservative
@@ -2230,6 +2239,7 @@ void main() {
             glCall(glUseProgram,_program);
             glCall(glUniform1i,Uniform(_program,"uPeelStage"),0);
             glCall(glUniform1i,Uniform(_program,"uPeeling"),0);
+            }
         }
         const auto transparencyDone = FrameClock::now();
         // Separate physical depth from the game's draw-order depth, without
