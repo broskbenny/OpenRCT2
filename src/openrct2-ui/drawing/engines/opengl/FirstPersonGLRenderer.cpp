@@ -1493,11 +1493,7 @@ void main() {
                 for (const auto key : regionDraws)
                 {
                     const auto& region = _staticOpaqueRegions.at(key);
-                    // The fragment shader discards every non-directional
-                    // owner in the rear-face pass. Submitting those buffers
-                    // still performs vertex processing and driver work.
-                    if (region.ownerCount <= 0
-                        || (sidePass == 1 && !region.hasDirectionalWallOwner))
+                    if (region.ownerCount <= 0)
                         continue;
                     glCall(glBindVertexArray, region.vao);
                     glCall(glDrawArrays, GL_TRIANGLES,
@@ -1505,8 +1501,7 @@ void main() {
                     ++opaqueOwnerDrawCalls;
                     opaqueOwnerSubmittedVertices += size_t(region.ownerCount);
                 }
-                if (!opaqueOwnerVertices.empty()
-                    && (sidePass != 1 || streamedDirectionalWallOwner))
+                if (!opaqueOwnerVertices.empty())
                 {
                     glCall(glBindVertexArray, _vao);
                     glCall(glDrawArrays, GL_TRIANGLES, 0,
