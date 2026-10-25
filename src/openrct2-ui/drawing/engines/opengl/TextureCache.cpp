@@ -302,44 +302,57 @@ void TextureCache::GeneratePaletteTexture()
 void TextureCache::EnlargeAtlasesTexture(GLuint newEntries)
 {
     CreateTextures();
-
-    GLuint newIndices = _atlasesTextureIndices + newEntries;
-
+    const GLuint newIndices = _atlasesTextureIndices + newEntries;
     if (newIndices > _atlasesTextureCapacity)
     {
-        // Preserve the atlas through GPU-side pixel transfer. A host readback
-        // here used to wait for every preceding draw whenever new scenery
-        // required another atlas layer.
-        GLint previousPack = 0, previousUnpack = 0;
-        glCall(glGetIntegerv, GL_PIXEL_PACK_BUFFER_BINDING, &previousPack);
+        // Integer sprite atlases are layer-addressed: all existing pixel
+        // coordinates and layer indices remain unchanged when capacity grows.
+        // The old path copied every layer into a huge GL_PIXEL_PACK_BUFFER via
+        // glGetTexImage and then uploaded it again. On older drivers that
+        // can synchronize the render thread for hundreds of milliseconds.
+        // Copy old layers entirely on the GPU from an R8UI framebuffer into
+        // a replacement array, with no pack buffer, CPU readback, or rewrite
+        // of existing pixel contents.
+        const GLuint newCapacity = std::min(
+            GLuint(_atlasesTextureIndicesLimit),
+            std::max(newIndices, (_atlasesTextureCapacity + 6u) << 1u));
+        GLuint expanded = 0;
+        glCall(glGenTextures, 1, &expanded);
+        glCall(glBindTexture, GL_TEXTURE_2D_ARRAY, expanded);
+        glCall(glTexParameteri, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glCall(glTexParameteri, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        GLint previousUnpack = 0;
         glCall(glGetIntegerv, GL_PIXEL_UNPACK_BUFFER_BINDING, &previousUnpack);
-        GLuint transfer = 0;
-        glCall(glBindTexture, GL_TEXTURE_2D_ARRAY, _atlasesTexture);
-        if (_atlasesTextureCapacity != 0)
-        {
-            const auto bytes = GLsizeiptr(_atlasesTextureDimensions) * _atlasesTextureDimensions * _atlasesTextureCapacity;
-            glCall(glGenBuffers, 1, &transfer);
-            glCall(glBindBuffer, GL_PIXEL_PACK_BUFFER, transfer);
-            glCall(glBufferData, GL_PIXEL_PACK_BUFFER, bytes, nullptr, GL_STREAM_COPY);
-            glCall(glGetTexImage, GL_TEXTURE_2D_ARRAY, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
-        }
-        glCall(glBindBuffer, GL_PIXEL_PACK_BUFFER, GLuint(previousPack));
         glCall(glBindBuffer, GL_PIXEL_UNPACK_BUFFER, 0);
-        _atlasesTextureCapacity = (_atlasesTextureCapacity + 6) << 1uL;
         glCall(glTexImage3D, GL_TEXTURE_2D_ARRAY, 0, GL_R8UI,
-            _atlasesTextureDimensions, _atlasesTextureDimensions, _atlasesTextureCapacity,
-            0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
-        if (transfer != 0)
-        {
-            glCall(glBindBuffer, GL_PIXEL_UNPACK_BUFFER, transfer);
-            glCall(glTexSubImage3D, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0,
-                _atlasesTextureDimensions, _atlasesTextureDimensions, _atlasesTextureIndices,
-                GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
-        }
+            _atlasesTextureDimensions, _atlasesTextureDimensions,
+            newCapacity, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
         glCall(glBindBuffer, GL_PIXEL_UNPACK_BUFFER, GLuint(previousUnpack));
-        if (transfer != 0) glCall(glDeleteBuffers, 1, &transfer);
-    }
 
+        if (_atlasesTextureIndices != 0)
+        {
+            GLint previousRead = 0;
+            glCall(glGetIntegerv, GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+            GLuint copyFramebuffer = 0;
+            glCall(glGenFramebuffers, 1, &copyFramebuffer);
+            glCall(glBindFramebuffer, GL_READ_FRAMEBUFFER, copyFramebuffer);
+            glCall(glReadBuffer, GL_COLOR_ATTACHMENT0);
+            for (GLuint layer = 0; layer < _atlasesTextureIndices; ++layer)
+            {
+                glCall(glFramebufferTextureLayer, GL_READ_FRAMEBUFFER,
+                    GL_COLOR_ATTACHMENT0, _atlasesTexture, 0, GLint(layer));
+                glCall(glCopyTexSubImage3D, GL_TEXTURE_2D_ARRAY, 0,
+                    0, 0, GLint(layer), 0, 0,
+                    _atlasesTextureDimensions, _atlasesTextureDimensions);
+            }
+            glCall(glBindFramebuffer, GL_READ_FRAMEBUFFER, GLuint(previousRead));
+            glCall(glDeleteFramebuffers, 1, &copyFramebuffer);
+        }
+        const GLuint previousTexture = _atlasesTexture;
+        _atlasesTexture = expanded;
+        _atlasesTextureCapacity = newCapacity;
+        glCall(glDeleteTextures, 1, &previousTexture);
+    }
     _atlasesTextureIndices = newIndices;
 }
 
