@@ -1509,11 +1509,13 @@ void main() {
             }
             glCall(glUniform1i, Uniform(_program, "uOwnerSidePass"), 0);
 
-            // Owner replay deliberately used the pre-owner snapshot so equal
-            // depth could be resolved without owners competing with
-            // themselves. Transparency, however, must be occluded by the
-            // completed opaque scene. Refresh only the depth snapshot now that
-            // all owners have written their final physical depth.
+            // Owner replay uses the pre-owner depth snapshot. Only a later
+            // transparency pass needs the updated opaque depth: an opaque-only
+            // frame never samples it, and the next frame replaces the snapshot.
+            // Avoid an unnecessary GPU-to-GPU depth blit (and its possible
+            // render-thread synchronization) in that common case.
+            if (!streamedTransparent.empty())
+            {
             _opaqueSnapshot->BindDraw();
             front.BindRead();
             glCall(
@@ -1532,6 +1534,7 @@ void main() {
                 glScissor,clipLeft,
                 screenHeight-clipBottom,
                 clipWidth,clipHeight);
+            }
         }
 
         const auto ownerReplayEnd = FrameClock::now();
