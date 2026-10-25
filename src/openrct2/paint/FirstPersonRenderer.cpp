@@ -1550,6 +1550,9 @@ namespace OpenRCT2::Paint
     {
         FirstPersonFrameBudget publicationBudget(2, std::chrono::microseconds(750));
         _reconstructionWorker.publish(publicationBudget);
+        FirstPersonFrameBudget relationshipPublicationBudget(
+            2, std::chrono::microseconds(750));
+        _regionRelationshipWorker.publish(relationshipPublicationBudget);
         FirstPersonFrameBudget repaintBudget(32, std::chrono::microseconds(750));
         _reconstructionRepaints.drain(repaintBudget, [](uint64_t packedTile) {
             // A completed worker asset is not an authoritative map edit.
@@ -1621,6 +1624,7 @@ namespace OpenRCT2::Paint
         gFirstPersonInteractionPickRequested = false;
         gFirstPersonInteractionPickResult.reset();
         _reconstructionWorker.cancel();
+        _regionRelationshipWorker.cancel();
         _reconstructionRepaints.clear();
         _largeSceneryJobs.clear();
         _parkEntranceJobs.clear();
