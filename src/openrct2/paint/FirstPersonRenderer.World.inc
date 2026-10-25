@@ -4977,11 +4977,9 @@
                 staging.neighbourSourceSurface = 0;
             }
 
-            // Large occupancy/interface meshes use the same one-worker
-            // bounded queue as the other snapshot-only reconstruction jobs.
-            // Copy/move only independently owned surfaces into that job:
-            // never read the mutable live park from its worker thread.
-            if (staging.boundaryCandidateCount >= 256)
+            // Keep nontrivial interface resolution off the frame thread.
+            if (staging.boundaryCandidateCount >= 16
+                || relationshipContext.size() >= 128)
             {
                 if (!_reconstructionWorker.hasCapacity())
                     return false;
@@ -4993,6 +4991,8 @@
                 };
                 auto input = std::make_shared<RelationshipInput>();
                 input->source = staging.provisionalSurfaces;
+                if (!input->source)
+                    input->surfaces = std::move(packet.surfaces);
                 input->context = std::move(relationshipContext);
                 const auto serial = staging.progress.invalidationSerial;
                 const auto mapEditSerial = staging.initialMapEditSerial;
@@ -5000,9 +5000,10 @@
                 const auto token = staging.buildToken;
                 const bool accepted = _reconstructionWorker.submit(
                     [input, regionKey, serial, mapEditSerial, epoch, token]() {
-                        // Copy to mutable working storage OFF the foreground
-                        // thread; the same immutable source stays visible.
-                        input->surfaces = *input->source;
+                        // Large provisional packets retain their original
+                        // visible snapshot; smaller packets move directly.
+                        if (input->source)
+                            input->surfaces = *input->source;
                         auto result = ResolveFirstPersonInternalOccupancyInterfaces(
                             input->surfaces, input->context);
                         return [input, regionKey, serial, mapEditSerial, epoch, token, result]() mutable {
@@ -5058,6 +5059,8 @@
                 if (!accepted)
                 {
                     relationshipContext = std::move(input->context);
+                    if (!input->source)
+                        packet.surfaces = std::move(input->surfaces);
                     return false;
                 }
                 staging.relationshipSubmitted = true;
