@@ -846,6 +846,7 @@
             int64_t nativePostUs = 0;
             int64_t nativeWorstAppendUs = 0;
             uint32_t nativeWorstImage = 0;
+            size_t nativeWorstSurfaces = 0;
             size_t nativeRoots = 0;
             size_t nativeStaticItems = 0;
             size_t nativeEntityItems = 0;
@@ -1126,6 +1127,7 @@
                         {
                             nativeWorstAppendUs = appendMicros;
                             nativeWorstImage = root->image_id.GetIndex();
+                            nativeWorstSurfaces = scene.surfaces.size() - startSurface;
                         }
                         for (size_t i = startSurface;
                              i < scene.surfaces.size(); ++i)
@@ -1317,7 +1319,7 @@
                 Console::WriteLine(
                     "FP_NATIVE_STALL totalUs=%lld allocUs=%lld setupUs=%lld arrangeUs=%lld"
                     " extractUs=%lld ordinalUs=%lld appendUs=%lld postUs=%lld"
-                    " roots=%zu worstAppendUs=%lld worstImage=%u"
+                    " roots=%zu worstAppendUs=%lld worstImage=%u worstSurfaces=%zu"
                     " staticItems=%zu entityItems=%zu",
                     static_cast<long long>(nativeTotalUs),
                     static_cast<long long>(nativeAllocUs),
@@ -1329,7 +1331,7 @@
                     static_cast<long long>(nativePostUs),
                     nativeRoots,
                     static_cast<long long>(nativeWorstAppendUs),
-                    nativeWorstImage,
+                    nativeWorstImage, nativeWorstSurfaces,
                     nativeStaticItems, nativeEntityItems);
             }
 
