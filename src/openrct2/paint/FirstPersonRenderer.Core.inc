@@ -757,7 +757,7 @@
 
                         const auto projectedCentre =
                             ProjectFirstPersonVehicleLocalPoint(
-                                view.imageDirection, centre);
+                                view.direction, centre);
                         const int32_t centreX =
                             int32_t(std::lround(
                                 projectedCentre[0]))
@@ -789,7 +789,7 @@
                         {
                             projected[i] =
                                 ProjectFirstPersonVehicleLocalPoint(
-                                    view.imageDirection, local[i]);
+                                    view.direction, local[i]);
                         }
                         float twiceArea = 0.0f;
                         for (size_t i = 0; i < 4; ++i)
