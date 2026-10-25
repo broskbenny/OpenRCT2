@@ -71,7 +71,7 @@ int main() {
         self.assertIn("input->context = std::move(relationshipContext);",build)
         self.assertIn("published.dirty = true;",build)
         self.assertLess(build.index("published.surfaceStorage = staging.provisionalSurfaces;"),
-                        build.index("_reconstructionWorker.submit("))
+                        build.index("_regionRelationshipWorker.submit("))
         self.assertIn("const bool havePublishedPacket =",build)
         self.assertIn("staging.initialSourceRevision = published.sourceRevision;",build)
         self.assertIn("const bool missedSourceChanges =",build)
