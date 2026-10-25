@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace OpenRCT2::Ui
 {
@@ -83,26 +84,49 @@ namespace OpenRCT2::Ui
     {
         if (cellSize <= 0 || right <= left || bottom <= top)
             return 0;
+
+        const int32_t columns = 1 + (right - left - 1) / cellSize;
+        const int32_t rows = 1 + (bottom - top - 1) / cellSize;
+        std::vector<size_t> cellCounts(size_t(columns) * size_t(rows), 0);
         size_t maximum = 0;
-        for (int32_t y = top; y < bottom; y += cellSize)
-        for (int32_t x = left; x < right; x += cellSize)
+
+        // Bin each source only into cells touched by its clipped screen
+        // rectangle. This is the same conservative coverage predicate as
+        // the cell-first scan, but avoids examining all 64 cells for every
+        // tiny surface in a 128px transparency tile.
+        for (const auto& candidate : candidates)
         {
-            const int32_t cellRight = std::min(x + cellSize, right);
-            const int32_t cellBottom = std::min(y + cellSize, bottom);
-            size_t count = 0;
-            for (const auto& candidate : candidates)
+            const int32_t firstX = std::max(left, candidate.x0);
+            const int32_t firstY = std::max(top, candidate.y0);
+            const int32_t lastX = std::min(right, candidate.x1);
+            const int32_t lastY = std::min(bottom, candidate.y1);
+            if (lastX <= firstX || lastY <= firstY)
+                continue;
+
+            const int32_t firstColumn = (firstX - left) / cellSize;
+            const int32_t lastColumn = (lastX - 1 - left) / cellSize;
+            const int32_t firstRow = (firstY - top) / cellSize;
+            const int32_t lastRow = (lastY - 1 - top) / cellSize;
+            for (int32_t row = firstRow; row <= lastRow; ++row)
+            for (int32_t column = firstColumn; column <= lastColumn; ++column)
             {
-                if (candidate.x1 <= x || candidate.x0 >= cellRight
-                    || candidate.y1 <= y || candidate.y0 >= cellBottom)
+                const int32_t cellLeft = left + column * cellSize;
+                const int32_t cellTop = top + row * cellSize;
+                const int32_t cellRight = std::min(cellLeft + cellSize, right);
+                const int32_t cellBottom = std::min(cellTop + cellSize, bottom);
+                if (!FirstPersonProjectedPolygonMayTouchCell(
+                        candidate.projectedPolygons[0],
+                        cellLeft, cellTop, cellRight, cellBottom)
+                    && !FirstPersonProjectedPolygonMayTouchCell(
+                        candidate.projectedPolygons[1],
+                        cellLeft, cellTop, cellRight, cellBottom))
                     continue;
-                if (FirstPersonProjectedPolygonMayTouchCell(
-                        candidate.projectedPolygons[0], x, y, cellRight, cellBottom)
-                    || FirstPersonProjectedPolygonMayTouchCell(
-                        candidate.projectedPolygons[1], x, y, cellRight, cellBottom))
-                    ++count;
+
+                auto& count = cellCounts[size_t(row) * size_t(columns) + size_t(column)];
+                maximum = std::max(maximum, ++count);
             }
-            maximum = std::max(maximum, count);
         }
         return maximum;
     }
+
 } // namespace OpenRCT2::Ui
