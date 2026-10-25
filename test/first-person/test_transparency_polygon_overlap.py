@@ -133,6 +133,15 @@ int main()
     assert(!FirstPersonProjectedPolygonMayTouchCell(absent,0,0,16,16));
     a.projectedPolygons[0].points[0][0]=std::numeric_limits<float>::quiet_NaN();
     assert(FirstPersonProjectedPolygonMayTouchCell(a.projectedPolygons[0],0,0,16,16));
+    // The earlier cell-first bound deliberately overcounted rectangles
+    // even with inverted edges when both edges fell inside one cell.
+    // Preserve that conservative behavior instead of treating them as empty.
+    Candidate malformed{};
+    malformed.x0=13;malformed.x1=12;malformed.y0=13;malformed.y1=12;
+    malformed.projectedPolygons[0]=triangle(0,0,15,0,0,15);
+    assert(cellFirstReference(std::array<Candidate,1>{malformed},0,0,32,32,16)==1);
+    assert(FirstPersonMaximumPolygonCellOverlap(
+        std::array<Candidate,1>{malformed},0,0,32,32,16)==1);
     std::cout << "conservative polygon coverage verified" << std::endl;
 }
 '''
