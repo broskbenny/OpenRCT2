@@ -341,6 +341,16 @@ void TextureCache::EnlargeAtlasesTexture(GLuint newEntries)
             {
                 glCall(glFramebufferTextureLayer, GL_READ_FRAMEBUFFER,
                     GL_COLOR_ATTACHMENT0, _atlasesTexture, 0, GLint(layer));
+                if (layer == 0
+                    && glCall(glCheckFramebufferStatus, GL_READ_FRAMEBUFFER)
+                        != GL_FRAMEBUFFER_COMPLETE)
+                {
+                    glCall(glBindFramebuffer, GL_READ_FRAMEBUFFER, GLuint(previousRead));
+                    glCall(glDeleteFramebuffers, 1, &copyFramebuffer);
+                    glCall(glDeleteTextures, 1, &expanded);
+                    glCall(glBindTexture, GL_TEXTURE_2D_ARRAY, _atlasesTexture);
+                    throw std::runtime_error("R8UI atlas layer copy framebuffer unavailable");
+                }
                 glCall(glCopyTexSubImage3D, GL_TEXTURE_2D_ARRAY, 0,
                     0, 0, GLint(layer), 0, 0,
                     _atlasesTextureDimensions, _atlasesTextureDimensions);
