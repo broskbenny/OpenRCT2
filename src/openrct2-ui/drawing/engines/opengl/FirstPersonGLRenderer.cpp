@@ -5,6 +5,7 @@
 #ifndef DISABLE_OPENGL
 #include "FirstPersonGLRenderer.h"
 #include "FirstPersonGpuBatching.h"
+#include "FirstPersonTransparencyCoverage.h"
 #include "FirstPersonRegionResidencyBudget.h"
 #include <openrct2/paint/FirstPersonAsync.h>
 #include "SwapFramebuffer.h"
@@ -1569,6 +1570,7 @@ void main() {
                 // intervals have a fixed far-to-near palette composition order.
                 float depthMin{}, depthMax{};
                 bool fixedDepthOrder = false;
+                std::array<FirstPersonProjectedScreenPolygon, 2> projectedPolygons{};
             };
             struct TransparentScreenTile
             {
@@ -1666,6 +1668,7 @@ void main() {
                 bool haveProjection = false;
                 float depthMin = std::numeric_limits<float>::infinity();
                 float depthMax = -std::numeric_limits<float>::infinity();
+                std::array<FirstPersonProjectedScreenPolygon, 2> projectedPolygons{};
 
                 for (size_t triangleStart :
                      { size_t{ 0 }, size_t{ 3 } })
@@ -1712,6 +1715,8 @@ void main() {
                     {
                         const auto projected =
                             projectCameraPoint(clipped[i]);
+                        projectedPolygons[triangleStart / 3].points[i] = projected;
+                        projectedPolygons[triangleStart / 3].count = uint8_t(clippedCount);
                         haveProjection = true;
                         depthMin = std::min(depthMin, clipped[i].z);
                         depthMax = std::max(depthMax, clipped[i].z);
@@ -1785,19 +1790,27 @@ void main() {
                         std::min(y1, tile.y1),
                         depthMin, depthMax,
                         !surface->coplanarOwner,
+                        projectedPolygons,
                     });
                 }
             }
 
-            // Rectangle coverage deliberately overestimates real sprite
-            // coverage. Its maximum is therefore a safe upper bound on the
-            // number of logical transparent layers any pixel can contain.
-            // Coverage changes only at candidate edges, so do not rebuild a
-            // 128x128 per-pixel prefix grid for every tile and frame.
+            // Rectangle-only overlap overcounts large diagonal native
+            // sprites. Intersect their actual near-clipped screen polygons
+            // with 16px cells to derive a second independent conservative
+            // bound. Neither bound may discard a physical fragment: the
+            // smaller upper bound safely avoids *provably empty* GPU peels.
+            // The triangle test is skipped when the cheap rectangle sweep
+            // already proves one or two layers, preserving foreground CPU.
             const auto conservativeLayerLimit =
                 [](const TransparentScreenTile& tile) {
-                    return FirstPersonMaximumRectangleOverlap(
-                        tile.candidates);
+                    const size_t rectangleBound =
+                        FirstPersonMaximumRectangleOverlap(tile.candidates);
+                    if (rectangleBound <= 2)
+                        return rectangleBound;
+                    const size_t triangleBound = FirstPersonMaximumPolygonCellOverlap(
+                        tile.candidates, tile.x0, tile.y0, tile.x1, tile.y1);
+                    return std::min(rectangleBound, triangleBound);
                 };
 
             auto& front = output.GetFinalFramebuffer();
