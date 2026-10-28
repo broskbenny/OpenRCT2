@@ -51,6 +51,24 @@ int main() {
             run = subprocess.run([str(exe)],capture_output=True,text=True)
             self.assertEqual(run.returncode,0,run.stderr)
 
+    def test_cold_region_tiles_skip_unneeded_map_readiness_checks(self):
+        source = (ROOT/"src/openrct2/paint/FirstPersonRenderer.World.inc").read_text()
+        build = source[source.index("[[nodiscard]] bool RebuildStaticRegionPacket"):
+                       source.index("void SubmitVisibleStaticRegions")]
+        tiles = build[build.index("const auto tileKey = TerrainKey(tx, ty);"):
+                      build.index("if (!staging.progress.tilesDone(kRegionTileCount))")]
+        self.assertEqual(tiles.count("_staticPaintCache.find(tileKey)"), 1)
+        self.assertLess(tiles.index("!cacheIt->second.valid || cacheIt->second.dirty"),
+                        tiles.index("FirstPersonLocalFlatPathReady("))
+        self.assertLess(tiles.index("FirstPersonLocalFlatPathReady("),
+                        tiles.index("cached.semanticResidentSurfaces"))
+        self.assertLess(tiles.index("cached.semanticResidentSurfaces"),
+                        tiles.index("if (cached.animated)"))
+        self.assertLess(tiles.index("if (cached.animated)"),
+                        tiles.index("cached.cameraIndependentResidentSurfaces"))
+        # Geometry already valid for animated semantic items must not vanish.
+        self.assertNotIn("|| cacheIt->second.animated)", tiles)
+
     def test_renderer_stages_and_publishes_only_complete_packet(self):
         source=(ROOT/"src/openrct2/paint/FirstPersonRenderer.World.inc").read_text()
         core=(ROOT/"src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text()
