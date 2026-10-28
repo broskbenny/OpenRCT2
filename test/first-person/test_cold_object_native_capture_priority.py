@@ -20,13 +20,17 @@ class ColdObjectNativeCapturePriorityTest(unittest.TestCase):
         self.assertIn("(frame & 3u) == 0", streaming)
         self.assertIn("static size_t captureCursor = 0;", paint)
         self.assertIn("static size_t coldObjectCursor = 0;", paint)
+        self.assertIn("const bool prioritizeNearColdObjects = (frame & 3u) == 1;", paint)
+        self.assertIn("prioritizeNearColdObjects ? 0 : coldObjectCursor;", paint)
+        self.assertIn("useColdObjectCursor && !prioritizeNearColdObjects", paint)
+        self.assertIn("coldCandidateCursor + coldOffset : captureCursor", paint)
         self.assertIn("first->getType() == TileElementType::surface", paint)
         self.assertIn("&& first->isLastForTile()", paint)
         self.assertIn("!std::any_of(cached.rotations.begin()", paint)
         lookahead = paint.split("const size_t coldOffset =", 1)[1].split(
             "const bool useColdObjectCursor =", 1)[0]
         self.assertNotIn("|| found->second.dirty", lookahead)
-        self.assertIn("if (useColdObjectCursor)", paint)
+        self.assertIn("if (useColdObjectCursor && !prioritizeNearColdObjects)", paint)
         self.assertIn("coldObjectCursor += captureExamined;", paint)
         self.assertIn("captureCursor += captureExamined;", paint)
         self.assertIn("size_t nativeCapturesRemaining = 2;", paint)
