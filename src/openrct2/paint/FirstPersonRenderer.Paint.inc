@@ -256,8 +256,15 @@
             // native paint slots while thousands of object tiles are cold.
             // The ordinary cursor is independent and always resumes, so
             // native terrain edges and unsupported fallbacks still complete.
+            // Visible tiles are traversed near-eye first. Reserve one
+            // priority turn in four for those currently near the camera;
+            // keep two turns for the independent rolling cold-object cursor
+            // and one for the all-source sweep. No extra paint captures.
+            const bool prioritizeNearColdObjects = (frame & 3u) == 1;
+            const size_t coldCandidateCursor =
+                prioritizeNearColdObjects ? 0 : coldObjectCursor;
             const size_t coldOffset = FirstPersonColdObjectCaptureOffset(
-                visibleCount, coldObjectCursor, frame,
+                visibleCount, coldCandidateCursor, frame,
                 [&](size_t index) {
                     const auto tile = scene.visibleTiles[index];
                     const auto* first = MapGetFirstElementAt(tile);
@@ -279,12 +286,13 @@
                             [](const auto& variant) { return variant.valid; });
                 });
             const bool useColdObjectCursor = coldOffset < visibleCount;
-            if (useColdObjectCursor)
+            if (useColdObjectCursor && !prioritizeNearColdObjects)
                 coldObjectCursor += coldOffset;
-            else if (visibleCount != 0)
+            else if (!useColdObjectCursor && visibleCount != 0)
                 coldObjectCursor += std::min<size_t>(visibleCount, 32);
             const size_t captureStart = visibleCount == 0 ? 0
-                : (useColdObjectCursor ? coldObjectCursor : captureCursor) % visibleCount;
+                : (useColdObjectCursor
+                    ? coldCandidateCursor + coldOffset : captureCursor) % visibleCount;
             size_t captureExamined = 0;
             while (captureExamined < scene.visibleTiles.size()
                    && nativeCapturesRemaining != 0 && captureScanBudget.take())
@@ -601,9 +609,9 @@
                 }
             }
 
-            if (useColdObjectCursor)
+            if (useColdObjectCursor && !prioritizeNearColdObjects)
                 coldObjectCursor += captureExamined;
-            else
+            else if (!useColdObjectCursor)
                 captureCursor += captureExamined;
             const auto selectedViewsDone = PaintClock::now();
             // The shared semantic visual hull needs four native observations
