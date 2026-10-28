@@ -22,6 +22,16 @@ class AtlasGrowthTests(unittest.TestCase):
         self.assertIn("glCheckFramebufferStatus", fn)
         self.assertIn("_atlasesTextureIndices = newIndices;", fn)
         self.assertIn("GLuint(_atlasesTextureIndicesLimit)", fn)
+        api = (ROOT / "src/openrct2-ui/drawing/engines/opengl/OpenGLAPI.h").read_text()
+        # SDL_opengl.h declares the GL 1.2 function on Windows. Temporarily
+        # rename its prototype, then restore the name before declaring the
+        # dynamically loaded function pointer; otherwise MSVC C2365/C2659.
+        self.assertLess(api.index("#define glCopyTexSubImage3D __static__glCopyTexSubImage3D"),
+                        api.index("#include <SDL_opengl.h>"))
+        self.assertLess(api.index("#include <SDL_opengl.h>"),
+                        api.index("#undef glCopyTexSubImage3D"))
+        self.assertLess(api.index("#undef glCopyTexSubImage3D"),
+                        api.index('#include "OpenGLAPIProc.h"'))
         loader = (ROOT / "src/openrct2-ui/drawing/engines/opengl/OpenGLAPIProc.h").read_text()
         self.assertIn("PFNGLFRAMEBUFFERTEXTURELAYERPROC, glFramebufferTextureLayer", loader)
         self.assertIn("PFNGLCOPYTEXSUBIMAGE3DPROC, glCopyTexSubImage3D", loader)
