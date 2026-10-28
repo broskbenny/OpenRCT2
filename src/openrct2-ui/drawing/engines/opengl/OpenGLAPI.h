@@ -43,6 +43,7 @@
     #define glTexParameteri __static__glTexParameteri
     #define glViewport __static__glViewport
     #define glTexSubImage3D __static__glTexSubImage3D
+    #define glCopyTexSubImage3D __static__glCopyTexSubImage3D
     #define glTexImage3D __static__glTexImage3D
     #define glGetIntegerv __static__glGetIntegerv
     #define glGetTexImage __static__glGetTexImage
@@ -90,6 +91,7 @@
     #undef glTexParameteri
     #undef glViewport
     #undef glTexSubImage3D
+    #undef glCopyTexSubImage3D
     #undef glTexImage3D
     #undef glGetIntegerv
     #undef glGetTexImage
