@@ -58,6 +58,11 @@ int main() {
         tiles = build[build.index("const auto tileKey = TerrainKey(tx, ty);"):
                       build.index("if (!staging.progress.tilesDone(kRegionTileCount))")]
         self.assertEqual(tiles.count("_staticPaintCache.find(tileKey)"), 1)
+        before_map = tiles[:tiles.index("FirstPersonLocalFlatPathReady(")]
+        self.assertIn("if (cached.semanticResidentSurfaces.empty()", before_map)
+        self.assertIn("cached.cameraIndependentResidentSurfaces.empty()", before_map)
+        self.assertIn("std::none_of(cached.rotations.begin(), cached.rotations.end()", before_map)
+        self.assertIn("return variant.valid && !variant.residentSurfaces.empty();", before_map)
         self.assertLess(tiles.index("!cacheIt->second.valid || cacheIt->second.dirty"),
                         tiles.index("FirstPersonLocalFlatPathReady("))
         self.assertLess(tiles.index("FirstPersonLocalFlatPathReady("),
