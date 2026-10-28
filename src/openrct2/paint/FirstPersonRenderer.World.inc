@@ -4538,6 +4538,14 @@
                     || !cacheIt->second.valid || cacheIt->second.dirty)
                     continue;
                 auto& cached = cacheIt->second;
+                if (cached.semanticResidentSurfaces.empty()
+                    && (cached.animated
+                        || (cached.cameraIndependentResidentSurfaces.empty()
+                            && std::none_of(cached.rotations.begin(), cached.rotations.end(),
+                                [](const auto& variant) {
+                                    return variant.valid && !variant.residentSurfaces.empty();
+                                }))))
+                    continue;
                 const bool mappedPathReady = FirstPersonLocalFlatPathReady(
                     { tx * kCoordsXYStep, ty * kCoordsXYStep });
                 const bool mappedWallReady = FirstPersonLocalPlainWallReady(
