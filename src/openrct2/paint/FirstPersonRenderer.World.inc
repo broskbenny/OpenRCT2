@@ -4533,19 +4533,18 @@
                 const int32_t ty = y0 + int32_t(index / 32);
                 const int32_t tx = x0 + int32_t(index % 32);
                 const auto tileKey = TerrainKey(tx, ty);
+                const auto cacheIt = _staticPaintCache.find(tileKey);
+                if (cacheIt == _staticPaintCache.end()
+                    || !cacheIt->second.valid || cacheIt->second.dirty)
+                    continue;
+                auto& cached = cacheIt->second;
                 const bool mappedPathReady = FirstPersonLocalFlatPathReady(
                     { tx * kCoordsXYStep, ty * kCoordsXYStep });
                 const bool mappedWallReady = FirstPersonLocalPlainWallReady(
                     { tx * kCoordsXYStep, ty * kCoordsXYStep });
-                if (auto supportIt =
-                        _staticPaintCache.find(tileKey);
-                    supportIt != _staticPaintCache.end()
-                    && supportIt->second.valid
-                    && !supportIt->second.dirty)
                 {
                     for (const auto& surface :
-                         supportIt->second
-                             .semanticResidentSurfaces)
+                         cached.semanticResidentSurfaces)
                     {
                         if ((mappedPathReady
                             && surface.diagnosticSemanticRole
@@ -4579,11 +4578,8 @@
                     }
                 }
 
-                const auto cacheIt = _staticPaintCache.find(tileKey);
-                if (cacheIt == _staticPaintCache.end() || !cacheIt->second.valid
-                    || cacheIt->second.dirty || cacheIt->second.animated)
+                if (cached.animated)
                     continue;
-                auto& cached = cacheIt->second;
                 for (const auto& surface :
                      cached.cameraIndependentResidentSurfaces)
                 {
