@@ -74,6 +74,20 @@ int main() {
         # Geometry already valid for animated semantic items must not vanish.
         self.assertNotIn("|| cacheIt->second.animated)", tiles)
 
+    def test_physical_group_meshes_do_not_restart_on_camera_turns(self):
+        world = (ROOT/"src/openrct2/paint/FirstPersonRenderer.World.inc").read_text()
+        build = world[world.index("[[nodiscard]] bool RebuildStaticRegionPacket"):
+                      world.index("void SubmitVisibleStaticRegions")]
+        group_setup = build[build.index("const auto gatherGroups ="):
+                            build.index("staging.groupsInitialized = true;")]
+        # Compiled geometry does not need a source rotation. Native fallback
+        # surfaces do, and must still guard worker completion.
+        self.assertNotIn("staging.selectedGroups.emplace(", group_setup)
+        self.assertIn("staging.selectedGroups.emplace(\n", build)
+        self.assertIn("staging.selectedGroups.emplace(\n"
+                      "                                surface.reconstructionGroup, captured);", build)
+        self.assertIn("FirstPersonStagedPacketSelectionChanged(pending->second)", build)
+
     def test_renderer_stages_and_publishes_only_complete_packet(self):
         source=(ROOT/"src/openrct2/paint/FirstPersonRenderer.World.inc").read_text()
         core=(ROOT/"src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text()
