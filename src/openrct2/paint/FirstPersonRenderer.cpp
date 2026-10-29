@@ -1661,6 +1661,7 @@ namespace OpenRCT2::Paint
         _terrainBackgroundEditedTiles.clear();
         _terrainBackgroundEditedSet.clear();
         _localSceneryPackets.clear();
+        _localSceneryBuilds.clear();
         _localSceneryEpoch = _sceneEpoch;
         _structuralTileIndex.clear();
         _structuralIndexEpoch = _sceneEpoch;
