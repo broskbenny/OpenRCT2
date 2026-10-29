@@ -13,7 +13,7 @@ class SourceViewFallbackTest(unittest.TestCase):
     def test_resident_and_streamed_reconstruction_use_same_fallback(self):
         world = (ROOT / "src/openrct2/paint/FirstPersonRenderer.World.inc").read_text(encoding="utf-8")
         paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(encoding="utf-8")
-        self.assertIn("selected = FirstPersonAvailableSourceRotation(\n                                cached, captured);", world)
+        self.assertIn("selected = FirstPersonAvailableSourceRotation(\n                                    cached, captured);", world)
         self.assertIn("selected = FirstPersonAvailableSourceRotation(\n                                    cached, group->second.selectedRotation);", paint)
         self.assertIn("FP_SOURCE_COVERAGE visibleTiles=%zu objectTiles=%zu", paint)
         for field in (
