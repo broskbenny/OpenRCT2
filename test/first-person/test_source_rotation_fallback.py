@@ -29,7 +29,7 @@ class SourceViewFallbackTest(unittest.TestCase):
         if not compiler:
             self.skipTest("C++ compiler unavailable")
         core = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text()
-        start = core.index("        template<typename Cache>\\n        [[nodiscard]] uint8_t FirstPersonReadyRotation(".replace("\\\\n", "\\n"))
+        start = core.index("        template<typename Cache>" + chr(10) + "        [[nodiscard]] uint8_t FirstPersonReadyRotation(")
         end = core.index("        void RequestFirstPersonNativeSceneryRetry(", start)
         policy = core[start:end]
         program = """
