@@ -4723,13 +4723,10 @@
                             if (geometry != _largeSceneryGeometryCache.end()
                                 && !geometry->second.dirty)
                             {
-                                const auto& surfaces = geometry->second.surfaces;
-                                while (staging.surfaceOffset < surfaces.size())
-                                {
-                                    if (!gatherBudget.take())
-                                        return false;
-                                    addSurface(surfaces[staging.surfaceOffset++]);
-                                }
+                                if (!ResumeFirstPersonIndexedRegionSurfaces(
+                                        geometry->second, regionKey, staging.surfaceOffset,
+                                        gatherBudget, addSurface))
+                                    return false;
                             }
                         }
                         else
@@ -4738,13 +4735,10 @@
                             if (geometry != _parkEntranceGeometryCache.end()
                                 && !geometry->second.dirty)
                             {
-                                const auto& surfaces = geometry->second.surfaces;
-                                while (staging.surfaceOffset < surfaces.size())
-                                {
-                                    if (!gatherBudget.take())
-                                        return false;
-                                    addSurface(surfaces[staging.surfaceOffset++]);
-                                }
+                                if (!ResumeFirstPersonIndexedRegionSurfaces(
+                                        geometry->second, regionKey, staging.surfaceOffset,
+                                        gatherBudget, addSurface))
+                                    return false;
                             }
                         }
                         ++staging.groupOffset;

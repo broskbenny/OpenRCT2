@@ -1738,6 +1738,7 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
             std::vector<FirstPersonSurface> surfaces;
             // One asset may have thousands of faces but few GPU regions.
             std::vector<uint64_t> gpuRegions;
+            FirstPersonRegionSurfaceIndex regionSurfaceIndices;
             std::vector<FirstPersonPhysicalBoxProxy> collisionProxies;
             // Track exactly which authoritative placement tiles supplied the
             // inferred geometry and walking proxies.
@@ -1773,6 +1774,7 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                 std::pair<CoordsXY, uint64_t>, 3>
                 tileSignatures{};
             std::vector<FirstPersonSurface> surfaces;
+            FirstPersonRegionSurfaceIndex regionSurfaceIndices;
         };
         static std::unordered_map<
             uint64_t, ParkEntranceGeometryCacheEntry>
@@ -1907,13 +1909,16 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                             regionKey].insert(groupKey);
                     });
             }
-            std::unordered_set<uint64_t> distinct;
-            for (const auto& surface : cached.surfaces)
-                if (surface.gpuRegion != 0)
-                    distinct.insert(surface.gpuRegion);
-            cached.gpuRegions.assign(distinct.begin(), distinct.end());
-            for (const auto region : cached.gpuRegions)
+            cached.regionSurfaceIndices =
+                IndexFirstPersonSurfacesByGpuRegion(cached.surfaces);
+            cached.gpuRegions.clear();
+            cached.gpuRegions.reserve(cached.regionSurfaceIndices.size());
+            for (const auto& [region, indices] : cached.regionSurfaceIndices)
+            {
+                cached.gpuRegions.push_back(region);
                 _largeSceneryGroupsByRegion[region].insert(groupKey);
+            }
+            std::sort(cached.gpuRegions.begin(), cached.gpuRegions.end());
         }
 
         void ActivateLargeSceneryRegions(
@@ -2010,7 +2015,7 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
 
         void RegisterParkEntranceRegionMembership(
             uint64_t groupKey,
-            const ParkEntranceGeometryCacheEntry& cached)
+            ParkEntranceGeometryCacheEntry& cached)
         {
             if (cached.hasBounds)
             {
@@ -2023,14 +2028,10 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                     });
             }
 
-            for (const auto& surface : cached.surfaces)
-            {
-                if (surface.gpuRegion != 0)
-                {
-                    _parkEntranceGroupsByRegion[
-                        surface.gpuRegion].insert(groupKey);
-                }
-            }
+            cached.regionSurfaceIndices =
+                IndexFirstPersonSurfacesByGpuRegion(cached.surfaces);
+            for (const auto& [region, indices] : cached.regionSurfaceIndices)
+                _parkEntranceGroupsByRegion[region].insert(groupKey);
         }
 
         [[nodiscard]] CoordsXY
