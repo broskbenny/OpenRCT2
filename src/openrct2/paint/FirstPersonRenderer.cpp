@@ -5,6 +5,7 @@
 #include "FirstPersonRenderer.h"
 #include "FirstPersonSpriteSnapshot.h"
 #include "FirstPersonPacketBuildProgress.h"
+#include "FirstPersonPacketSurfaceCursor.h"
 #include "FirstPersonAssetReconstruction.h"
 #include "FirstPersonAttachedArtworkRegistration.h"
 #include "FirstPersonLargeSceneryReconstruction.h"
