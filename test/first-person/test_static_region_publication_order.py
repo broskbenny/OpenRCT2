@@ -36,6 +36,58 @@ class StaticRegionPublicationOrderTest(unittest.TestCase):
         self.assertLess(streaming.index("a.hasStagedWork != b.hasStagedWork"),
                         streaming.index("a.distanceSquared != b.distanceSquared"))
 
+    def test_compiled_rebuild_priority_survives_camera_turns(self):
+        import shutil
+        import subprocess
+        import tempfile
+        compiler = shutil.which("clang++") or shutil.which("g++")
+        if compiler is None:
+            self.skipTest("C++ compiler unavailable")
+        program = r"""
+#include "FirstPersonStreaming.h"
+#include <algorithm>
+#include <cassert>
+#include <vector>
+using namespace OpenRCT2::Paint;
+int main() {
+    FirstPersonVec3 eye{0, 0, 0};
+    auto active = MakeFirstPersonStaticRegionRebuildCandidate(
+        (2ull<<32)|2u, false, eye, true);
+    auto cold = MakeFirstPersonStaticRegionRebuildCandidate(
+        (1ull<<32)|1u, false, eye, false);
+    auto resident = MakeFirstPersonStaticRegionRebuildCandidate(
+        (1ull<<32)|1u, true, eye, true);
+    assert(FirstPersonStaticRegionRebuildBefore(active, cold));
+    assert(FirstPersonStaticRegionRebuildBefore(cold, resident));
+    for (int n=0;n<600;++n) {
+        // Turning the camera makes the new cold region nearer than the
+        // staged one. Continuing progress still wins; visible resident
+        // replacement remains behind the unpublished cold region.
+        eye={float(n % 2 ? 5000 : -5000), float(n%3 ? -4000 : 4000), 0};
+        auto a=MakeFirstPersonStaticRegionRebuildCandidate(
+            (2ull<<32)|2u, false, eye, true);
+        auto b=MakeFirstPersonStaticRegionRebuildCandidate(
+            (1ull<<32)|1u, false, eye, false);
+        auto c=MakeFirstPersonStaticRegionRebuildCandidate(
+            (1ull<<32)|1u, true, eye, false);
+        std::vector<FirstPersonStaticRegionRebuildCandidate> jobs{c,b,a};
+        std::sort(jobs.begin(),jobs.end(),FirstPersonStaticRegionRebuildBefore);
+        assert(jobs[0].key==a.key);
+        assert(jobs[1].key==b.key);
+    }
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            from pathlib import Path
+            src, exe = Path(tmp)/"priority.cpp", Path(tmp)/"priority"
+            src.write_text(program, encoding="utf-8")
+            run = subprocess.run([compiler, "-std=c++20", "-O2", "-I",
+                str(ROOT/"src/openrct2/paint"), str(src), "-o", str(exe)],
+                text=True, capture_output=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            run = subprocess.run([str(exe)], text=True, capture_output=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+
     def test_local_and_coherent_publication_stay_stable_across_view_turns(self):
         local = LOCAL.read_text(encoding="utf-8")
         self.assertIn("std::sort(orderedVisible.begin(), orderedVisible.end());", local)
