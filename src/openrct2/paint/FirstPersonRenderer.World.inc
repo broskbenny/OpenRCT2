@@ -4920,31 +4920,29 @@
             while (staging.neighbourSource < staging.neighbourSources.size())
             {
                 const auto& source = staging.neighbourSources[staging.neighbourSource];
-                const std::vector<FirstPersonSurface>* surfaces = nullptr;
+                // Read only this neighbour's indexed geometry. Other regions'
+                // faces cannot contribute to this interface context.
                 if (source.kind == 1)
                 {
                     const auto geometry = _largeSceneryGeometryCache.find(source.group);
                     if (geometry != _largeSceneryGeometryCache.end()
-                        && !geometry->second.dirty)
-                        surfaces = &geometry->second.surfaces;
+                        && !geometry->second.dirty
+                        && !ResumeFirstPersonIndexedRegionSurfaces(
+                            geometry->second, source.region,
+                            staging.neighbourSourceSurface, gatherBudget,
+                            addRelationshipContext))
+                        return false;
                 }
                 else
                 {
                     const auto geometry = _parkEntranceGeometryCache.find(source.group);
                     if (geometry != _parkEntranceGeometryCache.end()
-                        && !geometry->second.dirty)
-                        surfaces = &geometry->second.surfaces;
-                }
-                if (surfaces != nullptr)
-                {
-                    while (staging.neighbourSourceSurface < surfaces->size())
-                    {
-                        if (!gatherBudget.take())
-                            return false;
-                        const auto& surface = (*surfaces)[staging.neighbourSourceSurface++];
-                        if (surface.gpuRegion == source.region)
-                            addRelationshipContext(surface);
-                    }
+                        && !geometry->second.dirty
+                        && !ResumeFirstPersonIndexedRegionSurfaces(
+                            geometry->second, source.region,
+                            staging.neighbourSourceSurface, gatherBudget,
+                            addRelationshipContext))
+                        return false;
                 }
                 ++staging.neighbourSource;
                 staging.neighbourSourceSurface = 0;

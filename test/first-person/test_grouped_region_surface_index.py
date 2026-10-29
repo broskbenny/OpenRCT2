@@ -16,7 +16,7 @@ class GroupedRegionSurfaceIndexTest(unittest.TestCase):
         self.assertIn('#include "FirstPersonRegionSurfaceIndex.h"', renderer)
         self.assertEqual(core.count("IndexFirstPersonSurfacesByGpuRegion(cached.surfaces)"), 2)
         self.assertEqual(core.count("FirstPersonRegionSurfaceIndex regionSurfaceIndices;"), 2)
-        self.assertEqual(world.count("ResumeFirstPersonIndexedRegionSurfaces("), 2)
+        self.assertEqual(world.count("ResumeFirstPersonIndexedRegionSurfaces("), 4)
         # Registration should reuse precomputed worker indices, not rescan faces.
         self.assertEqual(core.count(
             "IndexFirstPersonSurfacesByGpuRegion(result.surfaces)"), 2)
