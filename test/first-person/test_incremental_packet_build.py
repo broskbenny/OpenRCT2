@@ -65,12 +65,14 @@ int main() {
         self.assertIn("return variant.valid && !variant.residentSurfaces.empty();", before_map)
         self.assertLess(tiles.index("!cacheIt->second.valid || cacheIt->second.dirty"),
                         tiles.index("FirstPersonLocalFlatPathReady("))
-        self.assertLess(tiles.index("FirstPersonLocalFlatPathReady("),
-                        tiles.index("cached.semanticResidentSurfaces"))
-        self.assertLess(tiles.index("cached.semanticResidentSurfaces"),
-                        tiles.index("if (cached.animated)"))
-        self.assertLess(tiles.index("if (cached.animated)"),
-                        tiles.index("cached.cameraIndependentResidentSurfaces"))
+        semantic_loop = tiles.index("for (const auto& surface :\n"
+                                    "                         cached.semanticResidentSurfaces)")
+        animated_guard = tiles.index("if (cached.animated)\n                    continue;")
+        independent_loop = tiles.index("for (const auto& surface :\n"
+                                       "                     cached.cameraIndependentResidentSurfaces)")
+        self.assertLess(tiles.index("FirstPersonLocalFlatPathReady("), semantic_loop)
+        self.assertLess(semantic_loop, animated_guard)
+        self.assertLess(animated_guard, independent_loop)
         # Geometry already valid for animated semantic items must not vanish.
         self.assertNotIn("|| cacheIt->second.animated)", tiles)
 
