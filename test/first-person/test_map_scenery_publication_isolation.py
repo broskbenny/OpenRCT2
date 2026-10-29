@@ -24,6 +24,22 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
         self.assertIn("add(surface, owningRegion, true);", local)
         self.assertIn("if (waitingForSourceRevalidation", local)
 
+    def test_completed_small_scenery_skips_cold_native_priority(self):
+        local = LOCAL.read_text(encoding="utf-8")
+        paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text()
+        ready = local[
+            local.index("bool FirstPersonTileObjectsMapOwnedAndReady("):
+            local.index("void MarkLocalSceneryDirtyForTile(", local.index("bool FirstPersonTileObjectsMapOwnedAndReady("))]
+        self.assertIn("case TileElementType::smallScenery:", ready)
+        self.assertIn("packet->second.mapOwnedInstanceKeys.contains(", ready)
+        self.assertIn("FirstPersonLocalSmallSceneryInstanceKey(", ready)
+        self.assertIn("elementIndex, *small", ready)
+        self.assertIn("packet->second.dirty", ready)
+        self.assertEqual(local.count("packet.mapOwnedInstanceKeys = std::move(mapOwnedInstanceKeys);"), 2)
+        self.assertIn("mapOwnedInstanceKeys.insert(instance);", local)
+        self.assertIn("|| FirstPersonTileObjectsMapOwnedAndReady(tile))", paint)
+        self.assertIn("const bool useColdObjectCursor = coldOffset < visibleCount;", paint)
+
     def test_ownership_prevents_withdrawal_during_pending_native_capture(self):
         for native_dirty, present, native_owned in itertools.product((False, True), repeat=3):
             hold = should_hold_previous(native_dirty, present, native_owned)

@@ -69,6 +69,7 @@
             uint64_t fingerprint = 0;
             size_t vertexCount = 0;
             bool containsNativeSource = false;
+            std::unordered_set<uint64_t> mapOwnedInstanceKeys;
             std::unordered_set<uint64_t> mappedPathTiles;
             std::unordered_set<uint64_t> mappedWallTiles;
             uint32_t viewFlags = 0;
@@ -104,6 +105,7 @@
             bool waitingForSourceRevalidation = false;
             bool containsNativeSource = false;
             std::unordered_set<uint64_t> mapOwnedNativeKeys;
+            std::unordered_set<uint64_t> mapOwnedInstanceKeys;
             std::unordered_set<uint64_t> mappedPathTiles;
             std::unordered_set<uint64_t> mappedWallTiles;
         };
@@ -135,6 +137,10 @@
                     tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
         }
 
+        [[nodiscard]] uint64_t FirstPersonLocalSmallSceneryInstanceKey(
+            int32_t tx, int32_t ty, uint32_t index,
+            const SmallSceneryElement& small);
+
         [[nodiscard]] bool FirstPersonTileObjectsMapOwnedAndReady(
             CoordsXY tile)
         {
@@ -142,6 +148,10 @@
             if (element == nullptr)
                 return false;
             bool hasObject = false;
+            uint32_t elementIndex = 0;
+            const auto packet = _localSceneryPackets.find(
+                FirstPersonLocalSceneryRegionKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
             do
             {
                 switch (element->getType())
@@ -158,9 +168,26 @@
                             return false;
                         hasObject = true;
                         break;
+                    case TileElementType::smallScenery:
+                    {
+                        const auto* small = element->asSmallScenery();
+                        if (small == nullptr
+                            || packet == _localSceneryPackets.end()
+                            || packet->second.dirty
+                            || !packet->second.surfaces
+                            || !packet->second.mapOwnedInstanceKeys.contains(
+                                FirstPersonLocalSmallSceneryInstanceKey(
+                                    tile.x / kCoordsXYStep,
+                                    tile.y / kCoordsXYStep,
+                                    elementIndex, *small)))
+                            return false;
+                        hasObject = true;
+                        break;
+                    }
                     default:
                         return false;
                 }
+                ++elementIndex;
             } while (!(element++)->isLastForTile());
             // Native captures are still admitted through the independent
             // periodic sweep for terrain edges and presentation changes.
@@ -389,6 +416,7 @@
                 auto& waitingForSourceRevalidation = staging.waitingForSourceRevalidation;
                 auto& containsNativeSource = staging.containsNativeSource;
                 auto& mapOwnedNativeKeys = staging.mapOwnedNativeKeys;
+                auto& mapOwnedInstanceKeys = staging.mapOwnedInstanceKeys;
                 auto& mappedPathTiles = staging.mappedPathTiles;
                 auto& mappedWallTiles = staging.mappedWallTiles;
 
@@ -507,6 +535,7 @@
                                             mapSurfaces, mapTile, *small,
                                             scene.options.viewFlags))
                                     {
+                                        mapOwnedInstanceKeys.insert(instance);
                                         // A previously native-owned cache view
                                         // may survive an inspector selection
                                         // transition. A completed map instance
@@ -670,6 +699,7 @@
                         std::make_shared<const std::vector<FirstPersonSurface>>(
                             std::move(surfaces));
                     packet.containsNativeSource = containsNativeSource;
+                    packet.mapOwnedInstanceKeys = std::move(mapOwnedInstanceKeys);
                     packet.mappedPathTiles = std::move(mappedPathTiles);
                     packet.mappedWallTiles = std::move(mappedWallTiles);
                     packet.dirty = packet.invalidationSerial != staging.sourceInvalidationSerial;
@@ -678,6 +708,7 @@
                 }
                 packet.fingerprint = fingerprint;
                 packet.containsNativeSource = containsNativeSource;
+                packet.mapOwnedInstanceKeys = std::move(mapOwnedInstanceKeys);
                 packet.mappedPathTiles = std::move(mappedPathTiles);
                 packet.mappedWallTiles = std::move(mappedWallTiles);
                 packet.vertexCount = surfaces.size() * 6;
