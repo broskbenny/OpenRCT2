@@ -4323,6 +4323,7 @@
             size_t groupPhase = 0;
             size_t groupOffset = 0;
             size_t surfaceOffset = 0;
+            FirstPersonPacketTileSurfaceCursor tileCursor{};
         };
         static std::unordered_map<uint64_t, FirstPersonStaticPacketStaging>
             _staticRegionPacketBuilds;
@@ -4522,21 +4523,30 @@
                 }
             };
 
-            // A 32x32 packet is gathered in bounded, resumable tile slices.
+            // Resume by individual surface, not just by tile: a dense tile
+            // must never copy thousands of geometry/material faces in one
+            // uninterruptible invocation. Previous surfaces stay in staging.
             constexpr size_t kRegionTileCount = 32u * 32u;
             FirstPersonFrameBudget gatherBudget(
                 96, std::chrono::microseconds(700));
             while (!staging.progress.tilesDone(kRegionTileCount)
                    && gatherBudget.take())
             {
-                const size_t index = staging.progress.nextTile++;
+                const size_t index = staging.progress.nextTile;
                 const int32_t ty = y0 + int32_t(index / 32);
                 const int32_t tx = x0 + int32_t(index % 32);
                 const auto tileKey = TerrainKey(tx, ty);
                 const auto cacheIt = _staticPaintCache.find(tileKey);
+                const auto finishTile = [&] {
+                    staging.tileCursor.nextTile();
+                    ++staging.progress.nextTile;
+                };
                 if (cacheIt == _staticPaintCache.end()
                     || !cacheIt->second.valid || cacheIt->second.dirty)
+                {
+                    finishTile();
                     continue;
+                }
                 auto& cached = cacheIt->second;
                 if (cached.semanticResidentSurfaces.empty()
                     && (cached.animated
@@ -4545,125 +4555,106 @@
                                 [](const auto& variant) {
                                     return variant.valid && !variant.residentSurfaces.empty();
                                 }))))
+                {
+                    finishTile();
                     continue;
+                }
                 const bool mappedPathReady = FirstPersonLocalFlatPathReady(
                     { tx * kCoordsXYStep, ty * kCoordsXYStep });
                 const bool mappedWallReady = FirstPersonLocalPlainWallReady(
                     { tx * kCoordsXYStep, ty * kCoordsXYStep });
+                while (staging.tileCursor.phase < 6)
                 {
-                    for (const auto& surface :
-                         cached.semanticResidentSurfaces)
+                    const uint8_t phase = staging.tileCursor.phase;
+                    // Semantic moving parts are separately streamed. Animated
+                    // tiles retain only their resident semantic faces here.
+                    if (cached.animated && phase != 0)
                     {
-                        if ((mappedPathReady
-                            && surface.diagnosticSemanticRole
-                                == static_cast<uint8_t>(
-                                    FirstPersonPaintSemanticRole::pathDeck))
-                            || (mappedWallReady
-                                && surface.diagnosticSemanticRole
-                                    == static_cast<uint8_t>(
-                                        FirstPersonPaintSemanticRole::wall)))
-                            continue;
-                        if (IsReconstructedParkEntranceBody(
-                                surface, frame))
-                            continue;
-                        if (surface.gpuRegion != regionKey)
-                            continue;
-
-                        if (surface.diagnosticSemanticRole
-                                == static_cast<uint8_t>(
-                                    FirstPersonPaintSemanticRole::sign)
-                            && surface.reconstructionGroup != 0)
-                        {
-                            auto presented = surface;
-                            (void)PreserveParkEntranceSemanticSignPlane(
-                                presented, frame);
-                            addSurface(presented, true);
-                        }
-                        else
-                        {
-                            addSurface(surface, true);
-                        }
+                        staging.tileCursor.phase = 6;
+                        break;
                     }
-                }
-
-                if (cached.animated)
-                    continue;
-                for (const auto& surface :
-                     cached.cameraIndependentResidentSurfaces)
-                {
-                    if ((mappedPathReady
-                            && surface.diagnosticSemanticRole
-                                == static_cast<uint8_t>(
-                                    FirstPersonPaintSemanticRole::pathDeck))
-                            || (mappedWallReady
-                                && surface.diagnosticSemanticRole
-                                    == static_cast<uint8_t>(
-                                        FirstPersonPaintSemanticRole::wall)))
-                        continue;
-                    addSurface(surface, true);
-                }
-
-                for (uint8_t rotation = 0; rotation < 4; ++rotation)
-                {
-                    const auto& variant = cached.rotations[rotation];
-                    if (!variant.valid)
-                        continue;
-                    for (const auto& surface :
-                         variant.residentSurfaces)
+                    const std::vector<FirstPersonSurface>* surfaces = nullptr;
+                    if (phase == 0)
+                        surfaces = &cached.semanticResidentSurfaces;
+                    else if (phase == 1)
+                        surfaces = &cached.cameraIndependentResidentSurfaces;
+                    else if (cached.rotations[phase - 2].valid)
+                        surfaces = &cached.rotations[phase - 2].residentSurfaces;
+                    if (surfaces == nullptr)
                     {
-                        if ((mappedPathReady
-                            && surface.diagnosticSemanticRole
-                                == static_cast<uint8_t>(
-                                    FirstPersonPaintSemanticRole::pathDeck))
-                            || (mappedWallReady
-                                && surface.diagnosticSemanticRole
-                                    == static_cast<uint8_t>(
-                                        FirstPersonPaintSemanticRole::wall)))
-                            continue;
-                        if (IsReconstructedParkEntranceBody(
-                                surface, frame))
-                            continue;
-                        if (surface.reconstructionGroup != 0)
-                        {
-                            const auto trajectory =
-                                _trackTrajectoryCache.find(
-                                    surface.reconstructionGroup);
-                            if (trajectory != _trackTrajectoryCache.end()
-                                && !trajectory->second.dirty
-                                && !trajectory->second.surfaces.empty())
+                        staging.tileCursor.nextPhase();
+                        continue;
+                    }
+                    const bool consumed = ResumeFirstPersonPacketSurfaces(
+                        *surfaces, staging.tileCursor, gatherBudget,
+                        [&](const FirstPersonSurface& surface) {
+                            if ((mappedPathReady
+                                    && surface.diagnosticSemanticRole
+                                        == static_cast<uint8_t>(
+                                            FirstPersonPaintSemanticRole::pathDeck))
+                                || (mappedWallReady
+                                    && surface.diagnosticSemanticRole
+                                        == static_cast<uint8_t>(
+                                            FirstPersonPaintSemanticRole::wall)))
+                                return;
+                            if (phase == 0)
                             {
-                                // Trajectory-backed track is fully
-                                // camera-independent here. Its native
-                                // PaintStruct survives only as artwork evidence
-                                // and must not enter the fallback source-view
-                                // dependency set.
-                                continue;
+                                if (IsReconstructedParkEntranceBody(surface, frame)
+                                    || surface.gpuRegion != regionKey)
+                                    return;
+                                if (surface.diagnosticSemanticRole
+                                        == static_cast<uint8_t>(
+                                            FirstPersonPaintSemanticRole::sign)
+                                    && surface.reconstructionGroup != 0)
+                                {
+                                    auto presented = surface;
+                                    (void)PreserveParkEntranceSemanticSignPlane(
+                                        presented, frame);
+                                    addSurface(presented, true);
+                                }
+                                else
+                                    addSurface(surface, true);
+                                return;
                             }
-                        }
-
-                        uint8_t selected =
-                            cached.selectedRotation;
-                        if (surface.reconstructionGroup != 0)
-                        {
-                            reconstructionDependencies.insert(
-                                surface.reconstructionGroup);
-                            const auto group =
-                                _reconstructionRotations.find(
+                            if (phase == 1)
+                            {
+                                addSurface(surface, true);
+                                return;
+                            }
+                            if (IsReconstructedParkEntranceBody(surface, frame))
+                                return;
+                            if (surface.reconstructionGroup != 0)
+                            {
+                                const auto trajectory = _trackTrajectoryCache.find(
                                     surface.reconstructionGroup);
-                            const uint8_t captured =
-                                group != _reconstructionRotations.end()
-                                    && group->second.hasSelectedRotation
-                                ? group->second.selectedRotation : 0xffu;
-                            staging.selectedGroups.emplace(
-                                surface.reconstructionGroup, captured);
-                            selected = FirstPersonAvailableSourceRotation(
-                                cached, captured);
-                        }
-                        if (selected != rotation)
-                            continue;
-                        addSurface(surface, true);
-                    }
+                                if (trajectory != _trackTrajectoryCache.end()
+                                    && !trajectory->second.dirty
+                                    && !trajectory->second.surfaces.empty())
+                                    return;
+                            }
+                            uint8_t selected = cached.selectedRotation;
+                            if (surface.reconstructionGroup != 0)
+                            {
+                                reconstructionDependencies.insert(
+                                    surface.reconstructionGroup);
+                                const auto group = _reconstructionRotations.find(
+                                    surface.reconstructionGroup);
+                                const uint8_t captured =
+                                    group != _reconstructionRotations.end()
+                                        && group->second.hasSelectedRotation
+                                    ? group->second.selectedRotation : 0xffu;
+                                staging.selectedGroups.emplace(
+                                    surface.reconstructionGroup, captured);
+                                selected = FirstPersonAvailableSourceRotation(
+                                    cached, captured);
+                            }
+                            if (selected == phase - 2)
+                                addSurface(surface, true);
+                        });
+                    if (!consumed)
+                        return false;
                 }
+                finishTile();
             }
 
             if (!staging.progress.tilesDone(kRegionTileCount))
