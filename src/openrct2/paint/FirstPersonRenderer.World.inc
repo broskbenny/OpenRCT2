@@ -4277,6 +4277,7 @@
             });
         }
 
+        constexpr int32_t kFPCell = kFirstPersonConnectedRegionTiles;
         // Build in a private packet. Only completed, current generations are
         // published; the previous immutable GPU packet stays drawable.
         struct FirstPersonStaticPacketStaging
@@ -4332,7 +4333,7 @@
         static uint64_t _nextStaticPacketBuildToken = 0;
         // Native artwork arrival is not an authoritative map edit. Keep a
         // separate serial so new snapshots can be reconciled AFTER a staged
-        // region completes instead of restarting its 1024-tile traversal.
+        // cell completes instead of restarting its tile traversal.
         static std::unordered_map<uint64_t, uint64_t>
             _authoritativeRegionEditSerials;
         [[nodiscard]] uint64_t FirstPersonRegionMapEditSerial(uint64_t key)
@@ -4347,7 +4348,8 @@
             const int32_t ry = int32_t(uint32_t(regionKey)) - 1;
             constexpr std::array<std::array<int32_t, 2>, 5>
                 affected{ { { 0, 0 }, { -1, 0 }, { 1, 0 },
-                    { 0, -1 }, { 0, 1 } } };
+                    { 0, -1 }, { 0, 1 }, { -1, -1 }, { -1, 1 },
+                    { 1, -1 }, { 1, 1 } } };
             for (const auto& offset : affected)
             {
                 const int32_t x = rx + offset[0];
@@ -4355,7 +4357,7 @@
                 if (x < 0 || y < 0)
                     continue;
                 ++_authoritativeRegionEditSerials[
-                    FirstPersonGpuRegionKey(x * 32, y * 32)];
+                    FirstPersonGpuRegionKey(x * kFPCell, y * kFPCell)];
             }
         }
         static uint64_t _staticPacketSourceRestarts = 0;
@@ -4444,10 +4446,10 @@
 
             const int32_t regionX = int32_t(uint32_t(regionKey >> 32)) - 1;
             const int32_t regionY = int32_t(uint32_t(regionKey & 0xffffffffu)) - 1;
-            const int32_t x0 = regionX * 32;
-            const int32_t y0 = regionY * 32;
-            const int32_t x1 = x0 + 32;
-            const int32_t y1 = y0 + 32;
+            const int32_t x0 = regionX * kFPCell;
+            const int32_t y0 = regionY * kFPCell;
+            const int32_t x1 = x0 + kFPCell;
+            const int32_t y1 = y0 + kFPCell;
 
             auto addSurface = [&](const FirstPersonSurface& surface, bool tileSource = false) {
                 if (!IsResidentStaticSurface(surface) || surface.gpuRegion != regionKey)
@@ -4520,15 +4522,15 @@
             // Resume by individual surface, not just by tile: a dense tile
             // must never copy thousands of geometry/material faces in one
             // uninterruptible invocation. Previous surfaces stay in staging.
-            constexpr size_t kRegionTileCount = 32u * 32u;
+            constexpr size_t kRegionTileCount = kFPCell * kFPCell;
             FirstPersonFrameBudget gatherBudget(
                 8192, std::chrono::microseconds(700));
             while (!staging.progress.tilesDone(kRegionTileCount)
                    && gatherBudget.take())
             {
                 const size_t index = staging.progress.nextTile;
-                const int32_t ty = y0 + int32_t(index / 32);
-                const int32_t tx = x0 + int32_t(index % 32);
+                const int32_t ty = y0 + int32_t(index / kFPCell);
+                const int32_t tx = x0 + int32_t(index % kFPCell);
                 const auto tileKey = TerrainKey(tx, ty);
                 const auto cacheIt = _staticPaintCache.find(tileKey);
                 const auto finishTile = [&] {
@@ -4842,19 +4844,18 @@
                     relationshipContext.emplace_back(std::move(geometry));
                 };
 
-            // The original perimeter is four strips of 32 non-corner tiles.
+            // The perimeter has four strips plus diagonal corner tiles.
             // Finish one cached tile's resident surfaces before advancing,
             // and yield between individual surfaces when the budget expires.
-            while (staging.relationshipTile < 128)
+            while (staging.relationshipTile < size_t(4 * kFPCell + 4))
             {
-                const size_t offset = staging.relationshipTile % 32;
-                const size_t side = staging.relationshipTile / 32;
-                const int32_t tx = side < 2
-                    ? x0 + int32_t(offset)
-                    : (side == 2 ? x0 - 1 : x1);
-                const int32_t ty = side >= 2
-                    ? y0 + int32_t(offset)
-                    : (side == 0 ? y0 - 1 : y1);
+                const size_t index = staging.relationshipTile;
+                const size_t offset = index % kFPCell;
+                const size_t side = index / kFPCell;
+                const int32_t tx = side >= 4 ? ((side - 4) & 1 ? x1 : x0 - 1)
+                    : (side < 2 ? x0 + int32_t(offset) : (side == 2 ? x0 - 1 : x1));
+                const int32_t ty = side >= 4 ? ((side - 4) & 2 ? y1 : y0 - 1)
+                    : (side >= 2 ? y0 + int32_t(offset) : (side == 0 ? y0 - 1 : y1));
                 if (tx >= 0 && ty >= 0)
                 {
                     const auto cache = _staticPaintCache.find(TerrainKey(tx, ty));
@@ -4880,9 +4881,10 @@
 
             if (!staging.neighbourSourcesInitialized)
             {
-                constexpr std::array<std::array<int32_t, 2>, 4>
+                constexpr std::array<std::array<int32_t, 2>, 8>
                     kOffsets{ {
                         { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 },
+                        { -1, -1 }, { -1, 1 }, { 1, -1 }, { 1, 1 },
                     } };
                 for (const auto& offset : kOffsets)
                 {
@@ -4891,7 +4893,7 @@
                     if (nx < 0 || ny < 0)
                         continue;
                     const uint64_t neighbourRegion =
-                        FirstPersonGpuRegionKey(nx * 32, ny * 32);
+                        FirstPersonGpuRegionKey(nx * kFPCell, ny * kFPCell);
                     const auto appendGroups =
                         [&](const auto& index, uint8_t kind) {
                             const auto found = index.find(neighbourRegion);
@@ -6244,11 +6246,11 @@
                         static_cast<long long>(buildUs), rebuildCandidates.size(),
                         complete ? 1 : 0,
                         complete ? 5u
-                            : unsigned(_staticRegionPacketBuilds[candidate.key].progress.nextTile < 1024
+                            : unsigned(_staticRegionPacketBuilds[candidate.key].progress.nextTile < kFPCell * kFPCell
                                 ? 0u : !_staticRegionPacketBuilds[candidate.key].progress.groupsAdded
                                     ? 1u : !_staticRegionPacketBuilds[candidate.key].progress.relationshipsResolved
                                         ? 2u : 3u),
-                        complete ? size_t(1024) : _staticRegionPacketBuilds[candidate.key].progress.nextTile,
+                        complete ? size_t(kFPCell * kFPCell) : _staticRegionPacketBuilds[candidate.key].progress.nextTile,
                         static_cast<unsigned long long>(_staticPacketSourceRestarts),
                         static_cast<unsigned long long>(_staticPacketSelectionRestarts));
                 }

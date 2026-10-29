@@ -134,16 +134,17 @@ namespace OpenRCT2::Paint
         FirstPersonVec3 world{};
         float u{}, v{}; // Image pixel coordinates, not normalised or atlas coordinates.
     };
-    // Partition world-fixed geometry into 32 x 32 source-map tiles.
-    // This bounds per-turn region membership churn and per-edit VBO uploads.
+    // Independently publish connected static geometry in coherent 8x8 cells.
+    // Cross-cell interfaces are resolved using neighbouring geometry.
     // Zero means dynamic or camera-oriented geometry; it is always streamed.
-    // Reserve zero even for the origin region by adding one to both axes.
+    // Reserve zero even at the origin by adding one to both axes.
+    inline constexpr int32_t kFirstPersonConnectedRegionTiles = 8;
     [[nodiscard]] constexpr uint64_t FirstPersonGpuRegionKey(int32_t tileX, int32_t tileY)
     {
-        return (uint64_t(uint32_t(tileX / 32 + 1)) << 32) | uint32_t(tileY / 32 + 1);
+        return (uint64_t(uint32_t(tileX / kFirstPersonConnectedRegionTiles + 1)) << 32) | uint32_t(tileY / kFirstPersonConnectedRegionTiles + 1);
     }
     // Terrain has its own 8x8 GPU residency units, independent of the
-    // 32x32 reconstructed-scenery packets. The high bit keeps key spaces
+    // 8x8 connected-scenery packets. The high bit keeps key spaces
     // disjoint while retaining the existing immutable-region upload path.
     [[nodiscard]] constexpr uint64_t FirstPersonTerrainRegionKey(int32_t tileX, int32_t tileY)
     {
@@ -153,7 +154,7 @@ namespace OpenRCT2::Paint
     }
     // Safe tile-local static scenery uses independent 8x8 GPU packets.
     // 0b01 in the top bits distinguishes these keys from both regular
-    // 32x32 scenery (0b00) and independent terrain (0b10).
+    // connected scenery (0b00) and independent terrain (0b10).
     [[nodiscard]] constexpr uint64_t FirstPersonLocalSceneryRegionKey(int32_t tileX, int32_t tileY)
     {
         return (1ull << 62)

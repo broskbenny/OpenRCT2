@@ -1718,7 +1718,7 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
         static std::unordered_map<uint64_t, std::unordered_set<uint64_t>>
             _trackTrajectoryGroupsByRegion;
         // Spatial candidate index for invalidation. Unlike the surface-region
-        // map above, this covers every 32x32 region touched by the trajectory's
+        // map above, this covers every connected cell touched by the trajectory's
         // exact cached tile bounds.
         static std::unordered_map<uint64_t, std::unordered_set<uint64_t>>
             _trackTrajectoryGroupsByBoundsRegion;
@@ -1803,17 +1803,18 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
         {
             if (maxTileX < minTileX || maxTileY < minTileY)
                 return;
-            const int32_t minRegionX = minTileX / 32;
-            const int32_t minRegionY = minTileY / 32;
-            const int32_t maxRegionX = maxTileX / 32;
-            const int32_t maxRegionY = maxTileY / 32;
+            const int32_t minRegionX = minTileX / kFirstPersonConnectedRegionTiles;
+            const int32_t minRegionY = minTileY / kFirstPersonConnectedRegionTiles;
+            const int32_t maxRegionX = maxTileX / kFirstPersonConnectedRegionTiles;
+            const int32_t maxRegionY = maxTileY / kFirstPersonConnectedRegionTiles;
             for (int32_t regionY = minRegionY;
                  regionY <= maxRegionY; ++regionY)
             for (int32_t regionX = minRegionX;
                  regionX <= maxRegionX; ++regionX)
             {
                 visit(FirstPersonGpuRegionKey(
-                    regionX * 32, regionY * 32));
+                    regionX * kFirstPersonConnectedRegionTiles,
+                    regionY * kFirstPersonConnectedRegionTiles));
             }
         }
 
@@ -5912,8 +5913,8 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                 int32_t(uint32_t(regionKey)) - 1;
             constexpr std::array<std::array<int32_t, 2>, 4>
                 offsets{ {
-                    { -1, 0 }, { 1, 0 },
-                    { 0, -1 }, { 0, 1 },
+                    { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 },
+                    { -1, -1 }, { -1, 1 }, { 1, -1 }, { 1, 1 },
                 } };
             for (const auto& offset : offsets)
             {
@@ -5922,7 +5923,8 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                 if (x < 0 || y < 0)
                     continue;
                 MarkStaticRegionPacketDirty(FirstPersonGpuRegionKey(
-                        x * 32, y * 32));
+                        x * kFirstPersonConnectedRegionTiles,
+                            y * kFirstPersonConnectedRegionTiles));
             }
         }
 
@@ -5937,27 +5939,31 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
             MarkStaticRegionPacketDirty(regionKey);
             MarkLocalSceneryDirtyForTile(tileX, tileY);
 
-            const int32_t localX =
-                ((tileX % 32) + 32) % 32;
-            const int32_t localY =
-                ((tileY % 32) + 32) % 32;
-            const int32_t regionX = tileX / 32;
-            const int32_t regionY = tileY / 32;
+            constexpr int32_t kCell = kFirstPersonConnectedRegionTiles;
+            const int32_t localX = ((tileX % kCell) + kCell) % kCell;
+            const int32_t localY = ((tileY % kCell) + kCell) % kCell;
+            const int32_t regionX = tileX / kCell;
+            const int32_t regionY = tileY / kCell;
             const auto dirty =
                 [&](int32_t x, int32_t y) {
                     if (x < 0 || y < 0)
                         return;
                     MarkStaticRegionPacketDirty(FirstPersonGpuRegionKey(
-                            x * 32, y * 32));
+                            x * kFirstPersonConnectedRegionTiles,
+                            y * kFirstPersonConnectedRegionTiles));
                 };
             if (localX == 0)
                 dirty(regionX - 1, regionY);
-            if (localX == 31)
+            if (localX == kCell - 1)
                 dirty(regionX + 1, regionY);
             if (localY == 0)
                 dirty(regionX, regionY - 1);
-            if (localY == 31)
+            if (localY == kCell - 1)
                 dirty(regionX, regionY + 1);
+            if (localX == 0 && localY == 0) dirty(regionX - 1, regionY - 1);
+            if (localX == 0 && localY == kCell - 1) dirty(regionX - 1, regionY + 1);
+            if (localX == kCell - 1 && localY == 0) dirty(regionX + 1, regionY - 1);
+            if (localX == kCell - 1 && localY == kCell - 1) dirty(regionX + 1, regionY + 1);
         }
 
         void MarkTrackTrajectoryRegionsDirty(
