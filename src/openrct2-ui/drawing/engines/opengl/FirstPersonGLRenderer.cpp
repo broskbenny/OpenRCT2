@@ -898,9 +898,10 @@ void main() {
             std::vector<GPUVertex>& vertices,
             const Paint::FirstPersonSurface& surface,
             bool forceCoplanarOwner = false,
-            bool suppressCoplanarOwner = false) {
+            bool suppressCoplanarOwner = false,
+            bool materialAlreadyPrepared = false) {
             const auto image=surface.image;
-            if (!prepareMaterial(surface)) return false;
+            if (!materialAlreadyPrepared && !prepareMaterial(surface)) return false;
             const auto* g1 =
                 surface.solidColour == 0
                     && (!surface.hasImmutablePixelData()
@@ -1258,7 +1259,7 @@ void main() {
             {
                 auto& pending = *_pendingRegion;
                 std::vector<GPUVertex> packed;
-                packed.reserve(384);
+                packed.reserve(2112);
                 const auto flush = [&] {
                     if (packed.empty()) return;
                     glCall(glBindBuffer, GL_ARRAY_BUFFER, pending.buffer.vbo);
@@ -1310,7 +1311,7 @@ void main() {
                             break;
                         }
                         if (!appendVertices(
-                                packed, surface))
+                                packed, surface, false, false, true))
                         {
                             --pending.nextSurface;
                             break;
@@ -1329,7 +1330,7 @@ void main() {
                                 6 * sizeof(GPUVertex)))
                             break;
                         if (!appendVertices(
-                                packed, surface, true, false))
+                                packed, surface, true, false, true))
                             break;
                         if (!surface.exteriorOnly
                             && surface.diagnosticSemanticRole
@@ -1346,7 +1347,9 @@ void main() {
                         }
                     }
 
-                    if (packed.size() >= 384)
+                    // Fewer, larger contiguous submissions avoid thousands
+                    // of tiny GL buffer updates for dense static regions.
+                    if (packed.size() >= 2048)
                         flush();
                 }
                 flush();
