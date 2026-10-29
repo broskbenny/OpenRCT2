@@ -345,11 +345,13 @@ namespace OpenRCT2::Paint
     {
         uint64_t key{};
         bool hasPublishedGeometry = false;
+        bool hasStagedWork = false;
         double distanceSquared = 0.0;
     };
 
     [[nodiscard]] inline FirstPersonStaticRegionRebuildCandidate MakeFirstPersonStaticRegionRebuildCandidate(
-        uint64_t regionKey, bool hasPublishedGeometry, FirstPersonVec3 eye)
+        uint64_t regionKey, bool hasPublishedGeometry, FirstPersonVec3 eye,
+        bool hasStagedWork = false)
     {
         // GPU region coordinates are biased by one and span 32x32 map tiles.
         const int64_t regionX = int64_t(uint32_t(regionKey >> 32)) - 1;
@@ -358,7 +360,7 @@ namespace OpenRCT2::Paint
         const double centerY = double(regionY * 32 + 16) * 32.0;
         const double dx = centerX - double(eye.x);
         const double dy = centerY - double(eye.y);
-        return { regionKey, hasPublishedGeometry, dx * dx + dy * dy };
+        return { regionKey, hasPublishedGeometry, hasStagedWork, dx * dx + dy * dy };
     }
 
     [[nodiscard]] inline bool FirstPersonStaticRegionRebuildBefore(
@@ -367,6 +369,10 @@ namespace OpenRCT2::Paint
     {
         if (a.hasPublishedGeometry != b.hasPublishedGeometry)
             return !a.hasPublishedGeometry;
+        // Finish partially assembled invisible packets before starting yet
+        // another 1024-tile scan. Existing published packets stay drawable.
+        if (!a.hasPublishedGeometry && a.hasStagedWork != b.hasStagedWork)
+            return a.hasStagedWork;
         if (a.distanceSquared != b.distanceSquared)
             return a.distanceSquared < b.distanceSquared;
         return a.key < b.key;
