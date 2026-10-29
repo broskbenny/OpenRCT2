@@ -95,6 +95,7 @@
             bool paintBlockedMode = false;
             bool paintWideGhostMode = false;
             size_t nextTile = 0;
+            FirstPersonPacketTileSurfaceCursor tileCursor{};
             std::array<uint64_t, 64> sourceSignatures{};
             std::vector<FirstPersonSurface> surfaces;
             std::vector<ImageIndex> dependencies;
@@ -351,7 +352,7 @@
                     return a < b;
                 });
             FirstPersonFrameBudget budget(4, std::chrono::microseconds(1200));
-            FirstPersonFrameBudget tileBudget(256, std::chrono::microseconds(1200));
+            FirstPersonFrameBudget tileBudget(8192, std::chrono::microseconds(1200));
             for (const auto& [distance, key] : rebuild)
             {
                 (void)distance;
@@ -446,16 +447,18 @@
                 const auto previousCell = _localSceneryPackets.find(key);
                 while (staging.nextTile < 64 && tileBudget.take())
                 {
-                    const size_t cellIndex = staging.nextTile++;
+                    const size_t cellIndex = staging.nextTile;
                     const int32_t tx = rx * 8 + int32_t(cellIndex % 8);
                     const int32_t ty = ry * 8 + int32_t(cellIndex / 8);
                     // Capture exact map provenance: source edits during
                     // staging must never publish a hybrid 8x8 tile snapshot.
                     const CoordsXY mapTile{tx * kCoordsXYStep, ty * kCoordsXYStep};
                     const bool validMapTile = MapIsLocationValid(mapTile);
-                    staging.sourceSignatures[cellIndex] =
-                        validMapTile ? NativeTileSignature(mapTile) : 0;
                     const uint64_t owningRegion = FirstPersonGpuRegionKey(tx, ty);
+                    if (staging.tileCursor.phase == 0)
+                    {
+                        staging.sourceSignatures[cellIndex] =
+                            validMapTile ? NativeTileSignature(mapTile) : 0;
                     if (validMapTile)
                     {
                         auto* element = MapGetFirstElementAt(mapTile);
@@ -553,29 +556,50 @@
                             ++elementIndex;
                         } while (!(element++)->isLastForTile());
                     }
+                        staging.tileCursor.nextPhase();
+                    }
                     const auto it = _staticPaintCache.find(TerrainKey(tx, ty));
-                    if (it == _staticPaintCache.end())
-                        continue;
-                    if (it->second.dirty)
+                    if (it == _staticPaintCache.end()
+                        || !it->second.valid || it->second.dirty)
                     {
-                        waitingForSourceRevalidation = true;
+                        if (it != _staticPaintCache.end() && it->second.dirty)
+                            waitingForSourceRevalidation = true;
+                        staging.tileCursor.nextTile();
+                        ++staging.nextTile;
                         continue;
                     }
-                    if (!it->second.valid)
-                        continue;
                     const auto& cached = it->second;
-                    for (const auto& source : cached.semanticResidentSurfaces)
-                        add(source, owningRegion);
-                    if (cached.animated)
-                        continue;
-                    for (const auto& source : cached.cameraIndependentResidentSurfaces)
-                        add(source, owningRegion);
-                    const uint8_t rotation = cached.selectedRotation;
-                    if (rotation < cached.rotations.size()
-                        && cached.rotations[rotation].valid)
-                        for (const auto& source :
-                             cached.rotations[rotation].residentSurfaces)
-                            add(source, owningRegion);
+                    while (staging.tileCursor.phase <= 3)
+                    {
+                        const uint8_t phase = staging.tileCursor.phase;
+                        const std::vector<FirstPersonSurface>* source = nullptr;
+                        if (phase == 1)
+                            source = &cached.semanticResidentSurfaces;
+                        else if (phase == 2 && !cached.animated)
+                            source = &cached.cameraIndependentResidentSurfaces;
+                        else if (phase == 3 && !cached.animated)
+                        {
+                            const uint8_t rotation = cached.selectedRotation;
+                            if (rotation < cached.rotations.size()
+                                && cached.rotations[rotation].valid)
+                                source = &cached.rotations[rotation].residentSurfaces;
+                        }
+                        if (source == nullptr)
+                        {
+                            staging.tileCursor.nextPhase();
+                            continue;
+                        }
+                        if (!ResumeFirstPersonPacketSurfaces(
+                                *source, staging.tileCursor, tileBudget,
+                                [&](const FirstPersonSurface& surface) {
+                                    add(surface, owningRegion);
+                                }))
+                            break;
+                    }
+                    if (staging.tileCursor.phase <= 3)
+                        break;
+                    staging.tileCursor.nextTile();
+                    ++staging.nextTile;
                 }
                 if (staging.nextTile != 64)
                     continue;
