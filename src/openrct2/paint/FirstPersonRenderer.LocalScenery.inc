@@ -219,32 +219,6 @@
         // A placement key also includes authoritative object identity and
         // elevation. Reusing the same tile-element slot for another asset
         // must never inherit the previous object's published mesh.
-        [[nodiscard]] uint64_t FirstPersonLocalSmallSceneryInstanceKey(
-            int32_t tx, int32_t ty, uint32_t index,
-            const SmallSceneryElement& small)
-        {
-            uint64_t key = 14695981039346656037ull;
-            ExtendStableKey(key, uint32_t(tx));
-            ExtendStableKey(key, uint32_t(ty));
-            ExtendStableKey(key, index);
-            ExtendStableKey(key, uint32_t(small.getEntryIndex()));
-            ExtendStableKey(key, uint32_t(small.getBaseZ()));
-            // Last-known-good ownership is legal only for the exact
-            // authoritative pose and appearance. Reusing a tile-element
-            // slot after rotation, recolouring or withering cannot inherit
-            // the preceding mesh while another asset job is pending.
-            ExtendStableKey(key, uint32_t(small.getDirection()));
-            ExtendStableKey(key, uint32_t(small.getSceneryQuadrant()));
-            ExtendStableKey(key, uint32_t(small.getOccupiedQuadrants()));
-            if (const auto* entry = small.getEntry(); entry != nullptr)
-                ExtendStableKey(key,
-                    FirstPersonSmallSceneryWitherStage(*entry, small));
-            ExtendStableKey(key, uint32_t(small.getPrimaryColour()));
-            ExtendStableKey(key, uint32_t(small.getSecondaryColour()));
-            ExtendStableKey(key, uint32_t(small.getTertiaryColour()));
-            return key == 0 ? 1 : key;
-        }
-
         // An asset worker becoming ready is not a GPU publication.
         // Native fallback is retired only after the exact authoritative
         // instance has entered an immutable local-cell packet. A changed
@@ -273,6 +247,32 @@
                 ++index;
             } while (!(element++)->isLastForTile());
             return false;
+        }
+
+        [[nodiscard]] uint64_t FirstPersonLocalSmallSceneryInstanceKey(
+            int32_t tx, int32_t ty, uint32_t index,
+            const SmallSceneryElement& small)
+        {
+            uint64_t key = 14695981039346656037ull;
+            ExtendStableKey(key, uint32_t(tx));
+            ExtendStableKey(key, uint32_t(ty));
+            ExtendStableKey(key, index);
+            ExtendStableKey(key, uint32_t(small.getEntryIndex()));
+            ExtendStableKey(key, uint32_t(small.getBaseZ()));
+            // Last-known-good ownership is legal only for the exact
+            // authoritative pose and appearance. Reusing a tile-element
+            // slot after rotation, recolouring or withering cannot inherit
+            // the preceding mesh while another asset job is pending.
+            ExtendStableKey(key, uint32_t(small.getDirection()));
+            ExtendStableKey(key, uint32_t(small.getSceneryQuadrant()));
+            ExtendStableKey(key, uint32_t(small.getOccupiedQuadrants()));
+            if (const auto* entry = small.getEntry(); entry != nullptr)
+                ExtendStableKey(key,
+                    FirstPersonSmallSceneryWitherStage(*entry, small));
+            ExtendStableKey(key, uint32_t(small.getPrimaryColour()));
+            ExtendStableKey(key, uint32_t(small.getSecondaryColour()));
+            ExtendStableKey(key, uint32_t(small.getTertiaryColour()));
+            return key == 0 ? 1 : key;
         }
 
         void SubmitVisibleLocalSceneryRegions(
