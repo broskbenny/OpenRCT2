@@ -328,16 +328,37 @@
                     break;
                 const int32_t rx = int32_t(uint32_t((key >> 32) & 0x3fffffffu)) - 1;
                 const int32_t ry = int32_t(uint32_t(key)) - 1;
-                std::vector<FirstPersonSurface> surfaces;
-                surfaces.reserve(64);
-                std::vector<ImageIndex> dependencies;
-                FirstPersonVec3 low{}, high{};
-                bool haveBounds = false;
-                bool waitingForSourceRevalidation = false;
-                bool containsNativeSource = false;
-                std::unordered_set<uint64_t> mapOwnedNativeKeys;
-                std::unordered_set<uint64_t> mappedPathTiles;
-                std::unordered_set<uint64_t> mappedWallTiles;
+                auto& oldPacket = _localSceneryPackets[key];
+                auto& staging = _localSceneryBuilds[key];
+                if (!staging.initialized || staging.epoch != _sceneEpoch
+                    || staging.selectionGeneration != oldPacket.selectionGeneration
+                    || staging.viewFlags != scene.options.viewFlags
+                    || staging.trackDesignSaveMode != gTrackDesignSaveMode
+                    || staging.paintBlockedMode != gPaintBlockedTiles
+                    || staging.paintWideGhostMode != gPaintWidePathsAsGhost)
+                {
+                    staging = {};
+                    staging.initialized = true;
+                    staging.epoch = _sceneEpoch;
+                    staging.selectionGeneration = oldPacket.selectionGeneration;
+                    staging.sourceInvalidationSerial = oldPacket.invalidationSerial;
+                    staging.viewFlags = scene.options.viewFlags;
+                    staging.trackDesignSaveMode = gTrackDesignSaveMode;
+                    staging.paintBlockedMode = gPaintBlockedTiles;
+                    staging.paintWideGhostMode = gPaintWidePathsAsGhost;
+                    staging.surfaces.reserve(64);
+                }
+                staging.lastVisibleFrame = _terrainCache.frame;
+                auto& surfaces = staging.surfaces;
+                auto& dependencies = staging.dependencies;
+                auto& low = staging.low;
+                auto& high = staging.high;
+                auto& haveBounds = staging.haveBounds;
+                auto& waitingForSourceRevalidation = staging.waitingForSourceRevalidation;
+                auto& containsNativeSource = staging.containsNativeSource;
+                auto& mapOwnedNativeKeys = staging.mapOwnedNativeKeys;
+                auto& mappedPathTiles = staging.mappedPathTiles;
+                auto& mappedWallTiles = staging.mappedWallTiles;
 
                 const auto add = [&](const FirstPersonSurface& source,
                                      uint64_t owningRegion, bool mapOwned = false) {
@@ -392,13 +413,19 @@
 
                 std::vector<FirstPersonSurface> mapSurfaces;
                 const auto previousCell = _localSceneryPackets.find(key);
-                for (int32_t ty = ry * 8; ty < (ry + 1) * 8; ++ty)
-                for (int32_t tx = rx * 8; tx < (rx + 1) * 8; ++tx)
+                while (staging.nextTile < 64 && tileBudget.take())
                 {
-                    // Instantiate ready assets from the authoritative map.
+                    const size_t cellIndex = staging.nextTile++;
+                    const int32_t tx = rx * 8 + int32_t(cellIndex % 8);
+                    const int32_t ty = ry * 8 + int32_t(cellIndex / 8);
+                    // Capture exact map provenance: source edits during
+                    // staging must never publish a hybrid 8x8 tile snapshot.
                     const CoordsXY mapTile{tx * kCoordsXYStep, ty * kCoordsXYStep};
+                    const bool validMapTile = MapIsLocationValid(mapTile);
+                    staging.sourceSignatures[cellIndex] =
+                        validMapTile ? NativeTileSignature(mapTile) : 0;
                     const uint64_t owningRegion = FirstPersonGpuRegionKey(tx, ty);
-                    if (MapIsLocationValid(mapTile))
+                    if (validMapTile)
                     {
                         auto* element = MapGetFirstElementAt(mapTile);
                         uint32_t elementIndex = 0;
@@ -519,6 +546,30 @@
                              cached.rotations[rotation].residentSurfaces)
                             add(source, owningRegion);
                 }
+                if (staging.nextTile != 64)
+                    continue;
+                bool editedDuringBuild = false;
+                for (size_t index = 0; index < 64; ++index)
+                {
+                    const CoordsXY tile{
+                        (rx * 8 + int32_t(index % 8)) * kCoordsXYStep,
+                        (ry * 8 + int32_t(index / 8)) * kCoordsXYStep
+                    };
+                    const uint64_t liveSignature = MapIsLocationValid(tile)
+                        ? NativeTileSignature(tile) : 0;
+                    if (liveSignature != staging.sourceSignatures[index])
+                    {
+                        editedDuringBuild = true;
+                        break;
+                    }
+                }
+                if (editedDuringBuild)
+                {
+                    // Retain the previous immutable cell. A true edit requires
+                    // a fresh coherent snapshot, not a mixed-generation cell.
+                    _localSceneryBuilds.erase(key);
+                    continue;
+                }
                 // Preserve warm native-owned faces during source revalidation.
                 const auto current = _localSceneryPackets.find(key);
                 if (waitingForSourceRevalidation
@@ -526,7 +577,10 @@
                     && current->second.surfaces
                     && !current->second.surfaces->empty()
                     && current->second.containsNativeSource)
+                {
+                    _localSceneryBuilds.erase(key);
                     continue;
+                }
                 std::sort(dependencies.begin(), dependencies.end());
                 dependencies.erase(
                     std::unique(dependencies.begin(), dependencies.end()),
@@ -563,7 +617,8 @@
                     packet.containsNativeSource = containsNativeSource;
                     packet.mappedPathTiles = std::move(mappedPathTiles);
                     packet.mappedWallTiles = std::move(mappedWallTiles);
-                    packet.dirty = false;
+                    packet.dirty = packet.invalidationSerial != staging.sourceInvalidationSerial;
+                    _localSceneryBuilds.erase(key);
                     continue;
                 }
                 packet.fingerprint = fingerprint;
@@ -592,7 +647,8 @@
                     packet.radius = 0.0f;
                 }
                 ++packet.generation;
-                packet.dirty = false;
+                packet.dirty = packet.invalidationSerial != staging.sourceInvalidationSerial;
+                _localSceneryBuilds.erase(key);
             }
 
             // Visible cells are discovered in an unordered set. Their GPU
