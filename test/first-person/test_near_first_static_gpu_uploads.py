@@ -36,6 +36,33 @@ class NearFirstStaticGpuUploadsTest(unittest.TestCase):
         self.assertNotIn("regionDraws.push_back(packet.key);",
                          source[upload_loop:draw_loop])
 
+    def test_static_upload_batched_without_duplicate_material_admission(self):
+        source = GL.read_text(encoding="utf-8")
+        self.assertIn("bool materialAlreadyPrepared = false", source)
+        self.assertIn("if (!materialAlreadyPrepared && !prepareMaterial(surface))", source)
+        region = source[source.index("if (_pendingRegion && _pendingRegion->key == packet.key)"):
+                        source.index("// Preserve the deterministic CPU region order", 
+                                     source.index("if (_pendingRegion && _pendingRegion->key == packet.key)"))]
+        self.assertIn("packed.reserve(2112);", region)
+        self.assertIn("if (packed.size() >= 2048)", region)
+        self.assertIn("packed, surface, false, false, true", region)
+        self.assertIn("packed, surface, true, false, true", region)
+        self.assertIn("if (!prepareMaterial(surface))", region)
+        self.assertIn("6 * sizeof(GPUVertex)", region)
+        self.assertIn("pending.uploadedVertices += packed.size();", region)
+        # Every six-vertex face is submitted exactly once irrespective
+        # of the maximum buffer batch size or a partial frame upload.
+        for face_count in (1, 63, 100, 1001, 62000):
+            batch = []
+            batches = []
+            for i in range(face_count):
+                batch.extend(range(6*i, 6*i+6))
+                if len(batch) >= 2048:
+                    batches.extend(batch)
+                    batch.clear()
+            batches.extend(batch)
+            self.assertEqual(batches, list(range(face_count*6)))
+
     def test_camera_moves_reorder_admission_not_equal_depth_draw_ownership(self):
         rng = random.Random(20261021)
         for _ in range(20000):
