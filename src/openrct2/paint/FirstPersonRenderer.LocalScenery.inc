@@ -311,6 +311,37 @@
                 const float dy = float(ry * 8 * kCoordsXYStep + 4 * kCoordsXYStep) - frustum.eye.y;
                 rebuild.emplace_back(dx * dx + dy * dy, key);
             }
+            // A camera turn must not keep an unbounded number of partial
+            // 8x8 snapshots alive. Retain a few recent ones for return turns.
+            constexpr uint64_t kLocalBuildGrace = 120;
+            constexpr size_t kPausedLocalBuildLimit = 8;
+            std::vector<std::pair<uint64_t, uint64_t>> pausedLocalBuilds;
+            for (auto it = _localSceneryBuilds.begin();
+                 it != _localSceneryBuilds.end();)
+            {
+                if (visible.contains(it->first))
+                {
+                    it->second.lastVisibleFrame = _terrainCache.frame;
+                    ++it;
+                }
+                else if (_terrainCache.frame - it->second.lastVisibleFrame
+                         > kLocalBuildGrace)
+                    it = _localSceneryBuilds.erase(it);
+                else
+                {
+                    pausedLocalBuilds.emplace_back(
+                        it->second.lastVisibleFrame, it->first);
+                    ++it;
+                }
+            }
+            std::sort(pausedLocalBuilds.begin(), pausedLocalBuilds.end(),
+                [](const auto& x, const auto& y) {
+                    return x.first > y.first
+                        || (x.first == y.first && x.second < y.second);
+                });
+            for (size_t i = kPausedLocalBuildLimit;
+                 i < pausedLocalBuilds.size(); ++i)
+                _localSceneryBuilds.erase(pausedLocalBuilds[i].second);
             std::sort(rebuild.begin(), rebuild.end(),
                 [&](const auto& a, const auto& b) {
                     const bool aStaged = _localSceneryBuilds.contains(a.second);
