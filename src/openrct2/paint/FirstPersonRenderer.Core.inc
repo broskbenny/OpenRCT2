@@ -5911,7 +5911,7 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                 int32_t(uint32_t(regionKey >> 32)) - 1;
             const int32_t regionY =
                 int32_t(uint32_t(regionKey)) - 1;
-            constexpr std::array<std::array<int32_t, 2>, 4>
+            constexpr std::array<std::array<int32_t, 2>, 8>
                 offsets{ {
                     { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 },
                     { -1, -1 }, { -1, 1 }, { 1, -1 }, { 1, 1 },

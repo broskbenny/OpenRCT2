@@ -14,7 +14,7 @@ class StagedRelationshipContextTests(unittest.TestCase):
 
     def test_every_neighbour_tile_and_group_surface_is_resumable(self):
         s=self.stage
-        self.assertIn("staging.relationshipTile < 128",s)
+        self.assertIn("staging.relationshipTile < size_t(4 * kFPCell + 4)",s)
         self.assertIn("staging.relationshipTileSurface < surfaces.size()",s)
         self.assertIn("staging.neighbourSource < staging.neighbourSources.size()",s)
         self.assertIn("source.region,\n                            staging.neighbourSourceSurface",s)

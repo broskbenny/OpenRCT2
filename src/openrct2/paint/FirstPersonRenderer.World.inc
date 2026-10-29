@@ -4346,7 +4346,7 @@
         {
             const int32_t rx = int32_t(uint32_t(regionKey >> 32)) - 1;
             const int32_t ry = int32_t(uint32_t(regionKey)) - 1;
-            constexpr std::array<std::array<int32_t, 2>, 5>
+            constexpr std::array<std::array<int32_t, 2>, 9>
                 affected{ { { 0, 0 }, { -1, 0 }, { 1, 0 },
                     { 0, -1 }, { 0, 1 }, { -1, -1 }, { -1, 1 },
                     { 1, -1 }, { 1, 1 } } };

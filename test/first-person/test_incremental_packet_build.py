@@ -26,20 +26,20 @@ int main() {
     state.nextTile=511;
     state.groupsAdded=true;
     state.relationshipsResolved=true;
-    assert(!state.readyToPublish(1024));
-    state.nextTile=1024;
-    assert(state.readyToPublish(1024));
+    assert(!state.readyToPublish(64));
+    state.nextTile=64;
+    assert(state.readyToPublish(64));
     assert(state.needsRestart(1,1));
     state.restart(1,1);
     assert(state.nextTile==0 && !state.groupsAdded && !state.relationshipsResolved);
-    state.nextTile=1024;
+    state.nextTile=64;
     state.groupsAdded=true;
-    assert(!state.readyToPublish(1024));
+    assert(!state.readyToPublish(64));
     state.relationshipsResolved=true;
-    assert(state.readyToPublish(1024));
+    assert(state.readyToPublish(64));
     assert(state.needsRestart(1,2));
     state.restart(1,2);
-    assert(!state.readyToPublish(1024));
+    assert(!state.readyToPublish(64));
 }
 """
         with tempfile.TemporaryDirectory() as folder:
