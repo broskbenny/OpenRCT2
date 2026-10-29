@@ -55,7 +55,7 @@ class LocalSceneryPacketsTest(unittest.TestCase):
         self.assertEqual(coherent.count("addSurface(surface, true);"), 3)
         self.assertEqual(coherent.count("addSurface(presented, true);"), 1)
         self.assertIn("addSurface(sourceSurface);", coherent)
-        self.assertIn("addSurface(surfaces[staging.surfaceOffset++]);", coherent)
+        self.assertEqual(coherent.count("ResumeFirstPersonIndexedRegionSurfaces("), 4)
         self.assertIn("ResolveFirstPersonInternalOccupancyInterfaces(", coherent)
         independent = local[local.index("bool FirstPersonIndependentLocalScenery("):
                             local.index("struct FirstPersonLocalSceneryPacket")]
