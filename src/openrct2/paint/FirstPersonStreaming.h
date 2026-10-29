@@ -335,6 +335,8 @@ namespace OpenRCT2::Paint
         return visibleCount;
     }
 
+    inline constexpr int32_t kFirstPersonConnectedRegionTiles = 8;
+
     // Tile-map aligned region partition: a full-park visibility traversal, not
     // a fixed camera-centred ring. Bounds are deliberately conservative until
     // OpenRCT2 exposes authoritative region invalidation and accurate bounds.
@@ -353,11 +355,13 @@ namespace OpenRCT2::Paint
         uint64_t regionKey, bool hasPublishedGeometry, FirstPersonVec3 eye,
         bool hasStagedWork = false)
     {
-        // GPU region coordinates are biased by one and span 32x32 map tiles.
+        // GPU region coordinates are biased by one and span 8x8 map tiles.
         const int64_t regionX = int64_t(uint32_t(regionKey >> 32)) - 1;
         const int64_t regionY = int64_t(uint32_t(regionKey)) - 1;
-        const double centerX = double(regionX * 32 + 16) * 32.0;
-        const double centerY = double(regionY * 32 + 16) * 32.0;
+        const double centerX = double(regionX * kFirstPersonConnectedRegionTiles
+            + kFirstPersonConnectedRegionTiles / 2) * 32.0;
+        const double centerY = double(regionY * kFirstPersonConnectedRegionTiles
+            + kFirstPersonConnectedRegionTiles / 2) * 32.0;
         const double dx = centerX - double(eye.x);
         const double dy = centerY - double(eye.y);
         return { regionKey, hasPublishedGeometry, hasStagedWork, dx * dx + dy * dy };
@@ -370,7 +374,7 @@ namespace OpenRCT2::Paint
         if (a.hasPublishedGeometry != b.hasPublishedGeometry)
             return !a.hasPublishedGeometry;
         // Finish partially assembled invisible packets before starting yet
-        // another 1024-tile scan. Existing published packets stay drawable.
+        // another 64-tile scan. Existing published packets stay drawable.
         if (!a.hasPublishedGeometry && a.hasStagedWork != b.hasStagedWork)
             return a.hasStagedWork;
         if (a.distanceSquared != b.distanceSquared)

@@ -138,7 +138,6 @@ namespace OpenRCT2::Paint
     // Cross-cell interfaces are resolved using neighbouring geometry.
     // Zero means dynamic or camera-oriented geometry; it is always streamed.
     // Reserve zero even at the origin by adding one to both axes.
-    inline constexpr int32_t kFirstPersonConnectedRegionTiles = 8;
     [[nodiscard]] constexpr uint64_t FirstPersonGpuRegionKey(int32_t tileX, int32_t tileY)
     {
         return (uint64_t(uint32_t(tileX / kFirstPersonConnectedRegionTiles + 1)) << 32) | uint32_t(tileY / kFirstPersonConnectedRegionTiles + 1);

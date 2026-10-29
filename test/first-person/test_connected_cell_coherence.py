@@ -11,9 +11,12 @@ ROOT = Path(__file__).resolve().parents[2] / "src/openrct2/paint"
 class ConnectedCellCoherenceTest(unittest.TestCase):
     def test_cells_and_diagonal_relationship_context_are_consistent(self):
         header = (ROOT / "FirstPersonRenderer.h").read_text()
+        streaming = (ROOT / "FirstPersonStreaming.h").read_text()
         core = (ROOT / "FirstPersonRenderer.Core.inc").read_text()
         world = (ROOT / "FirstPersonRenderer.World.inc").read_text()
-        self.assertIn("kFirstPersonConnectedRegionTiles = 8;", header)
+        self.assertIn("kFirstPersonConnectedRegionTiles = 8;", streaming)
+        self.assertIn("regionX * kFirstPersonConnectedRegionTiles", streaming)
+        self.assertIn("kFirstPersonConnectedRegionTiles / 2", streaming)
         self.assertIn("minTileX / kFirstPersonConnectedRegionTiles", core)
         self.assertIn("regionX * kFirstPersonConnectedRegionTiles", core)
         self.assertIn("((tileX % kCell) + kCell) % kCell", core)
@@ -37,10 +40,15 @@ class ConnectedCellCoherenceTest(unittest.TestCase):
         if not compiler:
             self.skipTest("C++ compiler unavailable")
         header = (ROOT / "FirstPersonRenderer.h").read_text()
+        streaming = (ROOT / "FirstPersonStreaming.h").read_text()
         relations = (ROOT / "FirstPersonSurfaceRelations.h").read_text()
-        keys = header[
-            header.index("    inline constexpr int32_t kFirstPersonConnectedRegionTiles"):
-            header.index("    struct FirstPersonSurface")]
+        keys = (
+            streaming[
+                streaming.index("    inline constexpr int32_t kFirstPersonConnectedRegionTiles"):
+                streaming.index("    // Tile-map aligned region partition")]
+            + header[
+                header.index("    [[nodiscard]] constexpr uint64_t FirstPersonGpuRegionKey"):
+                header.index("    struct FirstPersonSurface")])
         owner = relations[
             relations.index("    struct FirstPersonCanonicalSurfaceQuad"):
             relations.index("    [[nodiscard]] inline FirstPersonSurfaceRelationshipKind")]
