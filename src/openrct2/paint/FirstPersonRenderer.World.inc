@@ -4316,6 +4316,8 @@
             bool relationshipSubmitted = false;
             bool boundaryCandidateCountReady = false;
             size_t boundaryCandidateCount = 0;
+            uint64_t workerSurfaceFingerprint = 0;
+            bool workerFingerprintReady = false;
             // Complete local region geometry can be presented while its
             // internal occupancy suppression is still resolving in a worker.
             // Worker-owned copies never mutate this immutable source snapshot.
@@ -4401,16 +4403,8 @@
         {
             auto& published = _staticRegionPackets[regionKey];
             auto& staging = _staticRegionPacketBuilds[regionKey];
-            // A global selection serial is a cheap change detector, not an
-            // authority to restart every in-flight region. Completed packets
-            // already use per-group selection stamps; staged packets need the
-            // same locality to make progress while the camera moves.
-            // During first publication, new native observations can dirty
-            // an entire region every frame. Restarting its 1024-tile traversal
-            // at each observation starves the first coherent packet. Finish
-            // that snapshot, publish it marked dirty, then reconcile the newer
-            // generation. Once a last-known-good packet exists, honour normal
-            // authoritative invalidations immediately.
+            // Ignore unrelated selection changes and native observations
+            // during staging. Genuine edits still invalidate published work.
             const bool havePublishedPacket =
                 published.surfaceStorage != nullptr
                 && !published.surfaceStorage->empty();
@@ -4990,7 +4984,9 @@
                             input->surfaces = *input->source;
                         auto result = ResolveFirstPersonInternalOccupancyInterfaces(
                             input->surfaces, input->context);
-                        return [input, regionKey, serial, mapEditSerial, epoch, token, result]() mutable {
+                        const uint64_t fingerprint =
+                            ResidentStaticSurfaceFingerprint(input->surfaces);
+                        return [input, regionKey, serial, mapEditSerial, epoch, token, result, fingerprint]() mutable {
                             if (_sceneEpoch != epoch)
                                 return;
                             const auto live = _staticRegionPackets.find(regionKey);
@@ -5021,6 +5017,8 @@
                             pendingPacket.suppressedInternalFaces = result.suppressedFaces;
                             pendingPacket.crossPacketInternalInterfaces = result.contextMatches;
                             pendingPacket.vertexCount = pendingPacket.surfaces.size() * 6;
+                            pending->second.workerSurfaceFingerprint = fingerprint;
+                            pending->second.workerFingerprintReady = true;
                             pending->second.progress.relationshipsResolved = true;
                             pending->second.relationshipSubmitted = false;
                         };
@@ -6045,8 +6043,9 @@
             // Keep its existing immutable residency and avoid uploading the
             // same 32x32 packet again. Ownership and native paint order are
             // part of the fingerprint; texture dependencies must also match.
-            const uint64_t fingerprint =
-                ResidentStaticSurfaceFingerprint(packet.surfaces);
+            const uint64_t fingerprint = staging.workerFingerprintReady
+                ? staging.workerSurfaceFingerprint
+                : ResidentStaticSurfaceFingerprint(packet.surfaces);
             const bool sameGpuOutput =
                 published.surfaceStorage != nullptr
                 && published.surfaceFingerprint == fingerprint
