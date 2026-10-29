@@ -17,6 +17,10 @@ class GroupedRegionSurfaceIndexTest(unittest.TestCase):
         self.assertEqual(core.count("IndexFirstPersonSurfacesByGpuRegion(cached.surfaces)"), 2)
         self.assertEqual(core.count("FirstPersonRegionSurfaceIndex regionSurfaceIndices;"), 2)
         self.assertEqual(world.count("ResumeFirstPersonIndexedRegionSurfaces("), 2)
+        # Registration should reuse precomputed worker indices, not rescan faces.
+        self.assertEqual(core.count(
+            "IndexFirstPersonSurfacesByGpuRegion(result.surfaces)"), 2)
+        self.assertNotIn("IndexFirstPersonSurfacesByGpuRegion(cached.surfaces)", core)
 
     def test_compiled_index_preserves_order_and_budget(self):
         compiler = shutil.which("clang++") or shutil.which("g++")

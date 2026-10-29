@@ -1909,16 +1909,9 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                             regionKey].insert(groupKey);
                     });
             }
-            cached.regionSurfaceIndices =
-                IndexFirstPersonSurfacesByGpuRegion(cached.surfaces);
-            cached.gpuRegions.clear();
-            cached.gpuRegions.reserve(cached.regionSurfaceIndices.size());
-            for (const auto& [region, indices] : cached.regionSurfaceIndices)
-            {
-                cached.gpuRegions.push_back(region);
+            // Index and region set are already prepared on the worker.
+            for (const auto region : cached.gpuRegions)
                 _largeSceneryGroupsByRegion[region].insert(groupKey);
-            }
-            std::sort(cached.gpuRegions.begin(), cached.gpuRegions.end());
         }
 
         void ActivateLargeSceneryRegions(
@@ -1959,14 +1952,10 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                         MarkStaticRegionPacketDirty(regionKey);
                     });
             }
-            for (const auto& surface : cached.surfaces)
+            for (const auto& [region, indices] : cached.regionSurfaceIndices)
             {
-                if (surface.gpuRegion != 0)
-                {
-                    MarkStaticRegionPacketDirty(surface.gpuRegion);
-                    MarkStaticRegionRelationshipNeighboursDirty(
-                        surface.gpuRegion);
-                }
+                MarkStaticRegionPacketDirty(region);
+                MarkStaticRegionRelationshipNeighboursDirty(region);
             }
         }
 
@@ -1995,13 +1984,7 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                     });
             }
 
-            std::unordered_set<uint64_t> regions;
-            for (const auto& surface : cached.surfaces)
-            {
-                if (surface.gpuRegion != 0)
-                    regions.insert(surface.gpuRegion);
-            }
-            for (const auto region : regions)
+            for (const auto& [region, indices] : cached.regionSurfaceIndices)
             {
                 const auto found =
                     _parkEntranceGroupsByRegion.find(region);
@@ -2028,8 +2011,6 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                     });
             }
 
-            cached.regionSurfaceIndices =
-                IndexFirstPersonSurfacesByGpuRegion(cached.surfaces);
             for (const auto& [region, indices] : cached.regionSurfaceIndices)
                 _parkEntranceGroupsByRegion[region].insert(groupKey);
         }
@@ -4788,6 +4769,12 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                 const auto& model = modelIt->second;
                 auto result = BuildLargeSceneryInstanceGeometry(job->element, metadata,
                     model, job->group, job->group.key, frame, *job->sprites, epoch);
+                result.regionSurfaceIndices =
+                    IndexFirstPersonSurfacesByGpuRegion(result.surfaces);
+                result.gpuRegions.reserve(result.regionSurfaceIndices.size());
+                for (const auto& [region, indices] : result.regionSurfaceIndices)
+                    result.gpuRegions.push_back(region);
+                std::sort(result.gpuRegions.begin(), result.gpuRegions.end());
                 return [job, result = std::move(result)]() mutable {
                     const auto pending = _largeSceneryJobs.find(job->group.key);
                     if (pending == _largeSceneryJobs.end() || pending->second != job) return;
@@ -5100,6 +5087,8 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                                 epoch,
                                 job->passage,
                                 job->interactionTarget);
+                        result.regionSurfaceIndices =
+                            IndexFirstPersonSurfacesByGpuRegion(result.surfaces);
                         return [
                             job,
                             result =
