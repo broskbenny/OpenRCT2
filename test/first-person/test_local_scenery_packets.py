@@ -90,7 +90,11 @@ class LocalSceneryPacketsTest(unittest.TestCase):
         header = HEADER.read_text(encoding="utf-8")
         world = WORLD.read_text(encoding="utf-8")
         local = LOCAL.read_text(encoding="utf-8")
-        keys = header[header.index("    [[nodiscard]] constexpr uint64_t FirstPersonGpuRegionKey("):
+        streaming = (ROOT / "src/openrct2/paint/FirstPersonStreaming.h").read_text()
+        constant = streaming[
+            streaming.index("    inline constexpr int32_t kFirstPersonConnectedRegionTiles"):
+            streaming.index("    // Tile-map aligned region partition")]
+        keys = constant + header[header.index("    [[nodiscard]] constexpr uint64_t FirstPersonGpuRegionKey("):
                       header.index("    struct FirstPersonSurface", header.index("FirstPersonGpuRegionKey("))]
         predicate = local[local.index("        [[nodiscard]] bool FirstPersonIndependentLocalScenery("):
                           local.index("        [[nodiscard]] bool FirstPersonResidentContainsCoherentGeometry(")]

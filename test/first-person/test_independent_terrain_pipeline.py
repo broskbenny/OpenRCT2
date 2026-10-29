@@ -66,7 +66,11 @@ class TerrainPipelineTest(unittest.TestCase):
         header = HEADER.read_text(encoding="utf-8")
         start = header.index("    [[nodiscard]] constexpr uint64_t FirstPersonGpuRegionKey(")
         end = header.index("    struct FirstPersonSurface", start)
-        helper = header[start:end]
+        streaming = (ROOT / "src/openrct2/paint/FirstPersonStreaming.h").read_text()
+        constant = streaming[
+            streaming.index("    inline constexpr int32_t kFirstPersonConnectedRegionTiles"):
+            streaming.index("    // Tile-map aligned region partition")]
+        helper = constant + header[start:end]
         source = """
 #include <cassert>
 #include <cstdint>
