@@ -137,9 +137,6 @@
                     tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
         }
 
-        [[nodiscard]] uint64_t FirstPersonLocalSmallSceneryInstanceKey(
-            int32_t tx, int32_t ty, uint32_t index,
-            const SmallSceneryElement& small);
 
         [[nodiscard]] bool FirstPersonTileObjectsMapOwnedAndReady(
             CoordsXY tile)
