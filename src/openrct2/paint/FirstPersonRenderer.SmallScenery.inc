@@ -1273,7 +1273,8 @@
                 // The authoritative 8x8 packet now owns eligible static
                 // placements. Do not draw a second native-capture instance.
                 if (FirstPersonMapSmallSceneryCanPublish(
-                        *entry, *small, scene.options.viewFlags))
+                        *entry, *small, scene.options.viewFlags)
+                    && FirstPersonLocalSceneryOwnsSmallScenery(ps.MapPos, *small))
                     return true;
                 if (job->surfaces.empty()) return false;
                 for (const auto& local : job->surfaces)

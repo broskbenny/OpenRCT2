@@ -40,6 +40,25 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
         self.assertIn("|| FirstPersonTileObjectsMapOwnedAndReady(tile))", paint)
         self.assertIn("const bool useColdObjectCursor = coldOffset < visibleCount;", paint)
 
+    def test_native_to_map_owned_handoff_waits_for_exact_published_instance(self):
+        core = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text()
+        local = LOCAL.read_text()
+        small = SMALL.read_text()
+        self.assertIn("bool FirstPersonLocalSceneryOwnsSmallScenery(", core)
+        self.assertIn("&& FirstPersonLocalSceneryOwnsSmallScenery(ps.MapPos, *small)", small)
+        handoff = local[
+            local.index("bool FirstPersonLocalSceneryOwnsSmallScenery("):
+            local.index("void SubmitVisibleLocalSceneryRegions(", local.index("bool FirstPersonLocalSceneryOwnsSmallScenery("))]
+        self.assertIn("!cell->second.surfaces", handoff)
+        self.assertIn("element == selected", handoff)
+        self.assertIn("FirstPersonLocalSmallSceneryInstanceKey(", handoff)
+        self.assertIn("cell->second.mapOwnedInstanceKeys.contains(", handoff)
+        # An asset job's ready flag is not sufficient to withdraw its native
+        # fallback; only published map ownership permits the handoff.
+        self.assertLess(
+            small.index("FirstPersonMapSmallSceneryCanPublish(", small.index("if (job->ready)")),
+            small.index("&& FirstPersonLocalSceneryOwnsSmallScenery(ps.MapPos, *small)"))
+
     def test_ownership_prevents_withdrawal_during_pending_native_capture(self):
         for native_dirty, present, native_owned in itertools.product((False, True), repeat=3):
             hold = should_hold_previous(native_dirty, present, native_owned)

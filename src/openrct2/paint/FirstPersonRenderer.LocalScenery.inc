@@ -248,6 +248,36 @@
             return key == 0 ? 1 : key;
         }
 
+        // An asset worker becoming ready is not a GPU publication.
+        // Native fallback is retired only after the exact authoritative
+        // instance has entered an immutable local-cell packet. A changed
+        // placement cannot inherit another instance's completed geometry.
+        [[nodiscard]] bool FirstPersonLocalSceneryOwnsSmallScenery(
+            CoordsXY tile, const SmallSceneryElement& small)
+        {
+            const auto cell = _localSceneryPackets.find(
+                FirstPersonLocalSceneryRegionKey(
+                    tile.x / kCoordsXYStep, tile.y / kCoordsXYStep));
+            if (cell == _localSceneryPackets.end() || !cell->second.surfaces)
+                return false;
+            auto* element = MapGetFirstElementAt(tile);
+            if (element == nullptr)
+                return false;
+            const auto* selected =
+                reinterpret_cast<const TileElement*>(&small);
+            uint32_t index = 0;
+            do
+            {
+                if (element == selected)
+                    return cell->second.mapOwnedInstanceKeys.contains(
+                        FirstPersonLocalSmallSceneryInstanceKey(
+                            tile.x / kCoordsXYStep, tile.y / kCoordsXYStep,
+                            index, small));
+                ++index;
+            } while (!(element++)->isLastForTile());
+            return false;
+        }
+
         void SubmitVisibleLocalSceneryRegions(
             FirstPersonScene& scene, const FirstPersonFrustum& frustum)
         {

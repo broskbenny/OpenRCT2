@@ -860,6 +860,8 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
         // scheduler below retries just this native observation next frame.
         void RequestFirstPersonNativeSceneryRetry(CoordsXY tile, uint8_t rotation);
         void MarkLocalSceneryDirtyForTile(int32_t tileX, int32_t tileY);
+        [[nodiscard]] bool FirstPersonLocalSceneryOwnsSmallScenery(
+            CoordsXY tile, const SmallSceneryElement& small);
 #include "FirstPersonRenderer.SmallScenery.inc"
 
         [[nodiscard]] uint64_t
