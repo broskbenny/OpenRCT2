@@ -6256,7 +6256,8 @@
                 {
                     lastSlowPacketReport = buildFinished;
                     Console::WriteLine(
-                        "FP_REGION_PACKET_SLOW region=%llu buildUs=%lld dirtyCandidates=%zu complete=%d phase=%u",
+                        "FP_REGION_PACKET_SLOW region=%llu buildUs=%lld dirtyCandidates=%zu complete=%d phase=%u"
+                        " nextTile=%zu mapRestarts=%llu selectionRestarts=%llu",
                         static_cast<unsigned long long>(candidate.key),
                         static_cast<long long>(buildUs), rebuildCandidates.size(),
                         complete ? 1 : 0,
@@ -6264,7 +6265,10 @@
                             : unsigned(_staticRegionPacketBuilds[candidate.key].progress.nextTile < 1024
                                 ? 0u : !_staticRegionPacketBuilds[candidate.key].progress.groupsAdded
                                     ? 1u : !_staticRegionPacketBuilds[candidate.key].progress.relationshipsResolved
-                                        ? 2u : 3u));
+                                        ? 2u : 3u),
+                        complete ? size_t(1024) : _staticRegionPacketBuilds[candidate.key].progress.nextTile,
+                        static_cast<unsigned long long>(_staticPacketSourceRestarts),
+                        static_cast<unsigned long long>(_staticPacketSelectionRestarts));
                 }
             }
 
