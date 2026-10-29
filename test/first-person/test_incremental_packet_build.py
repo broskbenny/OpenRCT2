@@ -65,14 +65,13 @@ int main() {
         self.assertIn("return variant.valid && !variant.residentSurfaces.empty();", before_map)
         self.assertLess(tiles.index("!cacheIt->second.valid || cacheIt->second.dirty"),
                         tiles.index("FirstPersonLocalFlatPathReady("))
-        semantic_loop = tiles.index("for (const auto& surface :\n"
-                                    "                         cached.semanticResidentSurfaces)")
-        animated_guard = tiles.index("if (cached.animated)\n                    continue;")
-        independent_loop = tiles.index("for (const auto& surface :\n"
-                                       "                     cached.cameraIndependentResidentSurfaces)")
-        self.assertLess(tiles.index("FirstPersonLocalFlatPathReady("), semantic_loop)
-        self.assertLess(semantic_loop, animated_guard)
-        self.assertLess(animated_guard, independent_loop)
+        self.assertLess(tiles.index("FirstPersonLocalFlatPathReady("),
+                        tiles.index("while (staging.tileCursor.phase < 6)"))
+        self.assertIn("if (cached.animated && phase != 0)", tiles)
+        self.assertIn("surfaces = &cached.semanticResidentSurfaces;", tiles)
+        self.assertIn("surfaces = &cached.cameraIndependentResidentSurfaces;", tiles)
+        self.assertIn("surfaces = &cached.rotations[phase - 2].residentSurfaces;", tiles)
+        self.assertIn("ResumeFirstPersonPacketSurfaces(", tiles)
         # Geometry already valid for animated semantic items must not vanish.
         self.assertNotIn("|| cacheIt->second.animated)", tiles)
 
@@ -87,7 +86,7 @@ int main() {
         self.assertNotIn("staging.selectedGroups.emplace(", group_setup)
         self.assertIn("staging.selectedGroups.emplace(\n", build)
         self.assertIn("staging.selectedGroups.emplace(\n"
-                      "                                surface.reconstructionGroup, captured);", build)
+                      "                                    surface.reconstructionGroup, captured);", build)
         self.assertIn("FirstPersonStagedPacketSelectionChanged(pending->second)", build)
 
     def test_renderer_stages_and_publishes_only_complete_packet(self):
