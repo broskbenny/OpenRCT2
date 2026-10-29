@@ -44,6 +44,19 @@ class SourceIndependentInvalidationSignatureTest(unittest.TestCase):
         self.assertIn("tileCache.valid ? tileCache.signature : snapshot.signature", world)
         self.assertIn("cached.valid ? cached.signature : snapshot.signature", world)
         self.assertIn("tileCache.lastInvalidatedSignature == signature", main)
+        invalidation = main.split("void InvalidateFirstPersonSceneRegion(", 1)[1].split(
+            "void InvalidateFirstPersonSceneTile(", 1)[0]
+        self.assertIn("auto& tileCache = _staticPaintCache[key];", invalidation)
+        self.assertLess(invalidation.index("auto& tileCache = _staticPaintCache[key];"),
+                        invalidation.index("if (unchanged)"))
+        self.assertNotIn("if (cached != _staticPaintCache.end())", invalidation.split(
+            "for (int32_t ty = y0;", 1)[1].split("changedTiles.insert(key);", 1)[0])
+        # A cold tile incurs one conservative invalidation, not an edit
+        # every time the native window redraws an unchanged object.
+        cold = InvalidationState()
+        self.assertTrue(cold.invalidate(123))
+        self.assertFalse(cold.invalidate(123))
+        self.assertTrue(cold.invalidate(124))
         self.assertIn("tileCache.lastInvalidatedSignature = signature;", main)
         invalidation = main.split("void InvalidateFirstPersonSceneRegion(", 1)[1].split(
             "void InvalidateFirstPersonSceneTile(", 1)[0]
