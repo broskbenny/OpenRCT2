@@ -4852,9 +4852,9 @@
                 const size_t index = staging.relationshipTile;
                 const size_t offset = index % kFPCell;
                 const size_t side = index / kFPCell;
-                const int32_t tx = side >= 4 ? ((side - 4) & 1 ? x1 : x0 - 1)
+                const int32_t tx = side >= 4 ? (offset & 1 ? x1 : x0 - 1)
                     : (side < 2 ? x0 + int32_t(offset) : (side == 2 ? x0 - 1 : x1));
-                const int32_t ty = side >= 4 ? ((side - 4) & 2 ? y1 : y0 - 1)
+                const int32_t ty = side >= 4 ? (offset & 2 ? y1 : y0 - 1)
                     : (side >= 2 ? y0 + int32_t(offset) : (side == 0 ? y0 - 1 : y1));
                 if (tx >= 0 && ty >= 0)
                 {
