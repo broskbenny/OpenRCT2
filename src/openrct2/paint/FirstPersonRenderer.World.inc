@@ -4528,7 +4528,7 @@
             // uninterruptible invocation. Previous surfaces stay in staging.
             constexpr size_t kRegionTileCount = 32u * 32u;
             FirstPersonFrameBudget gatherBudget(
-                96, std::chrono::microseconds(700));
+                8192, std::chrono::microseconds(700));
             while (!staging.progress.tilesDone(kRegionTileCount)
                    && gatherBudget.take())
             {
