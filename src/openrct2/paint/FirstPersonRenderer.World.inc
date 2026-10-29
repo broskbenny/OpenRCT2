@@ -4628,7 +4628,7 @@
                                     && !trajectory->second.surfaces.empty())
                                     return;
                             }
-                            uint8_t selected = cached.selectedRotation;
+                            uint8_t selected = FirstPersonReadyRotation(cached, false);
                             if (surface.reconstructionGroup != 0)
                             {
                                 reconstructionDependencies.insert(

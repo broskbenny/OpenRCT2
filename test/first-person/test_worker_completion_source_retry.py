@@ -24,7 +24,8 @@ class WorkerCompletionSourceRetryTest(unittest.TestCase):
         self.assertNotIn("MarkStaticRegionDirtyForTile(", completion)
         self.assertNotIn("MarkTerrainRegionDirtyForTile(", completion)
         self.assertIn("nativeRetryMask |= uint8_t(1u << rotation)", core)
-        self.assertIn("rotations[rotation].valid = false;", core)
+        self.assertNotIn("found->second.rotations[rotation].valid = false;", core)
+        self.assertIn("nativeRetryMask & uint8_t(1u << rotation)", paint)
         self.assertIn("rotationMask |= cached.nativeRetryMask;", paint)
 
     def test_randomized_source_view_retry_is_bounded_and_exact(self):

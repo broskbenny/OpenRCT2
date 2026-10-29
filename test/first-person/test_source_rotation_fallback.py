@@ -24,6 +24,56 @@ class SourceViewFallbackTest(unittest.TestCase):
             self.assertIn(f"{field}=%zu", paint)
         self.assertIn("nativeCapturesRemaining = 2;", paint)
 
+    def test_nonempty_native_variant_fallback_policy(self):
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if not compiler:
+            self.skipTest("C++ compiler unavailable")
+        core = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text()
+        start = core.index("        template<typename Cache>\\n        [[nodiscard]] uint8_t FirstPersonReadyRotation(".replace("\\\\n", "\\n"))
+        end = core.index("        void RequestFirstPersonNativeSceneryRetry(", start)
+        policy = core[start:end]
+        program = """
+#include <array>
+#include <cassert>
+#include <cstdint>
+#include <vector>
+struct View { bool valid = false; std::vector<int> residentSurfaces, streamedSurfaces; };
+struct Cache {
+    std::array<View, 4> rotations{};
+    bool hasSelectedRotation = false;
+    uint8_t selectedRotation = 0;
+};
+""" + policy + """
+int main() {
+    Cache cache;
+    assert(FirstPersonReadyRotation(cache, false) == 255);
+    assert(FirstPersonReadyRotation(cache, true) == 255);
+    cache.rotations[1].valid = true;
+    cache.rotations[1].residentSurfaces.push_back(1);
+    cache.rotations[1].streamedSurfaces.push_back(1);
+    cache.hasSelectedRotation = true;
+    cache.selectedRotation = 2;
+    cache.rotations[2].valid = true; // A valid source with no usable geometry.
+    assert(FirstPersonReadyRotation(cache, false) == 1);
+    assert(FirstPersonReadyRotation(cache, true) == 1);
+    cache.rotations[2].residentSurfaces.push_back(2);
+    assert(FirstPersonReadyRotation(cache, false) == 2);
+    assert(FirstPersonReadyRotation(cache, true) == 1);
+    cache.rotations[1].valid = false;
+    assert(FirstPersonReadyRotation(cache, true) == 255);
+    cache.rotations[2].streamedSurfaces.push_back(2);
+    assert(FirstPersonReadyRotation(cache, true) == 2);
+}
+"""
+        with tempfile.TemporaryDirectory() as folder:
+            cpp, exe = Path(folder) / "ready.cpp", Path(folder) / "ready"
+            cpp.write_text(program, encoding="utf-8")
+            built = subprocess.run([compiler, "-std=c++20", "-O0", str(cpp), "-o", str(exe)],
+                                   capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            ran = subprocess.run([str(exe)], capture_output=True, text=True)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+
     def test_actual_cpp_rotation_policy(self):
         compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++") or shutil.which("cl")
         if not compiler:

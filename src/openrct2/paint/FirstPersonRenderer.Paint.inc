@@ -583,6 +583,7 @@
                     // because time passed.
                     const bool stale =
                         !variant.valid
+                        || (cached.nativeRetryMask & uint8_t(1u << rotation)) != 0
                         || (cached.animated
                             && variant.lastAnimationGeneration
                                 != animationGeneration);
@@ -1543,7 +1544,7 @@
                                     continue;
                                 }
                             }
-                            uint8_t selected = cached.selectedRotation;
+                            uint8_t selected = FirstPersonReadyRotation(cached, true);
                             if (staticSurface.reconstructionGroup != 0)
                             {
                                 const auto group = _reconstructionRotations.find(staticSurface.reconstructionGroup);

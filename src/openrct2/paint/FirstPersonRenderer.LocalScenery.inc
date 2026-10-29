@@ -579,7 +579,7 @@
                             source = &cached.cameraIndependentResidentSurfaces;
                         else if (phase == 3 && !cached.animated)
                         {
-                            const uint8_t rotation = cached.selectedRotation;
+                            const uint8_t rotation = FirstPersonReadyRotation(cached, false);
                             if (rotation < cached.rotations.size()
                                 && cached.rotations[rotation].valid)
                                 source = &cached.rotations[rotation].residentSurfaces;

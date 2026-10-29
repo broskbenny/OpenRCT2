@@ -1401,6 +1401,28 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
         // The native-scenery retry helper is defined before that include.
         uint64_t TerrainKey(int32_t tx, int32_t ty);
 
+        // A painted variant may contain no faces; use another valid view
+        // rather than withdrawing geometry during a camera turn or retry.
+        template<typename Cache>
+        [[nodiscard]] uint8_t FirstPersonReadyRotation(
+            const Cache& cached, bool streamed)
+        {
+            const auto usable = [&](uint8_t rotation) {
+                if (rotation >= cached.rotations.size())
+                    return false;
+                const auto& view = cached.rotations[rotation];
+                return view.valid
+                    && (streamed ? !view.streamedSurfaces.empty()
+                                 : !view.residentSurfaces.empty());
+            };
+            if (cached.hasSelectedRotation && usable(cached.selectedRotation))
+                return cached.selectedRotation;
+            for (uint8_t rotation = 0; rotation < cached.rotations.size(); ++rotation)
+                if (usable(rotation))
+                    return rotation;
+            return 0xffu;
+        }
+
         void RequestFirstPersonNativeSceneryRetry(CoordsXY tile, uint8_t rotation)
         {
             if (rotation >= 4)
@@ -1414,7 +1436,8 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
             // terrain, trajectories, neighbouring regions, or a region packet
             // just because the worker queue could not yet admit its 3D asset.
             found->second.nativeRetryMask |= uint8_t(1u << rotation);
-            found->second.rotations[rotation].valid = false;
+            // A failed worker admission is not a failed native capture.
+            // Keep the prior view valid until its replacement is painted.
         }
 
         [[nodiscard]] std::optional<uint8_t> CachedVerticalTunnelHeight(uint64_t key)
