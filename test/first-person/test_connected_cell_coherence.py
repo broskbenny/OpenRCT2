@@ -33,6 +33,7 @@ class ConnectedCellCoherenceTest(unittest.TestCase):
         self.assertIn("offset & 2 ? y1 : y0 - 1", world)
         self.assertIn("FirstPersonGpuRegionKey(nx * kFPCell, ny * kFPCell)", world)
         self.assertIn("progress.nextTile < kFPCell * kFPCell", world)
+        self.assertIn("FirstPersonFrameBudget packetBudget(8, std::chrono::microseconds(1000));", world)
         self.assertIn("complete ? size_t(kFPCell * kFPCell)", world)
 
     def test_compiled_owner_partition_and_cross_cell_suppression(self):

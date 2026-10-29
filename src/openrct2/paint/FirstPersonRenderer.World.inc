@@ -6224,7 +6224,7 @@
             }
             std::sort(rebuildCandidates.begin(), rebuildCandidates.end(),
                 FirstPersonStaticRegionRebuildBefore);
-            FirstPersonFrameBudget packetBudget(2, std::chrono::microseconds(1000));
+            FirstPersonFrameBudget packetBudget(8, std::chrono::microseconds(1000));
             for (const auto& candidate : rebuildCandidates)
             {
                 if (!packetBudget.take())
