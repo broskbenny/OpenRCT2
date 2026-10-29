@@ -6235,7 +6235,7 @@
                 {
                     rebuildCandidates.push_back(MakeFirstPersonStaticRegionRebuildCandidate(
                         key, packet.surfaceStorage != nullptr && !packet.surfaceStorage->empty(),
-                        frustum.eye));
+                        frustum.eye, _staticRegionPacketBuilds.contains(key)));
                 }
             }
             std::sort(rebuildCandidates.begin(), rebuildCandidates.end(),
