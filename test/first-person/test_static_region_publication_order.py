@@ -25,6 +25,17 @@ class StaticRegionPublicationOrderTest(unittest.TestCase):
             publish.index("FirstPersonStaticRegionRebuildBefore);"),
             publish.index("std::vector<uint64_t> orderedRegions("))
 
+    def test_incomplete_unpublished_packets_keep_their_build_slots(self):
+        streaming = (ROOT/"src/openrct2/paint/FirstPersonStreaming.h").read_text()
+        world = WORLD.read_text()
+        self.assertIn("bool hasStagedWork = false;", streaming)
+        self.assertIn("!a.hasPublishedGeometry && a.hasStagedWork != b.hasStagedWork", streaming)
+        self.assertIn("frustum.eye, _staticRegionPacketBuilds.contains(key)", world)
+        self.assertLess(streaming.index("a.hasPublishedGeometry != b.hasPublishedGeometry"),
+                        streaming.index("a.hasStagedWork != b.hasStagedWork"))
+        self.assertLess(streaming.index("a.hasStagedWork != b.hasStagedWork"),
+                        streaming.index("a.distanceSquared != b.distanceSquared"))
+
     def test_local_and_coherent_publication_stay_stable_across_view_turns(self):
         local = LOCAL.read_text(encoding="utf-8")
         self.assertIn("std::sort(orderedVisible.begin(), orderedVisible.end());", local)
