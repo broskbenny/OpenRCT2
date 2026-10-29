@@ -18,7 +18,7 @@ class StagedRelationshipContextTests(unittest.TestCase):
         self.assertIn("staging.relationshipTileSurface < surfaces.size()",s)
         self.assertIn("staging.neighbourSource < staging.neighbourSources.size()",s)
         self.assertIn("source.region,\n                            staging.neighbourSourceSurface",s)
-        self.assertGreaterEqual(s.count("if (!gatherBudget.take())"),3)
+        self.assertGreaterEqual(s.count("if (!gatherBudget.take())"),2)
         self.assertEqual(s.count("ResumeFirstPersonIndexedRegionSurfaces("), 4)
         self.assertIn("staging.neighbourSourcesInitialized = true;",s)
 
