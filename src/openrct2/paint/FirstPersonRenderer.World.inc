@@ -4685,19 +4685,10 @@
                         gatherGroups(1, _largeSceneryGroupsByRegion);
                     if (_parkEntranceGeometryEnabled)
                         gatherGroups(2, _parkEntranceGroupsByRegion);
-                    // Group geometry may not appear in tile-level fallbacks.
-                    // Track its selection independently before the expensive
-                    // group copy, so worker completions can verify its inputs.
-                    for (const auto& keys : staging.groupedKeys)
-                    for (const auto key : keys)
-                    {
-                        const auto found = _reconstructionRotations.find(key);
-                        const uint8_t captured =
-                            found != _reconstructionRotations.end()
-                                && found->second.hasSelectedRotation
-                            ? found->second.selectedRotation : 0xffu;
-                        staging.selectedGroups.emplace(key, captured);
-                    }
+                    // Grouped physical meshes are camera-independent.
+                    // Only tile-level native fallback surfaces below record
+                    // a selected source rotation. Do not reset a large mesh
+                    // build when the player turns their head.
                     staging.groupsInitialized = true;
                 }
 
