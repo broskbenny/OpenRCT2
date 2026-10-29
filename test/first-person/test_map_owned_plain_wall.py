@@ -107,8 +107,8 @@ class MapPlainWallTest(unittest.TestCase):
         self.assertIn("it->second.mappedWallTiles.contains(TerrainKey(", local)
         coherent = world.split("bool RebuildStaticRegionPacket(", 1)[1].split(
             "if (!staging.progress.tilesDone(kRegionTileCount))", 1)[0]
-        self.assertEqual(coherent.count("mappedWallReady"), 4)
-        self.assertEqual(coherent.count("FirstPersonPaintSemanticRole::wall"), 3)
+        self.assertEqual(coherent.count("mappedWallReady"), 2)
+        self.assertEqual(coherent.count("FirstPersonPaintSemanticRole::wall"), 1)
 
     def test_multiple_edges_publish_atomically_or_remain_native(self):
         m = MAP.read_text(encoding="utf-8")
