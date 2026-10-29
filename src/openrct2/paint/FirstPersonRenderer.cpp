@@ -1719,22 +1719,21 @@ namespace OpenRCT2::Paint
         for (int32_t tx = x0; tx <= x1; ++tx)
         {
             const auto key = TerrainKey(tx, ty);
-            const auto cached = _staticPaintCache.find(key);
             const uint64_t signature = NativeTileSignature({
                 tx * kCoordsXYStep, ty * kCoordsXYStep });
-            if (cached != _staticPaintCache.end())
-            {
-                auto& tileCache = cached->second;
-                const bool unchanged = tileCache.hasInvalidationSignature
-                    ? tileCache.lastInvalidatedSignature == signature
-                    : tileCache.valid && tileCache.signature == signature;
-                if (unchanged)
-                    continue;
-                // Advance only when processing a verified edit, not when
-                // the visibility traversal happens to see a new snapshot.
-                tileCache.lastInvalidatedSignature = signature;
-                tileCache.hasInvalidationSignature = true;
-            }
+            // Even an uncaptured tile needs a durable redraw baseline.
+            // Otherwise every entity/shadow invalidation on a cold tile
+            // looks like a map edit and continually restarts packet builds.
+            auto& tileCache = _staticPaintCache[key];
+            const bool unchanged = tileCache.hasInvalidationSignature
+                ? tileCache.lastInvalidatedSignature == signature
+                : tileCache.valid && tileCache.signature == signature;
+            if (unchanged)
+                continue;
+            // Preserve the conservative first invalidation. Subsequent
+            // identical redraws cannot impersonate authoritative edits.
+            tileCache.lastInvalidatedSignature = signature;
+            tileCache.hasInvalidationSignature = true;
             changedTiles.insert(key);
             changedRegions.insert(FirstPersonGpuRegionKey(tx, ty));
             changedX0 = std::min(changedX0, tx);
