@@ -44,6 +44,25 @@ class StagedRelationshipContextTests(unittest.TestCase):
         self.assertIn("FP_REGION_HEALTH", world)
         self.assertNotIn("_reconstructionSelectionSerial != selection", s)
 
+    def test_worker_fingerprints_resolved_mesh_exactly_once(self):
+        s = self.stage
+        fingerprint = "ResidentStaticSurfaceFingerprint(input->surfaces)"
+        self.assertEqual(s.count(fingerprint), 1)
+        self.assertLess(s.index("ResolveFirstPersonInternalOccupancyInterfaces(\n"
+                                "                            input->surfaces, input->context);"),
+                        s.index(fingerprint))
+        self.assertLess(s.index(fingerprint),
+                        s.index("pendingPacket.surfaces = std::move(input->surfaces);"))
+        self.assertIn("pending->second.workerSurfaceFingerprint = fingerprint;", s)
+        self.assertIn("pending->second.workerFingerprintReady = true;", s)
+        self.assertIn("const uint64_t fingerprint = staging.workerFingerprintReady", s)
+        self.assertIn("staging.workerSurfaceFingerprint", s)
+        self.assertIn(": ResidentStaticSurfaceFingerprint(packet.surfaces);", s)
+        # A map edit, failed source or worker cancellation resets the staging
+        # struct, including its fingerprint and all other resume cursors.
+        self.assertIn("staging = {};", s)
+        self.assertIn("bool workerFingerprintReady = false;", s)
+
     def test_failed_submission_restores_both_snapshots(self):
         s=self.stage
         self.assertIn("input->source = staging.provisionalSurfaces;",s)
