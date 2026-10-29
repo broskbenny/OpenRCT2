@@ -79,9 +79,35 @@
             uint64_t selectionGeneration = 0;
             bool containsInspectedElement = false;
             bool dirty = true;
+            uint64_t invalidationSerial = 0;
         };
         static std::unordered_map<uint64_t, FirstPersonLocalSceneryPacket>
             _localSceneryPackets;
+        struct FirstPersonLocalSceneryStaging
+        {
+            bool initialized = false;
+            uint64_t epoch = 0;
+            uint64_t selectionGeneration = 0;
+            uint64_t sourceInvalidationSerial = 0;
+            uint64_t lastVisibleFrame = 0;
+            uint32_t viewFlags = 0;
+            bool trackDesignSaveMode = false;
+            bool paintBlockedMode = false;
+            bool paintWideGhostMode = false;
+            size_t nextTile = 0;
+            std::array<uint64_t, 64> sourceSignatures{};
+            std::vector<FirstPersonSurface> surfaces;
+            std::vector<ImageIndex> dependencies;
+            FirstPersonVec3 low{}, high{};
+            bool haveBounds = false;
+            bool waitingForSourceRevalidation = false;
+            bool containsNativeSource = false;
+            std::unordered_set<uint64_t> mapOwnedNativeKeys;
+            std::unordered_set<uint64_t> mappedPathTiles;
+            std::unordered_set<uint64_t> mappedWallTiles;
+        };
+        static std::unordered_map<uint64_t, FirstPersonLocalSceneryStaging>
+            _localSceneryBuilds;
         static uint64_t _localSceneryEpoch = 0;
 
         [[nodiscard]] bool FirstPersonLocalFlatPathReady(CoordsXY tile)
@@ -142,7 +168,9 @@
 
         void MarkLocalSceneryDirtyForTile(int32_t tx, int32_t ty)
         {
-            _localSceneryPackets[FirstPersonLocalSceneryRegionKey(tx, ty)].dirty = true;
+            auto& packet = _localSceneryPackets[FirstPersonLocalSceneryRegionKey(tx, ty)];
+            packet.dirty = true;
+            ++packet.invalidationSerial;
         }
 
         // Map ownership of a wall depends on the opposite edge in the
@@ -198,6 +226,7 @@
             if (_localSceneryEpoch != _sceneEpoch)
             {
                 _localSceneryPackets.clear();
+                _localSceneryBuilds.clear();
                 _localSceneryEpoch = _sceneEpoch;
             }
             // Selection is not part of TileElement bytes or viewport flags.
@@ -282,8 +311,16 @@
                 const float dy = float(ry * 8 * kCoordsXYStep + 4 * kCoordsXYStep) - frustum.eye.y;
                 rebuild.emplace_back(dx * dx + dy * dy, key);
             }
-            std::sort(rebuild.begin(), rebuild.end());
+            std::sort(rebuild.begin(), rebuild.end(),
+                [&](const auto& a, const auto& b) {
+                    const bool aStaged = _localSceneryBuilds.contains(a.second);
+                    const bool bStaged = _localSceneryBuilds.contains(b.second);
+                    if (aStaged != bStaged)
+                        return aStaged;
+                    return a < b;
+                });
             FirstPersonFrameBudget budget(4, std::chrono::microseconds(1200));
+            FirstPersonFrameBudget tileBudget(256, std::chrono::microseconds(1200));
             for (const auto& [distance, key] : rebuild)
             {
                 (void)distance;
