@@ -373,6 +373,8 @@
             const size_t surfaceStart = scene.surfaces.size();
             size_t emittedFaces = 0;
             size_t unsupportedVisibleFaces = 0;
+            std::vector<size_t> texturedFaceIndices;
+            texturedFaceIndices.reserve(faces.size());
             FirstPersonHullMaterialCoverage materialCoverage(faces);
             for (size_t faceIndex = 0;
                  faceIndex < faces.size(); ++faceIndex)
@@ -782,6 +784,7 @@
                     scene.surfaces.emplace_back(
                         std::move(surface));
                     ++emittedFaces;
+                    texturedFaceIndices.push_back(faceIndex);
                     continue;
                 }
 
@@ -811,20 +814,43 @@
                 continue;
             }
 
-            // Four-view silhouette fit alone does not make a physically
-            // coherent textured mesh. If a complex reconstruction leaves
-            // hundreds of non-bottom facets without ANY source material,
-            // publishing the other tiny facets produces exactly the
-            // glittering, partially billboarded geometry seen on ornate
-            // lattice artwork. Reject the whole VISUAL mesh when unsupported
-            // fragments are a substantial fraction of its actual surfaces;
-            // the authoritative collision hull remains entirely unchanged.
+            // A high unsupported-face count is NOT proof that every
+            // independently source-textured face is wrong. The previous
+            // all-or-nothing rollback erased hundreds of legitimate textured
+            // faces (263398 and 263793) after four-view geometry admission.
+            // Salvage only edge-connected coherent material patches. Detached
+            // voxel specks stay rejected, and no unsupported face is coloured.
             if (appearance.certifiesHullMaterial
                 && unsupportedVisibleFaces >= 128
                 && unsupportedVisibleFaces > emittedFaces / 2)
             {
-                scene.surfaces.resize(surfaceStart);
-                return false;
+                const auto coherent =
+                    SelectFirstPersonCoherentMaterialPatches(
+                        faces, texturedFaceIndices);
+                if (buildEvidence != nullptr)
+                    buildEvidence->materialFaces = uint32_t(emittedFaces);
+                if (coherent.retainedFaces == 0)
+                {
+                    scene.surfaces.resize(surfaceStart);
+                    return false;
+                }
+                size_t written = surfaceStart;
+                for (size_t i = 0; i < texturedFaceIndices.size(); ++i)
+                {
+                    const auto faceIndex = texturedFaceIndices[i];
+                    if (!coherent.keep[faceIndex])
+                    {
+                        materialCoverage.clearFace(faceIndex);
+                        continue;
+                    }
+                    const size_t source = surfaceStart + i;
+                    if (written != source)
+                        scene.surfaces[written] =
+                            std::move(scene.surfaces[source]);
+                    ++written;
+                }
+                scene.surfaces.resize(written);
+                emittedFaces = coherent.retainedFaces;
             }
 
             if (appearance.certifiesHullMaterial)

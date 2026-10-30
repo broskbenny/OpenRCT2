@@ -51,6 +51,9 @@ class AdaptiveSmallSceneryHullTest(unittest.TestCase):
         self.assertIn("fine.attempt = fineAttempt;", collision)
         self.assertIn("unsupportedVisibleFaces >= 128", small)
         self.assertIn("unsupportedVisibleFaces > emittedFaces / 2", small)
+        self.assertIn("SelectFirstPersonCoherentMaterialPatches(", small)
+        self.assertIn("coherent.retainedFaces == 0", small)
+        self.assertIn("materialCoverage.clearFace(faceIndex);", small)
         self.assertIn("scene.surfaces.resize(surfaceStart);", small)
         # Recorded mment1 had 1539 unsupported, 1705 textured visible
         # faces; its low-material-evidence surface must no longer publish.

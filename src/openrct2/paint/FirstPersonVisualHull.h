@@ -210,6 +210,137 @@ namespace OpenRCT2::Paint
         }
     };
 
+    // Material admission is independent of the already certified geometry.
+    // When a heavily perforated hull loses many textured faces, keep only
+    // source-backed patches connected by PHYSICAL EDGES. A shared vertex is
+    // insufficient: otherwise hundreds of isolated voxel glints can form a
+    // fake coherent surface. Unsupported faces cannot bridge components.
+    struct FirstPersonCoherentMaterialPatches
+    {
+        std::vector<uint8_t> keep;
+        size_t retainedFaces = 0;
+    };
+
+    [[nodiscard]] inline FirstPersonCoherentMaterialPatches
+        SelectFirstPersonCoherentMaterialPatches(
+            const std::vector<FirstPersonVisualHullFace>& faces,
+            const std::vector<size_t>& texturedFaceIndices)
+    {
+        FirstPersonCoherentMaterialPatches result{};
+        result.keep.assign(faces.size(), 0);
+        if (texturedFaceIndices.empty())
+            return result;
+
+        using Vertex = std::array<int32_t, 3>;
+        using Edge = std::array<Vertex, 2>;
+        struct EdgeHash
+        {
+            size_t operator()(const Edge& edge) const
+            {
+                uint64_t hash = 14695981039346656037ull;
+                for (const auto& point : edge)
+                    for (int32_t value : point)
+                    {
+                        hash ^= uint32_t(value);
+                        hash *= 1099511628211ull;
+                    }
+                return size_t(hash);
+            }
+        };
+        const auto vertex = [](FirstPersonVec3 p) -> Vertex {
+            return { int32_t(std::lround(double(p.x) * 64.0)),
+                     int32_t(std::lround(double(p.y) * 64.0)),
+                     int32_t(std::lround(double(p.z) * 64.0)) };
+        };
+        const auto area = [](const FirstPersonVisualHullFace& face) {
+            const auto triangle = [](FirstPersonVec3 a, FirstPersonVec3 b,
+                                      FirstPersonVec3 c) {
+                const double ux = double(b.x) - a.x;
+                const double uy = double(b.y) - a.y;
+                const double uz = double(b.z) - a.z;
+                const double vx = double(c.x) - a.x;
+                const double vy = double(c.y) - a.y;
+                const double vz = double(c.z) - a.z;
+                const double cx = uy * vz - uz * vy;
+                const double cy = uz * vx - ux * vz;
+                const double cz = ux * vy - uy * vx;
+                return 0.5 * std::sqrt(cx * cx + cy * cy + cz * cz);
+            };
+            return triangle(face.corners[0], face.corners[1], face.corners[2])
+                + triangle(face.corners[0], face.corners[2], face.corners[3]);
+        };
+
+        const size_t count = texturedFaceIndices.size();
+        std::vector<size_t> parent(count);
+        for (size_t i = 0; i < count; ++i)
+            parent[i] = i;
+        const auto rootOf = [&](size_t index) {
+            while (parent[index] != index)
+            {
+                parent[index] = parent[parent[index]];
+                index = parent[index];
+            }
+            return index;
+        };
+        std::unordered_map<Edge, size_t, EdgeHash> edgeOwners;
+        edgeOwners.reserve(count * 4);
+        for (size_t i = 0; i < count; ++i)
+        {
+            const size_t index = texturedFaceIndices[i];
+            if (index >= faces.size())
+                return result;
+            const auto& face = faces[index];
+            for (size_t e = 0; e < 4; ++e)
+            {
+                auto a = vertex(face.corners[e]);
+                auto b = vertex(face.corners[(e + 1) & 3u]);
+                if (a == b)
+                    continue;
+                if (b < a)
+                    std::swap(a, b);
+                const Edge key{ a, b };
+                const auto [found, inserted] = edgeOwners.emplace(key, i);
+                if (!inserted)
+                    parent[rootOf(i)] = rootOf(found->second);
+            }
+        }
+
+        std::vector<size_t> sizes(count, 0);
+        std::vector<double> areas(count, 0.0);
+        double totalArea = 0.0;
+        for (size_t i = 0; i < count; ++i)
+        {
+            const size_t root = rootOf(i);
+            const double surfaceArea = area(faces[texturedFaceIndices[i]]);
+            ++sizes[root];
+            areas[root] += surfaceArea;
+            totalArea += surfaceArea;
+        }
+
+        // Reject small isolated voxel flakes. A large source-backed panel
+        // may be one quad; a thin lattice needs a substantial connected run.
+        // Require aggregate retention as well, so a single good-looking
+        // island does not turn a mostly unsupported hull into visual noise.
+        double retainedArea = 0.0;
+        for (size_t i = 0; i < count; ++i)
+        {
+            const size_t root = rootOf(i);
+            if (areas[root] < 128.0
+                && !(sizes[root] >= 8 && areas[root] >= 32.0))
+                continue;
+            result.keep[texturedFaceIndices[i]] = 1;
+            ++result.retainedFaces;
+            retainedArea += area(faces[texturedFaceIndices[i]]);
+        }
+        if (result.retainedFaces * 4 < count
+            || retainedArea * 4.0 < totalArea)
+        {
+            std::fill(result.keep.begin(), result.keep.end(), 0);
+            result.retainedFaces = 0;
+        }
+        return result;
+    }
+
     // A closed occupancy hull does not imply a closed rendered surface. Baking
     // can omit unobserved faces or leave transparent texels on a boundary.
     // Missing material is directional evidence: an opening on one side can
@@ -234,6 +365,12 @@ namespace OpenRCT2::Paint
                 _normals[i] =
                     boundaryFaces[i].normal;
             }
+        }
+
+        void clearFace(size_t face)
+        {
+            if (face < _faces.size())
+                _faces[face] = FaceCoverage::absent;
         }
 
         void recordFace(size_t face, size_t texels, size_t opaqueTexels)
