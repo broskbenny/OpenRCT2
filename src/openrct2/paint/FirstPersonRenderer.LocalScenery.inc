@@ -301,6 +301,45 @@
             return false;
         }
 
+        // Native instance keys identify the tile, element index and type.
+        // Only its body may be retired after exact map-owned GPU publication;
+        // elevated wooden supports are still painted by the native path.
+        [[nodiscard]] bool FirstPersonNativeInstanceMapOwned(
+            CoordsXY tile, FirstPersonNativeInstanceRecord record)
+        {
+            const auto role = static_cast<FirstPersonPaintSemanticRole>(record.role);
+            if (role == FirstPersonPaintSemanticRole::pathDeck)
+                return FirstPersonLocalFlatPathReady(tile);
+            if (role == FirstPersonPaintSemanticRole::wall)
+                return FirstPersonLocalPlainWallReady(tile);
+            if (role != FirstPersonPaintSemanticRole::smallSceneryBody)
+                return false;
+            auto* element = MapGetFirstElementAt(tile);
+            uint32_t index = 0;
+            while (element != nullptr)
+            {
+                if (element->getType() == TileElementType::smallScenery)
+                {
+                    uint64_t nativeKey = 14695981039346656037ull;
+                    ExtendStableKey(nativeKey, uint32_t(tile.x / kCoordsXYStep));
+                    ExtendStableKey(nativeKey, uint32_t(tile.y / kCoordsXYStep));
+                    ExtendStableKey(nativeKey, index);
+                    ExtendStableKey(nativeKey, uint8_t(TileElementType::smallScenery));
+                    if ((nativeKey == 0 ? 1 : nativeKey) == record.instance)
+                    {
+                        const auto* small = element->asSmallScenery();
+                        return small != nullptr
+                            && FirstPersonLocalSceneryOwnsSmallScenery(tile, *small);
+                    }
+                }
+                if (element->isLastForTile())
+                    break;
+                ++element;
+                ++index;
+            }
+            return false;
+        }
+
         [[nodiscard]] uint64_t FirstPersonLocalSmallSceneryInstanceKey(
             int32_t tx, int32_t ty, uint32_t index,
             const SmallSceneryElement& small)

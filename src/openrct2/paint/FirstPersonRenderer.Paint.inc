@@ -254,10 +254,28 @@
                     const CoordsXY tile{
                         int32_t(key >> 32) * kCoordsXYStep,
                         int32_t(key) * kCoordsXYStep };
+                    const bool mapComplete =
+                        FirstPersonTileObjectsMapOwnedAndReady(tile);
                     if (FirstPersonKeepLastGoodNativeView(
-                            previous, current,
-                            FirstPersonTileObjectsMapOwnedAndReady(tile)))
+                            previous, current, mapComplete))
                         current = std::move(previous);
+                    else if (previous.valid && current.valid
+                        && !found->second.animated
+                        && !mapComplete
+                        && found->second.viewFlags == opt.viewFlags
+                        && TileInspector::GetSelectedElement() == nullptr
+                        && !gTrackDesignSaveMode
+                        && NativeTileSignature(tile) == found->second.signature)
+                    {
+                        // Record-by-record handoff: a partial native paint
+                        // cannot discard unrelated objects from this tile.
+                        (void)FirstPersonCarryMissingNativeInstances(
+                            previous, current,
+                            [&](FirstPersonNativeInstanceRecord record) {
+                                return !FirstPersonNativeInstanceMapOwned(
+                                    tile, record);
+                            });
+                    }
                 }
             };
             for (auto& misses : missesByRotation)

@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace OpenRCT2::Paint
@@ -314,6 +315,72 @@ namespace OpenRCT2::Paint
         bool inspectorActive)
     {
         return mapChanged || animated || cameraDependent || inspectorActive;
+    }
+
+    // Native presentation is tracked by exact tile-element identity plus
+    // physical component role. A source view that successfully paints a bin
+    // must not erase the neighbouring lamp, or an elevated building's body
+    // simply because it painted that body's separate wooden supports.
+    struct FirstPersonNativeInstanceRecord
+    {
+        uint64_t instance = 0;
+        uint8_t role = 0;
+        bool operator==(const FirstPersonNativeInstanceRecord&) const = default;
+    };
+    struct FirstPersonNativeInstanceRecordHash
+    {
+        size_t operator()(FirstPersonNativeInstanceRecord record) const
+        {
+            uint64_t hash = 14695981039346656037ull;
+            hash ^= record.instance;
+            hash *= 1099511628211ull;
+            hash ^= record.role;
+            hash *= 1099511628211ull;
+            return size_t(hash);
+        }
+    };
+    template<typename Surface>
+    [[nodiscard]] constexpr FirstPersonNativeInstanceRecord
+        FirstPersonNativeRecordOf(const Surface& face)
+    {
+        return { face.sourceInstanceKey, face.diagnosticSemanticRole };
+    }
+
+    // The caller must certify unchanged tile bytes, stable presentation
+    // flags, and non-animated source. Do NOT retain a deleted or edited
+    // placement. A missing role can recover from an old published view;
+    // a newly painted role completely replaces its own old artwork.
+    template<typename View, typename MayRetain>
+    [[nodiscard]] size_t FirstPersonCarryMissingNativeInstances(
+        const View& previous, View& current, MayRetain&& mayRetain)
+    {
+        using Key = FirstPersonNativeInstanceRecord;
+        std::unordered_set<Key, FirstPersonNativeInstanceRecordHash> currentKeys;
+        const auto observe = [&](const auto& faces) {
+            for (const auto& face : faces)
+                if (face.sourceInstanceKey != 0)
+                    currentKeys.insert(FirstPersonNativeRecordOf(face));
+        };
+        observe(current.residentSurfaces);
+        observe(current.streamedSurfaces);
+        std::unordered_set<Key, FirstPersonNativeInstanceRecordHash> retained;
+        const auto carry = [&](const auto& oldFaces, auto& nextFaces) {
+            size_t count = 0;
+            for (const auto& face : oldFaces)
+            {
+                const auto key = FirstPersonNativeRecordOf(face);
+                if (key.instance == 0 || currentKeys.contains(key)
+                    || !mayRetain(key))
+                    continue;
+                nextFaces.push_back(face);
+                retained.insert(key);
+                ++count;
+            }
+            return count;
+        };
+        size_t count = carry(previous.residentSurfaces, current.residentSurfaces);
+        count += carry(previous.streamedSurfaces, current.streamedSurfaces);
+        return count;
     }
 
     // An attempted refresh is not a successful replacement. This may only

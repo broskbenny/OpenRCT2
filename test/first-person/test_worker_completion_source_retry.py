@@ -59,6 +59,82 @@ if __name__ == "__main__":
     unittest.main()
 
 class LastGoodNativeRefreshPolicyTest(unittest.TestCase):
+
+    def test_native_refresh_preserves_missing_authoritative_instances(self):
+        from pathlib import Path
+        import shutil
+        import subprocess
+        import tempfile
+        header = (ROOT / "src/openrct2/paint/FirstPersonStreaming.h").read_text(encoding="utf-8")
+        local = (ROOT / "src/openrct2/paint/FirstPersonRenderer.LocalScenery.inc").read_text(encoding="utf-8")
+        paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(encoding="utf-8")
+        self.assertIn("FirstPersonNativeInstanceMapOwned(", local)
+        self.assertIn("FirstPersonCarryMissingNativeInstances(", paint)
+        self.assertIn("NativeTileSignature(tile) == found->second.signature", paint)
+        self.assertIn("TileInspector::GetSelectedElement() == nullptr", paint)
+        self.assertIn("!found->second.animated", paint)
+        self.assertIn("!FirstPersonNativeInstanceMapOwned(", paint)
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if not compiler:
+            self.skipTest("C++20 compiler unavailable")
+        start = header.index("    // Native presentation is tracked")
+        end = header.index("    // An attempted refresh is not a successful replacement.", start)
+        policy = header[start:end]
+        program = """
+#include <cstdint>
+#include <cstddef>
+#include <unordered_set>
+#include <vector>
+struct Face {
+    uint64_t sourceInstanceKey=0;
+    uint8_t diagnosticSemanticRole=0;
+    int surface=0;
+};
+struct View {
+    std::vector<Face> residentSurfaces, streamedSurfaces;
+};
+""" + policy + """
+#include <cassert>
+int main() {
+    View previous, current;
+    previous.streamedSurfaces = {
+        {101,1,11}, {101,1,12}, {101,2,13},
+        {202,1,21}, {303,1,31}, {0,1,88}};
+    current.streamedSurfaces = {{101,1,100}, {999,1,999}};
+    auto count = FirstPersonCarryMissingNativeInstances(
+        previous, current, [](auto record) { return record.instance != 303; });
+    assert(count == 2);
+    assert(current.streamedSurfaces.size() == 4);
+    assert(current.streamedSurfaces[2].sourceInstanceKey == 101);
+    assert(current.streamedSurfaces[2].diagnosticSemanticRole == 2);
+    assert(current.streamedSurfaces[3].sourceInstanceKey == 202);
+    // Repeated snapshots never multiply previously carried records.
+    assert(FirstPersonCarryMissingNativeInstances(
+        previous, current, [](auto) { return true; }) == 1);
+    assert(current.streamedSurfaces.size() == 5);
+    // Current resident material supersedes an old streamed billboard
+    // for the SAME exact instance and physical component.
+    current.residentSurfaces.push_back({404,1,40});
+    previous.streamedSurfaces.push_back({404,1,41});
+    assert(FirstPersonCarryMissingNativeInstances(
+        previous, current, [](auto) { return true; }) == 0);
+    // An all-new full capture does not retain obsolete primitives.
+    View complete;
+    complete.streamedSurfaces = previous.streamedSurfaces;
+    assert(FirstPersonCarryMissingNativeInstances(
+        previous, complete, [](auto) { return true; }) == 0);
+}
+"""
+        with tempfile.TemporaryDirectory() as folder:
+            cpp, exe = Path(folder) / "native_instance.cpp", Path(folder) / "native_instance"
+            cpp.write_text(program, encoding="utf-8")
+            build = subprocess.run(
+                [compiler, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
+                 str(cpp), "-o", str(exe)], capture_output=True, text=True)
+            self.assertEqual(build.returncode, 0, build.stderr)
+            ran = subprocess.run([str(exe)], capture_output=True, text=True)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+
     def test_compiled_production_last_good_policy(self):
         import shutil
         import subprocess
