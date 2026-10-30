@@ -156,15 +156,61 @@
                     case TileElementType::surface:
                         break;
                     case TileElementType::path:
-                        if (!FirstPersonLocalFlatPathReady(tile))
+                    {
+                        const auto* path = element->asPath();
+                        // The map-owned deck is NOT its bins, benches,
+                        // lamps or other path additions. These still need
+                        // native source acquisition at cold-object priority.
+                        if (path == nullptr || path->hasAddition()
+                            || !FirstPersonLocalFlatPathReady(tile))
                             return false;
                         hasObject = true;
                         break;
+                    }
                     case TileElementType::wall:
                         if (!FirstPersonLocalPlainWallReady(tile))
                             return false;
                         hasObject = true;
                         break;
+                    case TileElementType::track:
+                    case TileElementType::largeScenery:
+                    case TileElementType::entrance:
+                    {
+                        // A completed physical group already supplies 3D
+                        // occupancy independent of native paint. Do not
+                        // spend scarce cold-source slots on its ready tiles
+                        // while native-only objects remain unseen. Ordinary
+                        // source sweeps still acquire missing artwork.
+                        const auto group = GetReconstructionGroup(tile, element);
+                        if (!group.has_value())
+                            return false;
+                        if (element->getType() == TileElementType::track)
+                        {
+                            const auto found = _trackTrajectoryCache.find(group->key);
+                            if (found == _trackTrajectoryCache.end()
+                                || found->second.dirty
+                                || found->second.surfaces.empty())
+                                return false;
+                        }
+                        else if (element->getType() == TileElementType::largeScenery)
+                        {
+                            const auto found = _largeSceneryGeometryCache.find(group->key);
+                            if (found == _largeSceneryGeometryCache.end()
+                                || found->second.dirty
+                                || found->second.surfaces.empty())
+                                return false;
+                        }
+                        else
+                        {
+                            const auto found = _parkEntranceGeometryCache.find(group->key);
+                            if (found == _parkEntranceGeometryCache.end()
+                                || found->second.dirty
+                                || found->second.surfaces.empty())
+                                return false;
+                        }
+                        hasObject = true;
+                        break;
+                    }
                     case TileElementType::smallScenery:
                     {
                         const auto* small = element->asSmallScenery();
