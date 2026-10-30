@@ -4538,9 +4538,9 @@
                     { tx * kCoordsXYStep, ty * kCoordsXYStep });
                 const bool mappedWallReady = FirstPersonLocalPlainWallReady(
                     { tx * kCoordsXYStep, ty * kCoordsXYStep });
-                // Resolve each group's available observation once per tile;
-                // large native meshes can contain thousands of faces.
                 std::vector<std::pair<uint64_t, uint8_t>> selectedGroupViews;
+                std::unordered_map<FirstPersonNativeInstanceRecord, uint8_t,
+                    FirstPersonNativeInstanceRecordHash> selectedNativeInstances;
                 while (staging.tileCursor.phase < 6)
                 {
                     const uint8_t phase = staging.tileCursor.phase;
@@ -4610,7 +4610,8 @@
                                     && !trajectory->second.surfaces.empty())
                                     return;
                             }
-                            uint8_t selected = FirstPersonReadyInstanceRotation(cached, surface, false);
+                            uint8_t selected = FirstPersonCachedReadyInstanceRotation(
+                                cached, surface, false, selectedNativeInstances);
                             if (surface.reconstructionGroup != 0)
                             {
                                 reconstructionDependencies.insert(

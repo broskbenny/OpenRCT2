@@ -1526,6 +1526,25 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
             return 0xffu;
         }
 
+        // Reuse the chosen observation for every face of an object.
+        template<typename Cache, typename Surface, typename Index>
+        [[nodiscard]] uint8_t FirstPersonCachedReadyInstanceRotation(
+            const Cache& cached, const Surface& surface,
+            bool streamed, Index& selected)
+        {
+            if (surface.sourceInstanceKey == 0
+                || surface.reconstructionGroup != 0)
+                return FirstPersonReadyRotation(cached, streamed);
+            const auto record = FirstPersonNativeRecordOf(surface);
+            const auto found = selected.find(record);
+            if (found != selected.end())
+                return found->second;
+            const uint8_t rotation =
+                FirstPersonReadyInstanceRotation(cached, surface, streamed);
+            selected.emplace(record, rotation);
+            return rotation;
+        }
+
         [[nodiscard]] std::optional<uint8_t> CachedVerticalTunnelHeight(uint64_t key)
         {
             const auto it = _staticPaintCache.find(key);

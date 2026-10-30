@@ -28,7 +28,7 @@ class SourceViewFallbackTest(unittest.TestCase):
             self.assertIn(f"{field}=%zu", paint)
         self.assertIn("nativeCapturesRemaining = 2;", paint)
         local = (ROOT / "src/openrct2/paint/FirstPersonRenderer.LocalScenery.inc").read_text(encoding="utf-8")
-        self.assertIn("FirstPersonReadyInstanceRotation(cached, surface, false)", world)
+        self.assertIn("FirstPersonCachedReadyInstanceRotation(\n                                cached, surface, false, selectedNativeInstances)", world)
         self.assertIn("FirstPersonReadyInstanceRotation(\n                                        cached, staticSurface, true)", paint)
         self.assertIn("FirstPersonReadyInstanceRotation(\n                                                    cached, surface, false)", local)
         self.assertIn("while (staging.tileCursor.phase <= 6)", local)
@@ -59,6 +59,7 @@ class SourceViewFallbackTest(unittest.TestCase):
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 struct Surface {
     uint64_t sourceInstanceKey=0, reconstructionGroup=0;
@@ -95,6 +96,12 @@ int main() {
     // No valid source never invents a replacement.
     cached.rotations[1].valid=false;
     assert(FirstPersonReadyInstanceRotation(cached,b,true)==255);
+    std::unordered_map<FirstPersonNativeInstanceRecord,uint8_t,
+        FirstPersonNativeInstanceRecordHash> resolved;
+    assert(FirstPersonCachedReadyInstanceRotation(cached,a,true,resolved)==2);
+    assert(FirstPersonCachedReadyInstanceRotation(cached,a,true,resolved)==2);
+    assert(FirstPersonCachedReadyInstanceRotation(cached,b,true,resolved)==255);
+    assert(resolved.size()==2);
     // A non-tile-backed paint surface retains the ordinary fallback.
     Surface unknown{};
     assert(FirstPersonReadyInstanceRotation(cached,unknown,true)==2);
