@@ -506,6 +506,81 @@ namespace OpenRCT2::Paint
         };
     }
 
+    // Raster degeneracy does not erase source evidence from long, thin
+    // certified members. Produce ONLY pixel locations on a projected line
+    // whose four corners stay within one source pixel of that line. The
+    // caller must separately verify sprite opacity and depth visibility.
+    struct FirstPersonSubpixelFaceWitness
+    {
+        ScreenCoordsXY pixel{};
+        float depth = 0.0f;
+    };
+
+    [[nodiscard]] inline std::vector<FirstPersonSubpixelFaceWitness>
+        FirstPersonSubpixelFaceSourceWitnesses(
+            const std::array<ScreenCoordsXY, 4>& screen,
+            const std::array<float, 4>& depth)
+    {
+        size_t start = 0, end = 0;
+        int64_t longest = 0;
+        for (size_t a = 0; a < screen.size(); ++a)
+        for (size_t b = a + 1; b < screen.size(); ++b)
+        {
+            const int64_t dx = int64_t(screen[b].x) - screen[a].x;
+            const int64_t dy = int64_t(screen[b].y) - screen[a].y;
+            const int64_t distance = dx * dx + dy * dy;
+            if (distance > longest)
+            {
+                longest = distance;
+                start = a;
+                end = b;
+            }
+        }
+        const int64_t dx = int64_t(screen[end].x) - screen[start].x;
+        const int64_t dy = int64_t(screen[end].y) - screen[start].y;
+        const int64_t steps = std::max(std::abs(dx), std::abs(dy));
+        constexpr int64_t kMaximumProjectedStroke = 128;
+        if (steps > kMaximumProjectedStroke)
+            return {};
+        if (steps <= 1)
+        {
+            const auto point = FirstPersonSubpixelFaceSourceSample(screen);
+            if (!point)
+                return {};
+            return { { *point, *std::max_element(depth.begin(), depth.end()) } };
+        }
+        for (const auto& point : screen)
+        {
+            const int64_t px = int64_t(point.x) - screen[start].x;
+            const int64_t py = int64_t(point.y) - screen[start].y;
+            const int64_t cross = px * dy - py * dx;
+            // Reject ordinary surfaces. This only recovers a truly thin
+            // projected ribbon; it cannot fill an unsampled mesh face.
+            if (cross * cross > longest)
+                return {};
+        }
+        std::vector<FirstPersonSubpixelFaceWitness> result;
+        result.reserve(size_t(steps + 1));
+        for (int64_t i = 0; i <= steps; ++i)
+        {
+            const float t = float(i) / float(steps);
+            const ScreenCoordsXY point{
+                int32_t(std::lround(double(screen[start].x) + double(dx) * t)),
+                int32_t(std::lround(double(screen[start].y) + double(dy) * t))
+            };
+            const float z = depth[start] + (depth[end] - depth[start]) * t;
+            if (!result.empty()
+                && result.back().pixel.x == point.x
+                && result.back().pixel.y == point.y)
+            {
+                result.back().depth = std::max(result.back().depth, z);
+                continue;
+            }
+            result.push_back({ point, z });
+        }
+        return result;
+    }
+
     struct FirstPersonDepthVisibility
     {
         FirstPersonSilhouette projected;

@@ -421,9 +421,10 @@
                             && hull != nullptr
                             && hull->sourceTriangulatedWireSelected)
                         {
-                            const auto sample =
-                                FirstPersonSubpixelFaceSourceSample(projected);
-                            if (sample.has_value())
+                            const auto witnesses =
+                                FirstPersonSubpixelFaceSourceWitnesses(
+                                    projected, depth);
+                            if (!witnesses.empty())
                             {
                                 const auto paintOffset =
                                     FirstPersonSmallSceneryPaintOffset(
@@ -431,38 +432,49 @@
                                 const auto origin =
                                     Translate3DTo2DWithZ(
                                         source.rotation, { paintOffset, 0 });
-                                const int32_t u =
-                                    sample->x - origin.x - source.g1->xOffset
-                                    + source.groundingShiftU;
-                                const int32_t v =
-                                    sample->y - origin.y - source.g1->yOffset
-                                    + source.groundingShiftV;
-                                const auto owned =
-                                    depthOwners[source.rotation].find(
-                                        FirstPersonSilhouettePixelKey(
-                                            sample->x, sample->y));
-                                const float frontDepth =
-                                    *std::max_element(depth.begin(), depth.end());
-                                // Reject independently closer front surfaces;
-                                // a narrow rod's own width is at most about
-                                // one unit in canonical isometric depth.
-                                const bool unoccluded =
-                                    owned == depthOwners[source.rotation].end()
-                                    || owned->second.depth <= frontDepth + 1.0f;
-                                if (u >= 0 && v >= 0
-                                    && u < source.g1->width
-                                    && v < source.g1->height
-                                    && source.pixels[size_t(v)
-                                        * size_t(source.g1->width)
-                                        + size_t(u)] != 0
-                                    && unoccluded)
+                                for (const auto& witness : witnesses)
                                 {
+                                    const int32_t u =
+                                        witness.pixel.x - origin.x
+                                        - source.g1->xOffset
+                                        + source.groundingShiftU;
+                                    const int32_t v =
+                                        witness.pixel.y - origin.y
+                                        - source.g1->yOffset
+                                        + source.groundingShiftV;
                                     visibility.projected.add(
-                                        sample->x, sample->y);
+                                        witness.pixel.x, witness.pixel.y);
+                                    if (u < 0 || v < 0
+                                        || u >= source.g1->width
+                                        || v >= source.g1->height
+                                        || source.pixels[size_t(v)
+                                            * size_t(source.g1->width)
+                                            + size_t(u)] == 0)
+                                        continue;
+                                    const auto owner =
+                                        depthOwners[source.rotation].find(
+                                            FirstPersonSilhouettePixelKey(
+                                                witness.pixel.x,
+                                                witness.pixel.y));
+                                    // Unlike the former maximum-corner-depth
+                                    // test, depth follows the actual projected
+                                    // line. A nearer unrelated face cannot
+                                    // lend its pixels to an obscured member.
+                                    if (owner != depthOwners[source.rotation].end()
+                                        && owner->second.depth
+                                            > witness.depth + 1.0f)
+                                        continue;
                                     visibility.visible.add(
-                                        sample->x, sample->y);
-                                    visibilityCoverage = 1.0f;
+                                        witness.pixel.x, witness.pixel.y);
                                 }
+                                // One coincidental opaque pixel must not
+                                // certify an otherwise unsupported long rod.
+                                // Full-size faces never reach this recovery.
+                                if (visibility.visible.size()
+                                        >= (visibility.projected.size() + 1) / 2
+                                    && (witnesses.size() <= 2
+                                        || visibility.visible.size() >= 2))
+                                    visibilityCoverage = visibility.coverage();
                             }
                         }
                         if (visibilityCoverage < 0.20f)
