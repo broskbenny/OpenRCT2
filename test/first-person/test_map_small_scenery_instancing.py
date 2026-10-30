@@ -65,8 +65,14 @@ class MapSmallSceneryTest(unittest.TestCase):
         end = small.index("bool FirstPersonMapSmallSceneryCanPublish(", begin)
         self.assertNotIn("SmallSceneryFlag::flag17", small[begin:end])
         for guard in ("!gTrackDesignSaveMode", "!small.isGhost()",
-                      "!small.isInvisible()", "!small.needsSupports()"):
+                      "!small.isInvisible()"):
             self.assertIn(guard, small)
+        # The body and native wooden truss have separate publication
+        # responsibilities, even when both originate from one TileElement.
+        self.assertNotIn("!small.needsSupports()", small[begin:end])
+        self.assertIn("nativeSmallBody", core)
+        self.assertIn("mapOwnedNativeKeys.contains(source.sourceInstanceKey)", local)
+        self.assertIn("small->needsSupports()", local)
 
     def test_randomized_canonical_transform_matches_existing_native_geometry(self):
         rng = random.Random(20261019)
