@@ -141,7 +141,7 @@
         [[nodiscard]] bool FirstPersonTileObjectsMapOwnedAndReady(
             CoordsXY tile)
         {
-            const auto* element = MapGetFirstElementAt(tile);
+            auto* element = MapGetFirstElementAt(tile);
             if (element == nullptr)
                 return false;
             bool hasObject = false;
