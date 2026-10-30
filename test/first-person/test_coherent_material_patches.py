@@ -99,6 +99,17 @@ int main() {
     auto f=SelectFirstPersonCoherentMaterialPatches(faces,admitted);
     assert(f.retainedFaces==0);
 
+    // Reproduce the recorded 263398 classification: 641 hull faces,
+    // 254 untextured, 116 underside, 2 empty, 269 textured. The former
+    // count-only gate rejected all 269; a physically connected source-
+    // textured patch must survive instead of being globally erased.
+    faces.clear(); admitted.clear();
+    for (int i=0; i<269; ++i)
+        push(float((i%16)*2), float((i/16)*2));
+    assert(254 >= 128 && 254 > 269/2);
+    auto recorded = SelectFirstPersonCoherentMaterialPatches(faces, admitted);
+    assert(recorded.retainedFaces == 269);
+
     // Source geometry and material do not imply a manufactured backing.
     faces.clear(); admitted.clear();
     assert(SelectFirstPersonCoherentMaterialPatches(faces,admitted)
