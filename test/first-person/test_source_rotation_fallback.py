@@ -13,8 +13,12 @@ class SourceViewFallbackTest(unittest.TestCase):
     def test_resident_and_streamed_reconstruction_use_same_fallback(self):
         world = (ROOT / "src/openrct2/paint/FirstPersonRenderer.World.inc").read_text(encoding="utf-8")
         paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(encoding="utf-8")
-        self.assertIn("selected = FirstPersonAvailableGroupSourceRotation(\n                                    cached, captured, surface.reconstructionGroup, false);", world)
-        self.assertIn("selected = FirstPersonAvailableGroupSourceRotation(\n                                    cached, group->second.selectedRotation,\n                                    staticSurface.reconstructionGroup, true);", paint)
+        self.assertIn("selected = FirstPersonAvailableGroupSourceRotation(\n                                        cached, captured, surface.reconstructionGroup, false);", world)
+        self.assertIn("selected = FirstPersonAvailableGroupSourceRotation(\n                                        cached, group->second.selectedRotation,\n                                        staticSurface.reconstructionGroup, true);", paint)
+        for source in (world, paint):
+            self.assertIn("std::vector<std::pair<uint64_t, uint8_t>> selectedGroupViews;", source)
+            self.assertIn("const auto prior = std::find_if(", source)
+            self.assertIn("selectedGroupViews.emplace_back(", source)
         self.assertIn("FP_SOURCE_COVERAGE visibleTiles=%zu objectTiles=%zu", paint)
         for field in (
             "coldTiles", "dirtyTiles", "observedTiles",
