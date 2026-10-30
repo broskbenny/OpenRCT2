@@ -677,6 +677,7 @@
                                         {
                                             surface.interactionTarget = target;
                                             surface.sourceInstanceKey = instance;
+                                            surface.diagnosticSourceTile = mapTile;
                                             add(surface, owningRegion, true);
                                         }
                                     }

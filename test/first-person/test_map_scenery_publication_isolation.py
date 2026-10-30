@@ -61,6 +61,7 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
         self.assertIn("current->second.selectionGeneration == staging.selectionGeneration", local)
         self.assertIn("current->second.viewFlags == staging.viewFlags", local)
         self.assertIn("const uint64_t sourceRegion = FirstPersonGpuRegionKey(tx, ty);", local)
+        self.assertIn("surface.diagnosticSourceTile = mapTile;", local)
         self.assertIn("add(carried, sourceRegion);", local)
 
         # Exact-object retention never survives authoritative replacement.
