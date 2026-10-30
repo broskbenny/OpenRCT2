@@ -581,6 +581,17 @@ namespace OpenRCT2::Paint
         return result;
     }
 
+    // Geometry can be certified without sufficient material evidence.
+    // Require genuine opaque, non-occluded source witnesses for at least
+    // half of a degenerate line; one stray pixel cannot materialise a rail.
+    [[nodiscard]] constexpr bool FirstPersonSubpixelLineHasMaterialEvidence(
+        size_t projected, size_t supported)
+    {
+        return projected != 0 && supported <= projected
+            && supported >= (projected + 1) / 2
+            && (projected <= 2 || supported >= 2);
+    }
+
     struct FirstPersonDepthVisibility
     {
         FirstPersonSilhouette projected;

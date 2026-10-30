@@ -20,8 +20,9 @@ class SubpixelSourceMaterialWitnessTest(unittest.TestCase):
         self.assertIn("source.pixels[size_t(v)", small)
         self.assertIn("owner->second.depth", small)
         self.assertIn("witness.depth + 1.0f", small)
-        self.assertIn("visibility.visible.size() >= 2", small)
-        self.assertIn("(visibility.projected.size() + 1) / 2", small)
+        self.assertIn("FirstPersonSubpixelLineHasMaterialEvidence(", small)
+        self.assertIn("visibility.projected.size()", small)
+        self.assertIn("visibility.visible.size()", small)
 
     def test_production_line_witness_is_bounded_and_excludes_real_faces(self):
         compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
@@ -70,6 +71,13 @@ int main() {
     auto slantedWide = FirstPersonSubpixelFaceSourceWitnesses(
         {Point{0, 0}, Point{30, 30}, Point{26, 34}, Point{-4, 4}}, depth);
     assert(slantedWide.empty());
+    assert(FirstPersonSubpixelLineHasMaterialEvidence(1, 1));
+    assert(FirstPersonSubpixelLineHasMaterialEvidence(2, 1));
+    assert(FirstPersonSubpixelLineHasMaterialEvidence(32, 16));
+    assert(!FirstPersonSubpixelLineHasMaterialEvidence(32, 1));
+    assert(!FirstPersonSubpixelLineHasMaterialEvidence(32, 15));
+    assert(!FirstPersonSubpixelLineHasMaterialEvidence(32, 33));
+    assert(!FirstPersonSubpixelLineHasMaterialEvidence(0, 0));
 }
 """
         with tempfile.TemporaryDirectory() as folder:

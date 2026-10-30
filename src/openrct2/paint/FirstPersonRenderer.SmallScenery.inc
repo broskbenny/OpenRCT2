@@ -470,10 +470,9 @@
                                 // One coincidental opaque pixel must not
                                 // certify an otherwise unsupported long rod.
                                 // Full-size faces never reach this recovery.
-                                if (visibility.visible.size()
-                                        >= (visibility.projected.size() + 1) / 2
-                                    && (witnesses.size() <= 2
-                                        || visibility.visible.size() >= 2))
+                                if (FirstPersonSubpixelLineHasMaterialEvidence(
+                                        visibility.projected.size(),
+                                        visibility.visible.size()))
                                     visibilityCoverage = visibility.coverage();
                             }
                         }
