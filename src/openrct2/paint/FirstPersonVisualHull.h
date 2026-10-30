@@ -284,6 +284,32 @@ namespace OpenRCT2::Paint
         };
         std::unordered_map<Edge, size_t, EdgeHash> edgeOwners;
         edgeOwners.reserve(count * 4);
+        // Greedy voxel boundaries frequently form T-junctions: a long
+        // face edge shares only PART of a neighbouring smaller edge.
+        // Exact endpoint matching alone falsely labels these as isolated
+        // glitter. Admit only a positive-length common physical edge.
+        using AxisLine = std::array<int32_t, 3>;
+        struct AxisHash
+        {
+            size_t operator()(const AxisLine& key) const
+            {
+                uint64_t h = 14695981039346656037ull;
+                for (const auto value : key)
+                {
+                    h ^= uint32_t(value);
+                    h *= 1099511628211ull;
+                }
+                return size_t(h);
+            }
+        };
+        struct Interval
+        {
+            int32_t low, high;
+            size_t face;
+        };
+        std::unordered_map<AxisLine, std::vector<Interval>, AxisHash>
+            axisEdges;
+        axisEdges.reserve(count * 2);
         for (size_t i = 0; i < count; ++i)
         {
             const size_t index = texturedFaceIndices[i];
@@ -302,6 +328,28 @@ namespace OpenRCT2::Paint
                 const auto [found, inserted] = edgeOwners.emplace(key, i);
                 if (!inserted)
                     parent[rootOf(i)] = rootOf(found->second);
+                int axis = -1;
+                for (int component = 0; component < 3; ++component)
+                {
+                    if (a[component] == b[component])
+                        continue;
+                    if (axis != -1)
+                    {
+                        axis = -2;
+                        break;
+                    }
+                    axis = component;
+                }
+                if (axis < 0)
+                    continue;
+                const AxisLine line{
+                    axis, a[(axis + 1) % 3], a[(axis + 2) % 3] };
+                auto& intervals = axisEdges[line];
+                for (const auto& other : intervals)
+                    if (std::max(a[axis], other.low)
+                        < std::min(b[axis], other.high))
+                        parent[rootOf(i)] = rootOf(other.face);
+                intervals.push_back({ a[axis], b[axis], i });
             }
         }
 

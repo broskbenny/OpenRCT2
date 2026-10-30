@@ -85,6 +85,23 @@ int main() {
     auto d=SelectFirstPersonCoherentMaterialPatches(faces,admitted);
     assert(d.retainedFaces==0);
 
+    // A large panel touching two shorter panels along only PARTS of its
+    // side is one physical object. Exact-endpoint adjacency lost these.
+    faces.clear(); admitted.clear();
+    push(0,0,16);
+    push(16,0,8);
+    push(16,8,8);
+    auto junction = SelectFirstPersonCoherentMaterialPatches(faces,admitted);
+    assert(junction.retainedFaces==3);
+    assert(junction.keep[0] && junction.keep[1] && junction.keep[2]);
+
+    // Mere corner touching is still disconnected from source-backed mass.
+    faces.clear(); admitted.clear();
+    push(0,0,16);
+    push(16,16,4);
+    auto onlyCorner = SelectFirstPersonCoherentMaterialPatches(faces,admitted);
+    assert(onlyCorner.retainedFaces==1 && !onlyCorner.keep[1]);
+
     // A real broad textured panel does not need eight artificial facets.
     faces.clear(); admitted.clear();
     push(0,0,16);
