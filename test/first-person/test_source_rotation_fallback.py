@@ -27,6 +27,87 @@ class SourceViewFallbackTest(unittest.TestCase):
         ):
             self.assertIn(f"{field}=%zu", paint)
         self.assertIn("nativeCapturesRemaining = 2;", paint)
+        local = (ROOT / "src/openrct2/paint/FirstPersonRenderer.LocalScenery.inc").read_text(encoding="utf-8")
+        self.assertIn("FirstPersonReadyInstanceRotation(cached, surface, false)", world)
+        self.assertIn("FirstPersonReadyInstanceRotation(\n                                        cached, staticSurface, true)", paint)
+        self.assertIn("FirstPersonReadyInstanceRotation(\n                                                    cached, surface, false)", local)
+        self.assertIn("while (staging.tileCursor.phase <= 6)", local)
+        self.assertIn("selectedNativeInstances", paint)
+        self.assertIn("selectedNativeInstances", local)
+
+
+    def test_compiled_per_object_rotation_selection(self):
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if not compiler:
+            self.skipTest("C++20 compiler unavailable")
+        core = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text(encoding="utf-8")
+        header = (ROOT / "src/openrct2/paint/FirstPersonStreaming.h").read_text(encoding="utf-8")
+        first = core.index("        template<typename Cache>" + chr(10)
+                           + "        [[nodiscard]] uint8_t FirstPersonReadyRotation(")
+        last = core.index("        void RequestFirstPersonNativeSceneryRetry(", first)
+        ready = core[first:last]
+        begin = core.index("        template<typename Cache, typename Surface>" + chr(10)
+                           + "        [[nodiscard]] uint8_t FirstPersonReadyInstanceRotation(")
+        end = core.index("        [[nodiscard]] std::optional<uint8_t> CachedVerticalTunnelHeight", begin)
+        selector = core[begin:end]
+        recordStart = header.index("    struct FirstPersonNativeInstanceRecord")
+        recordEnd = header.index("    // The caller must certify unchanged tile bytes", recordStart)
+        record = header[recordStart:recordEnd]
+        code = """
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+struct Surface {
+    uint64_t sourceInstanceKey=0, reconstructionGroup=0;
+    uint8_t diagnosticSemanticRole=0;
+};
+struct View {
+    bool valid=false;
+    std::vector<Surface> residentSurfaces, streamedSurfaces;
+};
+struct Cache {
+    std::array<View,4> rotations{};
+    bool hasSelectedRotation=false;
+    uint8_t selectedRotation=0;
+};
+""" + record + ready + selector + """
+int main() {
+    Cache cached;
+    cached.hasSelectedRotation=true;
+    cached.selectedRotation=2;
+    cached.rotations[1].valid=true;
+    cached.rotations[2].valid=true;
+    Surface a{100,0,1}, b{200,0,1}, support{100,0,2};
+    cached.rotations[1].streamedSurfaces={a,b,support};
+    cached.rotations[2].streamedSurfaces={a,support};
+    // A's current view must not remove B, even though both share a tile.
+    assert(FirstPersonReadyInstanceRotation(cached,a,true)==2);
+    assert(FirstPersonReadyInstanceRotation(cached,b,true)==1);
+    assert(FirstPersonReadyInstanceRotation(cached,support,true)==2);
+    // A ready resident face wins only for its own physical component.
+    cached.rotations[1].residentSurfaces={a,b};
+    cached.rotations[2].residentSurfaces={a};
+    assert(FirstPersonReadyInstanceRotation(cached,a,false)==2);
+    assert(FirstPersonReadyInstanceRotation(cached,b,false)==1);
+    // No valid source never invents a replacement.
+    cached.rotations[1].valid=false;
+    assert(FirstPersonReadyInstanceRotation(cached,b,true)==255);
+    // A non-tile-backed paint surface retains the ordinary fallback.
+    Surface unknown{};
+    assert(FirstPersonReadyInstanceRotation(cached,unknown,true)==2);
+}
+"""
+        with tempfile.TemporaryDirectory() as folder:
+            cpp, exe = Path(folder)/"rotation.cpp", Path(folder)/"rotation"
+            cpp.write_text(code, encoding="utf-8")
+            result = subprocess.run([compiler, "-std=c++20", "-O2", str(cpp), "-o", str(exe)],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            run = subprocess.run([str(exe)], capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
 
     def test_nonempty_native_variant_fallback_policy(self):
         compiler = shutil.which("g++") or shutil.which("clang++")

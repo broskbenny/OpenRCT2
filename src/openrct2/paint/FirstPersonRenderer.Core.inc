@@ -1493,6 +1493,39 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
             // Keep the prior view valid until its replacement is painted.
         }
 
+        // Each source-backed tile element is an independent presentation
+        // record. A newly captured rotation can contain scenery A while
+        // missing B; never select A's view as proof that B was captured.
+        template<typename Cache, typename Surface>
+        [[nodiscard]] uint8_t FirstPersonReadyInstanceRotation(
+            const Cache& cached, const Surface& surface, bool streamed)
+        {
+            if (surface.sourceInstanceKey == 0
+                || surface.reconstructionGroup != 0)
+                return FirstPersonReadyRotation(cached, streamed);
+            const auto record = FirstPersonNativeRecordOf(surface);
+            const auto available = [&](uint8_t rotation) {
+                if (rotation >= cached.rotations.size())
+                    return false;
+                const auto& variant = cached.rotations[rotation];
+                if (!variant.valid)
+                    return false;
+                const auto& faces = streamed
+                    ? variant.streamedSurfaces : variant.residentSurfaces;
+                return std::any_of(faces.begin(), faces.end(),
+                    [&](const auto& candidate) {
+                        return FirstPersonNativeRecordOf(candidate) == record;
+                    });
+            };
+            if (cached.hasSelectedRotation
+                && available(cached.selectedRotation))
+                return cached.selectedRotation;
+            for (uint8_t rotation = 0; rotation < cached.rotations.size(); ++rotation)
+                if (available(rotation))
+                    return rotation;
+            return 0xffu;
+        }
+
         [[nodiscard]] std::optional<uint8_t> CachedVerticalTunnelHeight(uint64_t key)
         {
             const auto it = _staticPaintCache.find(key);

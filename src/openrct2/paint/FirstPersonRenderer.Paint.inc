@@ -1578,6 +1578,8 @@
                 // candidate view. Cache it per tile: never do a quadratic
                 // scan once per billboard in the regular frame path.
                 std::vector<std::pair<uint64_t, uint8_t>> selectedGroupViews;
+                std::unordered_map<FirstPersonNativeInstanceRecord, uint8_t,
+                    FirstPersonNativeInstanceRecordHash> selectedNativeInstances;
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
                     const auto& variant = cached.rotations[rotation];
@@ -1607,6 +1609,20 @@
                                 }
                             }
                             uint8_t selected = FirstPersonReadyRotation(cached, true);
+                            if (staticSurface.reconstructionGroup == 0
+                                && staticSurface.sourceInstanceKey != 0)
+                            {
+                                const auto record = FirstPersonNativeRecordOf(staticSurface);
+                                const auto found = selectedNativeInstances.find(record);
+                                if (found != selectedNativeInstances.end())
+                                    selected = found->second;
+                                else
+                                {
+                                    selected = FirstPersonReadyInstanceRotation(
+                                        cached, staticSurface, true);
+                                    selectedNativeInstances.emplace(record, selected);
+                                }
+                            }
                             if (staticSurface.reconstructionGroup != 0)
                             {
                                 const auto group = _reconstructionRotations.find(staticSurface.reconstructionGroup);

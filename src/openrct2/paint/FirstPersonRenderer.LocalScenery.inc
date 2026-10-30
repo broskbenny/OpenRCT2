@@ -718,7 +718,11 @@
                         continue;
                     }
                     const auto& cached = it->second;
-                    while (staging.tileCursor.phase <= 3)
+                    // Native source rotation is selected per exact tile
+                    // element, not once for every object in this cell.
+                    std::unordered_map<FirstPersonNativeInstanceRecord, uint8_t,
+                        FirstPersonNativeInstanceRecordHash> selectedNativeInstances;
+                    while (staging.tileCursor.phase <= 6)
                     {
                         const uint8_t phase = staging.tileCursor.phase;
                         const std::vector<FirstPersonSurface>* source = nullptr;
@@ -726,11 +730,10 @@
                             source = &cached.semanticResidentSurfaces;
                         else if (phase == 2 && !cached.animated)
                             source = &cached.cameraIndependentResidentSurfaces;
-                        else if (phase == 3 && !cached.animated)
+                        else if (phase >= 3 && phase <= 6 && !cached.animated)
                         {
-                            const uint8_t rotation = FirstPersonReadyRotation(cached, false);
-                            if (rotation < cached.rotations.size()
-                                && cached.rotations[rotation].valid)
+                            const uint8_t rotation = phase - 3;
+                            if (cached.rotations[rotation].valid)
                                 source = &cached.rotations[rotation].residentSurfaces;
                         }
                         if (source == nullptr)
@@ -741,11 +744,35 @@
                         if (!ResumeFirstPersonPacketSurfaces(
                                 *source, staging.tileCursor, tileBudget,
                                 [&](const FirstPersonSurface& surface) {
+                                    if (phase >= 3)
+                                    {
+                                        if (surface.reconstructionGroup != 0)
+                                            return;
+                                        uint8_t selected = 0xffu;
+                                        const auto record = FirstPersonNativeRecordOf(surface);
+                                        if (record.instance != 0)
+                                        {
+                                            const auto found = selectedNativeInstances.find(record);
+                                            if (found != selectedNativeInstances.end())
+                                                selected = found->second;
+                                            else
+                                            {
+                                                selected = FirstPersonReadyInstanceRotation(
+                                                    cached, surface, false);
+                                                selectedNativeInstances.emplace(record, selected);
+                                            }
+                                        }
+                                        else
+                                            selected = FirstPersonReadyInstanceRotation(
+                                                cached, surface, false);
+                                        if (selected != phase - 3)
+                                            return;
+                                    }
                                     add(surface, owningRegion);
                                 }))
                             break;
                     }
-                    if (staging.tileCursor.phase <= 3)
+                    if (staging.tileCursor.phase <= 6)
                         break;
                     staging.tileCursor.nextTile();
                     ++staging.nextTile;
