@@ -47,8 +47,10 @@ class ColdObjectNativeCapturePriorityTest(unittest.TestCase):
         paint = PAINT.read_text(encoding="utf-8")
         local = (ROOT / "src/openrct2/paint/FirstPersonRenderer.LocalScenery.inc"
                  ).read_text(encoding="utf-8")
+        # Two cold-capture priority gates plus the last-known-good
+        # restoration barrier that avoids native/map-owned duplication.
         self.assertEqual(paint.count(
-            "FirstPersonTileObjectsMapOwnedAndReady(tile)"), 2)
+            "FirstPersonTileObjectsMapOwnedAndReady(tile)"), 3)
         self.assertIn("bool FirstPersonTileObjectsMapOwnedAndReady(", local)
         self.assertIn("FirstPersonLocalFlatPathReady(tile)", local)
         self.assertIn("FirstPersonLocalPlainWallReady(tile)", local)
