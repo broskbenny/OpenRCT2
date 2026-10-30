@@ -234,6 +234,12 @@
             // foreground TileElementPaintSetup/PaintSessionArrange work.
             size_t nativeCapturesRemaining = 2;
             std::array<std::unordered_set<uint64_t>, 4> missesByRotation;
+            // Transactional native source refresh: retain previous paint
+            // until the replacement session has actually emitted artwork.
+            // At most two views are captured per frame; moving the vectors
+            // avoids copying thousands of cached surfaces.
+            std::array<std::unordered_map<uint64_t, StaticPaintRotationCache>, 4>
+                previousReadyNativeViews;
             for (auto& misses : missesByRotation)
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
             std::unordered_set<uint64_t>
@@ -590,21 +596,9 @@
                     if (stale && nativeCapturesRemaining != 0)
                     {
                         --nativeCapturesRemaining;
-                        cached.nativeRetryMask &=
-                            uint8_t(~uint8_t(1u << rotation));
-                        // Another native view is additional artwork evidence
-                        // for the same physical object. Preserve already-ready
-                        // camera-independent reconstruction and merge/deduplicate
-                        // the new observation below; authoritative source
-                        // invalidation already clears these caches explicitly.
-                        cameraIndependentRefreshKeys.insert(key);
-                        variant.valid = true;
-                        variant.lastPainted = frame;
-                        variant.lastAnimationGeneration = animationGeneration;
-                        variant.residentSurfaces.clear();
-                        variant.streamedSurfaces.clear();
-                        variant.semanticComponents.clear();
-                        variant.semanticValid = false;
+                        // Schedule, but DO NOT clear the currently ready
+                        // source before PaintSessionAlloc succeeds. A worker
+                        // retry or a camera turn is not a world deletion.
                         missesByRotation[rotation].insert(key);
                     }
                 }
@@ -700,15 +694,9 @@
                         // Exactly the same invalidation/capture path as a
                         // camera-requested view. Do not change which source
                         // view is selected for presentation.
-                        variant.valid = true;
-                        variant.lastPainted = frame;
-                        variant.lastAnimationGeneration = sourceGeneration;
-                        variant.residentSurfaces.clear();
-                        variant.streamedSurfaces.clear();
-                        variant.semanticComponents.clear();
-                        variant.semanticValid = false;
+                        // Optional evidence is staged just like requested
+                        // source views. Do not withdraw the last-good view.
                         missesByRotation[rotation].insert(key);
-                        cameraIndependentRefreshKeys.insert(key);
                         --nativeCapturesRemaining;
                         --evidenceRemaining;
                         break;
@@ -883,8 +871,9 @@
                         nativeSessionAllocated - nativeSessionStart).count();
                     if (session == nullptr)
                     {
-                        for (const auto key : missesByRotation[rotation])
-                            _staticPaintCache[key].rotations[rotation].valid = false;
+                        // Planned views have not been touched. Retain them
+                        // instead of converting an allocation failure into
+                        // disappearance of an entire source rotation.
                         for (const auto key : cameraIndependentRefreshKeys)
                         {
                             MarkStaticRegionDirtyForTile(
@@ -903,6 +892,33 @@
                         if (item.staticMiss)
                         {
                             ++nativeStaticItems;
+                            // Only now is a replacement capture actually
+                            // possible. Snapshot the previous static variant
+                            // by move, then reconstruct its new candidate.
+                            // Never retain an animated or source-invalidated
+                            // view, which could display deleted map objects.
+                            const auto pendingCache = _staticPaintCache.find(item.key);
+                            if (pendingCache != _staticPaintCache.end())
+                            {
+                                auto& cached = pendingCache->second;
+                                auto& variant = cached.rotations[rotation];
+                                auto old = std::move(variant);
+                                variant = {};
+                                variant.residentFingerprint = old.residentFingerprint;
+                                variant.hadCoherentResident = old.hadCoherentResident;
+                                variant.semanticFingerprint = old.semanticFingerprint;
+                                variant.valid = true;
+                                variant.lastPainted = frame;
+                                variant.lastAnimationGeneration = sourceGeneration;
+                                if (old.valid && !cached.animated
+                                    && (!old.residentSurfaces.empty()
+                                        || !old.streamedSurfaces.empty()))
+                                    previousReadyNativeViews[rotation].emplace(
+                                        item.key, std::move(old));
+                                cached.nativeRetryMask &=
+                                    uint8_t(~uint8_t(1u << rotation));
+                                cameraIndependentRefreshKeys.insert(item.key);
+                            }
                             std::vector<FirstPersonPaintSemanticComponent>
                                 semanticComponents;
                             session->CurrentSource = PaintStructSource::tile;
@@ -1315,6 +1331,25 @@
                 }
             }
 
+            // Publication barrier: a valid previous source is not replaced
+            // with an empty capture, unless a completed map-owned model
+            // already supplies every object on the tile. Every authoritative
+            // map edit invalidates these old variants before admission.
+            for (uint8_t rotation = 0; rotation < 4; ++rotation)
+            for (auto& [key, previous] : previousReadyNativeViews[rotation])
+            {
+                const auto found = _staticPaintCache.find(key);
+                if (found == _staticPaintCache.end() || found->second.dirty)
+                    continue;
+                auto& current = found->second.rotations[rotation];
+                const CoordsXY tile{
+                    int32_t(key >> 32) * kCoordsXYStep,
+                    int32_t(key) * kCoordsXYStep };
+                if (FirstPersonKeepLastGoodNativeView(
+                        previous, current,
+                        FirstPersonTileObjectsMapOwnedAndReady(tile)))
+                    current = std::move(previous);
+            }
             const auto nativeCaptureDone = PaintClock::now();
             // Report only serious native stalls, with phase attribution.
             // When they are resolved this tag becomes silent automatically.

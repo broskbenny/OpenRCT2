@@ -316,6 +316,23 @@ namespace OpenRCT2::Paint
         return mapChanged || animated || cameraDependent || inspectorActive;
     }
 
+    // An attempted refresh is not a successful replacement. This may only
+    // restore a prior view of an unchanged static source: invalidated map
+    // elements and animated views are excluded at the call site. A fully
+    // mapped tile has its own authoritative body and must not inherit a
+    // camera-facing native duplicate.
+    template<typename View>
+    [[nodiscard]] inline bool FirstPersonKeepLastGoodNativeView(
+        const View& previous, const View& captured,
+        bool mappedTileComplete)
+    {
+        return previous.valid && !mappedTileComplete
+            && (!previous.residentSurfaces.empty()
+                || !previous.streamedSurfaces.empty())
+            && captured.residentSurfaces.empty()
+            && captured.streamedSurfaces.empty();
+    }
+
     // Native paint is still needed for terrain walls, cliffs, fences and
     // unsupported objects. Give cold object tiles an independent, bounded
     // lookahead while leaving every fourth frame to the complete sequential
