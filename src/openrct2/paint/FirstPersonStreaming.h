@@ -369,11 +369,21 @@ namespace OpenRCT2::Paint
             for (const auto& face : oldFaces)
             {
                 const auto key = FirstPersonNativeRecordOf(face);
-                if (key.instance == 0 || currentKeys.contains(key)
-                    || !mayRetain(key))
+                if (key.instance == 0 || currentKeys.contains(key))
                     continue;
+                if (!retained.contains(key))
+                {
+                    // The authoritative ownership lookup can traverse map
+                    // elements. Do it ONCE per instance/role, never once
+                    // per triangle of a large sprite-derived mesh.
+                    if (!mayRetain(key))
+                    {
+                        currentKeys.insert(key);
+                        continue;
+                    }
+                    retained.insert(key);
+                }
                 nextFaces.push_back(face);
-                retained.insert(key);
                 ++count;
             }
             return count;

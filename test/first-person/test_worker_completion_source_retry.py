@@ -101,9 +101,16 @@ int main() {
         {101,1,11}, {101,1,12}, {101,2,13},
         {202,1,21}, {303,1,31}, {0,1,88}};
     current.streamedSurfaces = {{101,1,100}, {999,1,999}};
+    int ownershipChecks = 0;
     auto count = FirstPersonCarryMissingNativeInstances(
-        previous, current, [](auto record) { return record.instance != 303; });
+        previous, current, [&](auto record) {
+            ++ownershipChecks;
+            return record.instance != 303;
+        });
     assert(count == 2);
+    // Two old faces share the same 101/body source record. Check ownership
+    // once for each missing identity, not once per face.
+    assert(ownershipChecks == 3);
     assert(current.streamedSurfaces.size() == 4);
     assert(current.streamedSurfaces[2].sourceInstanceKey == 101);
     assert(current.streamedSurfaces[2].diagnosticSemanticRole == 2);
