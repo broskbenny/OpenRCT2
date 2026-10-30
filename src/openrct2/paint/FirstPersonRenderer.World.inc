@@ -4538,6 +4538,9 @@
                     { tx * kCoordsXYStep, ty * kCoordsXYStep });
                 const bool mappedWallReady = FirstPersonLocalPlainWallReady(
                     { tx * kCoordsXYStep, ty * kCoordsXYStep });
+                // Resolve each group's available observation once per tile;
+                // large native meshes can contain thousands of faces.
+                std::vector<std::pair<uint64_t, uint8_t>> selectedGroupViews;
                 while (staging.tileCursor.phase < 6)
                 {
                     const uint8_t phase = staging.tileCursor.phase;
@@ -4620,8 +4623,19 @@
                                     ? group->second.selectedRotation : 0xffu;
                                 staging.selectedGroups.emplace(
                                     surface.reconstructionGroup, captured);
-                                selected = FirstPersonAvailableGroupSourceRotation(
-                                    cached, captured, surface.reconstructionGroup, false);
+                                const auto prior = std::find_if(
+                                    selectedGroupViews.begin(), selectedGroupViews.end(),
+                                    [&](const auto& item) {
+                                        return item.first == surface.reconstructionGroup;
+                                    });
+                                if (prior != selectedGroupViews.end())
+                                    selected = prior->second;
+                                else
+                                {
+                                    selected = FirstPersonAvailableGroupSourceRotation(
+                                        cached, captured, surface.reconstructionGroup, false);
+                                    selectedGroupViews.emplace_back(surface.reconstructionGroup, selected);
+                                }
                             }
                             if (selected == phase - 2)
                                 addSurface(surface, true);

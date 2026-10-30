@@ -1516,6 +1516,10 @@
                             staticSurface);
                     }
                 }
+                // Native group source selection examines all faces of its
+                // candidate view. Cache it per tile: never do a quadratic
+                // scan once per billboard in the regular frame path.
+                std::vector<std::pair<uint64_t, uint8_t>> selectedGroupViews;
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
                     const auto& variant = cached.rotations[rotation];
@@ -1550,9 +1554,21 @@
                                 const auto group = _reconstructionRotations.find(staticSurface.reconstructionGroup);
                                 if (group == _reconstructionRotations.end() || !group->second.hasSelectedRotation)
                                     continue;
-                                selected = FirstPersonAvailableGroupSourceRotation(
-                                    cached, group->second.selectedRotation,
-                                    staticSurface.reconstructionGroup, true);
+                                const auto prior = std::find_if(
+                                    selectedGroupViews.begin(), selectedGroupViews.end(),
+                                    [&](const auto& item) {
+                                        return item.first == staticSurface.reconstructionGroup;
+                                    });
+                                if (prior != selectedGroupViews.end())
+                                    selected = prior->second;
+                                else
+                                {
+                                    selected = FirstPersonAvailableGroupSourceRotation(
+                                        cached, group->second.selectedRotation,
+                                        staticSurface.reconstructionGroup, true);
+                                    selectedGroupViews.emplace_back(
+                                        staticSurface.reconstructionGroup, selected);
+                                }
                             }
                             if (selected != rotation)
                                 continue;
