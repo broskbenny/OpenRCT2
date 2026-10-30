@@ -817,7 +817,7 @@
             // A high unsupported-face count is NOT proof that every
             // independently source-textured face is wrong. The previous
             // all-or-nothing rollback erased hundreds of legitimate textured
-            // faces (263398 and 263793) after four-view geometry admission.
+            // faces after four-view geometry admission.
             // Salvage only edge-connected coherent material patches. Detached
             // voxel specks stay rejected, and no unsupported face is coloured.
             if (appearance.certifiesHullMaterial
@@ -827,8 +827,6 @@
                 const auto coherent =
                     SelectFirstPersonCoherentMaterialPatches(
                         faces, texturedFaceIndices);
-                if (buildEvidence != nullptr)
-                    buildEvidence->materialFaces = uint32_t(emittedFaces);
                 if (coherent.retainedFaces == 0)
                 {
                     scene.surfaces.resize(surfaceStart);
