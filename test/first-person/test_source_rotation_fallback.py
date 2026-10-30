@@ -13,8 +13,8 @@ class SourceViewFallbackTest(unittest.TestCase):
     def test_resident_and_streamed_reconstruction_use_same_fallback(self):
         world = (ROOT / "src/openrct2/paint/FirstPersonRenderer.World.inc").read_text(encoding="utf-8")
         paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(encoding="utf-8")
-        self.assertIn("selected = FirstPersonAvailableSourceRotation(\n                                    cached, captured);", world)
-        self.assertIn("selected = FirstPersonAvailableSourceRotation(\n                                    cached, group->second.selectedRotation);", paint)
+        self.assertIn("selected = FirstPersonAvailableGroupSourceRotation(\n                                    cached, captured, surface.reconstructionGroup, false);", world)
+        self.assertIn("selected = FirstPersonAvailableGroupSourceRotation(\n                                    cached, group->second.selectedRotation,\n                                    staticSurface.reconstructionGroup, true);", paint)
         self.assertIn("FP_SOURCE_COVERAGE visibleTiles=%zu objectTiles=%zu", paint)
         for field in (
             "coldTiles", "dirtyTiles", "observedTiles",
@@ -75,65 +75,69 @@ int main() {
             self.assertEqual(ran.returncode, 0, ran.stderr)
 
     def test_actual_cpp_rotation_policy(self):
-        compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++") or shutil.which("cl")
+        compiler = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
         if not compiler:
             self.skipTest("C++ compiler not available")
-
-        world = (ROOT / "src/openrct2/paint/FirstPersonRenderer.World.inc").read_text(encoding="utf-8")
-        start = world.index("        template<typename TTileCache>\n        [[nodiscard]] uint8_t FirstPersonAvailableSourceRotation(")
-        end = world.index("        [[nodiscard]] bool RebuildStaticRegionPacket(", start)
-        helper = world[start:end]
-
+        core = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text(encoding="utf-8")
+        start = core.index("        template<typename Cache>" + chr(10)
+                           + "        [[nodiscard]] uint8_t FirstPersonAvailableGroupSourceRotation(")
+        end = core.index("        void RequestFirstPersonNativeSceneryRetry(", start)
+        policy = core[start:end]
         source = """
+#include <algorithm>
 #include <array>
 #include <cassert>
-#include <cstdint>
 #include <cstddef>
-struct Rotation { bool valid = false; };
+#include <cstdint>
+#include <vector>
+struct Surface { uint64_t reconstructionGroup = 0; };
+struct Rotation {
+    bool valid = false;
+    std::vector<Surface> residentSurfaces, streamedSurfaces;
+};
 struct Cache {
     std::array<Rotation, 4> rotations{};
     bool hasSelectedRotation = false;
     uint8_t selectedRotation = 0;
 };
-""" + helper + """
-int main()
-{
+""" + policy + """
+int main() {
     Cache cache;
-    // No observation exists; presenting any artwork would be fabricated.
-    assert(FirstPersonAvailableSourceRotation(cache, 2) == 0xffu);
-    // A cold preferred angle keeps the previous valid source.
+    constexpr uint64_t group = 123, other = 456;
+    assert(FirstPersonAvailableGroupSourceRotation(cache, 2, group, false) == 255);
     cache.rotations[1].valid = true;
+    cache.rotations[1].residentSurfaces.push_back({group});
+    cache.rotations[1].streamedSurfaces.push_back({group});
     cache.hasSelectedRotation = true;
     cache.selectedRotation = 1;
-    assert(FirstPersonAvailableSourceRotation(cache, 2) == 1);
-    assert(FirstPersonAvailableSourceRotation(cache, 0xffu) == 1);
-    // Switch atomically once the preferred observation really exists.
-    cache.rotations[2].valid = true;
-    assert(FirstPersonAvailableSourceRotation(cache, 2) == 2);
-    // If the previous selected view is invalid, use any genuinely ready view.
+    cache.rotations[2].valid = true; // Valid native session, empty group.
+    assert(FirstPersonAvailableGroupSourceRotation(cache, 2, group, false) == 1);
+    assert(FirstPersonAvailableGroupSourceRotation(cache, 2, group, true) == 1);
+    cache.rotations[2].residentSurfaces.push_back({other});
+    cache.rotations[2].streamedSurfaces.push_back({other});
+    assert(FirstPersonAvailableGroupSourceRotation(cache, 2, group, false) == 1);
+    assert(FirstPersonAvailableGroupSourceRotation(cache, 2, group, true) == 1);
+    cache.rotations[2].residentSurfaces.push_back({group});
+    assert(FirstPersonAvailableGroupSourceRotation(cache, 2, group, false) == 2);
+    assert(FirstPersonAvailableGroupSourceRotation(cache, 2, group, true) == 1);
+    cache.rotations[2].streamedSurfaces.push_back({group});
+    assert(FirstPersonAvailableGroupSourceRotation(cache, 2, group, true) == 2);
     cache.rotations[1].valid = false;
     cache.rotations[2].valid = false;
     cache.rotations[3].valid = true;
-    assert(FirstPersonAvailableSourceRotation(cache, 2) == 3);
-    cache.hasSelectedRotation = false;
-    assert(FirstPersonAvailableSourceRotation(cache, 0xffu) == 3);
+    cache.rotations[3].residentSurfaces.push_back({group});
+    assert(FirstPersonAvailableGroupSourceRotation(cache, 0xffu, group, false) == 3);
+    assert(FirstPersonAvailableGroupSourceRotation(cache, 0xffu, other, false) == 255);
 }
 """
         with tempfile.TemporaryDirectory() as folder:
-            cpp = Path(folder) / "source_rotation.cpp"
-            is_msvc = Path(compiler).stem.lower() == "cl"
-            exe = Path(folder) / ("source_rotation.exe" if is_msvc else "source_rotation")
+            cpp, exe = Path(folder) / "source_rotation.cpp", Path(folder) / "source_rotation"
             cpp.write_text(source, encoding="utf-8")
-            args = (
-                [compiler, "/nologo", "/std:c++20", "/EHsc", str(cpp), "/Fe:" + str(exe)]
-                if is_msvc else
-                [compiler, "-std=c++20", "-O0", str(cpp), "-o", str(exe)]
-            )
-            built = subprocess.run(args, cwd=folder,
-                capture_output=True, text=True)
+            built = subprocess.run([compiler, "-std=c++20", "-O0", str(cpp), "-o", str(exe)],
+                                   capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stderr)
-            result = subprocess.run([str(exe)], capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
+            ran = subprocess.run([str(exe)], capture_output=True, text=True)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
 
 
 if __name__ == "__main__":
