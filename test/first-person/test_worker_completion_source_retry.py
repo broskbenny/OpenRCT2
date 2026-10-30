@@ -30,6 +30,9 @@ class WorkerCompletionSourceRetryTest(unittest.TestCase):
         self.assertIn("previousReadyNativeViews", paint)
         self.assertIn("FirstPersonKeepLastGoodNativeView(", paint)
         self.assertIn("current = std::move(previous);", paint)
+        self.assertIn("const auto restoreEmptyNativeRefreshes = [&]() {", paint)
+        self.assertIn("if (session == nullptr)\n                    {\n                        restoreEmptyNativeRefreshes();", paint)
+        self.assertIn("restoreEmptyNativeRefreshes();\n            const auto nativeCaptureDone", paint)
         self.assertLess(
             paint.index("auto* session = PaintSessionAlloc("),
             paint.index("auto old = std::move(variant);"))

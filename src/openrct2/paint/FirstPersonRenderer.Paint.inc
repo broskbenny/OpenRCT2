@@ -240,6 +240,26 @@
             // avoids copying thousands of cached surfaces.
             std::array<std::unordered_map<uint64_t, StaticPaintRotationCache>, 4>
                 previousReadyNativeViews;
+            const auto restoreEmptyNativeRefreshes = [&]() {
+                // Only a completed new view or complete map ownership may
+                // retire an earlier visible static source. This is also used
+                // if a later paint-session allocation fails mid-frame.
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                for (auto& [key, previous] : previousReadyNativeViews[rotation])
+                {
+                    const auto found = _staticPaintCache.find(key);
+                    if (found == _staticPaintCache.end() || found->second.dirty)
+                        continue;
+                    auto& current = found->second.rotations[rotation];
+                    const CoordsXY tile{
+                        int32_t(key >> 32) * kCoordsXYStep,
+                        int32_t(key) * kCoordsXYStep };
+                    if (FirstPersonKeepLastGoodNativeView(
+                            previous, current,
+                            FirstPersonTileObjectsMapOwnedAndReady(tile)))
+                        current = std::move(previous);
+                }
+            };
             for (auto& misses : missesByRotation)
                 misses.reserve(scene.visibleTiles.size() / 16 + 1);
             std::unordered_set<uint64_t>
@@ -871,6 +891,7 @@
                         nativeSessionAllocated - nativeSessionStart).count();
                     if (session == nullptr)
                     {
+                        restoreEmptyNativeRefreshes();
                         // Planned views have not been touched. Retain them
                         // instead of converting an allocation failure into
                         // disappearance of an entire source rotation.
@@ -1331,25 +1352,9 @@
                 }
             }
 
-            // Publication barrier: a valid previous source is not replaced
-            // with an empty capture, unless a completed map-owned model
-            // already supplies every object on the tile. Every authoritative
-            // map edit invalidates these old variants before admission.
-            for (uint8_t rotation = 0; rotation < 4; ++rotation)
-            for (auto& [key, previous] : previousReadyNativeViews[rotation])
-            {
-                const auto found = _staticPaintCache.find(key);
-                if (found == _staticPaintCache.end() || found->second.dirty)
-                    continue;
-                auto& current = found->second.rotations[rotation];
-                const CoordsXY tile{
-                    int32_t(key >> 32) * kCoordsXYStep,
-                    int32_t(key) * kCoordsXYStep };
-                if (FirstPersonKeepLastGoodNativeView(
-                        previous, current,
-                        FirstPersonTileObjectsMapOwnedAndReady(tile)))
-                    current = std::move(previous);
-            }
+            // Commit (or restore) all native source candidates before
+            // invalidating publication packets or choosing presentation.
+            restoreEmptyNativeRefreshes();
             const auto nativeCaptureDone = PaintClock::now();
             // Report only serious native stalls, with phase attribution.
             // When they are resolved this tag becomes silent automatically.
