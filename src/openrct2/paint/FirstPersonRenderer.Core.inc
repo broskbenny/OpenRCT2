@@ -1428,6 +1428,37 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
             return 0xffu;
         }
 
+        // An observed native view can contain no surfaces for THIS group.
+        // Never replace a visible structure with an unrelated empty view.
+        template<typename Cache>
+        [[nodiscard]] uint8_t FirstPersonAvailableGroupSourceRotation(
+            const Cache& cached, uint8_t preferred, uint64_t groupKey,
+            bool streamed)
+        {
+            const auto ready = [&](uint8_t rotation) {
+                if (rotation >= cached.rotations.size())
+                    return false;
+                const auto& variant = cached.rotations[rotation];
+                if (!variant.valid)
+                    return false;
+                const auto& faces = streamed
+                    ? variant.streamedSurfaces
+                    : variant.residentSurfaces;
+                return std::any_of(faces.begin(), faces.end(),
+                    [&](const auto& surface) {
+                        return surface.reconstructionGroup == groupKey;
+                    });
+            };
+            if (ready(preferred))
+                return preferred;
+            if (cached.hasSelectedRotation && ready(cached.selectedRotation))
+                return cached.selectedRotation;
+            for (uint8_t i = 0; i < cached.rotations.size(); ++i)
+                if (ready(i))
+                    return i;
+            return 0xffu;
+        }
+
         void RequestFirstPersonNativeSceneryRetry(CoordsXY tile, uint8_t rotation)
         {
             if (rotation >= 4)

@@ -4380,27 +4380,6 @@
             return false;
         }
 
-        // A reconstruction group may request a different native artwork angle
-        // before that tile has acquired it. Preserve the last ready observation
-        // instead of making the group invisible while the capture budget catches up.
-        template<typename TTileCache>
-        [[nodiscard]] uint8_t FirstPersonAvailableSourceRotation(
-            const TTileCache& cached, uint8_t preferred)
-        {
-            const auto ready = [&](uint8_t rotation) {
-                return rotation < cached.rotations.size()
-                    && cached.rotations[rotation].valid;
-            };
-            if (ready(preferred))
-                return preferred;
-            if (cached.hasSelectedRotation && ready(cached.selectedRotation))
-                return cached.selectedRotation;
-            for (uint8_t rotation = 0; rotation < cached.rotations.size(); ++rotation)
-                if (ready(rotation))
-                    return rotation;
-            return 0xffu;
-        }
-
         [[nodiscard]] bool RebuildStaticRegionPacket(uint64_t regionKey, uint64_t frame)
         {
             auto& published = _staticRegionPackets[regionKey];
@@ -4641,8 +4620,8 @@
                                     ? group->second.selectedRotation : 0xffu;
                                 staging.selectedGroups.emplace(
                                     surface.reconstructionGroup, captured);
-                                selected = FirstPersonAvailableSourceRotation(
-                                    cached, captured);
+                                selected = FirstPersonAvailableGroupSourceRotation(
+                                    cached, captured, surface.reconstructionGroup, false);
                             }
                             if (selected == phase - 2)
                                 addSurface(surface, true);

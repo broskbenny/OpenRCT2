@@ -1550,8 +1550,9 @@
                                 const auto group = _reconstructionRotations.find(staticSurface.reconstructionGroup);
                                 if (group == _reconstructionRotations.end() || !group->second.hasSelectedRotation)
                                     continue;
-                                selected = FirstPersonAvailableSourceRotation(
-                                    cached, group->second.selectedRotation);
+                                selected = FirstPersonAvailableGroupSourceRotation(
+                                    cached, group->second.selectedRotation,
+                                    staticSurface.reconstructionGroup, true);
                             }
                             if (selected != rotation)
                                 continue;
