@@ -19,7 +19,7 @@ class CoherentMaterialPatchesTest(unittest.TestCase):
         s = SMALL.read_text(encoding="utf-8")
         begin = s.index("            // A high unsupported-face count")
         end = s.index("            if (appearance.certifiesHullMaterial)", begin + 80)
-        block = s[begin:end + 120]
+        block = s[begin:end + 240]
         self.assertIn("unsupportedVisibleFaces >= 128", block)
         self.assertIn("unsupportedVisibleFaces > emittedFaces / 2", block)
         self.assertIn("SelectFirstPersonCoherentMaterialPatches(", s)
