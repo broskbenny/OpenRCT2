@@ -25,6 +25,10 @@ class SmallSceneryPrewarmTest(unittest.TestCase):
         self.assertIn("StartFirstPersonSmallSceneryAssetJob(\n                    it->second, *entry, tile, 0, false);", scenery)
         self.assertIn("StartFirstPersonSmallSceneryAssetJob(\n                job, *entry, ps.MapPos, rotation, true);", scenery)
         self.assertIn("if (!job->submitted && fromNativePainter)", scenery)
+        pending = scenery[scenery.index("bool AppendCalibratedSmallSceneryGeometry("):]
+        self.assertIn("RequestFirstPersonNativeSceneryRetry(ps.MapPos, rotation);\n                    return false;", pending)
+        self.assertIn("StartFirstPersonSmallSceneryAssetJob(\n                job, *entry, ps.MapPos, rotation, true);\n            // An in-flight job is not a published replacement.", pending)
+        self.assertIn("return false;\n        }", pending)
         self.assertIn("const auto stage = job->stage;", scenery)
         self.assertIn("job->stage = FirstPersonSmallSceneryWitherStage(*entry, small);", scenery)
         self.assertIn("job->stage = stage;", scenery)

@@ -1288,10 +1288,11 @@
             {
                 if (!_snapshotBudget.available() || !_reconstructionWorker.hasCapacity())
                 {
-                    // Revisit this native view next frame; never fall through
-                    // to a synchronous silhouette reconstruction.
+                    // A worker slot is unavailable, not evidence that the
+                    // object does not exist. Keep its native artwork while
+                    // the asynchronous reconstruction queue catches up.
                     RequestFirstPersonNativeSceneryRetry(ps.MapPos, rotation);
-                    return true;
+                    return false;
                 }
                 auto job = std::make_shared<SmallSceneryJob>();
                 job->entry = *entry;
@@ -1342,5 +1343,8 @@
             job->waitingTiles.insert(tileKey);
             StartFirstPersonSmallSceneryAssetJob(
                 job, *entry, ps.MapPos, rotation, true);
-            return true; // pending geometry deliberately absent
+            // An in-flight job is not a published replacement. Draw the
+            // existing native source until verified 3D surfaces can be used.
+            // This avoids a visibility hole without inventing geometry.
+            return false;
         }
