@@ -168,7 +168,13 @@
                     case TileElementType::smallScenery:
                     {
                         const auto* small = element->asSmallScenery();
+                        const auto* entry = small != nullptr
+                            ? small->getEntry() : nullptr;
+                        // The native truss remains necessary even when the
+                        // static scenery body already has a map-owned mesh.
                         if (small == nullptr
+                            || (entry != nullptr && small->needsSupports()
+                                && !entry->flags.has(SmallSceneryFlag::hasNoSupports))
                             || packet == _localSceneryPackets.end()
                             || packet->second.dirty
                             || !packet->second.surfaces
@@ -452,7 +458,9 @@
                     if (!IsResidentStaticSurface(source)
                         || source.gpuRegion != owningRegion
                         || (!mapOwned && !FirstPersonIndependentLocalScenery(source))
-                        || (!mapOwned && mapOwnedNativeKeys.contains(source.sourceInstanceKey)))
+                        || (!mapOwned && mapOwnedNativeKeys.contains(source.sourceInstanceKey)
+                            && source.diagnosticSemanticRole == static_cast<uint8_t>(
+                                FirstPersonPaintSemanticRole::smallSceneryBody)))
                         return;
                     if (!mapOwned)
                         containsNativeSource = true;

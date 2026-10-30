@@ -72,7 +72,8 @@ int main() {
     assert(!FirstPersonMapSmallSceneryEligible(entry,element,0));
     element.invisible=false;
     element.supports=true;
-    assert(!FirstPersonMapSmallSceneryEligible(entry,element,0));
+    // Static body eligibility is independent of native wood supports.
+    assert(FirstPersonMapSmallSceneryEligible(entry,element,0));
     element.supports=false;
     gTrackDesignSaveMode=true;
     assert(!FirstPersonMapSmallSceneryEligible(entry,element,0));
@@ -87,7 +88,7 @@ int main() {
         gTrackDesignSaveMode = (rng() & 1)!=0;
         const bool expected = (entry.flags.bits & 31u)==0
             && !element.ghost && !element.invisible
-            && !element.supports && viewFlags==0 && !gTrackDesignSaveMode;
+            && viewFlags==0 && !gTrackDesignSaveMode;
         assert(FirstPersonMapSmallSceneryEligible(
             entry,element,viewFlags)==expected);
     }

@@ -992,11 +992,28 @@ static FirstPersonWorkQueue _regionRelationshipWorker;
                 FirstPersonInteractionTargetForPaintStruct(ps);
             const uint64_t sourceInstanceKey =
                 FirstPersonPaintSourceInstanceKey(ps);
+            const auto* nativeSmall = ps.Element != nullptr
+                    && ps.Element->getType() == TileElementType::smallScenery
+                ? ps.Element->asSmallScenery() : nullptr;
+            const auto* nativeEntry =
+                nativeSmall != nullptr ? nativeSmall->getEntry() : nullptr;
+            const bool nativeSmallBody = nativeEntry != nullptr
+                && ps.image_id.GetIndex() == nativeEntry->image
+                    + (nativeSmall->getDirectionWithOffset(rotation) & 3u)
+                    + uint32_t(FirstPersonSmallSceneryWitherStage(
+                        *nativeEntry, *nativeSmall)) * 4u;
             const auto applyNativeMetadata = [&]() {
                 for (size_t i = nodeSurfaceStart;
                      i < scene.surfaces.size(); ++i)
                 {
                     auto& surface = scene.surfaces[i];
+                    // The native body and its separately painted wooden
+                    // supports share a TileElement. Mark only its body so
+                    // map publication never withdraws support artwork.
+                    if (nativeSmallBody && surface.diagnosticSemanticRole == 0)
+                        surface.diagnosticSemanticRole =
+                            static_cast<uint8_t>(
+                                FirstPersonPaintSemanticRole::smallSceneryBody);
                     if (ps.FirstPersonNativePaintOrdinal != 0
                         && surface.nativePaintOrdinal == 0)
                     {

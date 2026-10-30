@@ -983,7 +983,8 @@
                 && (selected == nullptr
                     || selected != reinterpret_cast<const TileElement*>(&small))
                 && !small.isGhost() && !small.isInvisible()
-                && !small.needsSupports()
+                // Supports are separate native paint structures. A static
+                // reconstructed BODY can be map-owned without removing them.
                 && !entry.flags.hasAny(
                     SmallSceneryFlag::isAnimated,
                     SmallSceneryFlag::hasFrameOffsets,

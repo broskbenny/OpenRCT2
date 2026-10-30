@@ -33,6 +33,7 @@ class SourceViewFallbackTest(unittest.TestCase):
         end = core.index("        void RequestFirstPersonNativeSceneryRetry(", start)
         policy = core[start:end]
         program = """
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>

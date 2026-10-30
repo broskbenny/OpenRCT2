@@ -31,6 +31,12 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
             local.index("bool FirstPersonTileObjectsMapOwnedAndReady("):
             local.index("void MarkLocalSceneryDirtyForTile(", local.index("bool FirstPersonTileObjectsMapOwnedAndReady("))]
         self.assertIn("case TileElementType::smallScenery:", ready)
+        self.assertIn("small->needsSupports()", ready)
+        self.assertIn("SmallSceneryFlag::hasNoSupports", ready)
+        core = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text()
+        self.assertIn("const bool nativeSmallBody = nativeEntry != nullptr", core)
+        self.assertIn("if (nativeSmallBody && surface.diagnosticSemanticRole == 0)", core)
+        self.assertIn("&& source.diagnosticSemanticRole == static_cast<uint8_t>(", local)
         self.assertIn("packet->second.mapOwnedInstanceKeys.contains(", ready)
         self.assertIn("FirstPersonLocalSmallSceneryInstanceKey(", ready)
         self.assertIn("elementIndex, *small", ready)
