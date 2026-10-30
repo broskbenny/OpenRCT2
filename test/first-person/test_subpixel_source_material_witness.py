@@ -28,7 +28,7 @@ class SubpixelSourceMaterialWitnessTest(unittest.TestCase):
         if not compiler or Path(compiler).stem.lower() == "cl":
             self.skipTest("GNU/Clang C++ compiler unavailable")
         header = HEADER.read_text(encoding="utf-8")
-        start = header.index("    [[nodiscard]] inline std::optional<ScreenCoordsXY>\\n".replace("\\\\n", "\\n")
+        start = header.index("    [[nodiscard]] inline std::optional<ScreenCoordsXY>" + chr(10)
                              + "        FirstPersonSubpixelFaceSourceSample(")
         end = header.index("    struct FirstPersonDepthVisibility", start)
         policy = header[start:end]
