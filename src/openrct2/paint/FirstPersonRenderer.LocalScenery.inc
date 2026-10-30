@@ -69,6 +69,9 @@
             uint64_t fingerprint = 0;
             size_t vertexCount = 0;
             bool containsNativeSource = false;
+            // Last published authoritative tile bytes. Prevent a stale
+            // component from surviving deletion or tile-slot reuse.
+            std::array<uint64_t, 64> sourceSignatures{};
             std::unordered_set<uint64_t> mapOwnedInstanceKeys;
             std::unordered_set<uint64_t> mappedPathTiles;
             std::unordered_set<uint64_t> mappedWallTiles;
@@ -812,6 +815,76 @@
                     _localSceneryBuilds.erase(key);
                     continue;
                 }
+                // A valid new local-cell snapshot may be incomplete even
+                // after native capture: one object can be missing while
+                // neighbours publish. Carry only independently owned source
+                // components that were ACTUALLY in the last published GPU
+                // packet and whose complete authoritative tile bytes match.
+                // Never use an asset-ready flag in place of publication.
+                if (current != _localSceneryPackets.end()
+                    && current->second.surfaces
+                    && current->second.containsNativeSource
+                    && current->second.viewFlags == staging.viewFlags
+                    && current->second.trackDesignSaveMode == staging.trackDesignSaveMode
+                    && current->second.paintBlockedMode == staging.paintBlockedMode
+                    && current->second.paintWideGhostMode == staging.paintWideGhostMode
+                    && current->second.selectionGeneration == staging.selectionGeneration
+                    && TileInspector::GetSelectedElement() == nullptr)
+                {
+                    std::unordered_set<FirstPersonNativeInstanceRecord,
+                        FirstPersonNativeInstanceRecordHash> present;
+                    for (const auto& face : surfaces)
+                        if (face.sourceInstanceKey != 0)
+                            present.insert(FirstPersonNativeRecordOf(face));
+                    std::unordered_set<FirstPersonNativeInstanceRecord,
+                        FirstPersonNativeInstanceRecordHash> retained;
+                    for (const auto& old : *current->second.surfaces)
+                    {
+                        if (!FirstPersonIndependentLocalScenery(old)
+                            || old.sourceInstanceKey == 0)
+                            continue;
+                        const auto record = FirstPersonNativeRecordOf(old);
+                        if (present.contains(record))
+                            continue;
+                        const int32_t tx = old.diagnosticSourceTile.x / kCoordsXYStep;
+                        const int32_t ty = old.diagnosticSourceTile.y / kCoordsXYStep;
+                        if (tx < rx * 8 || tx >= (rx + 1) * 8
+                            || ty < ry * 8 || ty >= (ry + 1) * 8)
+                            continue;
+                        const size_t index = size_t(ty - ry * 8) * 8
+                            + size_t(tx - rx * 8);
+                        if (staging.sourceSignatures[index] == 0
+                            || staging.sourceSignatures[index]
+                                != current->second.sourceSignatures[index])
+                            continue;
+                        if (!retained.contains(record))
+                        {
+                            const auto role =
+                                static_cast<FirstPersonPaintSemanticRole>(record.role);
+                            const uint64_t tileKey = TerrainKey(tx, ty);
+                            if ((role == FirstPersonPaintSemanticRole::smallSceneryBody
+                                    && mapOwnedNativeKeys.contains(record.instance))
+                                || (role == FirstPersonPaintSemanticRole::pathDeck
+                                    && mappedPathTiles.contains(tileKey))
+                                || (role == FirstPersonPaintSemanticRole::wall
+                                    && mappedWallTiles.contains(tileKey)))
+                            {
+                                present.insert(record);
+                                continue;
+                            }
+                            retained.insert(record);
+                        }
+                        // Published local faces have a local-cell GPU key.
+                        // Reapply the authoritative source-region key only
+                        // for the normal bounded add()/bounds/material path.
+                        auto carried = old;
+                        const uint64_t sourceRegion = FirstPersonGpuRegionKey(tx, ty);
+                        carried.gpuRegion = sourceRegion;
+                        add(carried, sourceRegion);
+                        if (current->second.mapOwnedInstanceKeys.contains(record.instance))
+                            mapOwnedInstanceKeys.insert(record.instance);
+                    }
+                }
                 std::sort(dependencies.begin(), dependencies.end());
                 dependencies.erase(
                     std::unique(dependencies.begin(), dependencies.end()),
@@ -829,6 +902,7 @@
                     MarkFirstPersonAuthoritativeRegionEdit(coherentKey);
                     MarkStaticRegionPacketDirty(coherentKey);
                 }
+                packet.sourceSignatures = staging.sourceSignatures;
                 packet.viewFlags = scene.options.viewFlags;
                 packet.trackDesignSaveMode = gTrackDesignSaveMode;
                 packet.paintBlockedMode = gPaintBlockedTiles;

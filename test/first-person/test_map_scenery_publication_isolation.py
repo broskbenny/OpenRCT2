@@ -46,6 +46,33 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
         self.assertIn("|| FirstPersonTileObjectsMapOwnedAndReady(tile))", paint)
         self.assertIn("const bool useColdObjectCursor = coldOffset < visibleCount;", paint)
 
+    def test_published_native_instances_survive_only_unchanged_source_tiles(self):
+        local = LOCAL.read_text(encoding="utf-8")
+        self.assertEqual(local.count("std::array<uint64_t, 64> sourceSignatures{};"), 2)
+        self.assertIn("packet.sourceSignatures = staging.sourceSignatures;", local)
+        self.assertIn("current->second.sourceSignatures[index]", local)
+        self.assertIn("staging.sourceSignatures[index] == 0", local)
+        self.assertIn("FirstPersonNativeRecordOf(old)", local)
+        self.assertIn("present.contains(record)", local)
+        self.assertIn("current->second.mapOwnedInstanceKeys.contains(record.instance)", local)
+        self.assertIn("mapOwnedInstanceKeys.insert(record.instance);", local)
+        self.assertIn("mapOwnedNativeKeys.contains(record.instance)", local)
+        self.assertIn("TileInspector::GetSelectedElement() == nullptr", local)
+        self.assertIn("current->second.selectionGeneration == staging.selectionGeneration", local)
+        self.assertIn("current->second.viewFlags == staging.viewFlags", local)
+        self.assertIn("const uint64_t sourceRegion = FirstPersonGpuRegionKey(tx, ty);", local)
+        self.assertIn("add(carried, sourceRegion);", local)
+
+        # Exact-object retention never survives authoritative replacement.
+        for prior, current in ((17,17), (17,18), (0,0), (9,0)):
+            for replaced in (False, True):
+                for already_present in (False, True):
+                    keep = prior != 0 and current == prior and not replaced and not already_present
+                    self.assertEqual(
+                        keep,
+                        (prior != 0 and current == prior
+                         and not (replaced or already_present)))
+
     def test_native_to_map_owned_handoff_waits_for_exact_published_instance(self):
         core = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Core.inc").read_text()
         local = LOCAL.read_text()
