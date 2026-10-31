@@ -96,12 +96,16 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
     def test_streamed_native_fallback_respects_exact_gpu_publication(self):
         paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text()
         streamed = paint[paint.index("// Native group source selection examines all faces"):]
-        self.assertIn("mapOwnedNativeInstances.try_emplace(record, false)", streamed)
-        self.assertIn("FirstPersonNativeInstanceMapOwned(tile, record)", streamed)
-        self.assertIn("if (it->second)\n                                    continue;", streamed)
+        self.assertIn("mapOwnedNativeInstances.try_emplace(record, false)", paint)
+        self.assertIn("FirstPersonNativeInstanceMapOwned(tile, record)", paint)
+        self.assertIn("if (hasPublishedMapBody(staticSurface))", streamed)
+        self.assertIn("if (hasPublishedMapBody(staticSurface))\n                                continue;", streamed)
         self.assertLess(
-            streamed.index("FirstPersonNativeInstanceMapOwned(tile, record)"),
-            streamed.index("ReorientBillboard(surface, opt.camera.position, basis.right)"))
+            paint.index("if (hasPublishedMapBody(staticSurface))"),
+            paint.index("ReorientBillboard(surface, opt.camera.position, basis.right)"))
+        self.assertLess(
+            paint.index("hasPublishedMapBody ="),
+            paint.index("cached.cameraIndependentStreamedSurfaces)"))
 
     def test_pending_map_mesh_remains_published_owner(self):
         local = LOCAL.read_text(encoding="utf-8")
