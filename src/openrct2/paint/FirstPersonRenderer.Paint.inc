@@ -1848,6 +1848,8 @@
             if (finished - lastSourceCoverageReport >= std::chrono::seconds(5))
             {
                 lastSourceCoverageReport = finished;
+                const auto worldCoverage =
+                    InspectFirstPersonWorldCoverage(scene);
                 size_t objectTiles = 0;
                 size_t coldTiles = 0;
                 size_t dirtyTiles = 0;
@@ -1914,13 +1916,19 @@
                     " coldTiles=%zu dirtyTiles=%zu observedTiles=%zu"
                     " coldObjectTiles=%zu dirtyObjectTiles=%zu observedObjectTiles=%zu"
                     " semanticObservedTiles=%zu objectViewPending=%zu presentedRegions=%zu"
-                    " inventoriedObjects=%zu parkScannedTiles=%zu parkTotalTiles=%zu",
+                    " inventoriedObjects=%zu parkScannedTiles=%zu parkTotalTiles=%zu"
+                    " objectSampleTiles=%zu objectSampleSmall=%zu"
+                    " objectSampleMapSmall=%zu objectSampleNativeSmall=%zu"
+                    " objectSampleMissingSmall=%zu objectSampleExhaustedSmall=%zu",
                     scene.visibleTiles.size(), objectTiles, coldTiles, dirtyTiles,
                     observedTiles, coldObjectTiles, dirtyObjectTiles,
                     observedObjectTiles, semanticObservedTiles, objectViewPending,
                     scene.staticRegions.size(), _worldInventoryObjectCount,
                     _parkSceneryScanCursor,
-                    size_t(getGameState().mapSize.x) * size_t(getGameState().mapSize.y));
+                    size_t(getGameState().mapSize.x) * size_t(getGameState().mapSize.y),
+                    worldCoverage.sampledTiles, worldCoverage.smallPlacements,
+                    worldCoverage.mapPublishedSmall, worldCoverage.nativeEvidenceSmall,
+                    worldCoverage.missingSmall, worldCoverage.exhaustedSmall);
             }
             const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
                 finished - started).count();
