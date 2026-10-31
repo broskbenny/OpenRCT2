@@ -107,6 +107,17 @@ jobs:
       - name: Compile and link the production renderer and application
         shell: cmd
         run: scripts\vstool.cmd msbuild src\openrct2-win\openrct2-win.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /m:1 /p:BuildInParallel=false /p:CL_MPCount=1 /verbosity:minimal
+      - name: Reject Windows 8 API imports in the Windows 7 executable
+        shell: cmd
+        run: |
+          call scripts\vstool.cmd dumpbin.exe /nologo /imports bin\openrct2.exe > win7-imports.txt
+          if errorlevel 1 exit /b 1
+          findstr /I /C:"CreateFile2" /C:"CopyFile2" /C:"GetSystemTimePreciseAsFileTime" win7-imports.txt
+          if not errorlevel 1 (
+            echo ERROR: The linked executable imports Windows 8+ KERNEL32 functions.
+            exit /b 1
+          )
+          echo Win7 import check passed: no unsupported filesystem or clock entry points.
       - name: Retain the tested application
         uses: actions/upload-artifact@v4
         with:
