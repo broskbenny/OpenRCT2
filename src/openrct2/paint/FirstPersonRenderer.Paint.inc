@@ -1575,6 +1575,12 @@
                         || surface.sourceInstanceKey == 0)
                         return false;
                     const auto record = FirstPersonNativeRecordOf(surface);
+                    // Path/wall readiness is tile-wide, not exact-element.
+                    // Only the body of an exactly published small scenery
+                    // instance may displace its previous native artwork.
+                    if (record.role != static_cast<uint8_t>(
+                            FirstPersonPaintSemanticRole::smallSceneryBody))
+                        return false;
                     const auto [it, inserted] =
                         mapOwnedNativeInstances.try_emplace(record, false);
                     if (inserted)
