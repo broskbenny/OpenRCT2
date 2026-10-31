@@ -93,6 +93,25 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
             small.index("FirstPersonMapSmallSceneryCanPublish(", small.index("if (job->ready)")),
             small.index("&& FirstPersonLocalSceneryOwnsSmallScenery(ps.MapPos, *small)"))
 
+    def test_streamed_native_fallback_respects_exact_gpu_publication(self):
+        paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text()
+        streamed = paint[paint.index("// Native group source selection examines all faces"):]
+        self.assertIn("mapOwnedNativeInstances.try_emplace(record, false)", streamed)
+        self.assertIn("FirstPersonNativeInstanceMapOwned(tile, record)", streamed)
+        self.assertIn("if (it->second)\\n                                    continue;", streamed)
+        self.assertLess(
+            streamed.index("FirstPersonNativeInstanceMapOwned(tile, record)"),
+            streamed.index("ReorientBillboard(surface, opt.camera.position, basis.right)"))
+
+    def test_pending_map_mesh_remains_published_owner(self):
+        local = LOCAL.read_text(encoding="utf-8")
+        pending = local[local.index("else if (FirstPersonMapSmallSceneryPending("):
+                        local.index("++elementIndex;", local.index("else if (FirstPersonMapSmallSceneryPending("))]
+        self.assertIn("bool carriedBody = false;", pending)
+        self.assertIn("if (carriedBody)\\n                                            markPublishedBody();", pending)
+        self.assertIn("mapOwnedInstanceKeys.insert(instance);", local)
+        self.assertIn("mapOwnedNativeKeys.insert(nativeKey == 0 ? 1 : nativeKey);", local)
+
     def test_ownership_prevents_withdrawal_during_pending_native_capture(self):
         for native_dirty, present, native_owned in itertools.product((False, True), repeat=3):
             hold = should_hold_previous(native_dirty, present, native_owned)
