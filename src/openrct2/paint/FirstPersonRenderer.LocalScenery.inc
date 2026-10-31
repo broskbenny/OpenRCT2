@@ -682,7 +682,17 @@
                                     else if (FirstPersonMapSmallSceneryPending(
                                             *small, scene.options.viewFlags)
                                         && previousCell != _localSceneryPackets.end()
-                                        && previousCell->second.surfaces)
+                                        && previousCell->second.surfaces
+                                        && staging.sourceSignatures[cellIndex] != 0
+                                        && previousCell->second.sourceSignatures[cellIndex]
+                                            == staging.sourceSignatures[cellIndex]
+                                        && previousCell->second.viewFlags == staging.viewFlags
+                                        && previousCell->second.trackDesignSaveMode
+                                            == staging.trackDesignSaveMode
+                                        && previousCell->second.paintBlockedMode
+                                            == staging.paintBlockedMode
+                                        && previousCell->second.paintWideGhostMode
+                                            == staging.paintWideGhostMode)
                                     {
                                         // Carry only this exact object's prior
                                         // appearance while its new asset is
