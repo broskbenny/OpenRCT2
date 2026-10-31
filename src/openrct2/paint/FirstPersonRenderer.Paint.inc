@@ -1564,9 +1564,28 @@
                     }
                 }
 
+                // One cached source element can contribute both resident and
+                // streamed components. Only published, exact map-owned roles
+                // supersede native artwork, and the ownership probe is once
+                // per source component even for multi-triangle sprites.
+                std::unordered_map<FirstPersonNativeInstanceRecord, bool,
+                    FirstPersonNativeInstanceRecordHash> mapOwnedNativeInstances;
+                const auto hasPublishedMapBody = [&](const FirstPersonSurface& surface) {
+                    if (surface.reconstructionGroup != 0
+                        || surface.sourceInstanceKey == 0)
+                        return false;
+                    const auto record = FirstPersonNativeRecordOf(surface);
+                    const auto [it, inserted] =
+                        mapOwnedNativeInstances.try_emplace(record, false);
+                    if (inserted)
+                        it->second = FirstPersonNativeInstanceMapOwned(tile, record);
+                    return it->second;
+                };
                 for (const auto& staticSurface :
                      cached.cameraIndependentStreamedSurfaces)
                 {
+                    if (hasPublishedMapBody(staticSurface))
+                        continue;
                     if (SurfaceMayBeVisible(
                             staticSurface, worldFrustum))
                     {
@@ -1580,10 +1599,6 @@
                 std::vector<std::pair<uint64_t, uint8_t>> selectedGroupViews;
                 std::unordered_map<FirstPersonNativeInstanceRecord, uint8_t,
                     FirstPersonNativeInstanceRecordHash> selectedNativeInstances;
-                // A published 3D body must supersede its cached native
-                // billboard, but not unrelated support/fixture components.
-                std::unordered_map<FirstPersonNativeInstanceRecord, bool,
-                    FirstPersonNativeInstanceRecordHash> mapOwnedNativeInstances;
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
                     const auto& variant = cached.rotations[rotation];
@@ -1596,17 +1611,8 @@
                                 || IsReconstructedParkEntranceBody(
                                     staticSurface, frame))
                                 continue;
-                            if (staticSurface.reconstructionGroup == 0
-                                && staticSurface.sourceInstanceKey != 0)
-                            {
-                                const auto record = FirstPersonNativeRecordOf(staticSurface);
-                                const auto [it, inserted] =
-                                    mapOwnedNativeInstances.try_emplace(record, false);
-                                if (inserted)
-                                    it->second = FirstPersonNativeInstanceMapOwned(tile, record);
-                                if (it->second)
-                                    continue;
-                            }
+                            if (hasPublishedMapBody(staticSurface))
+                                continue;
                             if (staticSurface.reconstructionGroup != 0)
                             {
                                 const auto trajectory =
