@@ -107,6 +107,10 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
         local = LOCAL.read_text(encoding="utf-8")
         pending = local[local.index("else if (FirstPersonMapSmallSceneryPending("):
                         local.index("++elementIndex;", local.index("else if (FirstPersonMapSmallSceneryPending("))]
+        self.assertIn("staging.sourceSignatures[cellIndex] != 0", pending)
+        self.assertIn("previousCell->second.sourceSignatures[cellIndex]", pending)
+        self.assertIn("previousCell->second.viewFlags == staging.viewFlags", pending)
+        self.assertIn("previousCell->second.paintWideGhostMode", pending)
         self.assertIn("bool carriedBody = false;", pending)
         self.assertIn("if (carriedBody)\n                                            markPublishedBody();", pending)
         self.assertIn("mapOwnedInstanceKeys.insert(instance);", local)
