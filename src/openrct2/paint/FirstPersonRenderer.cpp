@@ -170,6 +170,7 @@ namespace OpenRCT2::Paint
 
         #include "FirstPersonRenderer.Core.inc"
         #include "FirstPersonRenderer.World.inc"
+        #include "FirstPersonRenderer.WorldConvergence.inc"
         #include "FirstPersonRenderer.ParkSceneryPrewarm.inc"
         #include "FirstPersonRenderer.Paint.inc"
     } // namespace
@@ -1664,6 +1665,7 @@ namespace OpenRCT2::Paint
         _localSceneryPackets.clear();
         _localSceneryBuilds.clear();
         _localSceneryEpoch = _sceneEpoch;
+        ClearFirstPersonWorldInventory();
         _structuralTileIndex.clear();
         _structuralIndexEpoch = _sceneEpoch;
         _largeScenerySourceAssets.clear();
