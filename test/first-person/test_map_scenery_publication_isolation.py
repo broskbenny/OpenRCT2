@@ -8,6 +8,7 @@ LOCAL = ROOT / "src/openrct2/paint/FirstPersonRenderer.LocalScenery.inc"
 SMALL = ROOT / "src/openrct2/paint/FirstPersonRenderer.SmallScenery.inc"
 PARK = ROOT / "src/openrct2/paint/FirstPersonRenderer.ParkSceneryPrewarm.inc"
 MAIN = ROOT / "src/openrct2/paint/FirstPersonRenderer.cpp"
+CONVERGENCE = ROOT / "src/openrct2/paint/FirstPersonRenderer.WorldConvergence.inc"
 
 
 def should_hold_previous(native_dirty, previous_has_surfaces, previous_native_owned):
@@ -128,6 +129,58 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
             self.assertEqual(hold, native_dirty and present and native_owned)
             if not native_owned:
                 self.assertFalse(hold)
+
+
+    def test_world_inventory_is_authoritative_and_edit_reconciled(self):
+        convergence = CONVERGENCE.read_text(encoding="utf-8")
+        park = PARK.read_text(encoding="utf-8")
+        main = MAIN.read_text(encoding="utf-8")
+        self.assertIn('#include "FirstPersonRenderer.WorldConvergence.inc"', main)
+        self.assertLess(
+            main.index('#include "FirstPersonRenderer.World.inc"'),
+            main.index('#include "FirstPersonRenderer.WorldConvergence.inc"'))
+        self.assertLess(
+            main.index('#include "FirstPersonRenderer.WorldConvergence.inc"'),
+            main.index('#include "FirstPersonRenderer.ParkSceneryPrewarm.inc"'))
+        self.assertIn("ClearFirstPersonWorldInventory();", main)
+        self.assertIn("EnsureFirstPersonWorldInventoryEpoch()", convergence)
+        self.assertIn("_worldInventoryObjectCount -= it->second.objects.size();", convergence)
+        self.assertIn("object.nativeSourceKey = FirstPersonWorldNativeSourceKey(", convergence)
+        self.assertIn("object.identity = FirstPersonLocalSmallSceneryInstanceKey(", convergence)
+        self.assertIn("ExtendStableKey(identity, next.sourceSignature);", convergence)
+        self.assertIn("!element->isGhost() && !element->isInvisible()", convergence)
+        self.assertIn("InvalidateFirstPersonWorldInventoryTile(tx, ty);", park)
+        self.assertIn("ObserveFirstPersonWorldInventoryTile(tile);", park)
+        self.assertLess(
+            park.index("ObserveFirstPersonWorldInventoryTile(tile);"),
+            park.index("PrewarmFirstPersonSmallSceneryAsset(tile, *small);"))
+
+    def test_unrepresented_exact_small_object_gets_only_untried_capture(self):
+        convergence = CONVERGENCE.read_text(encoding="utf-8")
+        paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(
+            encoding="utf-8")
+        self.assertIn("FirstPersonLocalSceneryOwnsSmallScenery(tile, *small)", convergence)
+        self.assertIn("FirstPersonNativeSourceContainsInstance(", convergence)
+        self.assertIn("source.sourceInstanceKey == nativeSourceKey", convergence)
+        self.assertIn("!cached.rotations[preferredRotation].valid", convergence)
+        self.assertIn("!cached.rotations[rotation].valid", convergence)
+        self.assertIn("return std::nullopt;", convergence)
+        self.assertGreaterEqual(
+            paint.count("FirstPersonMissingSmallSceneryCaptureRotation("), 2)
+        self.assertIn("rotationMask |= uint8_t(1u << *missingRotation);", paint)
+        self.assertIn("rotationMask |= cached.nativeRetryMask;", paint)
+        self.assertIn("size_t nativeCapturesRemaining = 2;", paint)
+        self.assertIn("inventoriedObjects=%zu parkScannedTiles=%zu", paint)
+
+        # A new capture is allowed only for an unobserved quarter turn.
+        for available in ((False, False, False, False),
+                          (True, False, True, True),
+                          (True, True, True, True)):
+            for preferred in range(4):
+                selected = (preferred if not available[preferred] else
+                            next((r for r, observed in enumerate(available)
+                                  if not observed), None))
+                self.assertEqual(selected is None, all(available))
 
     def test_background_traversal_is_bounded_and_camera_independent(self):
         code = PARK.read_text(encoding="utf-8")
