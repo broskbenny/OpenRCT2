@@ -1580,6 +1580,10 @@
                 std::vector<std::pair<uint64_t, uint8_t>> selectedGroupViews;
                 std::unordered_map<FirstPersonNativeInstanceRecord, uint8_t,
                     FirstPersonNativeInstanceRecordHash> selectedNativeInstances;
+                // A published 3D body must supersede its cached native
+                // billboard, but not unrelated support/fixture components.
+                std::unordered_map<FirstPersonNativeInstanceRecord, bool,
+                    FirstPersonNativeInstanceRecordHash> mapOwnedNativeInstances;
                 for (uint8_t rotation = 0; rotation < 4; ++rotation)
                 {
                     const auto& variant = cached.rotations[rotation];
@@ -1592,6 +1596,17 @@
                                 || IsReconstructedParkEntranceBody(
                                     staticSurface, frame))
                                 continue;
+                            if (staticSurface.reconstructionGroup == 0
+                                && staticSurface.sourceInstanceKey != 0)
+                            {
+                                const auto record = FirstPersonNativeRecordOf(staticSurface);
+                                const auto [it, inserted] =
+                                    mapOwnedNativeInstances.try_emplace(record, false);
+                                if (inserted)
+                                    it->second = FirstPersonNativeInstanceMapOwned(tile, record);
+                                if (it->second)
+                                    continue;
+                            }
                             if (staticSurface.reconstructionGroup != 0)
                             {
                                 const auto trajectory =
