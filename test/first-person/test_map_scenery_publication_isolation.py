@@ -160,6 +160,11 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
         paint = (ROOT / "src/openrct2/paint/FirstPersonRenderer.Paint.inc").read_text(
             encoding="utf-8")
         self.assertIn("FirstPersonLocalSceneryOwnsSmallScenery(tile, *small)", convergence)
+        self.assertIn("inventory->second.sourceSignature == cached.signature", convergence)
+        self.assertIn("object.nativeSourceKey", convergence)
+        self.assertIn("object.identity", convergence)
+        self.assertIn("return chooseUnobserved();", convergence)
+        self.assertIn("A changed or not-yet-inventoried tile falls back", convergence)
         self.assertIn("FirstPersonNativeSourceContainsInstance(", convergence)
         self.assertIn("source.sourceInstanceKey == nativeSourceKey", convergence)
         self.assertIn("FirstPersonPaintSemanticRole::smallSceneryBody", convergence)
