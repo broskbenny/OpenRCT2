@@ -66,8 +66,12 @@
             const int32_t ty = tile.y / kCoordsXYStep;
             const uint64_t tileKey = TerrainKey(tx, ty);
             auto* element = MapGetFirstElementAt(tile);
-            if (element == nullptr)
+            if (element == nullptr
+                || (element->getType() == TileElementType::surface
+                    && element->isLastForTile()))
             {
+                // A terrain-only tile has no map-object inventory entry.
+                // Avoid hashing the overwhelming majority of empty tiles.
                 InvalidateFirstPersonWorldInventoryTile(tx, ty);
                 return;
             }
