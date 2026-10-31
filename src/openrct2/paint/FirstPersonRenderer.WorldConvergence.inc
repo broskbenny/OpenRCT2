@@ -129,7 +129,10 @@
                 const std::vector<FirstPersonSurface>& surfaces) {
                 return std::any_of(surfaces.begin(), surfaces.end(),
                     [nativeSourceKey](const FirstPersonSurface& source) {
-                        return source.sourceInstanceKey == nativeSourceKey;
+                        return source.sourceInstanceKey == nativeSourceKey
+                            && source.diagnosticSemanticRole
+                                == static_cast<uint8_t>(
+                                    FirstPersonPaintSemanticRole::smallSceneryBody);
                     });
             };
             if (contains(cached.cameraIndependentResidentSurfaces)
@@ -189,4 +192,71 @@
                 ++index;
             } while (!(element++)->isLastForTile());
             return std::nullopt;
+        }
+
+        struct FirstPersonWorldCoverage
+        {
+            size_t inventoriedVisibleObjects = 0;
+            size_t smallPlacements = 0;
+            size_t mapPublishedSmall = 0;
+            size_t nativeEvidenceSmall = 0;
+            size_t missingSmall = 0;
+            size_t exhaustedSmall = 0;
+            size_t notYetInventoriedTiles = 0;
+        };
+
+        // An explicit bounded-frequency audit, not a per-frame full-park
+        // walk. These are presentation SOURCE certificates; native evidence
+        // alone does not prove that GPU submission and visibility succeeded.
+        [[nodiscard]] FirstPersonWorldCoverage
+        InspectFirstPersonWorldCoverage(const FirstPersonScene& scene)
+        {
+            FirstPersonWorldCoverage coverage{};
+            for (const auto tile : scene.visibleTiles)
+            {
+                const int32_t tx = tile.x / kCoordsXYStep;
+                const int32_t ty = tile.y / kCoordsXYStep;
+                const auto inventory = _worldInventory.find(TerrainKey(tx, ty));
+                if (inventory == _worldInventory.end())
+                {
+                    ++coverage.notYetInventoriedTiles;
+                    continue;
+                }
+                const auto& objects = inventory->second.objects;
+                coverage.inventoriedVisibleObjects += objects.size();
+                const auto cell = _localSceneryPackets.find(
+                    FirstPersonLocalSceneryRegionKey(tx, ty));
+                const auto native = _staticPaintCache.find(TerrainKey(tx, ty));
+                const bool nativeCurrent = native != _staticPaintCache.end()
+                    && native->second.valid && !native->second.dirty
+                    && native->second.signature == inventory->second.sourceSignature;
+                for (const auto& object : objects)
+                {
+                    if (object.type != TileElementType::smallScenery)
+                        continue;
+                    ++coverage.smallPlacements;
+                    if (cell != _localSceneryPackets.end()
+                        && cell->second.surfaces
+                        && cell->second.mapOwnedInstanceKeys.contains(object.identity))
+                    {
+                        ++coverage.mapPublishedSmall;
+                    }
+                    else if (nativeCurrent
+                        && FirstPersonNativeSourceContainsInstance(
+                            native->second, object.nativeSourceKey))
+                    {
+                        ++coverage.nativeEvidenceSmall;
+                    }
+                    else
+                    {
+                        ++coverage.missingSmall;
+                        if (nativeCurrent
+                            && std::all_of(native->second.rotations.begin(),
+                                native->second.rotations.end(),
+                                [](const auto& view) { return view.valid; }))
+                            ++coverage.exhaustedSmall;
+                    }
+                }
+            }
+            return coverage;
         }
