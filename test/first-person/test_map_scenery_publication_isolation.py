@@ -98,6 +98,8 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
         streamed = paint[paint.index("// Native group source selection examines all faces"):]
         self.assertIn("mapOwnedNativeInstances.try_emplace(record, false)", paint)
         self.assertIn("FirstPersonNativeInstanceMapOwned(tile, record)", paint)
+        self.assertIn("record.role != static_cast<uint8_t>(", paint)
+        self.assertIn("FirstPersonPaintSemanticRole::smallSceneryBody", paint)
         self.assertIn("if (hasPublishedMapBody(staticSurface))", streamed)
         self.assertIn("if (hasPublishedMapBody(staticSurface))\n                                continue;", streamed)
         self.assertLess(
