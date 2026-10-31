@@ -14,6 +14,7 @@
                 _parkSceneryScanCursor = 0;
                 _parkSceneryScanEpoch = _sceneEpoch;
             }
+            InvalidateFirstPersonWorldInventoryTile(tx, ty);
             _parkSceneryChangedTiles.insert(TerrainKey(tx, ty));
         }
 
@@ -87,6 +88,7 @@
                 };
                 if (!MapIsLocationValid(tile))
                     continue;
+                ObserveFirstPersonWorldInventoryTile(tile);
                 auto* element = MapGetFirstElementAt(tile);
                 if (element == nullptr)
                     continue;
