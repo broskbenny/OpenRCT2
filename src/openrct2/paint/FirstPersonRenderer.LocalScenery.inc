@@ -654,16 +654,8 @@
                                     const uint64_t instance =
                                         FirstPersonLocalSmallSceneryInstanceKey(
                                             tx, ty, elementIndex, *small);
-                                    if (AppendFirstPersonMapSmallScenery(
-                                            mapSurfaces, mapTile, *small,
-                                            scene.options.viewFlags))
-                                    {
+                                    const auto markPublishedBody = [&]() {
                                         mapOwnedInstanceKeys.insert(instance);
-                                        // A previously native-owned cache view
-                                        // may survive an inspector selection
-                                        // transition. A completed map instance
-                                        // supersedes that exact native element,
-                                        // otherwise it would render twice.
                                         uint64_t nativeKey = 14695981039346656037ull;
                                         ExtendStableKey(nativeKey, uint32_t(tx));
                                         ExtendStableKey(nativeKey, uint32_t(ty));
@@ -671,6 +663,12 @@
                                         ExtendStableKey(nativeKey,
                                             uint8_t(TileElementType::smallScenery));
                                         mapOwnedNativeKeys.insert(nativeKey == 0 ? 1 : nativeKey);
+                                    };
+                                    if (AppendFirstPersonMapSmallScenery(
+                                            mapSurfaces, mapTile, *small,
+                                            scene.options.viewFlags))
+                                    {
+                                        markPublishedBody();
                                         const auto target = BuildFirstPersonTileInteractionTarget(
                                             ViewportInteractionItem::scenery, mapTile, element);
                                         for (auto& surface : mapSurfaces)
@@ -691,6 +689,7 @@
                                         // awaiting reconstruction. An edited
                                         // object ID, deleted placement or
                                         // altered elevation never matches.
+                                        bool carriedBody = false;
                                         for (const auto& old :
                                              *previousCell->second.surfaces)
                                         {
@@ -702,7 +701,11 @@
                                             auto carried = old;
                                             carried.gpuRegion = owningRegion;
                                             add(carried, owningRegion, true);
+                                            carriedBody = true;
                                         }
+                                        // Retained published 3D stays the owner.
+                                        if (carriedBody)
+                                            markPublishedBody();
                                     }
                                 }
                             }
