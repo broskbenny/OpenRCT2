@@ -202,7 +202,8 @@
             size_t nativeEvidenceSmall = 0;
             size_t missingSmall = 0;
             size_t exhaustedSmall = 0;
-            size_t notYetInventoriedTiles = 0;
+            size_t sampledTiles = 0;
+            size_t tilesWithoutObjectRecords = 0;
         };
 
         // An explicit bounded-frequency audit, not a per-frame full-park
@@ -212,14 +213,22 @@
         InspectFirstPersonWorldCoverage(const FirstPersonScene& scene)
         {
             FirstPersonWorldCoverage coverage{};
-            for (const auto tile : scene.visibleTiles)
+            static size_t sampleCursor = 0;
+            const size_t count = scene.visibleTiles.size();
+            FirstPersonFrameBudget sampleBudget(
+                256, std::chrono::microseconds(750));
+            const size_t begin = count == 0 ? 0 : sampleCursor % count;
+            while (coverage.sampledTiles < count && sampleBudget.take())
             {
+                const auto tile = scene.visibleTiles[
+                    (begin + coverage.sampledTiles++) % count];
                 const int32_t tx = tile.x / kCoordsXYStep;
                 const int32_t ty = tile.y / kCoordsXYStep;
                 const auto inventory = _worldInventory.find(TerrainKey(tx, ty));
                 if (inventory == _worldInventory.end())
                 {
-                    ++coverage.notYetInventoriedTiles;
+                    // Empty map tiles intentionally have no inventory record.
+                    ++coverage.tilesWithoutObjectRecords;
                     continue;
                 }
                 const auto& objects = inventory->second.objects;
@@ -258,5 +267,6 @@
                     }
                 }
             }
+            sampleCursor += coverage.sampledTiles;
             return coverage;
         }
