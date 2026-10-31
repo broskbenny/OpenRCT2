@@ -98,7 +98,7 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
         streamed = paint[paint.index("// Native group source selection examines all faces"):]
         self.assertIn("mapOwnedNativeInstances.try_emplace(record, false)", streamed)
         self.assertIn("FirstPersonNativeInstanceMapOwned(tile, record)", streamed)
-        self.assertIn("if (it->second)\\n                                    continue;", streamed)
+        self.assertIn("if (it->second)\n                                    continue;", streamed)
         self.assertLess(
             streamed.index("FirstPersonNativeInstanceMapOwned(tile, record)"),
             streamed.index("ReorientBillboard(surface, opt.camera.position, basis.right)"))
@@ -108,7 +108,7 @@ class MapSceneryPublicationIsolationTest(unittest.TestCase):
         pending = local[local.index("else if (FirstPersonMapSmallSceneryPending("):
                         local.index("++elementIndex;", local.index("else if (FirstPersonMapSmallSceneryPending("))]
         self.assertIn("bool carriedBody = false;", pending)
-        self.assertIn("if (carriedBody)\\n                                            markPublishedBody();", pending)
+        self.assertIn("if (carriedBody)\n                                            markPublishedBody();", pending)
         self.assertIn("mapOwnedInstanceKeys.insert(instance);", local)
         self.assertIn("mapOwnedNativeKeys.insert(nativeKey == 0 ? 1 : nativeKey);", local)
 
