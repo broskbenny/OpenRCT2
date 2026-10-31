@@ -324,10 +324,17 @@
                         || !found->second.valid)
                         return true;
                     const auto& cached = found->second;
-                    return !cached.animated
-                        && !std::any_of(cached.rotations.begin(),
+                    if (cached.animated)
+                        return false;
+                    if (!std::any_of(cached.rotations.begin(),
                             cached.rotations.end(),
-                            [](const auto& variant) { return variant.valid; });
+                            [](const auto& variant) { return variant.valid; }))
+                        return true;
+                    // A captured tile may still lack an exact object.
+                    // Seek a new source view for that placement without
+                    // redoing rotations that already produced no evidence.
+                    return FirstPersonMissingSmallSceneryCaptureRotation(
+                        tile, cached, cached.requestedRotation).has_value();
                 });
             const bool useColdObjectCursor = coldOffset < visibleCount;
             if (useColdObjectCursor && !prioritizeNearColdObjects)
@@ -516,6 +523,15 @@
                     needsTileSourceView
                     ? uint8_t(1u << tileRotation)
                     : 0;
+                // Object-level convergence: a valid native tile view does
+                // not certify that all placements on that tile appeared.
+                // Give a missing exact small-scenery source one untried
+                // rotation while retaining all previously published views.
+                if (const auto missingRotation =
+                        FirstPersonMissingSmallSceneryCaptureRotation(
+                            tile, cached, tileRotation);
+                    missingRotation.has_value())
+                    rotationMask |= uint8_t(1u << *missingRotation);
                 // Revisit source views whose 3D asset job was not yet admitted,
                 // without inventing a map change or restarting region packets.
                 rotationMask |= cached.nativeRetryMask;
@@ -1897,11 +1913,14 @@
                     "FP_SOURCE_COVERAGE visibleTiles=%zu objectTiles=%zu"
                     " coldTiles=%zu dirtyTiles=%zu observedTiles=%zu"
                     " coldObjectTiles=%zu dirtyObjectTiles=%zu observedObjectTiles=%zu"
-                    " semanticObservedTiles=%zu objectViewPending=%zu presentedRegions=%zu",
+                    " semanticObservedTiles=%zu objectViewPending=%zu presentedRegions=%zu"
+                    " inventoriedObjects=%zu parkScannedTiles=%zu parkTotalTiles=%zu",
                     scene.visibleTiles.size(), objectTiles, coldTiles, dirtyTiles,
                     observedTiles, coldObjectTiles, dirtyObjectTiles,
                     observedObjectTiles, semanticObservedTiles, objectViewPending,
-                    scene.staticRegions.size());
+                    scene.staticRegions.size(), _worldInventoryObjectCount,
+                    _parkSceneryScanCursor,
+                    size_t(getGameState().mapSize.x) * size_t(getGameState().mapSize.y));
             }
             const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
                 finished - started).count();
