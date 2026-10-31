@@ -161,6 +161,47 @@
         {
             if (!cached.valid || cached.animated)
                 return std::nullopt;
+            const int32_t tx = tile.x / kCoordsXYStep;
+            const int32_t ty = tile.y / kCoordsXYStep;
+            const auto chooseUnobserved = [&]() -> std::optional<uint8_t> {
+                if (preferredRotation < 4
+                    && !cached.rotations[preferredRotation].valid)
+                    return preferredRotation;
+                for (uint8_t rotation = 0; rotation < 4; ++rotation)
+                {
+                    if (!cached.rotations[rotation].valid)
+                        return rotation;
+                }
+                return std::nullopt;
+            };
+            // The durable placement inventory avoids repeated TileElement
+            // walks in the hot cold-object selector. Only use it when the
+            // native source signature proves it describes this exact map
+            // revision. A changed or not-yet-inventoried tile falls back to
+            // inspecting authoritative live elements below.
+            const auto inventory = _worldInventory.find(TerrainKey(tx, ty));
+            if (inventory != _worldInventory.end() && !cached.dirty
+                && inventory->second.sourceSignature == cached.signature)
+            {
+                const auto cell = _localSceneryPackets.find(
+                    FirstPersonLocalSceneryRegionKey(tx, ty));
+                for (const auto& object : inventory->second.objects)
+                {
+                    if (object.type != TileElementType::smallScenery)
+                        continue;
+                    const bool mapPublished =
+                        cell != _localSceneryPackets.end()
+                        && cell->second.surfaces
+                        && cell->second.mapOwnedInstanceKeys.contains(
+                            object.identity);
+                    if (!mapPublished
+                        && !FirstPersonNativeSourceContainsInstance(
+                            cached, object.nativeSourceKey))
+                        return chooseUnobserved();
+                }
+                return std::nullopt;
+            }
+
             auto* element = MapGetFirstElementAt(tile);
             if (element == nullptr)
                 return std::nullopt;
@@ -175,19 +216,8 @@
                         && !FirstPersonLocalSceneryOwnsSmallScenery(tile, *small)
                         && !FirstPersonNativeSourceContainsInstance(
                             cached, FirstPersonWorldNativeSourceKey(
-                                tile.x / kCoordsXYStep,
-                                tile.y / kCoordsXYStep, index,
-                                TileElementType::smallScenery)))
-                    {
-                        if (preferredRotation < 4
-                            && !cached.rotations[preferredRotation].valid)
-                            return preferredRotation;
-                        for (uint8_t rotation = 0; rotation < 4; ++rotation)
-                        {
-                            if (!cached.rotations[rotation].valid)
-                                return rotation;
-                        }
-                    }
+                                tx, ty, index, TileElementType::smallScenery)))
+                        return chooseUnobserved();
                 }
                 ++index;
             } while (!(element++)->isLastForTile());
