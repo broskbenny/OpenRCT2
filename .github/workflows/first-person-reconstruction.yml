@@ -118,6 +118,7 @@ jobs:
             exit /b 1
           )
           echo Win7 import check passed: no unsupported filesystem or clock entry points.
+          exit /b 0
       - name: Retain the tested application
         uses: actions/upload-artifact@v4
         with:
